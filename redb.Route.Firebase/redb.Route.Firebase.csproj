@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>redb.Route.Firebase</RootNamespace>
+    <PackageId>redb.Route.Firebase</PackageId>
+    <Description>Firebase connector for redb.Route — FCM push notifications, Firestore realtime listeners, Firebase Storage file operations</Description>
+    <PackageTags>esb;messaging;firebase;fcm;firestore;storage;gcs;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FirebaseAdmin" Version="3.5.0" />
+    <PackageReference Include="Google.Cloud.Firestore" Version="3.13.0" />
+    <PackageReference Include="Google.Cloud.Storage.V1" Version="4.14.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

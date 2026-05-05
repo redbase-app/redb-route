@@ -1,0 +1,26 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- CS1591 NOT suppressed — every public member MUST have XML doc -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!-- Package metadata -->
+  <PropertyGroup>
+    <Authors>redbase</Authors>
+    <Company>redbase</Company>
+    <Product>REDB Route</Product>
+    <Copyright>Copyright © redbase 2026</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/redbase-app/redb</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Version>1.0.4</Version>
+    <PackageVersion>1.0.4</PackageVersion>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.S3</PackageId>
+    <Description>S3/MinIO transport for redb.Route ESB framework. Polling consumer with prefix filtering, idempotency, move-after-read; multi-operation producer with multipart upload, SSE, presigned URLs, tagging, versioning, and ACL management. Compatible with AWS S3 and MinIO via ForcePathStyle.</Description>
+    <PackageTags>esb;messaging;s3;minio;aws;object-storage;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.S3" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" Version="4.0.20.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

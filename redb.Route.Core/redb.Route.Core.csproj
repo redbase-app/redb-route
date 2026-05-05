@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Core</PackageId>
+    <Description>Bridge package connecting redb.Route ESB framework with redb.Core EAV storage. Provides RedbIdempotentRepository, typed access to IRedbService from route pipelines, and extension methods for redb.Core integration.</Description>
+    <PackageTags>esb;messaging;redb;core;eav;bridge;idempotent</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.Controllers\redb.Route.Controllers.csproj" />
+    <PackageReference Include="redb.Core" Version="1.3.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

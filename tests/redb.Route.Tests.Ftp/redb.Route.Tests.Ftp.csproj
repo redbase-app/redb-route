@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\src\redb.Route.GenericFile\redb.Route.GenericFile.csproj" />
+    <ProjectReference Include="..\..\src\redb.Route.Ftp\redb.Route.Ftp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentFTP" Version="54.1.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.6" />
+  </ItemGroup>
+
+</Project>
