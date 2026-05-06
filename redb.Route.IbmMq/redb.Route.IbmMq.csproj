@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.IbmMq</PackageId>
+    <Description>IBM MQ (WebSphere MQ) transport for redb.Route ESB framework. Native MQI access via IBMMQDotnetClient — queues, topics, transactions, RPC, message groups, SSL/TLS, and W3C telemetry.</Description>
+    <PackageTags>esb;messaging;ibmmq;websphere;mq;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.IbmMq" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="IBMMQDotnetClient" Version="9.4.1.1" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="9.0.5" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

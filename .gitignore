@@ -1,0 +1,25 @@
+# Build outputs
+bin/
+obj/
+*.user
+.vs/
+
+# NuGet
+*.nupkg
+*.snupkg
+nupkg/
+
+# Test results
+TestResults/
+
+# Secrets / local config
+nuget.config.json
+appsettings.Development.json
+*.redb
+
+# Demo tpkg output
+demo/**/output/
+
+# OS
+.DS_Store
+Thumbs.db

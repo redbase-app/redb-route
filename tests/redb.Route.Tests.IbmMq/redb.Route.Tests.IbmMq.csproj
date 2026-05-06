@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\src\redb.Route.IbmMq\redb.Route.IbmMq.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+option csharp_namespace = "redb.Route.Grpc.Proto";
+
+package redb.route.grpc;
+
+// Generic ESB service for exchanging messages through the route pipeline.
+service RedbService {
+  // Unary request-response.
+  rpc Process (RedbMessage) returns (RedbMessage);
+  
+  // Server-side streaming (consumer pushes multiple responses).
+  rpc ProcessStream (RedbMessage) returns (stream RedbMessage);
+}
+
+// Generic message carrying binary payload and string headers.
+message RedbMessage {
+  // Binary payload (exchange body).
+  bytes payload = 1;
+  
+  // String key-value headers (exchange headers).
+  map<string, string> headers = 2;
+}

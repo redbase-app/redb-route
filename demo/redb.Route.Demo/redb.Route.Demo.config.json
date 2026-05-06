@@ -1,0 +1,38 @@
+{
+  "ContextName": "route.demo",
+  "AutoStart": true,
+  "DemoSettings": {
+    "PostgresConnection": "Host=localhost;Port=5432;Username=postgres;Password=1;Database=test_redb_route_sql",
+    "HttpPort": 8080,
+    "EnableMetrics": true
+  },
+  "Redb": {
+    "pg-test": {
+      "Provider": "postgres",
+      "UsePro": true,
+      "ConnectionString": "Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=redb_tsak;Pooling=true;Include Error Detail=true",
+      "EavSaveStrategy": "ChangeTracking",
+      "EnsureCreated": true
+    },
+    "mssql-test": {
+      "Provider": "mssql",
+      "UsePro": false,
+      "ConnectionString": "Server=msdb;Database=redb_tsak;User Id=sa;Password=1;TrustServerCertificate=true;Command Timeout=600;",
+      "EnsureCreated": true
+    }
+  },
+  "RabbitMQ": {
+    "Host": "localhost",
+    "Port": 5672,
+    "Username": "admin",
+    "Password": "admin"
+  },
+  "Redis": {
+    "Host": "localhost",
+    "Port": 6379
+  },
+  "FeatureFlags": {
+    "EnableSqlRoutes": true,
+    "EnableMqttRoutes": true
+  }
+}

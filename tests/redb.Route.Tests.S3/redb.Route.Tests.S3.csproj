@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\src\redb.Route.S3\redb.Route.S3.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" Version="4.0.20.3" />
+  </ItemGroup>
+
+</Project>

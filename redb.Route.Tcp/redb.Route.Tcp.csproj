@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Tcp</PackageId>
+    <Description>TCP transport for redb.Route ESB framework. Provides socket-based producer (client) and consumer (server) with text-line, length-prefixed, and raw framing modes, TLS, and InOut patterns.</Description>
+    <PackageTags>esb;messaging;tcp;socket;netty;server;client;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Tcp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>
