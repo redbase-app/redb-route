@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Amqp</PackageId>
+    <Description>AMQP 1.0 transport for redb.Route ESB framework. Supports ActiveMQ Artemis, ActiveMQ Classic, Azure Service Bus, Amazon MQ, Qpid, and any AMQP 1.0 compliant broker.</Description>
+    <PackageTags>esb;messaging;amqp;activemq;artemis;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Amqp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="AMQPNetLite.Core" Version="2.5.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

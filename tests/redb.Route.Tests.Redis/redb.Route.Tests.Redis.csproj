@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\src\redb.Route.Redis\redb.Route.Redis.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Testcontainers.Redis" Version="4.3.0" />
+  </ItemGroup>
+
+</Project>

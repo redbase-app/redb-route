@@ -1,0 +1,83 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>redb.Route.Demo</RootNamespace>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Http\redb.Route.Http.csproj" />
+    <ProjectReference Include="..\..\redb.Route.RabbitMQ\redb.Route.RabbitMQ.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Amqp\redb.Route.Amqp.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Grpc\redb.Route.Grpc.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Kafka\redb.Route.Kafka.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Sql\redb.Route.Sql.csproj" />
+    <ProjectReference Include="..\..\redb.Route.File\redb.Route.File.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Redis\redb.Route.Redis.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Tcp\redb.Route.Tcp.csproj" />
+    <ProjectReference Include="..\..\redb.Route.WebSocket\redb.Route.WebSocket.csproj" />
+    <ProjectReference Include="..\..\redb.Route.MqttNet\redb.Route.MqttNet.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Quartz\redb.Route.Quartz.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Mail\redb.Route.Mail.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Sftp\redb.Route.Sftp.csproj" />
+    <ProjectReference Include="..\..\redb.Route.IbmMq\redb.Route.IbmMq.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Core\redb.Route.Core.csproj" />
+    <PackageReference Include="redb.Core" Version="2.0.2" />
+  </ItemGroup>
+
+  <!-- Npgsql for SQL component (Postgres provider) -->
+  <ItemGroup>
+    <PackageReference Include="librdkafka.redist" Version="2.13.2" />
+    <PackageReference Include="Npgsql" Version="9.0.3" />
+  </ItemGroup>
+
+  <!-- Module packaging properties -->
+  <PropertyGroup Condition="false">
+    <TsakModuleName>redb.Route.Demo</TsakModuleName>
+    <TsakLibsDir>$(MSBuildThisFileDirectory)..\redb.Tsak\src\redb.Tsak.Worker\Libs</TsakLibsDir>
+  </PropertyGroup>
+
+  <!-- After build: create .tpkg (ZIP with manifest + DLL + config) and copy to Tsak Libs -->
+  <Target Name="PackTpkg" Condition="false" AfterTargets="Build">
+    <PropertyGroup>
+      <_TpkgStaging>$(IntermediateOutputPath)tpkg</_TpkgStaging>
+      <_TpkgFile>$(MSBuildThisFileDirectory)output\$(TsakModuleName).tpkg</_TpkgFile>
+    </PropertyGroup>
+
+    <!-- Clean staging -->
+    <RemoveDir Directories="$(_TpkgStaging)" />
+    <MakeDir Directories="$(_TpkgStaging)" />
+    <MakeDir Directories="$(MSBuildThisFileDirectory)output" />
+
+    <!-- Copy manifest.json from project root -->
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)manifest.json" DestinationFolder="$(_TpkgStaging)" />
+
+    <!-- Copy module DLL -->
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(_TpkgStaging)" />
+
+    <!-- Copy config if exists -->
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)$(TsakModuleName).config.json"
+          DestinationFolder="$(_TpkgStaging)"
+          Condition="Exists('$(MSBuildThisFileDirectory)$(TsakModuleName).config.json')" />
+
+    <!-- Create .tpkg ZIP -->
+    <ZipDirectory SourceDirectory="$(_TpkgStaging)"
+                  DestinationFile="$(_TpkgFile)"
+                  Overwrite="true" />
+
+    <!-- Copy .tpkg to Tsak Libs for hot-reload -->
+    <MakeDir Directories="$(TsakLibsDir)" Condition="!Exists('$(TsakLibsDir)')" />
+    <Copy SourceFiles="$(_TpkgFile)" DestinationFolder="$(TsakLibsDir)" SkipUnchangedFiles="false" />
+
+    <!-- Touch the copied file to ensure hot-reload detects the change -->
+    <Touch Files="$(TsakLibsDir)\$(TsakModuleName).tpkg" />
+
+    <Message Importance="high" Text="Packed $(TsakModuleName) → $(_TpkgFile)" />
+  </Target>
+
+</Project>
+

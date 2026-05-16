@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.SignalR</PackageId>
+    <Description>SignalR transport for redb.Route ESB framework. Provides Kestrel-based SignalR Hub consumer (server) and HubConnection-based producer (client) with dynamic method dispatch, group management, and JSON/MessagePack support.</Description>
+    <PackageTags>esb;messaging;signalr;realtime;hub;websocket;rpc;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.SignalR" />
+    <InternalsVisibleTo Include="redb.Route.Tests.Controllers" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

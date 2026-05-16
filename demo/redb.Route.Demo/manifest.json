@@ -1,0 +1,6 @@
+{
+  "Name": "redb.Route.Demo",
+  "Version": "1.0.0",
+  "EntryPoints": ["redb.Route.Demo.dll"],
+  "Dependencies": []
+}
