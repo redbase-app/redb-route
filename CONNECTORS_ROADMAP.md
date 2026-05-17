@@ -1,7 +1,6 @@
 # redb.Route — Connectors Roadmap
 
 > Core connectors (components) covering the main integration protocols.
-> The SQL connector (`redb.Route.Sql`) is tracked separately and will be an extension built on top of `redb.Core`.
 
 ## Current Status
 
@@ -17,10 +16,19 @@
 | `redb.Route.WebSocket` | `ws:`, `wss:` | ✅ Done | 79 × 3 TFM |
 | `redb.Route.Grpc` | `grpc:` | ✅ Done | 64 × 3 TFM |
 | `redb.Route.File` | `file:` | ✅ Done | 104 × 3 TFM |
+| `redb.Route.Ftp` | `ftp:` | ✅ Done | ✅ TFM |
 | `redb.Route.Mail` | `smtp:`, `pop3:`, `imap:` | ✅ Done | 95 × 3 TFM |
 | `redb.Route.Quartz` | `quartz:` | ✅ Done | 62 × 3 TFM |
 | `redb.Route.Sftp` | `sftp:` | ✅ Done | 180 × 3 TFM |
 | `redb.Route.IbmMq` | `wmq:` | ✅ Done | 99 × 3 TFM |
+| `redb.Route.Ldap` | `ldap:` | ✅ Done | ✅ TFM |
+| `redb.Route.MqttNet` | `mqtt:` | ✅ Done | ✅ TFM |
+| `redb.Route.SignalR` | `signalr:` | ✅ Done | ✅ TFM |
+| `redb.Route.AzureServiceBus` | `asb:` | ✅ Done | ✅ TFM |
+| `redb.Route.S3` | `s3:` | ✅ Done | ✅ TFM |
+| `redb.Route.Elasticsearch` | `elasticsearch:` | ✅ Done | ✅ TFM |
+| `redb.Route.Firebase` | `fcm:` | ✅ Done | ✅ TFM |
+| `redb.Route.Sql` | `sql:` | ✅ Done | ✅ TFM |
 
 ---
 
@@ -205,19 +213,17 @@
 
 ---
 
-### 7. `redb.Route.Sql` — SQL connector (pure ADO.NET)
-- **Scheme:** `sql:`, `sql-stored:`
+### 7. `redb.Route.Sql` — SQL connector (pure ADO.NET) ✅
+- **Scheme:** `sql:`
 - **Dependencies:** `System.Data.Common` (BCL, 0 external)
-- **Status:** 📋 Specification ready → [docs/SQL_CONNECTOR_ROADMAP.md](docs/SQL_CONNECTOR_ROADMAP.md)
 - **Components:** `SqlComponent`, `SqlStoredComponent`
 - **SqlIdempotentRepository** — `IIdempotentRepository` backed by a raw ADO.NET table (standalone, no redb.Core required)
 - **No dependency on redb.Core** — pure ADO.NET via `DbProviderFactory`
 
 ### 8. `redb.Route.Core` — redb.Core bridge (optional)
 - **Dependencies:** `redb.Route` + `redb.Core`
-- **Status:** 📋 Designed → [docs/SQL_CONNECTOR_ROADMAP.md](docs/SQL_CONNECTOR_ROADMAP.md)
-- **Extension methods** following the `lt.DAL\RouteExtensions.cs` pattern — access `IRedbService` from route pipeline
-- **RedbIdempotentRepository** — `IIdempotentRepository` backed by redb.Core EAV (typed `IdempotentEntryProps` object, no raw SQL)
+- **Extension methods** to access `IRedbService` from a route pipeline
+- **RedbIdempotentRepository** — `IIdempotentRepository` backed by redb.Core (typed `IdempotentEntryProps` object, no raw SQL)
 
 ---
 
@@ -236,8 +242,9 @@
 | 7 | `redb.Route.WebSocket` | 0 (BCL) | ✅ Done |
 | 8 | `redb.Route.Grpc` | Grpc.Net.Client | ✅ Done |
 | 9 | `redb.Route.File` | 0 (BCL) | ✅ Done |
+| 10 | `redb.Route.Ftp` | FluentFTP | ✅ Done |
 
-### Phase 2 — Integrations (✅ Core complete)
+### Phase 2 — Integrations (✅ Complete)
 
 | # | Package | Dependencies | Status |
 |---|---|---|---|
@@ -245,19 +252,32 @@
 | 2 | `redb.Route.Quartz` | Quartz.NET | ✅ Done |
 | 3 | `redb.Route.Sftp` | SSH.NET | ✅ Done |
 | 4 | `redb.Route.IbmMq` | IBMMQDotnetClient | ✅ Done |
-| 5 | `redb.Route.Sql` | System.Data.Common (ADO.NET) | 🟡 Spec ready |
-| 6 | `redb.Route.Core` | redb.Route + redb.Core (bridge) | 🟡 After Sql |
-| 7 | `redb.Route.MqttNet` | MQTTnet | 🟡 IoT |
-| 8 | `redb.Route.SignalR` | Microsoft.AspNetCore.SignalR | 🟡 Realtime |
+| 5 | `redb.Route.Sql` | System.Data.Common (ADO.NET) | ✅ Done |
+| 6 | `redb.Route.Ldap` | Novell.Directory.Ldap | ✅ Done |
+| 7 | `redb.Route.MqttNet` | MQTTnet | ✅ Done |
+| 8 | `redb.Route.SignalR` | Microsoft.AspNetCore.SignalR | ✅ Done |
 
-### Phase 3 — Cloud & Enterprise (Planned)
+### Phase 3 — Cloud & Enterprise (✅ Complete)
 
-| # | Package | Dependencies | Priority |
+| # | Package | Dependencies | Status |
 |---|---|---|---|
-| 1 | `redb.Route.AzureServiceBus` | Azure.Messaging.ServiceBus | 🔵 Cloud |
-| 2 | `redb.Route.AwsSqs` | AWSSDK.SQS | 🔵 Cloud |
-| 3 | `redb.Route.GooglePubSub` | Google.Cloud.PubSub.V1 | 🔵 Cloud |
-| 4 | `redb.Route.Nats` | NATS.Net | 🔵 Cloud-native |
+| 1 | `redb.Route.AzureServiceBus` | Azure.Messaging.ServiceBus | ✅ Done |
+| 2 | `redb.Route.S3` | AWSSDK.S3 | ✅ Done |
+| 3 | `redb.Route.Elasticsearch` | Elastic.Clients.Elasticsearch | ✅ Done |
+| 4 | `redb.Route.Firebase` | FirebaseAdmin | ✅ Done |
+
+### Phase 4 — Planned
+
+| # | Package | Dependencies | Notes |
+|---|---|---|---|
+| 1 | `redb.Route.Sqs` | AWSSDK.SQS | Amazon SQS — queue messaging (pairs with S3) |
+| 2 | `redb.Route.Sns` | AWSSDK.SimpleNotificationService | Amazon SNS — fan-out pub/sub |
+| 3 | `redb.Route.AzureEventHub` | Azure.Messaging.EventHubs | Azure Event Hubs — high-throughput streaming |
+| 4 | `redb.Route.Nats` | NATS.Net | NATS — cloud-native messaging |
+| 5 | `redb.Route.GooglePubSub` | Google.Cloud.PubSub.V1 | Google Cloud Pub/Sub |
+| 6 | `redb.Route.Pulsar` | DotPulsar | Apache Pulsar — multi-tenant streaming |
+| 7 | `redb.Route.MongoDB` | MongoDB.Driver | MongoDB document store |
+| 8 | `redb.Route.CosmosDb` | Microsoft.Azure.Cosmos | Azure Cosmos DB |
 
 ## Common Patterns
 
