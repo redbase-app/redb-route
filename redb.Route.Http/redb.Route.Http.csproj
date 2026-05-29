@@ -4,8 +4,8 @@
     <Description>HTTP transport for redb.Route ESB framework. Provides HttpClient producer and Kestrel-based consumer (webhook receiver) with CORS, auth, and streaming support.</Description>
     <PackageTags>esb;messaging;http;https;webhook;kestrel;rest;redb</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Version>2.0.2</Version>
-    <PackageVersion>2.0.2</PackageVersion>
+    <Version>3.0.0</Version>
+    <PackageVersion>3.0.0</PackageVersion>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="redb.Route.Tests.Http" />

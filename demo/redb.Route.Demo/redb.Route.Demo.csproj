@@ -26,7 +26,7 @@
     <ProjectReference Include="..\..\redb.Route.Sftp\redb.Route.Sftp.csproj" />
     <ProjectReference Include="..\..\redb.Route.IbmMq\redb.Route.IbmMq.csproj" />
     <ProjectReference Include="..\..\redb.Route.Core\redb.Route.Core.csproj" />
-    <PackageReference Include="redb.Core" Version="2.0.2" />
+    <PackageReference Include="redb.Core" Version="3.0.0" />
   </ItemGroup>
 
   <!-- Npgsql for SQL component (Postgres provider) -->
