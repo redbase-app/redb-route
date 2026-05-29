@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -8,6 +9,7 @@ using Elastic.Clients.Elasticsearch.QueryDsl;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Elasticsearch;
 
@@ -57,6 +59,13 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
             if (Enum.TryParse<ElasticsearchOperationType>(opStr, ignoreCase: true, out var headerOp))
                 operation = headerOp;
         }
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"es {operation}", ActivityKind.Client,
+            "db.system", "elasticsearch",
+            _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.IndexName,
+            operation: operation.ToString());
 
         await DispatchOperationAsync(operation, exchange, ct).ConfigureAwait(false);
     }
@@ -387,7 +396,7 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
                     var fields = sourceNode.GetValue<string>()
                         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                         .Select(f => (Field)f).ToArray();
-                    body.Source = new SourceConfig(new SourceFilter { Includes = fields });
+                    body.Source = new SourceConfig(new Elastic.Clients.Elasticsearch.Core.Search.SourceFilter { Includes = fields });
                 }
             }
 

@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Processors;
 
@@ -54,6 +55,8 @@ public class MulticastProcessor : IProcessor
     {
         if (_targets.Count == 0) return;
 
+        ProcessorMetrics.MulticastBranches.Record(_targets.Count);
+
         using var timeoutCts = _timeout > TimeSpan.Zero
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
             : null;
@@ -100,6 +103,7 @@ public class MulticastProcessor : IProcessor
                 {
                     clones[i].Exception = ex;
                     firstException ??= ex;
+                    ProcessorMetrics.MulticastFailedBranches.Add(1);
 
                     if (_stopOnException)
                     {
@@ -160,6 +164,7 @@ public class MulticastProcessor : IProcessor
                         {
                             clone.Exception = ex;
                             exceptions[idx] = ex;
+                            ProcessorMetrics.MulticastFailedBranches.Add(1);
                             if (_stopOnException)
                             {
                                 Interlocked.Exchange(ref shouldStop, 1);

@@ -2,6 +2,7 @@ using redb.Route.Firebase;
 
 namespace redb.Route.Tests.Firebase;
 
+[Collection("FirebaseEnvSensitive")]
 public sealed class FirebaseStorageEndpointOptionsTests
 {
     // ── BindFromUri ──

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Google.Protobuf;
 using Grpc.Core;
 using GrpcCore = global::Grpc.Core;
@@ -6,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Grpc.Proto;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Grpc;
 
@@ -68,6 +70,11 @@ public class GrpcProducer : ConnectableProducer
     public override async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         EnsureStarted();
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            "grpc.invoke", ActivityKind.Client,
+            "rpc.system", "grpc",
+            _endpoint.Uri.NormalizedKey);
 
         // Build request from exchange
         var request = BuildRequest(exchange);

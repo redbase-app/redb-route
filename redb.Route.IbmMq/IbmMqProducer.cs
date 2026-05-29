@@ -24,6 +24,7 @@ public sealed class IbmMqProducer : ConnectableProducer
 
     private MQQueue? _outputQueue;
     private MQTopic? _outputTopic;
+    private MQQueueManager? _qm;
 
     // ── RPC infrastructure ──
     private readonly ConcurrentDictionary<string, TaskCompletionSource<IMessage>> _pendingResponses = new();
@@ -49,17 +50,21 @@ public sealed class IbmMqProducer : ConnectableProducer
     /// <inheritdoc />
     protected override async Task ConnectAsync(CancellationToken ct)
     {
+        // Each producer owns its own MQQueueManager to avoid MQI-call serialisation
+        // deadlocks with consumers / RPC reply loops on the same broker connection.
+        _qm = await _endpoint.CreateDedicatedQueueManagerAsync($"producer:{_endpoint.Destination}", ct).ConfigureAwait(false);
+
         if (_options.DestinationType == IbmMqDestinationType.Topic)
         {
-            _outputTopic = await _endpoint.OpenTopicForPublishAsync(
-                _endpoint.Destination,
-                MQC.MQOO_OUTPUT | MQC.MQOO_FAIL_IF_QUIESCING,
-                ct).ConfigureAwait(false);
+            _outputTopic = _qm.AccessTopic(
+                _endpoint.Destination, null,
+                MQC.MQTOPIC_OPEN_AS_PUBLICATION,
+                MQC.MQOO_OUTPUT | MQC.MQOO_FAIL_IF_QUIESCING);
         }
         else
         {
             var openOptions = MQC.MQOO_OUTPUT | MQC.MQOO_FAIL_IF_QUIESCING;
-            _outputQueue = await _endpoint.OpenQueueAsync(openOptions, ct).ConfigureAwait(false);
+            _outputQueue = _qm.AccessQueue(_endpoint.Destination, openOptions);
         }
 
         if (_options.ReplyTo)
@@ -106,6 +111,13 @@ public sealed class IbmMqProducer : ConnectableProducer
             catch (Exception ex) { Logger?.LogDebug(ex, "IBM MQ: error closing output topic during stop"); }
             _outputTopic = null;
         }
+
+        if (_qm != null)
+        {
+            try { if (_qm.IsConnected) _qm.Disconnect(); }
+            catch (Exception ex) { Logger?.LogDebug(ex, "IBM MQ: error disconnecting producer queue manager during stop"); }
+            _qm = null;
+        }
     }
 
     /// <inheritdoc />
@@ -130,7 +142,9 @@ public sealed class IbmMqProducer : ConnectableProducer
         InjectTraceContext(activity, msg);
 
         if (_options.ReplyTo)
+        {
             await ProcessRpcAsync(exchange, msg, ct).ConfigureAwait(false);
+        }
         else if (_options.Transacted)
             ProcessTransactional(exchange, msg);
         else
@@ -155,7 +169,7 @@ public sealed class IbmMqProducer : ConnectableProducer
     private void ProcessTransactional(IExchange exchange, MQMessage msg)
     {
         // Capture all data needed for deferred send — the action will MQPUT + MQCMIT on commit
-        var qm = _endpoint.GetQueueManagerAsync().GetAwaiter().GetResult();
+        var qm = _qm ?? throw new InvalidOperationException("IBM MQ producer not connected");
         var action = new IbmMqSendAction(
             _outputQueue, _outputTopic, _options.DestinationType,
             msg, _endpoint.Destination, qm, Logger);
@@ -168,7 +182,9 @@ public sealed class IbmMqProducer : ConnectableProducer
     private async Task ProcessRpcAsync(IExchange exchange, MQMessage msg, CancellationToken ct)
     {
         if (!_rpcSetup)
+        {
             await SetupReplyReceiverAsync(ct).ConfigureAwait(false);
+        }
 
         // Set up reply-to
         var replyToQueue = _options.ReplyToQueue;
@@ -180,6 +196,17 @@ public sealed class IbmMqProducer : ConnectableProducer
             msg.ReplyToQueueManagerName = _options.ReplyToQueueManager;
 
         msg.MessageType = MQC.MQMT_REQUEST;
+
+        // Per IBM MQ Application Programming Guide ("Request and reply messages"):
+        // when using a temporary dynamic reply queue, set the request expiry to
+        // bound the lifetime of orphan requests if the caller goes away before the
+        // reply arrives. IBM MQ silently discards expired messages at MQGET, so the
+        // consumer never sees them and the reply queue can be safely deleted.
+        // Units: tenths of a second. MQEI_UNLIMITED == -1 (constructor default).
+        // Only set if the caller didn't already specify an expiry (via header or
+        // endpoint option resolved in IbmMqMessageHelper.ApplyOptionsToMqMessage).
+        if (msg.Expiry == MQC.MQEI_UNLIMITED)
+            msg.Expiry = Math.Max(1, _options.Timeout * 10);
 
         // Put the message
         var pmo = new MQPutMessageOptions
@@ -246,7 +273,7 @@ public sealed class IbmMqProducer : ConnectableProducer
             if (string.IsNullOrEmpty(replyQueueName))
             {
                 // Use a model queue to create a dynamic temporary reply queue
-                var qm = await _endpoint.GetQueueManagerAsync(ct).ConfigureAwait(false);
+                var qm = _qm ?? throw new InvalidOperationException("IBM MQ producer not connected");
                 _replyQueue = qm.AccessQueue(
                     "SYSTEM.DEFAULT.MODEL.QUEUE",
                     MQC.MQOO_INPUT_SHARED | MQC.MQOO_FAIL_IF_QUIESCING,
@@ -259,7 +286,7 @@ public sealed class IbmMqProducer : ConnectableProducer
             else
             {
                 // Open an existing reply queue
-                var qm = await _endpoint.GetQueueManagerAsync(ct).ConfigureAwait(false);
+                var qm = _qm ?? throw new InvalidOperationException("IBM MQ producer not connected");
                 _replyQueue = qm.AccessQueue(
                     replyQueueName,
                     MQC.MQOO_INPUT_SHARED | MQC.MQOO_FAIL_IF_QUIESCING);
@@ -315,6 +342,9 @@ public sealed class IbmMqProducer : ConnectableProducer
                         if (_options.MqmdReadEnabled)
                             IbmMqMessageHelper.CopyMqmdToHeaders(replyMsg, response,
                                 _replyQueue.Name.Trim(), _options.QueueManager);
+
+                        // Pick up user headers that the responder stamped via RFH2
+                        IbmMqMessageHelper.CopyRfh2UserProperties(replyMsg, response);
 
                         tcs.TrySetResult(response);
                     }

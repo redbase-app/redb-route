@@ -107,9 +107,10 @@ public sealed class LdapComponentTests
     }
 
     [Fact]
-    public void CreateEndpoint_InvalidPageSize_Throws()
+    public void CreateEndpoint_NegativePageSize_Throws()
     {
-        var uri = EndpointUriParser.Parse("ldap:SEARCH:dc=redb,dc=test?server=localhost&pageSize=0");
+        // PageSize == 0 is allowed (disables paged results); only negative values are invalid.
+        var uri = EndpointUriParser.Parse("ldap:SEARCH:dc=redb,dc=test?server=localhost&pageSize=-1");
         var act = () => _sut.CreateEndpoint(uri);
         act.Should().Throw<ArgumentOutOfRangeException>();
     }

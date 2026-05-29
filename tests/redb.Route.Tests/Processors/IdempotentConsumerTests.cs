@@ -193,7 +193,7 @@ public class IdempotentConsumerTests
     }
 
     [Fact]
-    public async Task Process_DuplicateMessage_SkipDuplicate_StopsExchange()
+    public async Task Process_DuplicateMessage_SkipDuplicate_DoesNotInvokeInner()
     {
         var inner = Substitute.For<IProcessor>();
         var repo = new InMemoryIdempotentRepository();
@@ -213,8 +213,11 @@ public class IdempotentConsumerTests
         // Inner called only once (for the first message)
         await inner.Received(1).Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>());
 
-        // Second exchange should be stopped and flagged as duplicate
-        exchange2.IsStopped.Should().BeTrue();
+        // Second exchange must be flagged as duplicate.
+        // IsStopped is intentionally NOT set: tail-consuming wiring in OldRouteCompiler
+        // owns the tail, so flagging the exchange would only pollute downstream reuse
+        // (see Aggregate seed-reuse regression in AggregatorProcessor).
+        exchange2.IsStopped.Should().BeFalse();
         exchange2.Properties[IdempotentConsumerProcessor.DuplicatePropertyKey].Should().Be(true);
     }
 
@@ -336,5 +339,35 @@ public class IdempotentConsumerTests
     public void DuplicatePropertyKey_HasCorrectValue()
     {
         IdempotentConsumerProcessor.DuplicatePropertyKey.Should().Be("CamelDuplicateMessage");
+    }
+
+    /// <summary>
+    /// Scope-form IdempotentConsumer(..., body): body runs only for first-seen keys;
+    /// subsequent route steps run for ALL exchanges including duplicates.
+    /// </summary>
+    [Fact]
+    public async Task RouteDsl_IdempotentConsumerScope_BodyOnFirstSeen_TailAlways()
+    {
+        await using var context = new RouteContext();
+        var repo = new InMemoryIdempotentRepository();
+        var inBody = new List<string>();
+        var afterBody = new List<string>();
+
+        context.AddRoutes(r =>
+        {
+            r.From("direct://ic-scope")
+                .IdempotentConsumer(e => (string)e.In.Body!, repo, b => b
+                    .Process(e => inBody.Add((string)e.In.Body!)))
+                .Process(e => afterBody.Add((string)e.In.Body!));
+        });
+        await context.Start();
+
+        var producer = context.GetEndpoint("direct://ic-scope").CreateProducer();
+        await producer.Start();
+        foreach (var k in new[] { "a", "b", "a", "c", "b" })
+            await producer.Process(new Exchange(new Message(k)));
+
+        inBody.Should().Equal("a", "b", "c");
+        afterBody.Should().Equal("a", "b", "a", "c", "b");
     }
 }

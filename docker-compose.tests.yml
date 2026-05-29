@@ -282,8 +282,12 @@ services:
       start_period: 30s
 
   # ── Azure Service Bus Emulator ──────────────────────────────────────────────
-  # Used by: redb.Route.Tests.AzureServiceBus → localhost:5672
-  #   Official Microsoft emulator (GA). Requires Azurite for state storage.
+  # Used by: redb.Route.Tests.AzureServiceBus → localhost:5300 (AMQP)
+  #   Official Microsoft emulator (GA). Requires:
+  #     - Azurite (state/storage)
+  #     - Azure SQL Edge (metadata DB — the emulator stores queue/topic/subscription
+  #       definitions in MSSQL). Pointing SQL_SERVER to anything else (e.g. Azurite)
+  #       causes the emulator host to crash-loop on startup.
   #   Connection string: "Endpoint=sb://localhost;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;"
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest
@@ -298,16 +302,31 @@ services:
       timeout: 5s
       retries: 5
 
+  sqledge:
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    container_name: route-sqledge
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "StrongP@ss1"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P 'StrongP@ss1' -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
   servicebus:
     image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
     container_name: route-servicebus
     depends_on:
       azurite:
         condition: service_healthy
+      sqledge:
+        condition: service_started
     ports:
       - "5300:5672"     # AMQP (remapped to avoid conflict with RabbitMQ on 5672)
     environment:
-      SQL_SERVER: azurite
+      SQL_SERVER: sqledge
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "StrongP@ss1"
     healthcheck:
@@ -315,7 +334,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 10
-      start_period: 30s
+      start_period: 60s
 
   # ── OpenLDAP ─────────────────────────────────────────────────────────────────
   # Used by: redb.Route.Tests.Ldap → localhost:389

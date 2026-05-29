@@ -240,13 +240,12 @@ public class KeyedThrottleTests
     {
         var def = new RouteDefinition();
         Func<IExchange, string> key = e => "k";
-        def.From("direct:in").Throttle(key, 10, TimeSpan.FromSeconds(2));
+        def.Throttle(key, 10, TimeSpan.FromSeconds(2));
 
-        def.Steps.Should().HaveCount(2);
-        var step = def.Steps[1].Should().BeOfType<KeyedThrottleStep>().Subject;
-        step.KeyExtractor.Should().BeSameAs(key);
-        step.MaxPerPeriod.Should().Be(10);
-        step.Period.Should().Be(TimeSpan.FromSeconds(2));
+        var node = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<KeyedThrottleDefinition>().Subject;
+        node.KeyExtractor.Should().BeSameAs(key);
+        node.MaxPerPeriod.Should().Be(10);
+        node.Period.Should().Be(TimeSpan.FromSeconds(2));
     }
 
     [Fact]
@@ -254,17 +253,16 @@ public class KeyedThrottleTests
     {
         var def = new RouteDefinition();
         Func<IExchange, string> key = e => "k";
-        def.From("direct:in").Throttle(key, 5);
+        def.Throttle(key, 5);
 
-        var step = def.Steps[1].Should().BeOfType<KeyedThrottleStep>().Subject;
-        step.Period.Should().BeNull();
+        var node = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<KeyedThrottleDefinition>().Subject;
+        node.Period.Should().BeNull();
     }
 
     [Fact]
     public void DSL_Throttle_Keyed_NullKeyExtractor_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct:in");
         var act = () => def.Throttle(null!, 5);
         act.Should().Throw<ArgumentNullException>().WithParameterName("keyExtractor");
     }
@@ -273,7 +271,6 @@ public class KeyedThrottleTests
     public void DSL_Throttle_Keyed_ZeroMax_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct:in");
         var act = () => def.Throttle(e => "k", 0);
         act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("maxPerPeriod");
     }
@@ -282,11 +279,12 @@ public class KeyedThrottleTests
     public void DSL_Throttle_Keyed_Chaining()
     {
         var def = new RouteDefinition();
-        var result = def.From("direct:in")
-            .Throttle(e => "k", 10)
-            .To("direct:out");
+        var scope = def.Throttle(e => "k", 10);
+        scope.To("direct:out");
+        var result = scope.EndKeyedThrottle();
 
         result.Should().BeSameAs(def);
-        def.Steps.Should().HaveCount(3);
+        def.Outputs.Should().ContainSingle().Which.Should().BeOfType<KeyedThrottleDefinition>()
+            .Which.Outputs.Should().ContainSingle().Which.Should().BeOfType<ToDefinition>();
     }
 }

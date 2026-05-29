@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Telemetry;
 
 namespace redb.Route.ErrorHandling;
 
@@ -78,6 +79,7 @@ public sealed class DeadLetterProcessor : IProcessor
                     attempt, ex.GetType().Name);
 
                 // Route to dead letter channel
+                ProcessorMetrics.DeadLetterSent.Add(1);
                 await _deadLetterTarget.Process(exchange, ct).ConfigureAwait(false);
                 exchange.ExceptionHandled = true;
                 return;

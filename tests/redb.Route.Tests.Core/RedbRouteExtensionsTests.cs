@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using redb.Core;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Definitions;
 using redb.Route.RedbCore.Extensions;
 
 namespace redb.Route.Tests.Core;
@@ -255,23 +256,18 @@ public sealed class RedbRouteExtensionsTests
         var context = Substitute.For<IRouteContext>();
         context.GetService<IRedbService>().Returns(routeRedb);
 
-        var exchange = Substitute.For<IExchange>();
-        exchange.ServiceProvider.Returns((IServiceProvider?)null);
+        var route = new RouteDefinition();
+        route._context = context;
 
-        Func<IExchange, CancellationToken, Task>? captured = null;
-        var route = Substitute.For<IRouteDefinition>();
-        route.GetContext().Returns(context);
-        route.Process(Arg.Any<Func<IExchange, CancellationToken, Task>>())
-            .Returns(ci => { captured = ci.Arg<Func<IExchange, CancellationToken, Task>>(); return route; });
-
+        IRedbService? observed = null;
         route.ProcessWithRedb(async (redb, ex, ct) =>
         {
-            redb.Should().BeSameAs(routeRedb);
+            observed = redb;
             await Task.CompletedTask;
         });
 
-        captured.Should().NotBeNull();
-        await captured!(exchange, CancellationToken.None);
+        await InvokeAsync(route, context, new Exchange());
+        observed.Should().BeSameAs(routeRedb);
     }
 
     [Fact]
@@ -343,105 +339,82 @@ public sealed class RedbRouteExtensionsTests
         context.GetFromRegistry<IServiceScopeFactory>(Arg.Any<string>()).Returns((IServiceScopeFactory?)null);
         context.GetFromRegistry<IRedbService>("redb:orders-db").Returns(namedRedb);
 
-        var exchange = Substitute.For<IExchange>();
+        var route = new RouteDefinition();
+        route._context = context;
 
-        Func<IExchange, CancellationToken, Task>? captured = null;
-        var route = Substitute.For<IRouteDefinition>();
-        route.GetContext().Returns(context);
-        route.Process(Arg.Any<Func<IExchange, CancellationToken, Task>>())
-            .Returns(ci => { captured = ci.Arg<Func<IExchange, CancellationToken, Task>>(); return route; });
-
+        IRedbService? observed = null;
         route.ProcessWithRedb("orders-db", async (redb, ex, ct) =>
         {
-            redb.Should().BeSameAs(namedRedb);
+            observed = redb;
             await Task.CompletedTask;
         });
 
-        captured.Should().NotBeNull();
-        await captured!(exchange, CancellationToken.None);
+        await InvokeAsync(route, context, new Exchange());
+        observed.Should().BeSameAs(namedRedb);
     }
 
     // ── Named ProcessWithRedb (sync) ────────────────────────────────
 
     [Fact]
-    public void ProcessWithRedb_Named_Sync_ResolvesFromRegistry()
+    public async Task ProcessWithRedb_Named_Sync_ResolvesFromRegistry()
     {
         var namedRedb = Substitute.For<IRedbService>();
         var context = Substitute.For<IRouteContext>();
         context.GetFromRegistry<IServiceScopeFactory>(Arg.Any<string>()).Returns((IServiceScopeFactory?)null);
         context.GetFromRegistry<IRedbService>("redb:orders-db").Returns(namedRedb);
 
-        var exchange = Substitute.For<IExchange>();
+        var route = new RouteDefinition();
+        route._context = context;
 
-        Action<IExchange>? captured = null;
-        var route = Substitute.For<IRouteDefinition>();
-        route.GetContext().Returns(context);
-        route.Process(Arg.Any<Action<IExchange>>())
-            .Returns(ci => { captured = ci.Arg<Action<IExchange>>(); return route; });
+        IRedbService? observed = null;
+        route.ProcessWithRedb("orders-db", (redb, ex) => { observed = redb; });
 
-        route.ProcessWithRedb("orders-db", (redb, ex) =>
-        {
-            redb.Should().BeSameAs(namedRedb);
-        });
-
-        captured.Should().NotBeNull();
-        captured!(exchange);
+        await InvokeAsync(route, context, new Exchange());
+        observed.Should().BeSameAs(namedRedb);
     }
 
     // ── Named SetBodyFromRedb ───────────────────────────────────────
 
     [Fact]
-    public void SetBodyFromRedb_Named_ResolvesFromRegistry()
+    public async Task SetBodyFromRedb_Named_ResolvesFromRegistry()
     {
         var namedRedb = Substitute.For<IRedbService>();
         var context = Substitute.For<IRouteContext>();
         context.GetFromRegistry<IServiceScopeFactory>(Arg.Any<string>()).Returns((IServiceScopeFactory?)null);
         context.GetFromRegistry<IRedbService>("redb:analytics").Returns(namedRedb);
 
-        var exchange = Substitute.For<IExchange>();
+        var route = new RouteDefinition();
+        route._context = context;
 
-        Func<IExchange, object?>? captured = null;
-        var route = Substitute.For<IRouteDefinition>();
-        route.GetContext().Returns(context);
-        route.SetBody(Arg.Any<Func<IExchange, object?>>())
-            .Returns(ci => { captured = ci.Arg<Func<IExchange, object?>>(); return route; });
+        IRedbService? observed = null;
+        route.SetBodyFromRedb("analytics", (redb, ex) => { observed = redb; return "data"; });
 
-        route.SetBodyFromRedb("analytics", (redb, ex) =>
-        {
-            redb.Should().BeSameAs(namedRedb);
-            return "data";
-        });
-
-        captured.Should().NotBeNull();
-        captured!(exchange).Should().Be("data");
+        var exchange = new Exchange();
+        await InvokeAsync(route, context, exchange);
+        observed.Should().BeSameAs(namedRedb);
+        exchange.In.Body.Should().Be("data");
     }
 
     // ── Named SetHeaderFromRedb ─────────────────────────────────────
 
     [Fact]
-    public void SetHeaderFromRedb_Named_ResolvesFromRegistry()
+    public async Task SetHeaderFromRedb_Named_ResolvesFromRegistry()
     {
         var namedRedb = Substitute.For<IRedbService>();
         var context = Substitute.For<IRouteContext>();
         context.GetFromRegistry<IServiceScopeFactory>(Arg.Any<string>()).Returns((IServiceScopeFactory?)null);
         context.GetFromRegistry<IRedbService>("redb:orders-db").Returns(namedRedb);
 
-        var exchange = Substitute.For<IExchange>();
+        var route = new RouteDefinition();
+        route._context = context;
 
-        Func<IExchange, object?>? captured = null;
-        var route = Substitute.For<IRouteDefinition>();
-        route.GetContext().Returns(context);
-        route.SetHeader(Arg.Is("X-Count"), Arg.Any<Func<IExchange, object?>>())
-            .Returns(ci => { captured = ci.Arg<Func<IExchange, object?>>(); return route; });
+        IRedbService? observed = null;
+        route.SetHeaderFromRedb("orders-db", "X-Count", (redb, ex) => { observed = redb; return 99; });
 
-        route.SetHeaderFromRedb("orders-db", "X-Count", (redb, ex) =>
-        {
-            redb.Should().BeSameAs(namedRedb);
-            return 99;
-        });
-
-        captured.Should().NotBeNull();
-        captured!(exchange).Should().Be(99);
+        var exchange = new Exchange();
+        await InvokeAsync(route, context, exchange);
+        observed.Should().BeSameAs(namedRedb);
+        exchange.In.Headers["X-Count"].Should().Be(99);
     }
 
     // ── Named: empty name falls back to default ─────────────────────
@@ -453,46 +426,36 @@ public sealed class RedbRouteExtensionsTests
         var context = Substitute.For<IRouteContext>();
         context.GetService<IRedbService>().Returns(defaultRedb);
 
-        var exchange = Substitute.For<IExchange>();
+        var route = new RouteDefinition();
+        route._context = context;
 
-        Func<IExchange, CancellationToken, Task>? captured = null;
-        var route = Substitute.For<IRouteDefinition>();
-        route.GetContext().Returns(context);
-        route.Process(Arg.Any<Func<IExchange, CancellationToken, Task>>())
-            .Returns(ci => { captured = ci.Arg<Func<IExchange, CancellationToken, Task>>(); return route; });
-
+        IRedbService? observed = null;
         route.ProcessWithRedb("", async (redb, ex, ct) =>
         {
-            redb.Should().BeSameAs(defaultRedb);
+            observed = redb;
             await Task.CompletedTask;
         });
 
-        captured.Should().NotBeNull();
-        await captured!(exchange, CancellationToken.None);
+        await InvokeAsync(route, context, new Exchange());
+        observed.Should().BeSameAs(defaultRedb);
     }
 
     // ── Named: not found throws ─────────────────────────────────────
 
     [Fact]
-    public void ProcessWithRedb_Named_NotFound_Throws()
+    public async Task ProcessWithRedb_Named_NotFound_Throws()
     {
         var context = Substitute.For<IRouteContext>();
         context.GetFromRegistry<IServiceScopeFactory>(Arg.Any<string>()).Returns((IServiceScopeFactory?)null);
         context.GetFromRegistry<IRedbService>("redb:missing").Returns((IRedbService?)null);
 
-        var exchange = Substitute.For<IExchange>();
-
-        Action<IExchange>? captured = null;
-        var route = Substitute.For<IRouteDefinition>();
-        route.GetContext().Returns(context);
-        route.Process(Arg.Any<Action<IExchange>>())
-            .Returns(ci => { captured = ci.Arg<Action<IExchange>>(); return route; });
+        var route = new RouteDefinition();
+        route._context = context;
 
         route.ProcessWithRedb("missing", (redb, ex) => { });
 
-        captured.Should().NotBeNull();
-        var act = () => captured!(exchange);
-        act.Should().Throw<InvalidOperationException>()
+        var act = async () => await InvokeAsync(route, context, new Exchange());
+        await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Named IRedbService 'missing'*not found*");
     }
 
@@ -516,36 +479,37 @@ public sealed class RedbRouteExtensionsTests
         var context = Substitute.For<IRouteContext>();
         context.GetFromRegistry<IServiceScopeFactory>("redb-factory:orders-db").Returns(scopeFactory);
 
-        Func<IExchange, CancellationToken, Task>? captured = null;
-        var route = Substitute.For<IRouteDefinition>();
-        route.GetContext().Returns(context);
-        route.Process(Arg.Any<Func<IExchange, CancellationToken, Task>>())
-            .Returns(ci => { captured = ci.Arg<Func<IExchange, CancellationToken, Task>>(); return route; });
+        var route = new RouteDefinition();
+        route._context = context;
 
         var resolved = new List<IRedbService>();
-
         route.ProcessWithRedb("orders-db", async (redb, ex, ct) =>
         {
             resolved.Add(redb);
             await Task.CompletedTask;
         });
 
-        captured.Should().NotBeNull();
+        var processor = route.Outputs[0].CreateProcessor(context);
 
-        // Two distinct exchanges with real Properties bag.
-        var ex1 = Substitute.For<IExchange>();
-        ex1.Properties.Returns(new Dictionary<string, object?>());
-        var ex2 = Substitute.For<IExchange>();
-        ex2.Properties.Returns(new Dictionary<string, object?>());
+        var ex1 = new Exchange();
+        var ex2 = new Exchange();
 
         // First exchange — invoke twice to exercise cache reuse.
-        await captured!(ex1, CancellationToken.None);
-        await captured!(ex1, CancellationToken.None);
+        await processor.Process(ex1, CancellationToken.None);
+        await processor.Process(ex1, CancellationToken.None);
         // Second exchange — must get its own scoped instance.
-        await captured!(ex2, CancellationToken.None);
+        await processor.Process(ex2, CancellationToken.None);
 
         resolved.Should().HaveCount(3);
         resolved[0].Should().BeSameAs(resolved[1], "second call within same exchange must reuse the cached scope");
         resolved[0].Should().NotBeSameAs(resolved[2], "different exchanges must get different scoped IRedbService");
+    }
+
+    // ── Helper to invoke a real RouteDefinition's first output processor ─────
+
+    private static async Task InvokeAsync(RouteDefinition route, IRouteContext context, IExchange exchange)
+    {
+        var processor = route.Outputs[0].CreateProcessor(context);
+        await processor.Process(exchange, CancellationToken.None);
     }
 }

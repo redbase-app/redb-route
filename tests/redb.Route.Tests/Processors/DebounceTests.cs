@@ -304,19 +304,17 @@ public class DebounceTests
     {
         var def = new RouteDefinition();
         Func<IExchange, string> key = e => "k";
-        def.From("direct:in").Debounce(key, TimeSpan.FromMilliseconds(500));
+        def.Debounce(key, TimeSpan.FromMilliseconds(500));
 
-        def.Steps.Should().HaveCount(2);
-        var step = def.Steps[1].Should().BeOfType<DebounceStep>().Subject;
-        step.KeyExtractor.Should().BeSameAs(key);
-        step.QuietPeriod.Should().Be(TimeSpan.FromMilliseconds(500));
+        var node = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<DebounceDefinition>().Subject;
+        node.KeyExtractor.Should().BeSameAs(key);
+        node.QuietPeriod.Should().Be(TimeSpan.FromMilliseconds(500));
     }
 
     [Fact]
     public void DSL_Debounce_NullKeyExtractor_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct:in");
         var act = () => def.Debounce(null!, TimeSpan.FromMilliseconds(100));
         act.Should().Throw<ArgumentNullException>().WithParameterName("keyExtractor");
     }
@@ -325,7 +323,6 @@ public class DebounceTests
     public void DSL_Debounce_ZeroQuietPeriod_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct:in");
         var act = () => def.Debounce(e => "k", TimeSpan.Zero);
         act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("quietPeriod");
     }
@@ -334,7 +331,6 @@ public class DebounceTests
     public void DSL_Debounce_NegativeQuietPeriod_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct:in");
         var act = () => def.Debounce(e => "k", TimeSpan.FromMilliseconds(-50));
         act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName("quietPeriod");
     }
@@ -343,11 +339,12 @@ public class DebounceTests
     public void DSL_Debounce_Chaining()
     {
         var def = new RouteDefinition();
-        var result = def.From("direct:in")
-            .Debounce(e => "k", TimeSpan.FromMilliseconds(200))
-            .To("direct:out");
+        var scope = def.Debounce(e => "k", TimeSpan.FromMilliseconds(200));
+        scope.To("direct:out");
+        var result = scope.EndDebounce();
 
         result.Should().BeSameAs(def);
-        def.Steps.Should().HaveCount(3);
+        def.Outputs.Should().ContainSingle().Which.Should().BeOfType<DebounceDefinition>()
+            .Which.Outputs.Should().ContainSingle().Which.Should().BeOfType<ToDefinition>();
     }
 }

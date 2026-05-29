@@ -244,6 +244,17 @@ internal static class RouteContextTestExtensions
         return rd.Process(e => { }); // no-op
     }
 
+    /// <summary>RichLogScope overload: captures context while keeping the scope open for chaining.</summary>
+    public static redb.Route.Definitions.RichLogScopeDefinition CaptureContext(
+        this redb.Route.Definitions.RichLogScopeDefinition scope,
+        Action<IRouteContext?> capture)
+    {
+        IProcessorDefinition? cur = scope.Parent;
+        while (cur is not null and not IRouteDefinition) cur = cur.Parent;
+        capture((cur as IRouteDefinition)?.GetContext());
+        return scope;
+    }
+
     /// <summary>Extension that reads from registry at build-time, uses value at run-time.</summary>
     public static IRouteDefinition UseRegistryFlag(this IRouteDefinition rd, string key, Action<object?> onFlag)
     {

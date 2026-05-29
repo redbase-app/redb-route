@@ -33,11 +33,11 @@ public class KeyedThrottleIntegrationTests
     {
         var def = new RouteDefinition();
         def.From("direct://kt");
-        def.Throttle(KeyFromHeader, 5, TimeSpan.FromSeconds(5));
-        def.Transform(e => $"ok:{e.In.Body}");
+        def.Throttle(KeyFromHeader, 5, TimeSpan.FromSeconds(5))
+            .Transform(e => $"ok:{e.In.Body}")
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var ex = CreateExchange("hello", "A");
         await pipeline.Process(ex);
@@ -50,11 +50,11 @@ public class KeyedThrottleIntegrationTests
     {
         var def = new RouteDefinition();
         def.From("direct://kt");
-        def.Throttle(KeyFromHeader, 2, TimeSpan.FromSeconds(10));
-        def.Transform(e => $"ok:{e.In.Body}");
+        def.Throttle(KeyFromHeader, 2, TimeSpan.FromSeconds(10))
+            .Transform(e => $"ok:{e.In.Body}")
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         // 2 messages per key should pass immediately
         var a1 = CreateExchange("a1", "A");
@@ -78,11 +78,11 @@ public class KeyedThrottleIntegrationTests
     {
         var def = new RouteDefinition();
         def.From("direct://kt");
-        def.Throttle(KeyFromHeader, 2, TimeSpan.FromMilliseconds(500));
-        def.Process(e => { }); // no-op tail
+        def.Throttle(KeyFromHeader, 2, TimeSpan.FromMilliseconds(500))
+            .Process(e => { })
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         // Fill the bucket
         await pipeline.Process(CreateExchange(1, "X"));
@@ -105,11 +105,11 @@ public class KeyedThrottleIntegrationTests
     {
         var def = new RouteDefinition();
         def.From("direct://kt");
-        def.Throttle(KeyFromHeader, 10);
-        def.Process(e => { }); // no-op
+        def.Throttle(KeyFromHeader, 10)
+            .Process(e => { })
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var ex = CreateExchange("body", "K");
         ex.In.Headers["Custom"] = "value";
@@ -134,10 +134,10 @@ public class KeyedThrottleIntegrationTests
         def.From("direct://kt")
            .SetHeader("Step", "before")
            .Throttle(KeyFromHeader, 10)
-           .Transform(e => $"throttled:{e.In.Body}");
+               .Transform(e => $"throttled:{e.In.Body}")
+           .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var ex = CreateExchange("data", "K");
         await pipeline.Process(ex);
@@ -156,11 +156,11 @@ public class KeyedThrottleIntegrationTests
     {
         var def = new RouteDefinition();
         def.From("direct://kt");
-        def.Throttle(KeyFromHeader, 100); // no period = 1 second default
-        def.Process(e => { });
+        def.Throttle(KeyFromHeader, 100)
+            .Process(e => { })
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         // 100 messages under limit should pass fast
         var sw = Stopwatch.StartNew();
@@ -181,11 +181,11 @@ public class KeyedThrottleIntegrationTests
         var count = 0;
         var def = new RouteDefinition();
         def.From("direct://kt");
-        def.Throttle(KeyFromHeader, 20, TimeSpan.FromSeconds(5));
-        def.Process(e => Interlocked.Increment(ref count));
+        def.Throttle(KeyFromHeader, 20, TimeSpan.FromSeconds(5))
+            .Process(e => Interlocked.Increment(ref count))
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var tasks = Enumerable.Range(0, 40)
             .Select(i => pipeline.Process(CreateExchange(i, $"Key{i % 4}")))

@@ -212,7 +212,8 @@ public class TracedDslTests : IAsyncDisposable
     [Fact]
     public async Task Traced_ExpressionInName_ResolvesAtRuntime()
     {
-        _context.AddRoutes(r =>
+#pragma warning disable CS0618 // v1 DSL — Traced expression templates require v1 semantics
+        _context.AddRoutes((InlineRouteBuilder r) =>
         {
             r.From("direct://traced-expr-in")
                 .Traced("process-${header.orderType}", e =>
@@ -221,6 +222,7 @@ public class TracedDslTests : IAsyncDisposable
                 })
                 .To("direct://traced-expr-out");
         });
+#pragma warning restore CS0618
 
         IExchange? received = null;
         _context.AddRoutes(r =>
@@ -249,7 +251,8 @@ public class TracedDslTests : IAsyncDisposable
     [Fact]
     public async Task Traced_BlockScope_ExpressionInName()
     {
-        _context.AddRoutes(r =>
+#pragma warning disable CS0618 // v1 DSL — Traced expression templates require v1 semantics
+        _context.AddRoutes((InlineRouteBuilder r) =>
         {
             r.From("direct://traced-block-expr-in")
                 .Traced("pipeline-${header.region}")
@@ -257,6 +260,7 @@ public class TracedDslTests : IAsyncDisposable
                 .EndTraced()
                 .To("direct://traced-block-expr-out");
         });
+#pragma warning restore CS0618
 
         IExchange? received = null;
         _context.AddRoutes(r =>

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -5,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.SignalR;
 
@@ -69,6 +71,13 @@ public class SignalRProducer : ConnectableProducer
     public override async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         EnsureStarted();
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"signalr {_options.Mode} {_options.Method}", ActivityKind.Producer,
+            "messaging.system", "signalr",
+            _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.HubPath,
+            operation: _options.Mode.ToString());
 
         try
         {

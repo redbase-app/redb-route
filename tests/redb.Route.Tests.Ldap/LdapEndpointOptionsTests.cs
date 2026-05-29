@@ -88,11 +88,12 @@ public sealed class LdapEndpointOptionsTests
     }
 
     [Fact]
-    public void Validate_ZeroPageSize_Throws()
+    public void Validate_ZeroPageSize_IsAllowed()
     {
+        // PageSize == 0 is a documented sentinel meaning "paged results disabled".
         var opts = new LdapEndpointOptions { PageSize = 0 };
         var act = () => opts.Validate();
-        act.Should().Throw<ArgumentOutOfRangeException>().WithMessage("*PageSize*");
+        act.Should().NotThrow();
     }
 
     [Fact]

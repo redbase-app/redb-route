@@ -34,11 +34,11 @@ public class DebounceIntegrationTests
         var forwarded = new ConcurrentBag<object?>();
         var def = new RouteDefinition();
         def.From("direct://debounce");
-        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(100));
-        def.Process(e => forwarded.Add(e.In.Body));
+        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(100))
+            .Process(e => forwarded.Add(e.In.Body))
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange("hello", "A"));
 
@@ -54,11 +54,11 @@ public class DebounceIntegrationTests
         var forwarded = new ConcurrentBag<object?>();
         var def = new RouteDefinition();
         def.From("direct://debounce");
-        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(150));
-        def.Process(e => forwarded.Add(e.In.Body));
+        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(150))
+            .Process(e => forwarded.Add(e.In.Body))
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange("v1", "A"));
         await Task.Delay(30);
@@ -77,15 +77,15 @@ public class DebounceIntegrationTests
         var forwarded = new ConcurrentBag<string>();
         var def = new RouteDefinition();
         def.From("direct://debounce");
-        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(100));
-        def.Process(e =>
-        {
-            var k = e.In.Headers["DebounceKey"]?.ToString() ?? "";
-            forwarded.Add($"{k}:{e.In.Body}");
-        });
+        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(100))
+            .Process(e =>
+            {
+                var k = e.In.Headers["DebounceKey"]?.ToString() ?? "";
+                forwarded.Add($"{k}:{e.In.Body}");
+            })
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange("a1", "A"));
         await pipeline.Process(CreateExchange("b1", "B"));
@@ -103,12 +103,12 @@ public class DebounceIntegrationTests
         var forwarded = new ConcurrentBag<object?>();
         var def = new RouteDefinition();
         def.From("direct://debounce");
-        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(100));
-        def.Transform(e => $"transformed:{e.In.Body}");
-        def.Process(e => forwarded.Add(e.In.Body));
+        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(100))
+            .Transform(e => $"transformed:{e.In.Body}")
+            .Process(e => forwarded.Add(e.In.Body))
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange("raw", "X"));
         await Task.Delay(350);
@@ -124,11 +124,11 @@ public class DebounceIntegrationTests
         var def = new RouteDefinition();
         def.From("direct://debounce");
         def.Process(e => preProcessed.Add(e.In.Body));
-        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(100));
-        def.Process(e => forwarded.Add(e.In.Body));
+        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(100))
+            .Process(e => forwarded.Add(e.In.Body))
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange("msg1", "A"));
         await Task.Delay(30);
@@ -149,15 +149,15 @@ public class DebounceIntegrationTests
         var forwarded = new ConcurrentBag<string>();
         var def = new RouteDefinition();
         def.From("direct://debounce");
-        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(150));
-        def.Process(e =>
-        {
-            var k = e.In.Headers["DebounceKey"]?.ToString() ?? "";
-            forwarded.Add($"{k}:{e.In.Body}");
-        });
+        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(150))
+            .Process(e =>
+            {
+                var k = e.In.Headers["DebounceKey"]?.ToString() ?? "";
+                forwarded.Add($"{k}:{e.In.Body}");
+            })
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         // Burst on A
         await pipeline.Process(CreateExchange("a1", "A"));
@@ -181,12 +181,12 @@ public class DebounceIntegrationTests
         var forwarded = new ConcurrentBag<object?>();
         var def = new RouteDefinition();
         def.From("direct://debounce");
-        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(100));
-        def.SetHeader("Debounced", "true");
-        def.Process(e => forwarded.Add(e.In.Headers["Debounced"]));
+        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(100))
+            .SetHeader("Debounced", "true")
+            .Process(e => forwarded.Add(e.In.Headers["Debounced"]))
+            .End();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange("test", "A"));
         await Task.Delay(350);

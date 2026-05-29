@@ -25,6 +25,7 @@ public sealed class IbmMqConsumer : IConsumer
 
     private MQQueue? _queue;
     private MQTopic? _topic;
+    private MQQueueManager? _qm;
     private CancellationTokenSource? _cts;
     private Task? _receiveTask;
     private readonly InflightDrainGuard _drain = new();
@@ -45,19 +46,22 @@ public sealed class IbmMqConsumer : IConsumer
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
+        // Each consumer owns its own MQQueueManager to avoid MQI-call serialisation
+        // deadlocks with producers / RPC reply loops on the same broker connection.
+        _qm = await _endpoint.CreateDedicatedQueueManagerAsync($"consumer:{_endpoint.Destination}", ct).ConfigureAwait(false);
+
         if (_options.DestinationType == IbmMqDestinationType.Topic)
         {
-            _topic = await _endpoint.OpenTopicAsync(
-                _endpoint.Destination,
+            var subName = $"REDB.{_endpoint.Destination}.{Guid.NewGuid():N}";
+            _topic = _qm.AccessTopic(
+                _endpoint.Destination, null,
                 MQC.MQSO_CREATE | MQC.MQSO_NON_DURABLE | MQC.MQSO_MANAGED,
-                ct).ConfigureAwait(false);
+                null, subName);
         }
         else
         {
             var openOptions = MQC.MQOO_INPUT_SHARED | MQC.MQOO_FAIL_IF_QUIESCING;
-            if (_options.Transacted)
-                openOptions |= MQC.MQOO_INPUT_SHARED;
-            _queue = await _endpoint.OpenQueueAsync(openOptions, ct).ConfigureAwait(false);
+            _queue = _qm.AccessQueue(_endpoint.Destination, openOptions);
         }
 
         _cts = new CancellationTokenSource();
@@ -85,6 +89,13 @@ public sealed class IbmMqConsumer : IConsumer
 
         CloseDestination();
 
+        if (_qm != null)
+        {
+            try { if (_qm.IsConnected) _qm.Disconnect(); }
+            catch (Exception ex) { _logger?.LogDebug(ex, "IBM MQ: error disconnecting consumer queue manager during stop"); }
+            _qm = null;
+        }
+
         _cts?.Dispose();
         _cts = null;
         _receiveTask = null;
@@ -97,9 +108,12 @@ public sealed class IbmMqConsumer : IConsumer
 
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
+        // Note: MQGMO_PROPERTIES_IN_HANDLE requires gmo.MessageHandle to be set via
+        // qm.CreateMessageHandle(). Without it, GetStringProperty calls in helpers can
+        // misbehave on the managed .NET client. Use queue-default property handling.
         var gmo = new MQGetMessageOptions
         {
-            Options = MQC.MQGMO_WAIT | MQC.MQGMO_FAIL_IF_QUIESCING | MQC.MQGMO_PROPERTIES_IN_HANDLE,
+            Options = MQC.MQGMO_WAIT | MQC.MQGMO_FAIL_IF_QUIESCING,
             WaitInterval = _options.WaitInterval,
         };
 
@@ -119,6 +133,8 @@ public sealed class IbmMqConsumer : IConsumer
             try
             {
                 var msg = new MQMessage();
+                var getSw = Stopwatch.StartNew();
+                bool gotMessage = false;
 
                 try
                 {
@@ -126,6 +142,7 @@ public sealed class IbmMqConsumer : IConsumer
                         _topic!.Get(msg, gmo);
                     else
                         _queue!.Get(msg, gmo);
+                    gotMessage = true;
                 }
                 catch (MQException ex) when (ex.ReasonCode == MQC.MQRC_NO_MSG_AVAILABLE)
                 {
@@ -135,6 +152,7 @@ public sealed class IbmMqConsumer : IConsumer
                 catch (MQException ex) when (ex.ReasonCode == MQC.MQRC_FORMAT_ERROR)
                 {
                     // MQGMO_CONVERT can't convert binary (MQFMT_NONE) data — proceed with unconverted payload
+                    gotMessage = true;
                 }
                 catch (MQException ex) when (ex.ReasonCode == MQC.MQRC_Q_MGR_QUIESCING ||
                                               ex.ReasonCode == MQC.MQRC_CONNECTION_BROKEN)
@@ -142,6 +160,46 @@ public sealed class IbmMqConsumer : IConsumer
                     if (!ct.IsCancellationRequested)
                         _logger?.LogWarning("IBM MQ connection interrupted: RC={ReasonCode}", ex.ReasonCode);
                     break;
+                }
+                finally
+                {
+                    getSw.Stop();
+                }
+
+                // ─────────────────────────────────────────────────────────────
+                // KNOWN ISSUE — IBM MQ managed .NET client (amqmdnetstd.dll)
+                // ─────────────────────────────────────────────────────────────
+                // The managed IBM MQ client is NOT event-driven on MQGET with
+                // MQGMO_WAIT. It carries an internal polling tick of ~500 ms
+                // that is INDEPENDENT of the WaitInterval supplied in MQGMO:
+                // WaitInterval only governs the upper timeout, not the lower
+                // delivery-granularity bound. As a result the typical
+                // producer→consumer latency observed on this transport is
+                // ~500 ms even with SHARECNV(1) on the channel.
+                //
+                // The native (unmanaged) client is event-driven but requires
+                // the IBM MQ Client redistributable to be installed on the
+                // host — not viable for self-contained .NET deployments.
+                //
+                // Proper fix: rewrite ReceiveLoopAsync to use the managed
+                // async-consume API (MQQueue.Cb(...) + MQQueueManager.Ctl(
+                // MQOP_START, ...)). With the callback path the broker pushes
+                // messages to us and the per-message latency drops to ~0.
+                // This is a non-trivial refactor (callback-driven instead of
+                // poll-driven loop, different cancellation/back-pressure
+                // model) — tracked for a future release.
+                //
+                // The Debug log below lets ops confirm the diagnosis in the
+                // field: if "MQGET blocked for ~500 ms" appears consistently,
+                // it is the managed-client tick (need MQCB); if values are
+                // <50 ms while end-to-end latency is still ~500 ms, the
+                // bottleneck is on the producer side instead.
+                // ─────────────────────────────────────────────────────────────
+                if (gotMessage && getSw.ElapsedMilliseconds > 50)
+                {
+                    _logger?.LogDebug(
+                        "IBM MQ MQGET blocked for {ElapsedMs} ms before delivering message (destination={Destination})",
+                        getSw.ElapsedMilliseconds, _endpoint.Destination);
                 }
 
                 await _semaphore.WaitAsync(ct).ConfigureAwait(false);
@@ -173,12 +231,23 @@ public sealed class IbmMqConsumer : IConsumer
     {
         using var activity = StartConsumerActivity(mqMsg);
 
+        _logger?.LogDebug(
+            "IBM MQ consumer: GOT message destination={Destination}, msgId={MsgId}, replyTo={ReplyTo}, msgType={MsgType}",
+            _endpoint.Destination,
+            IbmMqMessageHelper.BytesToHex(mqMsg.MessageId),
+            mqMsg.ReplyToQueueName?.Trim(),
+            mqMsg.MessageType);
+
         var exchange = CreateExchange(mqMsg);
+
+        _logger?.LogDebug(
+            "IBM MQ consumer: exchange CREATED, pattern={Pattern}, about to invoke route processor",
+            exchange.Pattern);
 
         // Register transacted ack action
         if (_options.Transacted)
         {
-            var qm = await _endpoint.GetQueueManagerAsync(ct).ConfigureAwait(false);
+            var qm = _qm ?? throw new InvalidOperationException("IBM MQ consumer not started");
             var ackAction = new IbmMqAckAction(qm, _logger);
             RegisterTransactedAction(exchange, $"ibmmq-ack-{Guid.NewGuid():N}", ackAction);
         }
@@ -186,6 +255,10 @@ public sealed class IbmMqConsumer : IConsumer
         try
         {
             await _processor.Process(exchange, ct).ConfigureAwait(false);
+
+            _logger?.LogDebug(
+                "IBM MQ consumer: route processor RETURNED, hasOut={HasOut}, replyTo={ReplyTo}",
+                exchange.HasOut, mqMsg.ReplyToQueueName?.Trim());
 
             // RPC reply: if the incoming message had ReplyTo, send the Out message back
             if (!string.IsNullOrWhiteSpace(mqMsg.ReplyToQueueName))
@@ -213,7 +286,7 @@ public sealed class IbmMqConsumer : IConsumer
             {
                 try
                 {
-                    var qm = await _endpoint.GetQueueManagerAsync(ct).ConfigureAwait(false);
+                    var qm = _qm ?? throw new InvalidOperationException("IBM MQ consumer not started");
                     qm.Backout();
                     _logger?.LogDebug("IBM MQ message rolled back after processing error");
                 }
@@ -317,10 +390,14 @@ public sealed class IbmMqConsumer : IConsumer
             reply.CorrelationId = originalMsg.MessageId;
             reply.MessageType = MQC.MQMT_REPLY;
 
+            // Round-trip user headers via RFH2 (matches producer-side BuildOutgoingMessage)
+            var headerSource = exchange.HasOut ? exchange.Out! : exchange.In;
+            IbmMqMessageHelper.CopyHeadersToRfh2(reply, headerSource);
+
             var replyQueueName = originalMsg.ReplyToQueueName.Trim();
             var replyQmName = originalMsg.ReplyToQueueManagerName?.Trim();
 
-            var qm = await _endpoint.GetQueueManagerAsync(ct).ConfigureAwait(false);
+            var qm = _qm ?? throw new InvalidOperationException("IBM MQ consumer not started");
 
             var openOptions = MQC.MQOO_OUTPUT | MQC.MQOO_FAIL_IF_QUIESCING;
             MQQueue replyQueue;
@@ -352,8 +429,10 @@ public sealed class IbmMqConsumer : IConsumer
             // Swallow: failed reply must not block the consumer slot. The original message
             // has already been destructively read (MQGMO_NO_SYNCPOINT) or will be committed
             // on the transactional path — the client will detect failure via its own RPC timeout.
-            _logger?.LogWarning(ex, "IBM MQ: failed to send RPC reply to {ReplyQueue} — original message will still be settled",
-                originalMsg.ReplyToQueueName?.Trim());
+            var reason = (ex as MQException)?.ReasonCode;
+            _logger?.LogWarning(ex,
+                "IBM MQ: failed to send RPC reply to {ReplyQueue} (reason={Reason}): {Message} — original message will still be settled",
+                originalMsg.ReplyToQueueName?.Trim(), reason, ex.Message);
         }
     }
 
@@ -370,7 +449,7 @@ public sealed class IbmMqConsumer : IConsumer
 
         try
         {
-            var qm = await _endpoint.GetQueueManagerAsync(ct).ConfigureAwait(false);
+            var qm = _qm ?? throw new InvalidOperationException("IBM MQ consumer not started");
             using var boq = qm.AccessQueue(boqName, MQC.MQOO_OUTPUT | MQC.MQOO_FAIL_IF_QUIESCING);
             var pmo = new MQPutMessageOptions { Options = MQC.MQPMO_NO_SYNCPOINT };
             boq.Put(mqMsg, pmo);

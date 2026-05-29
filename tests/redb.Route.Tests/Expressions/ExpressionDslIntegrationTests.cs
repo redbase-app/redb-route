@@ -11,7 +11,7 @@ namespace redb.Route.Tests.Expressions;
 
 /// <summary>
 /// Integration tests verifying that Expression/Predicate system is fully wired into DSL,
-/// RouteCompiler, and RouteContext end-to-end.
+/// OldRouteCompiler, and RouteContext end-to-end.
 /// </summary>
 [Collection("ExpressionResolver")]
 public class ExpressionDslIntegrationTests : IAsyncDisposable
@@ -691,8 +691,8 @@ public class ExpressionDslIntegrationTests : IAsyncDisposable
             .SetHeaderExpression("h2", "${header.h}")
             .Transform(new DelegateExpression<string>(e => "x"))
             .TransformExpression("${body}")
-            .Filter(new IsNotNullPredicate(new BodyExpression()))
-            .Filter("${header.flag}")
+            .Filter(new IsNotNullPredicate(new BodyExpression())).EndFilter()
+            .Filter("${header.flag}").EndFilter()
             .Split(new BodyExpression()).End()
             .Log("Test ${body}")
             .Choice()

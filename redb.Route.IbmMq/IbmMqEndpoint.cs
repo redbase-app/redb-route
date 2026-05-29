@@ -54,6 +54,15 @@ public sealed class IbmMqEndpoint : EndpointBase<IbmMqEndpointOptions>
         => _component.GetOrCreateQueueManagerAsync(this, ct);
 
     /// <summary>
+    /// Creates a fresh dedicated <see cref="MQQueueManager"/> owned by the caller.
+    /// Producers and consumers use this instead of the shared pool to avoid MQI-call
+    /// serialisation deadlocks (MQGET WAIT on the shared connection would otherwise
+    /// block concurrent MQPUTs / MQOPENs).
+    /// </summary>
+    internal Task<MQQueueManager> CreateDedicatedQueueManagerAsync(string ownerTag, CancellationToken ct = default)
+        => _component.CreateDedicatedQueueManagerAsync(this, ownerTag, ct);
+
+    /// <summary>
     /// Opens an MQ queue with the specified open options.
     /// </summary>
     internal async Task<MQQueue> OpenQueueAsync(int openOptions, CancellationToken ct = default)

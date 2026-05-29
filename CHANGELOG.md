@@ -40,6 +40,277 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [3.0.0] — 2026-05-28
+
+### Added
+
+#### DSL — full Camel parity, single canonical `RouteDefinition`
+- **`redb.Route` (DSL)** — Package A "enterprise EIP closure": the parallel
+  v2 type tree (`IRouteDefinition2`, `RouteBuilder2`, `BlockStack`,
+  `ExceptionRouteDefinition`, the v1 `OldRouteCompiler`, the v1 typed
+  `Abstractions/Typed/IRouteDefinition.cs`, etc.) has been collapsed into a
+  single canonical surface — `IRouteDefinition` / `RouteDefinition` /
+  `RouteBuilder`. The route AST is now exclusively built from
+  `IProcessorDefinition` nodes, each of which compiles itself via
+  `CreateProcessor(IRouteContext)`; there is no separate compiler class. The
+  previous "v2 DSL → bridge → legacy compiler" indirection has been removed.
+- **`redb.Route` (DSL)** — `IRouteContext` is now propagated down the
+  definition tree via a `Parent` chain, so any nested `*Definition` can reach
+  the owning context (logger factory, services, idempotent repositories,
+  policy factories) without explicit threading.
+- **`redb.Route` (DSL)** — `RouteStepProjection`: a read-only canonical
+  projection of the `IProcessorDefinition` tree into `RouteStep` records,
+  exposed as `RouteDefinition.Steps`. Intended for diagnostics, validation,
+  and tooling (e.g. route visualisers); it is **not** used by the runtime
+  compiler. `FromStep`, `ToStep`, `FilterStep` (with optional `SubSteps`
+  body), `ChoiceStep`, `SagaRouteStep`, etc. all flow through this
+  projection.
+- **`redb.Route` (DSL)** — `RouteBuilder.Definitions` and
+  `RouteBuilder.ExceptionDefinitions` are now `public` (previously
+  `internal`). This unblocks downstream test fixtures and tooling that need
+  to introspect the route AST after `Build()`.
+- **`redb.Route` (DSL)** — `OnExceptionDefinition` gained the fluent setters
+  `LogStackTrace(bool)` and `LogExhausted(bool)` to match the rest of the
+  Camel `onException(...)` builder surface.
+
+#### Dynamic endpoints (Camel `toD()` / dynamic `wireTap` / dynamic `enrich`)
+- **`redb.Route` (DSL)** — `DynamicEndpointResolver`: per-instance producer
+  cache keyed by the URI resolved at runtime. Three constructors accept a
+  string template (`${header.xxx}` / `${property.yyy}` / `${body}`
+  placeholders), an `IExpression` instance, or a raw
+  `Func<IExchange, string>`. Producers are tracked via
+  `RouteContext.TrackProducer(...)` for graceful shutdown.
+- **`redb.Route` (DSL)** — `ToDynamicProcessor` + `ToDynamicDefinition`
+  implement Camel's `toD(...)` — `IRouteDefinition.ToD(string|IExpression|Func)`.
+- **`redb.Route` (DSL)** — `WireTapDynamicDefinition`,
+  `EnrichDynamicDefinition`, `PollEnrichDynamicDefinition` and matching
+  `IRouteDefinition.WireTap(...)` / `Enrich(...)` / `PollEnrich(...)`
+  overloads that accept a dynamic URI. `EnrichProcessor` and
+  `PollEnrichProcessor` gained an alternate constructor taking a
+  `DynamicEndpointResolver`; their `Process` chooses between the resolver
+  and the cached producer at run time.
+- **`redb.Route` (DSL)** — string-template expression DSL:
+  `SetBodyExpression(...)`, `SetHeaderExpression(...)`,
+  `SetPropertyExpression(...)` on `IRouteDefinition`.
+- **`redb.Route` (DSL)** — `LogDefinition.LogStaticDefinition` auto-upgrades
+  to `TemplateLogProcessor` when the configured message contains a
+  `${...}` placeholder, so users get template-interpolation without a
+  separate API.
+- **`redb.Route` (Core)** — `RouteContext` now registers the current
+  `ILoggerFactory` into its service collection so processors built from
+  `.Log(...)` / template expressions can resolve their logger without
+  extra plumbing.
+
+#### Tests
+- **`redb.Route` (Tests)** — new DSL **reference suites** that pin Camel
+  semantics with extensive scenario coverage:
+  `Reference/DslChoiceReferenceTests.cs` (~767 lines),
+  `Reference/DslDoTryReferenceTests.cs` (~441 lines),
+  `Reference/DslFilterReferenceTests.cs` (extended). These are the
+  authoritative compatibility specs for Choice/When/Otherwise,
+  TryCatchFinally and Filter scope semantics.
+- **`redb.Route.Tests.Core`** — twelve tests (`RedbRouteExtensionsTests`,
+  `RedbTransactedActionTests`) were rewritten on top of the real
+  `RouteDefinition` + `Exchange` pipeline, removing the previous
+  `IRouteDefinition` mock-based scaffolding.
+
+#### IBM MQ diagnostics
+- **`redb.Route.IbmMq`** — diagnostic timing around `MQGET`. The consumer
+  emits a `Debug`-level `MQGET blocked for {N}ms` log entry for any blocking
+  get longer than ~50 ms. This was originally raised at `Information` while
+  diagnosing a ~500 ms producer→consumer latency in production; it has been
+  lowered to `Debug` so it stays silent under default verbosity and only
+  lights up when ops explicitly enable IBM MQ diagnostics.
+  `IbmMqProducer` / `IbmMqMessageHelper` / `IbmMqEndpoint` /
+  `IbmMqComponent` received the supporting plumbing.
+
+### Known limitations
+- **`redb.Route.IbmMq` — ~500 ms minimum end-to-end latency on the managed
+  client.** The managed IBM MQ .NET client (`amqmdnetstd.dll`) used by this
+  package is **not event-driven** on `MQGET` with `MQGMO_WAIT`. It carries
+  an internal polling tick of ~500 ms that is **independent** of the
+  `WaitInterval` supplied in `MQGMO`: `WaitInterval` only governs the upper
+  timeout, not the lower delivery-granularity bound. As a result the
+  typical producer→consumer latency on this transport is ~500 ms even after
+  channel reconfiguration (we have validated `SHARECNV(1)` on
+  `DEV.APP.SVRCONN` — it does not change the floor). The native
+  (unmanaged) client is event-driven but requires the IBM MQ Client
+  redistributable to be installed on the host, which is not viable for
+  self-contained .NET deployments and is therefore not used here.
+
+  **Planned fix:** rewrite `IbmMqConsumer.ReceiveLoopAsync` to use the
+  managed async-consume API (`MQQueue.Cb(...)` +
+  `MQQueueManager.Ctl(MQOP_START, ...)`). With the callback path the broker
+  pushes messages and per-message latency drops to ~0. Tracked for a future
+  release; the change is non-trivial because the loop becomes
+  callback-driven (different cancellation, back-pressure and lifecycle
+  model than the current poll loop). See the in-source `KNOWN ISSUE` block
+  in [`IbmMqConsumer.cs`](src/redb.Route.IbmMq/IbmMqConsumer.cs) for
+  details.
+
+  **Field diagnosis recipe.** Enable `Debug` on
+  `redb.Route.IbmMq.IbmMqConsumer` and inspect the
+  `MQGET blocked for {N}ms` log line:
+    - `N ≈ 500 ms` consistently → managed-client polling tick; the
+      MQCB rewrite above is required.
+    - `N < 50 ms` while end-to-end latency is still ~500 ms → the
+      bottleneck is on the producer side (PUT missing a flush or an
+      extra round-trip), not the consumer.
+
+### Added — Telemetry (carried over)
+- **`redb.Route` (Telemetry)** — shared telemetry identity. Both `Meter` and
+  `ActivitySource` now use a single canonical name `redb.Route`, exposed via
+  the `RouteActivitySource.TelemetryName` constant (also surfaced as
+  `RouteActivitySource.SourceName` and `RouteMetrics.MeterName`). OTel
+  collectors can subscribe once and get both signals.
+- **`redb.Route` (Telemetry)** — `RouteTelemetryExtensions.StartTransportSpan(...)`
+  helper that opens a transport span with the conventional OpenTelemetry
+  semantic attributes (`messaging.system` / `db.system` / `http.method` /
+  `rpc.system` / `network.transport`, plus `redb.route.endpoint`,
+  `messaging.destination.name`, `messaging.operation`). Returns `null` when
+  no listener is registered (zero overhead).
+- **`redb.Route` (Telemetry)** — `ProcessorMetrics` gained 16 new instruments
+  covering the previously-unmeasured EIP processors:
+  - WireTap: `redb.route.wiretap.dispatched`, `redb.route.wiretap.failed`
+  - Multicast: `redb.route.multicast.branches`, `redb.route.multicast.failed_branches`
+  - Recipient List: `redb.route.recipientlist.recipients`
+  - Aggregator: `redb.route.aggregator.completed`,
+    `redb.route.aggregator.timed_out`, `redb.route.aggregator.inflight_groups`
+  - Idempotent Consumer: `redb.route.idempotent.duplicate`,
+    `redb.route.idempotent.passed`
+  - Retry: `redb.route.retry.attempts`, `redb.route.retry.success`,
+    `redb.route.retry.exhausted`
+  - Saga: `redb.route.saga.completed`, `redb.route.saga.compensated`,
+    `redb.route.saga.failed`
+  - Dead Letter: `redb.route.deadletter.sent`
+- **`redb.Route` (Telemetry)** — `MeteredProcessor` now enriches every metric
+  point with the new tags `redb.route.endpoint` (canonical endpoint URI) and
+  `redb.route.scheme` (transport scheme such as `http`, `kafka`, `postgres`)
+  in addition to the existing `redb.route.id`.
+- **Transport spans** — 16 producers now open a transport span via the new
+  helper, producing OpenTelemetry-compliant span trees from the route pipeline
+  down to the wire: `Http`, `Sql`, `Sql` (procedure), `Grpc`, `MqttNet`,
+  `AzureServiceBus`, `Redis`, `Elasticsearch`, `Tcp`, `S3`, `GenericFile`
+  (covers File / Sftp / Ftp), `Firebase.Storage`, `Firebase.Firestore`,
+  `Firebase.Fcm`, `WebSocket`, `SignalR`. The five previously-instrumented
+  transports (`Kafka`, `RabbitMQ`, `IbmMq`, `Amqp`, `Mail`, `Ldap`) keep their
+  existing spans unchanged.
+
+### Changed
+- **`redb.Route` (DSL)** — `IOldRouteDefinition` renamed to `IRouteDefinition`
+  and all consumer projects (`redb.Route.Controllers`,
+  `redb.Route.Core`, `redb.Route.Validation.Adapters`,
+  `redb.Route.Tests.Core`) realigned. The Camel-style canonical name is now
+  the single name across the public API.
+- **`redb.Route`** — `MeteredProcessor` constructor signature gained two
+  optional parameters `endpointUri` and `endpointScheme`. Existing call sites
+  that only pass `(inner, routeId)` continue to work; `RouteContext` now wires
+  the endpoint URI and scheme so dashboards can slice metrics per endpoint.
+- **`redb.Route`** — `InstrumentedProcessor.ActivityExtensions.RecordException`
+  uses `Activity.AddException(...)` on NET9+ and falls back to a manual
+  `ActivityEvent("exception", ...)` with `exception.type` / `exception.message` /
+  `exception.stacktrace` tags on NET8, matching the OpenTelemetry
+  exception-recording convention on both target frameworks.
+
+### Removed
+- **`redb.Route` (Legacy)** — the entire v1 compiler stack has been removed:
+  `OldRouteCompiler` (~907 lines), `OldRouteDefinition` (~1500 lines
+  partial), `OldRouteDefinition<TIn>`, `OldRouteBuilder` /
+  `OldInlineRouteBuilder`, `OldCompiledRoute`, `BlockStack`,
+  `ExceptionRouteDefinition`, `IOldRouteDefinition`, the
+  `Legacy/Abstractions/Typed/IRouteDefinition.cs`, `Legacy/Extensions/*`,
+  the v2→v1 bridges (`RouteBuilder2BatchBridge`,
+  `RouteDefinition2BridgeBuilder`, `ProcessorDefinitionWrapperStep`), and the
+  `IRouteDefinition2` / `RouteBuilder2` parallel surface. The `Legacy/`
+  folder no longer exists. `RouteContext._builders` /
+  `RouteContext._routes` are now `List<RouteBuilder>` /
+  `List<CompiledRoute>` directly, with no intermediate adapter.
+- **`redb.Route`** — five stale code comments still referencing
+  `OldRouteCompiler` / `OldRouteDefinition` (in `RouteStep`,
+  `NormalizerDefinition`, `SagaDefinition`, `AggregatorProcessor`,
+  `IdempotentConsumerProcessor`) were rewritten in terms of the current
+  type names; explanatory intent preserved.
+
+### Notes
+- **Pipeline EIP semantics.** `PipelineProcessor` now strictly follows the
+  Camel Pipeline contract: between steps, an `Out` produced by step `i` is
+  merged into `In` and cleared before step `i+1` runs; on the **final** step
+  `Out` is left as-is and is **not** synthesised from `In`. InOut callers
+  should therefore consume the reply as `exchange.Out ?? exchange.In`. This
+  was previously documented inline in `PipelineProcessor.cs`; recording it
+  here as the authoritative engine contract. Downstream conventions (e.g.
+  the Identity layer's "business processors write to `In.Body`, do not
+  pre-create `Out`") sit on top of this contract without changing it.
+
+### Tests
+- **`redb.Route.Tests`** — new `Telemetry/InMemoryTelemetryTests.cs` using the
+  OpenTelemetry SDK in-memory exporters (`OpenTelemetry.Exporter.InMemory`)
+  to verify: shared meter/activity-source name, WireTap dispatched/failed,
+  Multicast branches/failed-branches, Idempotent passed/duplicate, Retry
+  attempts/success/exhausted, transport-span semantic tags, `MeteredProcessor`
+  endpoint/scheme tag enrichment, and `Activity.AddException` event emission.
+- **Per-transport telemetry smoke tests** — added `*TelemetrySmokeTests.cs`
+  files (and one Firebase pair appended to `FirebaseIntegrationTests`)
+  covering all P1 transport spans: Http, Tcp, WebSocket, Grpc, Sql,
+  SqlProcedure, GenericFile, MqttNet, Redis, S3, Elasticsearch, SignalR,
+  AzureServiceBus, Firestore, Firebase Storage. Each test builds a real
+  endpoint, runs the producer through `OpenTelemetry.Sdk.CreateTracerProviderBuilder()
+  .AddSource(RouteActivitySource.SourceName).AddInMemoryExporter(...)`,
+  and asserts the conventional semantic attributes
+  (`http.method` / `network.transport` / `db.system` / `messaging.system` /
+  `rpc.system` / `redb.system`, plus `redb.route.endpoint` and
+  `messaging.destination.name`). Docker-dependent tests are tagged
+  `[Trait("Category","Integration")]`.
+
+### Pending (integration smoke)
+- _(none — completed below; see `### Tests` for the per-transport smoke sweep.)_
+
+### Fixed
+- **`redb.Route.Ldap` (tests)** — `LdapEndpointOptionsTests.Validate_ZeroPageSize_*`
+  and `LdapComponentTests.CreateEndpoint_InvalidPageSize_Throws` were updated to
+  match the (already-shipped) behaviour where `PageSize=0` legitimately disables
+  the paged-results control. The tests now assert that `PageSize=0` is accepted
+  and that only `PageSize < 0` throws.
+- **`redb.Route.Firebase` (tests)** — `FirestoreEndpointOptionsTests.Validate_NoCredential_NoEnvVar_Throws`
+  now captures and restores the `GOOGLE_APPLICATION_CREDENTIALS` and
+  `FIRESTORE_EMULATOR_HOST` environment variables in a `try`/`finally` to
+  avoid racing with `FirebaseIntegrationTests.InitializeAsync`, which sets
+  `FIRESTORE_EMULATOR_HOST` for the whole test host.
+- **`redb.Route.Firebase` (tests)** — xUnit collection-level race fixed.
+  `try`/`finally` alone was not enough: by default xUnit runs test classes in
+  different collections concurrently within an assembly, so option-validation
+  classes that mutate `FIRESTORE_EMULATOR_HOST` / `GOOGLE_APPLICATION_CREDENTIALS`
+  could still overlap with the live-emulator integration suite that reads them.
+  Introduced `FirebaseEnvSensitiveCollection` (`[CollectionDefinition("FirebaseEnvSensitive", DisableParallelization = true)]`)
+  and applied `[Collection("FirebaseEnvSensitive")]` to all four env-sensitive
+  classes (`FirestoreEndpointOptionsTests`, `FirebaseStorageEndpointOptionsTests`,
+  `FcmEndpointOptionsTests`, `FirebaseIntegrationTests`). Result: 149/149 PASS,
+  no intermittent
+  `Emulator environment variable 'FIRESTORE_EMULATOR_HOST' is not set` failures.
+- **`redb.Route` (dev/test infra)** — `docker-compose.tests.yml`: the Azure
+  Service Bus emulator (`servicebus`) had `SQL_SERVER: azurite` configured, but
+  Azurite is blob/queue/table storage and does not speak TDS. The emulator host
+  therefore crash-looped on startup (initial run created MDFs in the container's
+  writable layer, subsequent restarts failed with
+  *Cannot create file '/var/opt/mssql/data/SbGatewayDatabase.mdf' because it already exists*),
+  killing the AMQP listener mid-suite and producing
+  *AMQP transport failed to open because the inner transport tcpNN is closed*
+  on the consumer side. Added a dedicated `sqledge` service
+  (`mcr.microsoft.com/azure-sql-edge:latest`) with `ACCEPT_EULA=Y` /
+  `MSSQL_SA_PASSWORD`, changed `servicebus.environment.SQL_SERVER` to `sqledge`,
+  declared the dependency, and bumped `start_period` to `60s` to cover SQL Edge
+  warm-up. This is a test-infra change only; published packages are not
+  affected.
+
+### Fixed
+- **`redb.Route`** — `WireTapProcessor` no longer propagates the caller's
+  `CancellationToken` into the fire-and-forget tap branch. Previously, when the
+  main pipeline was cancelled (e.g. an HTTP request was aborted by the client),
+  an in-flight audit/notification tap could be killed mid-write — typically
+  surfacing as a failed `ExecuteNonQuery`/`Commit` on the audit store. The tap
+  branch now runs with `CancellationToken.None` and is only torn down on host
+  shutdown, which matches the EIP "InOnly, detached" semantics of WireTap.
+
 ## [2.0.2] — 2026-05-16
 
 ### Changed

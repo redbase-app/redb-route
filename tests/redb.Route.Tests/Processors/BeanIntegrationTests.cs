@@ -52,8 +52,7 @@ public class BeanIntegrationTests : IAsyncDisposable
             exchange.In.Body = await svc.ProcessOrderAsync(input, ct);
         });
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("order-123");
         await pipeline.Process(exchange);
@@ -76,8 +75,7 @@ public class BeanIntegrationTests : IAsyncDisposable
             exchange.In.Body = await svc.ValidateOrderAsync(input);
         });
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("order-456");
         await pipeline.Process(exchange);
@@ -100,8 +98,7 @@ public class BeanIntegrationTests : IAsyncDisposable
             exchange.In.Headers["price"] = svc.GetPrice(productId);
         });
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("prod-A");
         await pipeline.Process(exchange);
@@ -123,8 +120,7 @@ public class BeanIntegrationTests : IAsyncDisposable
             exchange.In.Body = await svc.ProcessOrderAsync("x", ct);
         });
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         // Exchange without DI scope
         var exchange = Exchange.Create(new Message("test"), null);
@@ -151,8 +147,7 @@ public class BeanIntegrationTests : IAsyncDisposable
             exchange.Properties["instanceId"] = svc.InstanceId;
         });
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var ex1 = CreateExchange();
         var ex2 = CreateExchange();
@@ -184,8 +179,7 @@ public class BeanIntegrationTests : IAsyncDisposable
             exchange.In.Headers["price"] = svc.GetPrice(exchange.In.Body!.ToString()!);
         });
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("item-X");
         await pipeline.Process(exchange);
@@ -211,8 +205,7 @@ public class BeanIntegrationTests : IAsyncDisposable
             exchange.In.Body = await svc.ProcessOrderAsync("x", ct);
         });
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("test");
 
@@ -235,8 +228,7 @@ public class BeanIntegrationTests : IAsyncDisposable
             await svc.FailAsync(ct);
         });
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange();
 
@@ -273,8 +265,7 @@ public class BeanIntegrationTests : IAsyncDisposable
             });
             def.To("direct:bean-sink");
 
-            var compiler = new RouteCompiler(_context, null);
-            var pipeline = compiler.Compile(def);
+            var pipeline = def.CreateProcessor(_context);
 
             var exchange = CreateExchange("order-789");
             await pipeline.Process(exchange);
@@ -301,8 +292,7 @@ public class BeanIntegrationTests : IAsyncDisposable
             exchange.In.Body = await svc.ProcessOrderAsync(exchange.In.Body!.ToString()!, ct);
         });
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("test");
         exchange.Properties["tenant"] = "acme";

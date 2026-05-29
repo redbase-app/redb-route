@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Telemetry;
 
 namespace redb.Route.ErrorHandling;
 
@@ -36,6 +37,8 @@ public sealed class RetryProcessor : IProcessor
             try
             {
                 await _inner.Process(exchange, ct).ConfigureAwait(false);
+                if (attempt > 0)
+                    ProcessorMetrics.RetrySuccess.Add(1);
                 return; // Success
             }
             catch (OperationCanceledException)
@@ -46,12 +49,14 @@ public sealed class RetryProcessor : IProcessor
             {
                 if (attempt >= _policy.MaxRetries || !_policy.ShouldRetry(ex))
                 {
+                    ProcessorMetrics.RetryExhausted.Add(1);
                     _logger?.LogError(ex,
                         "Exchange processing failed after {Attempts} attempt(s). No more retries.",
                         attempt + 1);
                     throw;
                 }
 
+                ProcessorMetrics.RetryAttempts.Add(1);
                 var delay = _policy.GetDelay(attempt);
 
                 // Add ±15% jitter to prevent thundering herd

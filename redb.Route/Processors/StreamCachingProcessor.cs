@@ -38,3 +38,32 @@ internal sealed class StreamCachingProcessor : IProcessor
         await _next.Process(exchange, ct).ConfigureAwait(false);
     }
 }
+
+/// <summary>
+/// Standalone (no-next) variant of stream caching, suitable for use as a
+/// <see cref="ProcessorDefinition"/> leaf inside a <see cref="PipelineProcessor"/>.
+/// Wraps a forward-only <see cref="Stream"/> body with a seekable <see cref="StreamCache"/>;
+/// the pipeline advances to the next step automatically.
+/// Non-Stream bodies pass through unchanged.
+/// </summary>
+internal sealed class StreamCachingTransformer : IProcessor
+{
+    private readonly StreamCacheOptions _options;
+
+    internal StreamCachingTransformer(StreamCacheOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        _options = options;
+    }
+
+    /// <inheritdoc />
+    public async Task Process(IExchange exchange, CancellationToken ct = default)
+    {
+        if (exchange.In.Body is Stream stream and not StreamCache)
+        {
+            var cache = new StreamCache(_options.SpoolThreshold, _options.TempDirectory);
+            await cache.CacheFromSourceAsync(stream, ct).ConfigureAwait(false);
+            exchange.In.Body = cache;
+        }
+    }
+}

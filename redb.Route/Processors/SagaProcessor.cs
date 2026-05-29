@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Definitions;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Processors;
 
@@ -29,6 +30,7 @@ internal sealed class SagaProcessor : IProcessor
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         var completedCount = 0;
+        var compensationFailed = false;
 
         try
         {
@@ -55,12 +57,20 @@ internal sealed class SagaProcessor : IProcessor
                 }
                 catch (Exception compEx)
                 {
+                    compensationFailed = true;
                     _logger?.LogError(compEx, "Saga compensation for step {StepIndex} failed", i);
                 }
             }
 
+            if (compensationFailed)
+                ProcessorMetrics.SagaFailed.Add(1);
+            else
+                ProcessorMetrics.SagaCompensated.Add(1);
+
             throw;
         }
+
+        ProcessorMetrics.SagaCompleted.Add(1);
 
         // All steps succeeded — invoke completion callback if present
         if (_onCompletion is not null)

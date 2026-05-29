@@ -431,10 +431,10 @@ public class ScatterGatherIntegrationTests : IAsyncDisposable
             })
             .ParallelProcessing());
 
-        // Verify step was created correctly
-        var step = def.Steps.OfType<ScatterGatherStep>().Single();
-        step.StaticRecipients.Should().HaveCount(2);
-        step.ParallelProcessing.Should().BeTrue();
+        // Verify definition was created correctly
+        var sgDef = def.Outputs.OfType<ScatterGatherDefinition>().Single();
+        sgDef.StaticRecipients.Should().HaveCount(2);
+        sgDef.ParallelProcessing.Should().BeTrue();
     }
 
     // ══════════════════════════════════════════════════════════════

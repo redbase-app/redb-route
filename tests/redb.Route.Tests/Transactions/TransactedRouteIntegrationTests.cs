@@ -7,7 +7,7 @@ using redb.Route.Transactions;
 namespace redb.Route.Tests.Transactions;
 
 /// <summary>
-/// Integration tests that verify the DSL → RouteCompiler → TransactedProcessor pipeline.
+/// Integration tests that verify the DSL → OldRouteCompiler → TransactedProcessor pipeline.
 /// Uses real RouteContext with direct:// components to test the full compilation flow.
 /// </summary>
 public class TransactedRouteIntegrationTests : IAsyncDisposable

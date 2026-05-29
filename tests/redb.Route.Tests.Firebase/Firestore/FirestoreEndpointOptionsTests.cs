@@ -2,6 +2,7 @@ using redb.Route.Firebase;
 
 namespace redb.Route.Tests.Firebase;
 
+[Collection("FirebaseEnvSensitive")]
 public sealed class FirestoreEndpointOptionsTests
 {
     // ── BindFromUri ──
@@ -107,11 +108,21 @@ public sealed class FirestoreEndpointOptionsTests
     [Fact]
     public void Validate_NoCredential_NoEnvVar_Throws()
     {
+        var prevCreds = Environment.GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS");
+        var prevEmu = Environment.GetEnvironmentVariable("FIRESTORE_EMULATOR_HOST");
         Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", null);
         Environment.SetEnvironmentVariable("FIRESTORE_EMULATOR_HOST", null);
-        var options = new FirestoreEndpointOptions();
-        var act = () => options.Validate();
-        act.Should().Throw<ArgumentOutOfRangeException>().WithMessage("*CredentialPath*");
+        try
+        {
+            var options = new FirestoreEndpointOptions();
+            var act = () => options.Validate();
+            act.Should().Throw<ArgumentOutOfRangeException>().WithMessage("*CredentialPath*");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", prevCreds);
+            Environment.SetEnvironmentVariable("FIRESTORE_EMULATOR_HOST", prevEmu);
+        }
     }
 
     [Fact]

@@ -1,0 +1,135 @@
+using Microsoft.Extensions.Logging;
+using redb.Route.Abstractions;
+using redb.Route.Processors;
+using redb.Route.Telemetry;
+using redb.Route.Transactions;
+using redb.Route.Validation;
+
+namespace redb.Route.Definitions;
+
+/// <summary>
+/// Scope-opener definition for per-step metrics collection.
+/// All child steps run inside a single <see cref="MeteredStepProcessor"/> that records
+/// <c>redb.route.step.processed</c>, <c>redb.route.step.failed</c>,
+/// and <c>redb.route.step.duration</c> tagged with <see cref="StepName"/>.
+/// Close with <see cref="EndMetered"/> or the universal <see cref="End"/>.
+/// </summary>
+public class MeteredDefinition : RouteDefinition, IRouteScope
+{
+    /// <summary>Step name used as a metric tag value for <c>redb.route.step</c>.</summary>
+    public string StepName { get; }
+
+    private readonly List<(string Name, Func<IExchange, object?> Resolver)> _tagProviders = new();
+
+    /// <summary>Tag providers evaluated per message to enrich the recorded metrics with low-cardinality dimensions.</summary>
+    public IReadOnlyList<(string Name, Func<IExchange, object?> Resolver)> TagProviders => _tagProviders;
+
+    internal MeteredDefinition(string stepName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+        StepName = stepName;
+    }
+
+    /// <summary>
+    /// Adds a dimension/label evaluated per message. Use only with bounded value domains
+    /// (status codes, tenant ids from a small set, etc.) to keep cardinality under control.
+    /// </summary>
+    public MeteredDefinition Tag(string name, Func<IExchange, object?> resolver)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(resolver);
+        _tagProviders.Add((name, resolver));
+        return this;
+    }
+
+    /// <summary>Convenience: tag the metric with the value of a header.</summary>
+    public MeteredDefinition TagFromHeader(string tagName, string headerName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(headerName);
+        return Tag(tagName, e => e.In.Headers.TryGetValue(headerName, out var v) ? v : null);
+    }
+
+    // ── Navigation ─────────────────────────────────────────────────────────────
+
+    /// <summary>Closes this metered scope and returns the parent route definition.</summary>
+    /// <exception cref="InvalidOperationException">Thrown if no parent route is set.</exception>
+    public IRouteDefinition EndMetered()
+        => (IRouteDefinition)(Parent ?? throw new InvalidOperationException(
+            "EndMetered() called without a parent route. Ensure Metered() was called on a route definition."));
+
+    /// <inheritdoc cref="IRouteScope.End"/>
+    public IRouteDefinition End() => EndMetered();
+
+    // ── IProcessorDefinition ───────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public override IProcessor CreateProcessor(IRouteContext context)
+    {
+        IProcessor body = BuildPipeline(Outputs, context);
+        return new MeteredStepProcessor(body, StepName, _tagProviders.Count > 0 ? _tagProviders.ToArray() : null);
+    }
+
+    private static IProcessor BuildPipeline(IList<IProcessorDefinition> outputs, IRouteContext context)
+    {
+        return outputs.Count switch
+        {
+            0 => new DelegateProcessor(_ => { }),
+            1 => outputs[0].CreateProcessor(context),
+            _ => BuildMulti(outputs, context)
+        };
+    }
+
+    private static PipelineProcessor BuildMulti(IList<IProcessorDefinition> outputs, IRouteContext context)
+    {
+        var pipeline = new PipelineProcessor();
+        foreach (var o in outputs)
+            pipeline.Add(o.CreateProcessor(context));
+        return pipeline;
+    }
+
+    // ── Leaf DSL ───────────────────────────────────────────────────────────────
+
+    /// <summary>Sends the exchange to an endpoint.</summary>
+    public MeteredDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
+
+    /// <summary>Processes the exchange with a synchronous action.</summary>
+    public MeteredDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
+
+    /// <summary>Processes the exchange with an asynchronous action.</summary>
+    public MeteredDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
+
+    /// <summary>Processes the exchange with a pre-built processor instance.</summary>
+    public MeteredDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
+
+    /// <summary>Sets the exchange body to a static value.</summary>
+    public MeteredDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
+
+    /// <summary>Transforms the exchange body.</summary>
+    public MeteredDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
+
+    /// <summary>Sets a header to a static value.</summary>
+    public MeteredDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
+
+    /// <summary>Sets a property to a static value.</summary>
+    public MeteredDefinition SetProperty(string key, object? value) { AddOutput(new SetPropertyStaticDefinition(key, value)); return this; }
+
+    /// <summary>Logs a static message.</summary>
+    public MeteredDefinition Log(string message, LogLevel level = LogLevel.Information) { AddOutput(new LogStaticDefinition(message, level)); return this; }
+
+    /// <summary>Stops exchange processing.</summary>
+    public MeteredDefinition Stop() { AddOutput(new StopDefinition()); return this; }
+
+    /// <summary>Validates the exchange using a predicate function.</summary>
+    public MeteredDefinition Validate(Func<IExchange, bool> predicate, string errorMessage = "Validation failed", bool throwOnFailure = true)
+    { AddOutput(new ValidatePredicateDefinition(predicate, errorMessage, throwOnFailure)); return this; }
+
+    /// <summary>Begins a transaction scope.</summary>
+    public MeteredDefinition BeginTransaction(TransactionPolicy? policy = null)
+    { AddOutput(new BeginTransactionDefinition(policy)); return this; }
+
+    /// <summary>Commits the transaction.</summary>
+    public MeteredDefinition CommitTransaction() { AddOutput(new CommitTransactionDefinition()); return this; }
+
+    /// <summary>Rolls back the transaction.</summary>
+    public MeteredDefinition RollbackTransaction() { AddOutput(new RollbackTransactionDefinition()); return this; }
+}

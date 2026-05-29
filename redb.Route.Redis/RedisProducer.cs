@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 using StackExchange.Redis;
 
 namespace redb.Route.Redis;
@@ -46,6 +48,13 @@ public sealed class RedisProducer : ConnectableProducer
     public override async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         EnsureStarted();
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"redis {_endpoint.OperationType}", ActivityKind.Client,
+            "db.system", "redis",
+            _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.Resource,
+            operation: _endpoint.OperationType.ToString());
 
         if (_options.Transacted && IsWriteOperation(_endpoint.OperationType))
         {

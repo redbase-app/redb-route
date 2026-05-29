@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -5,6 +6,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Tcp;
 
@@ -59,6 +61,12 @@ public sealed class TcpProducer : ConnectableProducer
     {
         EnsureStarted();
 
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"tcp {_options.Host}:{_options.Port}", ActivityKind.Client,
+            "network.transport", "tcp",
+            _endpoint.Uri.NormalizedKey,
+            destination: $"{_options.Host}:{_options.Port}");
+
         // Reconnect if needed
         if (_client is not { Connected: true })
         {
@@ -73,24 +81,24 @@ public sealed class TcpProducer : ConnectableProducer
         await _sendLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await TcpCodec.WriteMessageAsync(_stream!, data, _options.Framing, _options.Delimiter, _encoding, ct)
-                .ConfigureAwait(false);
-
-            // InOut: read response
-            if (_options.InOut)
+            // Transparent retry on stale pooled connection.
+            // Socket.Connected reflects state of the *last* I/O, so a connection torn
+            // down between Process() calls (server timeout, KeepAlive probe, firewall RST)
+            // is only detected when the next Write throws IOException/SocketException.
+            // Same pattern as HttpClient connection pool revalidation and SqlConnection
+            // pool validation: treat the first failure on a cached connection as expected,
+            // reconnect once silently, retry. If the second attempt also fails, bubble up.
+            try
             {
-                var response = await TcpCodec.ReadMessageAsync(
-                    _stream!, _options.Framing, _options.Delimiter, _options.ReceiveBufferSize, ct)
-                    .ConfigureAwait(false);
-
-                if (response is not null)
-                {
-                    var outMsg = new Message(_options.Framing == TcpFraming.TextLine
-                        ? _encoding.GetString(response)
-                        : (object)response);
-                    outMsg.Headers[TcpHeaders.ByteCount] = response.Length.ToString();
-                    exchange.Out = outMsg;
-                }
+                await SendAndOptionallyReadAsync(exchange, data, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (_options.Reconnect && IsStaleConnectionError(ex))
+            {
+                Logger?.LogDebug(ex,
+                    "TCP stale pooled connection to {Host}:{Port} detected; reconnecting and retrying once",
+                    _options.Host, _options.Port);
+                await ReconnectAsync(ct).ConfigureAwait(false);
+                await SendAndOptionallyReadAsync(exchange, data, ct).ConfigureAwait(false);
             }
         }
         finally
@@ -99,6 +107,47 @@ public sealed class TcpProducer : ConnectableProducer
         }
 
         SetExchangeHeaders(exchange);
+    }
+
+    private async Task SendAndOptionallyReadAsync(IExchange exchange, byte[] data, CancellationToken ct)
+    {
+        await TcpCodec.WriteMessageAsync(_stream!, data, _options.Framing, _options.Delimiter, _encoding, ct)
+            .ConfigureAwait(false);
+
+        // InOut: read response
+        if (_options.InOut)
+        {
+            var response = await TcpCodec.ReadMessageAsync(
+                _stream!, _options.Framing, _options.Delimiter, _options.ReceiveBufferSize, ct)
+                .ConfigureAwait(false);
+
+            if (response is not null)
+            {
+                var outMsg = new Message(_options.Framing == TcpFraming.TextLine
+                    ? _encoding.GetString(response)
+                    : (object)response);
+                outMsg.Headers[TcpHeaders.ByteCount] = response.Length.ToString();
+                exchange.Out = outMsg;
+            }
+        }
+    }
+
+    private static bool IsStaleConnectionError(Exception ex)
+    {
+        // Unwrap IOException → SocketException; recognise the classic stale-pool codes.
+        var socketEx = ex as SocketException ?? ex.InnerException as SocketException;
+        if (socketEx is not null)
+        {
+            return socketEx.SocketErrorCode is
+                SocketError.ConnectionAborted     // 10053 WSAECONNABORTED
+                or SocketError.ConnectionReset    // 10054 WSAECONNRESET
+                or SocketError.NotConnected       // 10057 WSAENOTCONN
+                or SocketError.Shutdown           // 10058 WSAESHUTDOWN
+                or SocketError.HostUnreachable
+                or SocketError.NetworkReset
+                or SocketError.TimedOut;
+        }
+        return ex is IOException or ObjectDisposedException;
     }
 
     private byte[] ResolveBody(IExchange exchange)

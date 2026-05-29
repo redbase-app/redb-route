@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Processors;
 
@@ -43,6 +44,8 @@ internal sealed class RecipientListProcessor : IProcessor, IAsyncDisposable
     {
         var uris = _recipientListFactory(exchange).ToList();
         if (uris.Count == 0) return;
+
+        ProcessorMetrics.RecipientListRecipients.Record(uris.Count);
 
         if (_parallelProcessing)
             await ProcessParallel(exchange, uris, ct).ConfigureAwait(false);

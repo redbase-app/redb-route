@@ -41,8 +41,7 @@ public class NormalizerIntegrationTests
             .When(e => e.In.Body is string, e => ((string)e.In.Body!).ToUpperInvariant())
             .When(e => e.In.Body is int, e => ((int)e.In.Body!) * 10));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("hello");
         await pipeline.Process(exchange);
@@ -59,8 +58,7 @@ public class NormalizerIntegrationTests
             .When(e => e.In.Body is string, e => "was-string")
             .When(e => e.In.Body is int, e => "was-int"));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange(42);
         await pipeline.Process(exchange);
@@ -76,8 +74,7 @@ public class NormalizerIntegrationTests
         def.Normalize(n => n
             .When(e => e.In.Body is string, e => "was-string"));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange(42);
         await pipeline.Process(exchange);
@@ -98,8 +95,7 @@ public class NormalizerIntegrationTests
             .When(e => e.In.Body is string, e => "was-string")
             .Otherwise(e => "unknown-format"));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange(new object());
         await pipeline.Process(exchange);
@@ -116,8 +112,7 @@ public class NormalizerIntegrationTests
             .When(e => e.In.Body is string, e => "was-string")
             .Otherwise(e => "fallback"));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("test");
         await pipeline.Process(exchange);
@@ -138,8 +133,7 @@ public class NormalizerIntegrationTests
             .WhenContentType("application/json", e => $"json:{e.In.Body}")
             .WhenContentType("application/xml", e => $"xml:{e.In.Body}"));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("data",
             new Dictionary<string, object?> { ["ContentType"] = "application/json" });
@@ -156,8 +150,7 @@ public class NormalizerIntegrationTests
         def.Normalize(n => n
             .WhenContentType("application/xml", e => "xml-normalized"));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("data",
             new Dictionary<string, object?> { ["ContentType"] = "APPLICATION/XML" });
@@ -180,8 +173,7 @@ public class NormalizerIntegrationTests
             .WhenContentType("text/csv", e => string.Format(CultureInfo.InvariantCulture, "csv:{0}", e.In.Body))
             .Otherwise(e => string.Format(CultureInfo.InvariantCulture, "other:{0}", e.In.Body)));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         // int body → predicate branch
         var e1 = CreateExchange(100);
@@ -213,8 +205,7 @@ public class NormalizerIntegrationTests
             .When(e => e.In.Body is string, e => ((string)e.In.Body!).ToUpperInvariant()));
         def.SetHeader("Normalized", "true");
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("hello");
         await pipeline.Process(exchange);
@@ -231,8 +222,7 @@ public class NormalizerIntegrationTests
         def.Normalize(n => n
             .When(e => true, e => "normalized"));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("raw");
         exchange.Properties["traceId"] = "abc-123";

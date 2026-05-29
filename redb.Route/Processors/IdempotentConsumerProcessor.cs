@@ -1,5 +1,6 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Processors;
 
@@ -65,12 +66,14 @@ public sealed class IdempotentConsumerProcessor : IProcessor
         if (!isNew)
         {
             // Duplicate detected
+            ProcessorMetrics.IdempotentDuplicate.Add(1);
             exchange.Properties[DuplicatePropertyKey] = true;
             _logger?.LogDebug("Duplicate message detected (key={Key}). Skipping.", key);
 
             if (_skipDuplicate)
             {
-                exchange.Stop();
+                // Tail-consuming wiring: this processor owns the route tail,
+                // so duplicates are skipped simply by returning without invoking _inner.
                 return;
             }
 
@@ -83,6 +86,7 @@ public sealed class IdempotentConsumerProcessor : IProcessor
         {
             await _inner.Process(exchange, ct).ConfigureAwait(false);
             await _repository.Confirm(key, ct).ConfigureAwait(false);
+            ProcessorMetrics.IdempotentPassed.Add(1);
         }
         catch
         {

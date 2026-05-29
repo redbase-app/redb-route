@@ -79,4 +79,61 @@ public class FilterProcessorTests
         var act = () => new FilterProcessor(_ => true, null!);
         act.Should().Throw<ArgumentNullException>();
     }
+
+    // ────────────────── DSL compilation (Phase 0 / T0.1 fixators) ──────────────────
+    // See redb.Route/docs/EIP_SCOPE_FIX_PLAN.md § 1.1.
+    // These tests validate end-to-end behaviour of the .Filter(...) DSL when compiled
+    // by OldRouteCompiler and executed through PipelineProcessor. They should both PASS
+    // once Phase 1 ships (CompileFilter wired through FilterProcessor + scope form).
+
+    /// <summary>T0.1a — Filter with passing predicate must allow downstream steps to run.</summary>
+    [Fact]
+    public async Task RouteDsl_Filter_PassThrough_NextStepRuns()
+    {
+        await using var context = new RouteContext();
+        var received = new List<object?>();
+
+        context.AddRoutes(r =>
+        {
+            r.From("direct://flt-pass")
+                .Filter(_ => true)
+                .Process(e => received.Add(e.In.Body));
+        });
+        await context.Start();
+
+        var producer = context.GetEndpoint("direct://flt-pass").CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("payload")));
+
+        received.Should().ContainSingle().Which.Should().Be("payload");
+    }
+
+    /// <summary>
+    /// Scope-form Filter(p, body): body runs only when predicate is true,
+    /// subsequent steps run for ALL exchanges regardless of predicate.
+    /// </summary>
+    [Fact]
+    public async Task RouteDsl_FilterScope_BodyConditional_TailUnconditional()
+    {
+        await using var context = new RouteContext();
+        var inBody = new List<int>();
+        var afterBody = new List<int>();
+
+        context.AddRoutes(r =>
+        {
+            r.From("direct://flt-scope")
+                .Filter(e => (int)e.In.Body! % 2 == 0, b => b
+                    .Process(e => inBody.Add((int)e.In.Body!)))
+                .Process(e => afterBody.Add((int)e.In.Body!));
+        });
+        await context.Start();
+
+        var producer = context.GetEndpoint("direct://flt-scope").CreateProducer();
+        await producer.Start();
+        foreach (var i in new[] { 1, 2, 3, 4 })
+            await producer.Process(new Exchange(new Message(i)));
+
+        inBody.Should().Equal(2, 4);
+        afterBody.Should().Equal(1, 2, 3, 4);
+    }
 }

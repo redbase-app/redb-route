@@ -35,8 +35,7 @@ public class SagaIntegrationTests
             .Step(e => log.Add("B"), e => log.Add("B-comp"))
             .Step(e => log.Add("C")));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
         var exchange = CreateExchange();
 
         await pipeline.Process(exchange);
@@ -59,8 +58,7 @@ public class SagaIntegrationTests
             .Step(e => log.Add("B"), e => log.Add("B-comp"))
             .Step(e => throw new InvalidOperationException("boom"), e => log.Add("C-comp")));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
         var exchange = CreateExchange();
 
         var act = () => pipeline.Process(exchange);
@@ -83,8 +81,7 @@ public class SagaIntegrationTests
             .Step(e => { })
             .OnCompletion(e => completed = true));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange());
 
@@ -106,8 +103,7 @@ public class SagaIntegrationTests
             .SagaStep(e => log.Add("Y"))
             .EndSaga();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange());
 
@@ -129,8 +125,7 @@ public class SagaIntegrationTests
             .SagaStep(e => throw new InvalidOperationException("fail"), e => log.Add("B-comp"))
             .EndSaga();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var act = () => pipeline.Process(CreateExchange());
         await act.Should().ThrowAsync<InvalidOperationException>();
@@ -154,8 +149,7 @@ public class SagaIntegrationTests
         // Steps after saga
         def.Process(e => log.Add("after-saga"));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange());
 
@@ -176,8 +170,7 @@ public class SagaIntegrationTests
             .Step(e => throw new InvalidOperationException("fail")));
         def.Process(e => downstreamRan = true);
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var act = () => pipeline.Process(CreateExchange());
         await act.Should().ThrowAsync<InvalidOperationException>();
@@ -200,8 +193,7 @@ public class SagaIntegrationTests
                   async (e, ct) => { await Task.Yield(); log.Add("async-A-comp"); })
             .Step(async (e, ct) => { await Task.Yield(); log.Add("async-B"); }));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange());
 
@@ -221,8 +213,7 @@ public class SagaIntegrationTests
             .Step(e => e.In.Body = "first")
             .Step(e => e.In.Body = $"{e.In.Body}+second"));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
         var exchange = CreateExchange("init");
 
         await pipeline.Process(exchange);
@@ -244,8 +235,7 @@ public class SagaIntegrationTests
                   e => e.In.Body = "restored")
             .Step(e => throw new InvalidOperationException("fail")));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
         var exchange = CreateExchange("original");
 
         var act = () => pipeline.Process(exchange);
@@ -271,8 +261,7 @@ public class SagaIntegrationTests
             .OnSagaCompletion(async (e, ct) => { await Task.Yield(); log.Add("completed"); })
             .EndSaga();
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange());
 
@@ -294,8 +283,7 @@ public class SagaIntegrationTests
             .Step(e => log.Add("saga-step")));
         def.Process(e => log.Add("after"));
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         await pipeline.Process(CreateExchange());
 

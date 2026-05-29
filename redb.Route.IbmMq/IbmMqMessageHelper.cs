@@ -110,6 +110,27 @@ public static class IbmMqMessageHelper
     }
 
     /// <summary>
+    /// Copies user-defined headers from a route message into the MQ message's RFH2
+    /// user property folder (using the same JSON-encoded property as
+    /// <see cref="BuildOutgoingMessage"/>). Skips internal redb headers.
+    /// </summary>
+    public static void CopyHeadersToRfh2(MQMessage mqMsg, IMessage routeMsg)
+    {
+        var customHeaders = new Dictionary<string, string>();
+        foreach (var (key, value) in routeMsg.Headers)
+        {
+            if (IbmMqHeaders.IsRedbHeader(key)) continue;
+            if (value is null) continue;
+            customHeaders[key] = value.ToString()!;
+        }
+
+        if (customHeaders.Count == 0) return;
+
+        var json = System.Text.Json.JsonSerializer.Serialize(customHeaders);
+        mqMsg.SetStringProperty(IbmMqHeaders.HeaderKeys, json);
+    }
+
+    /// <summary>
     /// Builds an <see cref="MQMessage"/> from an exchange for sending.
     /// </summary>
     public static MQMessage BuildOutgoingMessage(

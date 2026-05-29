@@ -48,6 +48,7 @@ public class Wave1FeatureTests
             parallelProcessing: true,
             aggregationStrategy: (agg, cur) =>
             {
+                if (agg == null) return cur; // first part: seed (Camel-compatible)
                 agg.In.Body = (int)agg.In.Body! + (int)cur.In.Body!;
                 return agg;
             });
@@ -73,6 +74,7 @@ public class Wave1FeatureTests
             parallelProcessing: false,
             aggregationStrategy: (agg, cur) =>
             {
+                if (agg == null) return cur; // first part: seed (Camel-compatible)
                 agg.In.Body = (int)agg.In.Body! + (int)cur.In.Body!;
                 return agg;
             });

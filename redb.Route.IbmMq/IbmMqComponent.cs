@@ -142,6 +142,31 @@ public sealed class IbmMqComponent : ComponentBase
         }, ct);
     }
 
+    /// <summary>
+    /// Creates a brand-new <see cref="MQQueueManager"/> that is NOT pooled and is owned by
+    /// the caller (consumer/producer). The IBM .NET managed client serialises MQI calls
+    /// per connection, so a long-running MQGET WAIT on a shared connection blocks every
+    /// other MQI call (PUT/OPEN/GET) on the same connection. To avoid that, producers and
+    /// consumers each open their own dedicated MQQueueManager.
+    /// <para>The caller is responsible for calling <c>Disconnect()</c> on shutdown.</para>
+    /// </summary>
+    internal Task<MQQueueManager> CreateDedicatedQueueManagerAsync(IbmMqEndpoint endpoint, string ownerTag, CancellationToken ct)
+    {
+        return Task.Run(() =>
+        {
+            var options = endpoint.EndpointOptions;
+            var properties = BuildConnectionProperties(options);
+
+            var qm = new MQQueueManager(options.QueueManager, properties);
+
+            Logger?.LogInformation(
+                "IBM MQ dedicated connection opened [{Owner}]: queueManager={QueueManager}, host={Host}:{Port}, channel={Channel}",
+                ownerTag, options.QueueManager, options.Host, options.Port, options.Channel);
+
+            return qm;
+        }, ct);
+    }
+
     private static Hashtable BuildConnectionProperties(IbmMqEndpointOptions options)
     {
         var props = new Hashtable

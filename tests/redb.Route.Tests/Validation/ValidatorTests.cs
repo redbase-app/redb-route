@@ -480,11 +480,9 @@ public class ValidatorTests
         var def = new RouteDefinition();
         var validator = new JsonSchemaValidator(PersonJsonSchema);
 
-        def.From("direct://input")
-           .Validate(validator)
-           .To("direct://output");
+        def.Validate(validator).To("direct://output");
 
-        def.Steps.Should().ContainSingle(s => s is ValidateInstanceStep);
+        def.Outputs.Should().ContainSingle(s => s is ValidateInstanceDefinition);
     }
 
     [Fact]
@@ -492,11 +490,9 @@ public class ValidatorTests
     {
         var def = new RouteDefinition();
 
-        def.From("direct://input")
-           .Validate(e => e.In.Body != null, "Body required")
-           .To("direct://output");
+        def.Validate(e => e.In.Body != null, "Body required").To("direct://output");
 
-        def.Steps.Should().ContainSingle(s => s is ValidatePredicateStep);
+        def.Outputs.Should().ContainSingle(s => s is ValidatePredicateDefinition);
     }
 
     [Fact]
@@ -505,13 +501,11 @@ public class ValidatorTests
         var def = new RouteDefinition();
         var validator = new JsonSchemaValidator(PersonJsonSchema);
 
-        def.From("direct://input")
-           .Validate(validator)
-           .To("mock://result");
+        def.Validate(validator).To("mock://result");
 
-        var step = def.Steps.OfType<ValidateInstanceStep>().Single();
-        step.Validator.Should().BeSameAs(validator);
-        step.ThrowOnFailure.Should().BeTrue();
+        var node = def.Outputs.OfType<ValidateInstanceDefinition>().Single();
+        node.Validator.Should().BeSameAs(validator);
+        node.ThrowOnFailure.Should().BeTrue();
     }
 
     [Fact]
@@ -520,12 +514,10 @@ public class ValidatorTests
         var def = new RouteDefinition();
         var validator = new XsdValidator(PersonXsd);
 
-        def.From("direct://input")
-           .Validate(validator)
-           .To("mock://result");
+        def.Validate(validator).To("mock://result");
 
-        var step = def.Steps.OfType<ValidateInstanceStep>().Single();
-        step.Validator.Should().BeSameAs(validator);
+        var node = def.Outputs.OfType<ValidateInstanceDefinition>().Single();
+        node.Validator.Should().BeSameAs(validator);
     }
 
     [Fact]
@@ -533,13 +525,11 @@ public class ValidatorTests
     {
         var def = new RouteDefinition();
 
-        def.From("direct://input")
-           .Validate(e => e.In.Body != null, "Body required")
-           .To("mock://result");
+        def.Validate(e => e.In.Body != null, "Body required").To("mock://result");
 
-        var step = def.Steps.OfType<ValidatePredicateStep>().Single();
-        step.ErrorMessage.Should().Be("Body required");
-        step.ThrowOnFailure.Should().BeTrue();
+        var node = def.Outputs.OfType<ValidatePredicateDefinition>().Single();
+        node.ErrorMessage.Should().Be("Body required");
+        node.ThrowOnFailure.Should().BeTrue();
     }
 
     [Fact]
@@ -548,11 +538,9 @@ public class ValidatorTests
         var def = new RouteDefinition();
         var validator = new JsonSchemaValidator(PersonJsonSchema);
 
-        def.From("direct://input")
-           .Validate(validator, throwOnFailure: false)
-           .To("mock://result");
+        def.Validate(validator, throwOnFailure: false).To("mock://result");
 
-        def.Steps.OfType<ValidateInstanceStep>().Single().ThrowOnFailure.Should().BeFalse();
+        def.Outputs.OfType<ValidateInstanceDefinition>().Single().ThrowOnFailure.Should().BeFalse();
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -877,12 +865,11 @@ public class ValidatorTests
     public void ValidateJsonSchema_String_Records_Step()
     {
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         def.ValidateJsonSchema(PersonJsonSchema);
 
-        def.Steps.Should().ContainSingle(s => s is ValidateJsonSchemaStringStep)
-            .Which.Should().BeOfType<ValidateJsonSchemaStringStep>()
+        def.Outputs.Should().ContainSingle(s => s is ValidateJsonSchemaStringDefinition)
+            .Which.Should().BeOfType<ValidateJsonSchemaStringDefinition>()
             .Which.SchemaJson.Should().Be(PersonJsonSchema);
     }
 
@@ -890,11 +877,10 @@ public class ValidatorTests
     public void ValidateJsonSchema_String_ThrowOnFailure_Default_True()
     {
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         def.ValidateJsonSchema(PersonJsonSchema);
 
-        def.Steps.OfType<ValidateJsonSchemaStringStep>().Single()
+        def.Outputs.OfType<ValidateJsonSchemaStringDefinition>().Single()
             .ThrowOnFailure.Should().BeTrue();
     }
 
@@ -902,11 +888,10 @@ public class ValidatorTests
     public void ValidateJsonSchema_String_SoftMode()
     {
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         def.ValidateJsonSchema(PersonJsonSchema, throwOnFailure: false);
 
-        def.Steps.OfType<ValidateJsonSchemaStringStep>().Single()
+        def.Outputs.OfType<ValidateJsonSchemaStringDefinition>().Single()
             .ThrowOnFailure.Should().BeFalse();
     }
 
@@ -915,19 +900,17 @@ public class ValidatorTests
     {
         var schema = JsonSchema.FromText(PersonJsonSchema);
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         def.ValidateJsonSchema(schema);
 
-        def.Steps.Should().ContainSingle(s => s is ValidateJsonSchemaObjectStep)
-            .Which.Should().BeOfType<ValidateJsonSchemaObjectStep>();
+        def.Outputs.Should().ContainSingle(s => s is ValidateJsonSchemaObjectDefinition)
+            .Which.Should().BeOfType<ValidateJsonSchemaObjectDefinition>();
     }
 
     [Fact]
     public void ValidateJsonSchema_NullString_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         var act = () => def.ValidateJsonSchema((string)null!);
         act.Should().Throw<ArgumentNullException>();
@@ -937,7 +920,6 @@ public class ValidatorTests
     public void ValidateJsonSchema_NullObject_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         var act = () => def.ValidateJsonSchema((JsonSchema)null!);
         act.Should().Throw<ArgumentNullException>();
@@ -947,12 +929,11 @@ public class ValidatorTests
     public void ValidateXsd_String_Records_Step()
     {
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         def.ValidateXsd(PersonXsd);
 
-        def.Steps.Should().ContainSingle(s => s is ValidateXsdStringStep)
-            .Which.Should().BeOfType<ValidateXsdStringStep>()
+        def.Outputs.Should().ContainSingle(s => s is ValidateXsdStringDefinition)
+            .Which.Should().BeOfType<ValidateXsdStringDefinition>()
             .Which.XsdContent.Should().Be(PersonXsd);
     }
 
@@ -960,11 +941,10 @@ public class ValidatorTests
     public void ValidateXsd_String_ThrowOnFailure_Default_True()
     {
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         def.ValidateXsd(PersonXsd);
 
-        def.Steps.OfType<ValidateXsdStringStep>().Single()
+        def.Outputs.OfType<ValidateXsdStringDefinition>().Single()
             .ThrowOnFailure.Should().BeTrue();
     }
 
@@ -972,11 +952,10 @@ public class ValidatorTests
     public void ValidateXsd_String_SoftMode()
     {
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         def.ValidateXsd(PersonXsd, throwOnFailure: false);
 
-        def.Steps.OfType<ValidateXsdStringStep>().Single()
+        def.Outputs.OfType<ValidateXsdStringDefinition>().Single()
             .ThrowOnFailure.Should().BeFalse();
     }
 
@@ -984,15 +963,14 @@ public class ValidatorTests
     public void ValidateXsd_Namespace_Records_Step()
     {
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         def.ValidateXsd("http://example.com", PersonXsd);
 
-        def.Steps.Should().ContainSingle(s => s is ValidateXsdNamespaceStep)
-            .Which.Should().BeOfType<ValidateXsdNamespaceStep>();
-        var step = def.Steps.OfType<ValidateXsdNamespaceStep>().Single();
-        step.TargetNamespace.Should().Be("http://example.com");
-        step.XsdContent.Should().Be(PersonXsd);
+        def.Outputs.Should().ContainSingle(s => s is ValidateXsdNamespaceDefinition)
+            .Which.Should().BeOfType<ValidateXsdNamespaceDefinition>();
+        var node = def.Outputs.OfType<ValidateXsdNamespaceDefinition>().Single();
+        node.TargetNamespace.Should().Be("http://example.com");
+        node.XsdContent.Should().Be(PersonXsd);
     }
 
     [Fact]
@@ -1004,19 +982,17 @@ public class ValidatorTests
         schemaSet.Compile();
 
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         def.ValidateXsd(schemaSet);
 
-        def.Steps.Should().ContainSingle(s => s is ValidateXsdSchemaSetStep)
-            .Which.Should().BeOfType<ValidateXsdSchemaSetStep>();
+        def.Outputs.Should().ContainSingle(s => s is ValidateXsdSchemaSetDefinition)
+            .Which.Should().BeOfType<ValidateXsdSchemaSetDefinition>();
     }
 
     [Fact]
     public void ValidateXsd_NullString_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         var act = () => def.ValidateXsd((string)null!);
         act.Should().Throw<ArgumentNullException>();
@@ -1026,7 +1002,6 @@ public class ValidatorTests
     public void ValidateXsd_NullSchemaSet_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct:start");
 
         var act = () => def.ValidateXsd((XmlSchemaSet)null!);
         act.Should().Throw<ArgumentNullException>();
@@ -1044,8 +1019,7 @@ public class ValidatorTests
         route.From("direct:validated")
              .ValidateJsonSchema(PersonJsonSchema);
 
-        var compiler = new RouteCompiler(context, null);
-        var compiled = compiler.Compile(route);
+        var compiled = route.CreateProcessor(context);
 
         var exchange = CreateExchange(ValidPersonJson);
         await compiled.Process(exchange);
@@ -1063,8 +1037,7 @@ public class ValidatorTests
         route.From("direct:validated")
              .ValidateJsonSchema(PersonJsonSchema);
 
-        var compiler = new RouteCompiler(context, null);
-        var compiled = compiler.Compile(route);
+        var compiled = route.CreateProcessor(context);
 
         var exchange = CreateExchange(InvalidPersonJson_MissingAge);
         var act = async () => await compiled.Process(exchange);
@@ -1083,8 +1056,7 @@ public class ValidatorTests
         route.From("direct:validated")
              .ValidateJsonSchema(schema);
 
-        var compiler = new RouteCompiler(context, null);
-        var compiled = compiler.Compile(route);
+        var compiled = route.CreateProcessor(context);
 
         var exchange = CreateExchange(ValidPersonJson);
         await compiled.Process(exchange);
@@ -1102,8 +1074,7 @@ public class ValidatorTests
         route.From("direct:validated")
              .ValidateXsd(PersonXsd);
 
-        var compiler = new RouteCompiler(context, null);
-        var compiled = compiler.Compile(route);
+        var compiled = route.CreateProcessor(context);
 
         var exchange = CreateExchange(ValidPersonXml);
         await compiled.Process(exchange);
@@ -1121,8 +1092,7 @@ public class ValidatorTests
         route.From("direct:validated")
              .ValidateXsd(PersonXsd);
 
-        var compiler = new RouteCompiler(context, null);
-        var compiled = compiler.Compile(route);
+        var compiled = route.CreateProcessor(context);
 
         var exchange = CreateExchange(InvalidPersonXml_MissingAge);
         var act = async () => await compiled.Process(exchange);
@@ -1140,8 +1110,7 @@ public class ValidatorTests
         route.From("direct:validated")
              .ValidateXsd(null, PersonXsd);
 
-        var compiler = new RouteCompiler(context, null);
-        var compiled = compiler.Compile(route);
+        var compiled = route.CreateProcessor(context);
 
         var exchange = CreateExchange(ValidPersonXml);
         await compiled.Process(exchange);
@@ -1164,8 +1133,7 @@ public class ValidatorTests
         route.From("direct:validated")
              .ValidateXsd(schemaSet);
 
-        var compiler = new RouteCompiler(context, null);
-        var compiled = compiler.Compile(route);
+        var compiled = route.CreateProcessor(context);
 
         var exchange = CreateExchange(ValidPersonXml);
         await compiled.Process(exchange);
@@ -1183,8 +1151,7 @@ public class ValidatorTests
         route.From("direct:validated")
              .ValidateJsonSchema(PersonJsonSchema, throwOnFailure: false);
 
-        var compiler = new RouteCompiler(context, null);
-        var compiled = compiler.Compile(route);
+        var compiled = route.CreateProcessor(context);
 
         var exchange = CreateExchange(InvalidPersonJson_MissingAge);
         await compiled.Process(exchange);
@@ -1203,8 +1170,7 @@ public class ValidatorTests
         route.From("direct:validated")
              .ValidateXsd(PersonXsd, throwOnFailure: false);
 
-        var compiler = new RouteCompiler(context, null);
-        var compiled = compiler.Compile(route);
+        var compiled = route.CreateProcessor(context);
 
         var exchange = CreateExchange(InvalidPersonXml_MissingAge);
         await compiled.Process(exchange);

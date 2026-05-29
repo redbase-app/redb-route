@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 using SysHttpMethod = System.Net.Http.HttpMethod;
 
 namespace redb.Route.Http;
@@ -72,6 +74,12 @@ public class HttpProducer : ConnectableProducer
 
         var url = ResolveUrl(exchange);
         var method = ResolveMethod(exchange);
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"HTTP {method.Method}", ActivityKind.Client,
+            "http.method", method.Method,
+            _endpoint.Uri.NormalizedKey,
+            destination: url);
 
         using var request = new HttpRequestMessage(method, url);
 

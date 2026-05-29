@@ -96,6 +96,12 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         if (_logger is not null)
             _services[typeof(ILogger)] = _logger;
 
+        // Expose the logger factory via the service locator so definitions
+        // (LogDefinition, RichLogDefinition, etc.) can resolve it through
+        // IRouteContext.GetService<ILoggerFactory>() without reaching for DI.
+        if (loggerFactory is not null)
+            _services[typeof(ILoggerFactory)] = loggerFactory;
+
         // Register built-in components
         _components["direct"] = SetComponentContext(new DirectComponent());
         _components["timer"] = SetComponentContext(new TimerComponent());
@@ -640,7 +646,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         // 1. Invoke all builders to collect definitions
         foreach (var builder in _builders)
         {
-            ((IRouteBuilder)builder).Configure(this);
+            builder.InternalBuild(this);
         }
 
         // 2. Validate route registrations — fail fast before any compilation
@@ -671,18 +677,20 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         }
 
         // 3. Collect builder-level exception definitions
-        var compiler = new RouteCompiler(this, _loggerFactory);
         var allExceptionDefs = _builders.SelectMany(b => b.ExceptionDefinitions).ToList();
 
         if (allExceptionDefs.Count > 0)
         {
             foreach (var exDef in allExceptionDefs)
             {
-                AddGlobalExceptionHandler(exDef.ExceptionType,
-                    compiler.CompileExceptionDefinition(exDef));
-                logger?.LogInformation(
-                    "Registered global exception handler for {ExceptionType}",
-                    exDef.ExceptionType.Name);
+                var handlerProcessor = Definitions.TryCatchDefinition.BuildPipeline(exDef.Outputs, this);
+                foreach (var exType in exDef.ExceptionTypes)
+                {
+                    AddGlobalExceptionHandler(exType, handlerProcessor);
+                    logger?.LogInformation(
+                        "Registered global exception handler for {ExceptionType}",
+                        exType.Name);
+                }
             }
         }
 
@@ -707,7 +715,10 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 PipelineProcessor pipeline;
                 try
                 {
-                    pipeline = compiler.Compile(definition);
+                    var inner = definition.CreateProcessor(this);
+                    pipeline = inner as PipelineProcessor ?? new PipelineProcessor();
+                    if (inner is not PipelineProcessor)
+                        pipeline.Add(inner);
                 }
                 catch (Exception ex) when (!_options.ThrowOnCompilationError)
                 {
@@ -787,11 +798,32 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                     finalProcessor = new InstrumentedProcessor(finalProcessor, $"route:{routeId}");
 
                 if (_options.EnableMetrics)
-                    finalProcessor = new MeteredProcessor(finalProcessor, routeId);
+                {
+                    var endpointScheme = EndpointUriParser.Parse(fromUri).Scheme;
+                    finalProcessor = new MeteredProcessor(finalProcessor, routeId, fromUri, endpointScheme);
+                }
 
                 // Wrap with builder-level exception handlers (outermost layer)
                 if (allExceptionDefs.Count > 0)
-                    finalProcessor = compiler.CompileExceptionDefinitions(allExceptionDefs, finalProcessor);
+                {
+                    foreach (var exDef in allExceptionDefs)
+                    {
+                        var handlerBody = Definitions.TryCatchDefinition.BuildPipeline(exDef.Outputs, this);
+                        var oeLogger = _loggerFactory?.CreateLogger<OnExceptionProcessor>();
+                        var oeProc = new OnExceptionProcessor(finalProcessor, oeLogger);
+                        foreach (var exType in exDef.ExceptionTypes)
+                        {
+                            oeProc.Handle(exType, handlerBody,
+                                maxRedeliveries: exDef.MaxRedeliveries,
+                                redeliveryDelay: exDef.RedeliveryDelayValue,
+                                backoffMultiplier: exDef.BackoffMultiplierValue,
+                                useExponentialBackoff: exDef.UseExponentialBackoffValue,
+                                handled: exDef.IsHandled,
+                                continued: exDef.IsContinued);
+                        }
+                        finalProcessor = oeProc;
+                    }
+                }
 
                 // Create consumer on the From endpoint
                 var endpoint = GetEndpoint(fromUri);
@@ -1332,105 +1364,4 @@ public enum RouteStatus
 
     /// <summary>Route startup or compilation failed.</summary>
     Errored
-}
-
-/// <summary>
-/// Represents a compiled route with lifecycle state.
-/// </summary>
-public sealed class CompiledRoute
-{
-    /// <summary>Creates a compiled route.</summary>
-    public CompiledRoute(
-        string routeId,
-        string fromUri,
-        RouteDefinition definition,
-        PipelineProcessor pipeline,
-        IConsumer consumer,
-        IEndpoint endpoint)
-    {
-        RouteId = routeId;
-        FromUri = fromUri;
-        Definition = definition;
-        Pipeline = pipeline;
-        Consumer = consumer;
-        Endpoint = endpoint;
-    }
-
-    /// <summary>Route identifier.</summary>
-    public string RouteId { get; }
-
-    /// <summary>Source endpoint URI.</summary>
-    public string FromUri { get; }
-
-    /// <summary>Original route definition.</summary>
-    public RouteDefinition Definition { get; }
-
-    /// <summary>Compiled processor pipeline.</summary>
-    public PipelineProcessor Pipeline { get; }
-
-    /// <summary>The consumer instance.</summary>
-    public IConsumer Consumer { get; }
-
-    /// <summary>The source endpoint.</summary>
-    public IEndpoint Endpoint { get; }
-
-    /// <summary>
-    /// Whether this route should auto-start when the context starts.
-    /// Can be overridden at runtime (e.g., by Tsak StateStore).
-    /// </summary>
-    public bool AutoStart { get; set; } = true;
-
-    /// <summary>Route policy for lifecycle control, or <c>null</c> if none assigned.</summary>
-    public IRoutePolicy? Policy { get; internal set; }
-
-    /// <summary>
-    /// Effective cluster-policy resolution captured at compile time. Never null;
-    /// reports <c>"AllNodes"</c> when no policy was attached.
-    /// </summary>
-    public RoutePolicyDescriptor PolicyDescriptor { get; internal set; }
-        = new(false, "AllNodes", null, "No policy attached");
-
-    /// <summary>Current route status. Defaults to Stopped until started by the context.</summary>
-    public RouteStatus Status { get; internal set; } = RouteStatus.Stopped;
-}
-
-/// <summary>
-/// Route builder that accepts an inline configure action.
-/// </summary>
-public sealed class InlineRouteBuilder : RouteBuilder
-{
-    private readonly Action<InlineRouteBuilder> _configure;
-
-    /// <summary>Creates an inline route builder.</summary>
-    public InlineRouteBuilder(Action<InlineRouteBuilder> configure)
-    {
-        _configure = configure ?? throw new ArgumentNullException(nameof(configure));
-    }
-
-    /// <summary>Starts a new route definition (public wrapper for inline usage).</summary>
-    /// <param name="uri">Source endpoint URI.</param>
-    /// <returns>Route definition for fluent chaining.</returns>
-    public new IRouteDefinition From(string uri) => base.From(uri);
-
-    /// <summary>
-    /// Defines a global exception handler (public wrapper for inline usage).
-    /// </summary>
-    /// <typeparam name="TException">Exception type to handle.</typeparam>
-    /// <returns>Route definition for fluent chaining.</returns>
-    public new IRouteDefinition OnException<TException>() where TException : Exception
-        => base.OnException<TException>();
-
-    /// <summary>
-    /// Defines a global exception handler for multiple types (public wrapper for inline usage).
-    /// </summary>
-    /// <param name="exceptionTypes">Exception types to handle.</param>
-    /// <returns>Route definition for fluent chaining.</returns>
-    public new IRouteDefinition OnException(params Type[] exceptionTypes)
-        => base.OnException(exceptionTypes);
-
-    /// <inheritdoc />
-    protected override void Configure()
-    {
-        _configure(this);
-    }
 }

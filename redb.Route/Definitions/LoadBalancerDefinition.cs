@@ -1,52 +1,58 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Processors;
 using redb.Route.Processors.LoadBalancer;
 
 namespace redb.Route.Definitions;
 
 /// <summary>
-/// Internal builder for <see cref="ILoadBalancerDefinition"/>.
-/// Collects configuration and exposes it for step creation.
+/// Definition for a Load Balancer step. Collects configuration and creates a
+/// <see cref="LoadBalancerProcessor"/> at route-build time.
 /// </summary>
-internal sealed class LoadBalancerDefinition : ILoadBalancerDefinition
+public sealed class LoadBalancerDefinition : ProcessorDefinition, ILoadBalancerDefinition
 {
-    internal string[]? EndpointUris { get; private set; }
-    internal ILoadBalancerStrategy? SelectedStrategy { get; private set; }
+    /// <summary>Target endpoint URIs to balance across.</summary>
+    public string[]? Endpoints { get; private set; }
 
-    /// <inheritdoc />
-    public ILoadBalancerDefinition Endpoints(params string[] uris)
+    /// <summary>The load balancer strategy.</summary>
+    public ILoadBalancerStrategy? Strategy { get; private set; }
+
+    // ── ILoadBalancerDefinition — explicit to avoid name conflicts with properties ──
+
+    ILoadBalancerDefinition ILoadBalancerDefinition.Endpoints(params string[] uris)
     {
-        EndpointUris = uris ?? throw new ArgumentNullException(nameof(uris));
+        Endpoints = uris ?? throw new ArgumentNullException(nameof(uris));
         return this;
     }
 
-    /// <inheritdoc />
-    public ILoadBalancerDefinition Strategy(ILoadBalancerStrategy strategy)
+    ILoadBalancerDefinition ILoadBalancerDefinition.Strategy(ILoadBalancerStrategy strategy)
     {
-        SelectedStrategy = strategy ?? throw new ArgumentNullException(nameof(strategy));
+        Strategy = strategy ?? throw new ArgumentNullException(nameof(strategy));
         return this;
     }
 
     /// <inheritdoc />
     public ILoadBalancerDefinition UseRoundRobin()
     {
-        SelectedStrategy = new RoundRobinStrategy();
+        Strategy = new RoundRobinStrategy();
         return this;
     }
 
     /// <inheritdoc />
     public ILoadBalancerDefinition UseRandom()
     {
-        SelectedStrategy = new RandomStrategy();
+        Strategy = new RandomStrategy();
         return this;
     }
 
     /// <inheritdoc />
     public ILoadBalancerDefinition UseFailover()
     {
-        SelectedStrategy = new FailoverStrategy();
+        Strategy = new FailoverStrategy();
         return this;
     }
 
@@ -54,7 +60,7 @@ internal sealed class LoadBalancerDefinition : ILoadBalancerDefinition
     public ILoadBalancerDefinition UseSticky(Func<IExchange, string> correlationKeyExtractor)
     {
         ArgumentNullException.ThrowIfNull(correlationKeyExtractor);
-        SelectedStrategy = new StickyStrategy(correlationKeyExtractor!);
+        Strategy = new StickyStrategy(correlationKeyExtractor!);
         return this;
     }
 
@@ -63,7 +69,20 @@ internal sealed class LoadBalancerDefinition : ILoadBalancerDefinition
     {
         ArgumentNullException.ThrowIfNull(weights);
         var entries = weights.Select(kv => (kv.Key, kv.Value)).ToList();
-        SelectedStrategy = new WeightedStrategy(entries);
+        Strategy = new WeightedStrategy(entries);
         return this;
+    }
+
+    /// <inheritdoc />
+    public override IProcessor CreateProcessor(IRouteContext context)
+    {
+        if (Strategy is null)
+            throw new InvalidOperationException(
+                "Strategy is required for LoadBalance. Use UseRoundRobin(), UseFailover(), etc.");
+        if (Endpoints is null || Endpoints.Length == 0)
+            throw new InvalidOperationException("At least one endpoint is required for LoadBalance.");
+
+        var logger = context.GetService<ILoggerFactory>()?.CreateLogger<LoadBalancerProcessor>();
+        return new LoadBalancerProcessor(context, Endpoints, Strategy, logger);
     }
 }

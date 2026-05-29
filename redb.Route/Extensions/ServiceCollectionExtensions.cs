@@ -1,3 +1,4 @@
+﻿#pragma warning disable CS0619
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using redb.Route.Abstractions;

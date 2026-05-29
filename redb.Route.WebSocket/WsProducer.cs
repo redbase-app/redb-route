@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.WebSocket;
 
@@ -59,6 +61,12 @@ public sealed class WsProducer : ConnectableProducer
     public override async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         EnsureStarted();
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            "ws send", ActivityKind.Producer,
+            "messaging.system", "websocket",
+            _endpoint.Uri.NormalizedKey,
+            operation: "send");
 
         // Reconnect if needed
         if (_ws is null or { State: not WebSocketState.Open })

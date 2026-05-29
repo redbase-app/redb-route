@@ -1,11 +1,13 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 
 namespace redb.Route.Definitions;
 
 /// <summary>
-/// Represents a single step recorded by the fluent DSL.
-/// RouteCompiler converts these into IProcessor instances.
+/// Read-only projection of a single step in the route AST, exposed via
+/// <see cref="RouteDefinition.Steps"/>. Built from <see cref="IProcessorDefinition"/>
+/// nodes by <see cref="RouteStepProjection"/> for diagnostics, validation and tooling.
+/// Not used for compilation — that goes through <c>IProcessorDefinition.CreateProcessor</c>.
 /// </summary>
 public abstract record RouteStep;
 
@@ -19,7 +21,14 @@ public record ToStep(string Uri) : RouteStep;
 
 /// <summary>Step: filter by predicate.</summary>
 /// <param name="Predicate">Filter predicate.</param>
-public record FilterStep(Func<Abstractions.IExchange, bool> Predicate) : RouteStep;
+/// <param name="SubSteps">
+/// Optional explicit body. When non-null, the filter's inner pipeline is taken from these
+/// sub-steps (Camel scope-form: <c>Filter().To(...).EndFilter()</c>) instead of consuming
+/// the surrounding pipeline's tail.
+/// </param>
+public record FilterStep(
+    Func<Abstractions.IExchange, bool> Predicate,
+    IReadOnlyList<RouteStep>? SubSteps = null) : RouteStep;
 
 /// <summary>Step: process via async delegate.</summary>
 /// <param name="Action">Async processing delegate.</param>
@@ -124,17 +133,24 @@ public record WireTapStep(
 /// <param name="SubSteps">Optional sub-route steps for each split part.</param>
 /// <param name="ParallelProcessing">Whether to process parts in parallel.</param>
 /// <param name="MaxDegreeOfParallelism">Max concurrent tasks (0 = processor count).</param>
-/// <param name="AggregationStrategy">Optional pair-wise aggregation strategy.</param>
+/// <param name="AggregationStrategy">
+/// Optional pair-wise aggregation strategy (Camel-compatible): for the first part
+/// <c>oldExchange == null</c> so the strategy can perform a seed/wrap.
+/// </param>
 /// <param name="StopOnException">Whether to stop on the first exception.</param>
 /// <param name="Timeout">Timeout for the operation (TimeSpan.Zero = no timeout).</param>
+/// <param name="ParallelAggregate">When true and ParallelProcessing is true, aggregation runs in-task under a lock (strategy must be thread-safe).</param>
+/// <param name="AggregateOnException">When true, failed split exchanges still feed into the aggregation strategy.</param>
 public record SplitStep(
     Func<Abstractions.IExchange, IEnumerable<object?>> Splitter,
     IReadOnlyList<RouteStep>? SubSteps,
     bool ParallelProcessing = false,
     int MaxDegreeOfParallelism = 0,
-    Func<Abstractions.IExchange, Abstractions.IExchange, Abstractions.IExchange>? AggregationStrategy = null,
+    Func<Abstractions.IExchange?, Abstractions.IExchange, Abstractions.IExchange>? AggregationStrategy = null,
     bool StopOnException = true,
-    TimeSpan Timeout = default) : RouteStep;
+    TimeSpan Timeout = default,
+    bool ParallelAggregate = false,
+    bool AggregateOnException = false) : RouteStep;
 
 /// <summary>Step: aggregate exchanges by correlation key.</summary>
 /// <param name="CorrelationKey">Correlation key extractor.</param>
@@ -352,10 +368,12 @@ public record TransactedStep(Transactions.TransactionPolicy? Policy = null) : Ro
 /// <param name="KeyExtractor">Function to extract the unique key from an exchange.</param>
 /// <param name="Repository">Idempotent repository for tracking keys.</param>
 /// <param name="SkipDuplicate">Whether to silently skip duplicates (true) or propagate with flag (false).</param>
+/// <param name="SubSteps">Optional explicit body. See <see cref="FilterStep"/> for semantics.</param>
 public record IdempotentConsumerStep(
     Func<Abstractions.IExchange, string> KeyExtractor,
     Abstractions.IIdempotentRepository Repository,
-    bool SkipDuplicate = true) : RouteStep;
+    bool SkipDuplicate = true,
+    IReadOnlyList<RouteStep>? SubSteps = null) : RouteStep;
 
 /// <summary>
 /// Step: idempotent consumer that resolves its <see cref="Abstractions.IIdempotentRepository"/>
@@ -365,10 +383,12 @@ public record IdempotentConsumerStep(
 /// <param name="KeyExtractor">Function to extract the unique key from an exchange.</param>
 /// <param name="RepositoryName">Logical repository name to resolve at compile time.</param>
 /// <param name="SkipDuplicate">Whether to silently skip duplicates (true) or propagate with flag (false).</param>
+/// <param name="SubSteps">Optional explicit body. See <see cref="FilterStep"/> for semantics.</param>
 public record NamedIdempotentConsumerStep(
     Func<Abstractions.IExchange, string> KeyExtractor,
     string RepositoryName,
-    bool SkipDuplicate = true) : RouteStep;
+    bool SkipDuplicate = true,
+    IReadOnlyList<RouteStep>? SubSteps = null) : RouteStep;
 
 /// <summary>Step: remove a property from the exchange.</summary>
 /// <param name="Key">Property key to remove.</param>
@@ -416,11 +436,17 @@ public record ExceptionHandledStep : RouteStep;
 
 /// <summary>Step: filter by <see cref="IPredicate"/> instance.</summary>
 /// <param name="Predicate">Predicate to evaluate.</param>
-public record FilterPredicateStep(IPredicate Predicate) : RouteStep;
+/// <param name="SubSteps">Optional explicit body. See <see cref="FilterStep"/> for semantics.</param>
+public record FilterPredicateStep(
+    IPredicate Predicate,
+    IReadOnlyList<RouteStep>? SubSteps = null) : RouteStep;
 
 /// <summary>Step: filter by string expression evaluated as boolean (e.g. <c>"${header.active}"</c>).</summary>
 /// <param name="Expression">Expression string evaluated as boolean.</param>
-public record FilterExpressionStep(string Expression) : RouteStep;
+/// <param name="SubSteps">Optional explicit body. See <see cref="FilterStep"/> for semantics.</param>
+public record FilterExpressionStep(
+    string Expression,
+    IReadOnlyList<RouteStep>? SubSteps = null) : RouteStep;
 
 /// <summary>Step: set body via <see cref="IExpression"/> instance.</summary>
 /// <param name="Expression">Expression producing the new body value.</param>
@@ -453,17 +479,24 @@ public record TransformStringExpressionStep(string Expression) : RouteStep;
 /// <param name="SubSteps">Optional sub-route steps for each split part.</param>
 /// <param name="ParallelProcessing">Whether to process parts in parallel.</param>
 /// <param name="MaxDegreeOfParallelism">Max concurrent tasks (0 = processor count).</param>
-/// <param name="AggregationStrategy">Optional pair-wise aggregation strategy.</param>
+/// <param name="AggregationStrategy">
+/// Optional pair-wise aggregation strategy (Camel-compatible): for the first part
+/// <c>oldExchange == null</c> so the strategy can perform a seed/wrap.
+/// </param>
 /// <param name="StopOnException">Whether to stop on first exception.</param>
 /// <param name="Timeout">Timeout for the operation.</param>
+/// <param name="ParallelAggregate">When true and ParallelProcessing is true, aggregation runs in-task under a lock (strategy must be thread-safe).</param>
+/// <param name="AggregateOnException">When true, failed split exchanges still feed into the aggregation strategy.</param>
 public record SplitExpressionStep(
     IExpression Expression,
     IReadOnlyList<RouteStep>? SubSteps,
     bool ParallelProcessing = false,
     int MaxDegreeOfParallelism = 0,
-    Func<IExchange, IExchange, IExchange>? AggregationStrategy = null,
+    Func<IExchange?, IExchange, IExchange>? AggregationStrategy = null,
     bool StopOnException = true,
-    TimeSpan Timeout = default) : RouteStep;
+    TimeSpan Timeout = default,
+    bool ParallelAggregate = false,
+    bool AggregateOnException = false) : RouteStep;
 
 /// <summary>Step: log using ExpressionResolver template syntax (<c>${body}</c>, <c>${header.x}</c> placeholders).</summary>
 /// <param name="Template">Template string with <c>${...}</c> placeholders.</param>

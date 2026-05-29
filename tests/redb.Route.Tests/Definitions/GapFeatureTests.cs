@@ -177,20 +177,20 @@ public class GapFeatureTests : IAsyncDisposable
     public void Loop_CopyTrue_RecordedInStep_Lambda()
     {
         var def = new RouteDefinition();
-        def.From("direct://x")
-            .Loop(5, _ => { }, copy: true);
+        def.Loop(5, copy: true).EndLoop();
 
-        def.Steps.OfType<LoopCountStep>().First().Copy.Should().BeTrue();
+        def.Outputs.Should().ContainSingle().Which.Should().BeOfType<LoopDefinition>()
+            .Which.Copy.Should().BeTrue();
     }
 
     [Fact]
     public void Loop_CopyFalse_RecordedInStep_Lambda()
     {
         var def = new RouteDefinition();
-        def.From("direct://x")
-            .Loop(5, _ => { });
+        def.Loop(5).EndLoop();
 
-        def.Steps.OfType<LoopCountStep>().First().Copy.Should().BeFalse();
+        def.Outputs.Should().ContainSingle().Which.Should().BeOfType<LoopDefinition>()
+            .Which.Copy.Should().BeFalse();
     }
 
     // ══════════════════════════════════════════
@@ -283,7 +283,7 @@ public class GapFeatureTests : IAsyncDisposable
         var def = new RouteDefinition();
         def.From("direct://x").RollbackAll();
 
-        def.Steps.OfType<RollbackAllStep>().Should().HaveCount(1);
+        def.Outputs.Should().ContainSingle().Which.Should().BeOfType<RollbackAllDefinition>();
     }
 
     // ══════════════════════════════════════════
@@ -330,7 +330,7 @@ public class GapFeatureTests : IAsyncDisposable
         var def = new RouteDefinition();
         def.From("direct://x").ExceptionHandled();
 
-        def.Steps.OfType<ExceptionHandledStep>().Should().HaveCount(1);
+        def.Outputs.Should().ContainSingle().Which.Should().BeOfType<ExceptionHandledDefinition>();
     }
 
     [Fact]
@@ -406,12 +406,12 @@ public class GapFeatureTests : IAsyncDisposable
                 .Handled()
             .End();
 
-        var handlers = def.Steps.OfType<OnExceptionStep>().SelectMany(s => s.Handlers).ToList();
-        handlers.Should().HaveCount(1);
-        handlers[0].MaxRedeliveries.Should().Be(3);
-        handlers[0].RedeliveryDelay.Should().Be(TimeSpan.FromMilliseconds(50));
-        handlers[0].BackoffMultiplier.Should().Be(2.0);
-        handlers[0].UseExponentialBackoff.Should().BeTrue();
+        var oe = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<OnExceptionDefinition>().Subject;
+        oe.ExceptionTypes.Should().Equal([typeof(InvalidOperationException)]);
+        oe.MaxRedeliveries.Should().Be(3);
+        oe.RedeliveryDelayValue.Should().Be(TimeSpan.FromMilliseconds(50));
+        oe.BackoffMultiplierValue.Should().Be(2.0);
+        oe.UseExponentialBackoffValue.Should().BeTrue();
     }
 
     [Fact]
@@ -430,7 +430,6 @@ public class GapFeatureTests : IAsyncDisposable
     public void RedeliveryPolicy_NullPolicy_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://x");
 
         var act = () => def.OnException<Exception>().RedeliveryPolicy(null!);
         act.Should().Throw<ArgumentNullException>();
@@ -446,7 +445,8 @@ public class GapFeatureTests : IAsyncDisposable
             RedeliveryDelay = TimeSpan.FromMilliseconds(10)
         };
 
-        _context.AddRoutes(r =>
+#pragma warning disable CS0618 // v1 DSL — OnException fluent chain requires v1 semantics
+        _context.AddRoutes((InlineRouteBuilder r) =>
         {
             r.From("direct://rp-engine-in")
                 .OnException<InvalidOperationException>()
@@ -459,6 +459,7 @@ public class GapFeatureTests : IAsyncDisposable
                     throw new InvalidOperationException("retry me");
                 });
         });
+#pragma warning restore CS0618
 
         await _context.Start();
 
@@ -484,23 +485,18 @@ public class GapFeatureTests : IAsyncDisposable
                 .MaximumRedeliveries(2)
             .End();
 
-        var handlers = def.Steps.OfType<OnExceptionStep>().SelectMany(s => s.Handlers).ToList();
-        handlers.Should().HaveCount(2);
-        handlers[0].ExceptionType.Should().Be(typeof(InvalidOperationException));
-        handlers[1].ExceptionType.Should().Be(typeof(TimeoutException));
-
-        // Both share same config
-        handlers[0].MaxRedeliveries.Should().Be(2);
-        handlers[1].MaxRedeliveries.Should().Be(2);
-        handlers[0].Handled.Should().BeTrue();
-        handlers[1].Handled.Should().BeTrue();
+        var oe = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<OnExceptionDefinition>().Subject;
+        oe.ExceptionTypes.Should().HaveCount(2);
+        oe.ExceptionTypes[0].Should().Be(typeof(InvalidOperationException));
+        oe.ExceptionTypes[1].Should().Be(typeof(TimeoutException));
+        oe.MaxRedeliveries.Should().Be(2);
+        oe.IsHandled.Should().BeTrue();
     }
 
     [Fact]
     public void OnException_ParamsTypes_EmptyArray_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://x");
 
         var act = () => def.OnException(Array.Empty<Type>());
         act.Should().Throw<ArgumentException>();
@@ -510,7 +506,6 @@ public class GapFeatureTests : IAsyncDisposable
     public void OnException_ParamsTypes_NonExceptionType_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://x");
 
         var act = () => def.OnException(typeof(string));
         act.Should().Throw<ArgumentException>()
@@ -584,15 +579,12 @@ public class GapFeatureTests : IAsyncDisposable
                 .Handled()
             .End();
 
-        var handlers = def.Steps.OfType<OnExceptionStep>().SelectMany(s => s.Handlers).ToList();
-        handlers.Should().HaveCount(2);
-        foreach (var h in handlers)
-        {
-            h.MaxRedeliveries.Should().Be(4);
-            h.RedeliveryDelay.Should().Be(TimeSpan.FromMilliseconds(100));
-            h.BackoffMultiplier.Should().Be(3.0);
-            h.UseExponentialBackoff.Should().BeTrue();
-        }
+        var oe = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<OnExceptionDefinition>().Subject;
+        oe.ExceptionTypes.Should().HaveCount(2);
+        oe.MaxRedeliveries.Should().Be(4);
+        oe.RedeliveryDelayValue.Should().Be(TimeSpan.FromMilliseconds(100));
+        oe.BackoffMultiplierValue.Should().Be(3.0);
+        oe.UseExponentialBackoffValue.Should().BeTrue();
     }
 
     // ── Builder-level OnException(params Type[]) ──

@@ -148,33 +148,28 @@ public class SamplingTests
     public void DSL_SampleCount_AddsSampleCountStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         def.Sample(5);
 
-        def.Steps.Should().ContainSingle(s => s is SampleCountStep);
-        var step = def.Steps.OfType<SampleCountStep>().Single();
-        step.MessageFrequency.Should().Be(5);
+        var node = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<SampleCountDefinition>().Subject;
+        node.MessageFrequency.Should().Be(5);
     }
 
     [Fact]
     public void DSL_SamplePeriod_AddsSamplePeriodStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         def.Sample(TimeSpan.FromSeconds(30));
 
-        def.Steps.Should().ContainSingle(s => s is SamplePeriodStep);
-        var step = def.Steps.OfType<SamplePeriodStep>().Single();
-        step.Period.Should().Be(TimeSpan.FromSeconds(30));
+        var node = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<SamplePeriodDefinition>().Subject;
+        node.Period.Should().Be(TimeSpan.FromSeconds(30));
     }
 
     [Fact]
     public void DSL_SampleCount_ZeroFrequency_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.Sample(0);
 
@@ -185,7 +180,6 @@ public class SamplingTests
     public void DSL_SamplePeriod_ZeroPeriod_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.Sample(TimeSpan.Zero);
 
@@ -196,7 +190,6 @@ public class SamplingTests
     public void DSL_SampleCount_Chaining()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var result = def.Sample(10);
 
@@ -207,7 +200,6 @@ public class SamplingTests
     public void DSL_SamplePeriod_Chaining()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var result = def.Sample(TimeSpan.FromSeconds(1));
 

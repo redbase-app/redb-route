@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Processors;
 
@@ -45,16 +46,22 @@ public class WireTapProcessor : IProcessor
 
         _onPrepare?.Invoke(clone);
 
-        // Fire-and-forget: do not await, but catch and log errors
+        // Fire-and-forget: do not await, but catch and log errors.
+        // The tap branch must NOT inherit the caller's CancellationToken — otherwise
+        // cancelling the main pipeline (e.g. an HTTP request being aborted) would
+        // kill an in-flight audit/notification mid-write. WireTap semantics per EIP
+        // are "InOnly, detached": the side branch lives on its own lifecycle.
         _ = Task.Run(async () =>
         {
             try
             {
-                await _tap.Process(clone, ct).ConfigureAwait(false);
+                await _tap.Process(clone, CancellationToken.None).ConfigureAwait(false);
+                ProcessorMetrics.WireTapDispatched.Add(1);
             }
-            catch (OperationCanceledException) { /* expected on shutdown */ }
+            catch (OperationCanceledException) { /* expected on host shutdown */ }
             catch (Exception ex)
             {
+                ProcessorMetrics.WireTapFailed.Add(1);
                 _logger?.LogWarning(ex, "WireTap processor failed for route '{RouteId}'. Error is non-fatal and will not affect the main pipeline.",
                     exchange.RouteId ?? "(no-route)");
             }
@@ -62,7 +69,7 @@ public class WireTapProcessor : IProcessor
             {
                 if (clone is IAsyncDisposable d) await d.DisposeAsync().ConfigureAwait(false);
             }
-        }, ct);
+        }, CancellationToken.None);
 
         return Task.CompletedTask;
     }

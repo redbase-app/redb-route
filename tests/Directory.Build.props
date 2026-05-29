@@ -16,6 +16,15 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <PackageReference Include="FluentAssertions" Version="8.2.0" />
     <PackageReference Include="NSubstitute" Version="5.3.0" />
+    <!-- Telemetry assertion exporters for transport-span smoke tests.
+         1.14.0 closes NU1902 advisory GHSA-g94r-2vxg-569j (fixed in 1.13+).
+         Last line that keeps Microsoft.Extensions.Logging at 9.x — 1.15+ requires 10.0.
+         Targets netstandard2.1 → compatible with net8.0/net9.0/net10.0. -->
+    <!-- Telemetry assertion exporters for transport-span smoke tests.
+         1.15.3 is latest stable; closes NU1902 advisory GHSA-g94r-2vxg-569j.
+         Requires Microsoft.Extensions.* 10.0.x (aligned repo-wide). -->
+    <PackageReference Include="OpenTelemetry" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.InMemory" Version="1.15.3" />
   </ItemGroup>
 
   <!-- Global usings for all test projects -->

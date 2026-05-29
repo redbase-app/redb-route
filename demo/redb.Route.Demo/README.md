@@ -227,7 +227,7 @@ Edit `redb.Route.Demo.config.json` to adjust connection strings and feature flag
 ```json
 {
   "DemoSettings": {
-    "PostgresConnection": "Host=localhost;Port=5432;Username=postgres;Password=1;Database=test_redb_route_sql"
+    "PostgresConnection": "Host=localhost;Port=5432;Username=postgres;Password=1;Database=redb"
   },
   "RabbitMQ": { "Host": "localhost", "Port": 5672, "Username": "admin", "Password": "admin" },
   "Redis":    { "Host": "localhost", "Port": 6379 },

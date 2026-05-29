@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using redb.Route.Abstractions;
+using redb.Route.Expressions;
 
 namespace redb.Route.Telemetry;
 
@@ -12,20 +13,24 @@ public sealed class InstrumentedProcessor : IProcessor
 {
     private readonly IProcessor _inner;
     private readonly string _operationName;
+    private readonly Func<IExchange, string>? _nameTemplate;
 
     /// <summary>Creates an instrumented processor wrapper.</summary>
     /// <param name="inner">The processor to instrument.</param>
-    /// <param name="operationName">Operation name for the activity span (e.g., "route.process", "direct://output send").</param>
+    /// <param name="operationName">Operation name for the activity span (e.g., "route.process", "direct://output send"). Supports <c>${...}</c> templates resolved at runtime.</param>
     public InstrumentedProcessor(IProcessor inner, string operationName)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _operationName = operationName ?? throw new ArgumentNullException(nameof(operationName));
+        if (operationName.Contains("${"))
+            _nameTemplate = ExpressionResolver.GetCompiledTemplate(operationName);
     }
 
     /// <inheritdoc />
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
-        using var activity = RouteActivitySource.Source.StartActivity(_operationName, ActivityKind.Internal);
+        var name = _nameTemplate != null ? _nameTemplate(exchange) : _operationName;
+        using var activity = RouteActivitySource.Source.StartActivity(name, ActivityKind.Internal);
 
         if (activity is { IsAllDataRequested: true })
         {
@@ -60,15 +65,25 @@ public sealed class InstrumentedProcessor : IProcessor
 /// </summary>
 internal static class ActivityExtensions
 {
-    /// <summary>Records an exception event on the activity.</summary>
+    /// <summary>
+    /// Records an exception event on the activity. Uses the framework-built-in
+    /// <c>Activity.AddException</c> when available (.NET 9+ / OTel semconv 1.6+),
+    /// falling back to a manual <c>exception</c> event with OTel standard tags
+    /// otherwise. Either way the resulting span event is interoperable with
+    /// Jaeger / Tempo / OTLP collectors.
+    /// </summary>
     internal static void RecordException(this Activity activity, Exception ex)
     {
+#if NET9_0_OR_GREATER
+        activity.AddException(ex);
+#else
         var tags = new ActivityTagsCollection
         {
             { "exception.type", ex.GetType().FullName },
             { "exception.message", ex.Message },
-            { "exception.stacktrace", ex.StackTrace }
+            { "exception.stacktrace", ex.ToString() }
         };
         activity.AddEvent(new ActivityEvent("exception", tags: tags));
+#endif
     }
 }

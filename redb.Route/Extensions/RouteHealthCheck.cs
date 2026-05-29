@@ -1,3 +1,4 @@
+#pragma warning disable CS0619
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using redb.Route.Abstractions;
 using redb.Route.Core;

@@ -23,24 +23,21 @@ public class BeanTests
     public void DSL_AsyncWithCt_AddsBeanStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         def.Bean<ITestService>(async (svc, exchange, ct) =>
         {
             exchange.In.Body = await svc.ProcessAsync(exchange.In.Body!.ToString()!, ct);
         });
 
-        def.Steps.Should().ContainSingle(s => s is BeanStep);
-        var step = def.Steps.OfType<BeanStep>().Single();
-        step.ServiceType.Should().Be(typeof(ITestService));
-        step.Method.Should().NotBeNull();
+        var beanDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<BeanDefinition>().Subject;
+        beanDef.ServiceType.Should().Be(typeof(ITestService));
+        beanDef.Method.Should().NotBeNull();
     }
 
     [Fact]
     public void DSL_AsyncWithCt_NullMethod_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.Bean<ITestService>((Func<ITestService, IExchange, CancellationToken, Task>)null!);
 
@@ -55,23 +52,20 @@ public class BeanTests
     public void DSL_AsyncNoCt_AddsBeanStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         def.Bean<ITestService>(async (svc, exchange) =>
         {
             exchange.In.Body = await svc.ValidateAsync(exchange.In.Body!.ToString()!);
         });
 
-        def.Steps.Should().ContainSingle(s => s is BeanStep);
-        var step = def.Steps.OfType<BeanStep>().Single();
-        step.ServiceType.Should().Be(typeof(ITestService));
+        var beanDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<BeanDefinition>().Subject;
+        beanDef.ServiceType.Should().Be(typeof(ITestService));
     }
 
     [Fact]
     public void DSL_AsyncNoCt_NullMethod_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.Bean<ITestService>((Func<ITestService, IExchange, Task>)null!);
 
@@ -86,23 +80,20 @@ public class BeanTests
     public void DSL_Sync_AddsBeanStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         def.Bean<ITestService>((svc, exchange) =>
         {
             exchange.In.Headers["value"] = svc.GetValue();
         });
 
-        def.Steps.Should().ContainSingle(s => s is BeanStep);
-        var step = def.Steps.OfType<BeanStep>().Single();
-        step.ServiceType.Should().Be(typeof(ITestService));
+        var beanDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<BeanDefinition>().Subject;
+        beanDef.ServiceType.Should().Be(typeof(ITestService));
     }
 
     [Fact]
     public void DSL_Sync_NullMethod_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.Bean<ITestService>((Action<ITestService, IExchange>)null!);
 
@@ -178,17 +169,16 @@ public class BeanTests
     public void BeanStep_CapturesCorrectServiceType_ForEachOverload()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         def.Bean<ITestService>(async (svc, e, ct) => { await Task.CompletedTask; });
         def.Bean<IAnotherService>(async (svc, e) => { await Task.CompletedTask; });
         def.Bean<ITestService>((svc, e) => { });
 
-        var steps = def.Steps.OfType<BeanStep>().ToList();
-        steps.Should().HaveCount(3);
-        steps[0].ServiceType.Should().Be(typeof(ITestService));
-        steps[1].ServiceType.Should().Be(typeof(IAnotherService));
-        steps[2].ServiceType.Should().Be(typeof(ITestService));
+        var beanDefs = def.Outputs.OfType<BeanDefinition>().ToList();
+        beanDefs.Should().HaveCount(3);
+        beanDefs[0].ServiceType.Should().Be(typeof(ITestService));
+        beanDefs[1].ServiceType.Should().Be(typeof(IAnotherService));
+        beanDefs[2].ServiceType.Should().Be(typeof(ITestService));
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -199,7 +189,6 @@ public class BeanTests
     public void DSL_Bean_ReturnsSameDefinitionForChaining()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var result = def.Bean<ITestService>((svc, e) => { });
 

@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Text.Json;
 using FcmMessage = FirebaseAdmin.Messaging.Message;
 using FcmNotification = FirebaseAdmin.Messaging.Notification;
 using FirebaseAdmin.Messaging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Firebase;
 
@@ -49,6 +51,12 @@ internal sealed class FcmProducer : ConnectableProducer
     public override async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         EnsureStarted();
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"fcm send {_options.MessageType}", ActivityKind.Producer,
+            "messaging.system", "fcm",
+            _endpoint.Uri.NormalizedKey,
+            operation: "send");
 
         var message = BuildMessage(exchange);
         var messageId = await _messaging!.SendAsync(message, _options.DryRun, ct).ConfigureAwait(false);

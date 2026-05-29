@@ -1,4 +1,5 @@
-using redb.Route.Abstractions;
+﻿using redb.Route.Abstractions;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Processors;
 
@@ -45,6 +46,7 @@ public class AggregatorProcessor : IProcessor
     {
         var key = _correlationKey(exchange);
         IExchange? completed = null;
+        var groupCreated = false;
 
         lock (_lock)
         {
@@ -62,19 +64,30 @@ public class AggregatorProcessor : IProcessor
             else
             {
                 _aggregated[key] = exchange;
+                groupCreated = true;
 
                 if (_completionPredicate(exchange))
                 {
                     completed = exchange;
                     _aggregated.Remove(key);
+                    groupCreated = false;
                 }
             }
         }
 
+        if (groupCreated)
+            ProcessorMetrics.AggregatorInflightGroups.Add(1);
+
         if (completed != null)
         {
+            ProcessorMetrics.AggregatorCompleted.Add(1);
+            if (!groupCreated)
+                ProcessorMetrics.AggregatorInflightGroups.Add(-1);
             await _target.Process(completed, ct).ConfigureAwait(false);
         }
+        // Pre-completion inputs are consumed silently: only completed aggregates flow to
+        // _target (the route tail). The aggregator is wired as tail-consuming, so no
+        // downstream pipeline steps follow it inside the same PipelineProcessor.
     }
 
     /// <summary>Gets the number of currently pending aggregation groups.</summary>

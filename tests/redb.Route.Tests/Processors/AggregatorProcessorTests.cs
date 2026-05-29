@@ -104,4 +104,79 @@ public class AggregatorProcessorTests
         fired.Should().Be(1);
         aggregator.PendingGroupCount.Should().Be(0);
     }
+
+    // ────────────────── DSL compilation (Phase 0 / T0.3 fixators) ──────────────────
+    // See redb.Route/docs/EIP_SCOPE_FIX_PLAN.md § 1.3.
+
+    /// <summary>
+    /// T0.3a — Symptom A: completed aggregate must reach the next step in the route.
+    /// Today CompileAggregate wires a no-op DelegateProcessor as the AggregatorProcessor
+    /// target, so completed aggregates silently disappear. Will be fixed in Phase 2.
+    /// </summary>
+    [Fact]
+    public async Task RouteDsl_Aggregate_CompletedExchange_FlowsToNextStep()
+    {
+        await using var context = new RouteContext();
+        var downstream = new List<int>();
+
+        context.AddRoutes(r =>
+        {
+            r.From("direct://agg-complete")
+                .Aggregate(
+                    correlationKey: _ => "k",
+                    aggregationStrategy: (old, neu) =>
+                    {
+                        var sum = (int)(old.In.Body ?? 0) + (int)(neu.In.Body ?? 0);
+                        old.In.Body = sum;
+                        return old;
+                    },
+                    completionPredicate: ex => (int)(ex.In.Body ?? 0) >= 3)
+                .Process(e => downstream.Add((int)e.In.Body!));
+        });
+        await context.Start();
+
+        var producer = context.GetEndpoint("direct://agg-complete").CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message(1)));
+        await producer.Process(new Exchange(new Message(2)));
+
+        downstream.Should().ContainSingle().Which.Should().Be(3);
+    }
+
+    /// <summary>
+    /// T0.3b — Symptom B: pre-completion input exchanges must NOT leak past the
+    /// aggregate step into downstream processors. Today the aggregator consumes the
+    /// exchange into its group but PipelineProcessor still routes the original input
+    /// further. Will be fixed in Phase 2 (tail-consuming wiring + exchange.Stop()).
+    /// </summary>
+    [Fact]
+    public async Task RouteDsl_Aggregate_PreCompletionExchange_DoesNotLeakToTail()
+    {
+        await using var context = new RouteContext();
+        var downstream = new List<int>();
+
+        context.AddRoutes(r =>
+        {
+            r.From("direct://agg-leak")
+                .Aggregate(
+                    correlationKey: _ => "k",
+                    aggregationStrategy: (old, neu) =>
+                    {
+                        var sum = (int)(old.In.Body ?? 0) + (int)(neu.In.Body ?? 0);
+                        old.In.Body = sum;
+                        return old;
+                    },
+                    completionPredicate: ex => (int)(ex.In.Body ?? 0) >= 100)
+                .Process(e => downstream.Add((int)e.In.Body!));
+        });
+        await context.Start();
+
+        var producer = context.GetEndpoint("direct://agg-leak").CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message(1)));
+        await producer.Process(new Exchange(new Message(2)));
+
+        // Group is not complete (sum=3 < 100), so nothing should flow downstream.
+        downstream.Should().BeEmpty();
+    }
 }

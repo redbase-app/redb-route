@@ -17,22 +17,20 @@ public class NormalizerTests
     // ══════════════════════════════════════════════════════════════
 
     [Fact]
-    public void DSL_AddsSingleChoiceStep()
+    public void DSL_AddsNormalizerStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         def.Normalize(n => n
             .When(e => e.In.Body is string, e => ((string)e.In.Body!).ToUpperInvariant()));
 
-        def.Steps.Should().ContainSingle(s => s is ChoiceStep);
+        def.Outputs.Should().ContainSingle().Which.Should().BeOfType<NormalizerDefinition>();
     }
 
     [Fact]
     public void DSL_NullConfigure_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.Normalize(null!);
 

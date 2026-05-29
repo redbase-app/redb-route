@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Google.Cloud.Firestore;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Firebase;
 
@@ -37,6 +39,13 @@ internal sealed class FirestoreProducer : ConnectableProducer
     public override async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         EnsureStarted();
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"firestore {_options.Operation}", ActivityKind.Client,
+            "db.system", "firestore",
+            _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.CollectionPath,
+            operation: _options.Operation.ToString());
 
         var collection = _db!.Collection(_endpoint.CollectionPath);
 

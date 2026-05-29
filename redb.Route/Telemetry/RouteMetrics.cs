@@ -8,8 +8,8 @@ namespace redb.Route.Telemetry;
 /// </summary>
 public static class RouteMetrics
 {
-    /// <summary>Meter name for OpenTelemetry subscription.</summary>
-    public const string MeterName = "redb.Route";
+    /// <summary>Meter name for OpenTelemetry subscription. Same canonical name as the activity source.</summary>
+    public const string MeterName = RouteActivitySource.TelemetryName;
 
     internal static readonly Meter Meter = new(MeterName, GetVersion());
 

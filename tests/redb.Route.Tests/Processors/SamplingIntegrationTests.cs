@@ -30,8 +30,7 @@ public class SamplingIntegrationTests
         def.Sample(3);
         def.Transform(e => $"sampled:{e.In.Body}");
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         // Message 1 (passes) — gets transformed
         var e1 = CreateExchange("A");
@@ -66,8 +65,7 @@ public class SamplingIntegrationTests
         def.Sample(1);
         def.SetHeader("Sampled", "true");
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         for (int i = 0; i < 5; i++)
         {
@@ -89,8 +87,7 @@ public class SamplingIntegrationTests
         def.Sample(TimeSpan.FromMinutes(10)); // Very long period
         def.Transform(e => $"sampled:{e.In.Body}");
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         // First message passes
         var e1 = CreateExchange("first");
@@ -118,8 +115,7 @@ public class SamplingIntegrationTests
         def.Sample(2); // Every 2nd = 1, 3, 5, ...
         def.Transform(e => $"ok:{e.In.Body}");
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var results = new string?[4];
         for (int i = 0; i < 4; i++)
@@ -144,8 +140,7 @@ public class SamplingIntegrationTests
         def.From("direct://sample");
         def.Sample(1);
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         var exchange = CreateExchange("data");
         exchange.Properties["traceId"] = "abc-123";
@@ -166,8 +161,7 @@ public class SamplingIntegrationTests
         def.Sample(100); // Only first passes
         def.SetHeader("Applied", "yes");
 
-        var compiler = new RouteCompiler(_context, null);
-        var pipeline = compiler.Compile(def);
+        var pipeline = def.CreateProcessor(_context);
 
         // First passes — header set
         var e1 = CreateExchange("first");

@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Google.Apis.Storage.v1.Data;
 using Google.Cloud.Storage.V1;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Firebase;
 
@@ -39,6 +41,13 @@ internal sealed class FirebaseStorageProducer : ConnectableProducer
     public override async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         EnsureStarted();
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"gcs {_options.Operation}", ActivityKind.Client,
+            "db.system", "gcs",
+            _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.BucketName,
+            operation: _options.Operation.ToString());
 
         switch (_options.Operation)
         {

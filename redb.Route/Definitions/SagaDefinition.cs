@@ -1,21 +1,35 @@
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Processors;
 
 namespace redb.Route.Definitions;
 
 /// <summary>
-/// Internal builder for saga definition. Collects steps and builds <see cref="SagaRouteStep"/>.
+/// Definition for a Saga step. Collects saga step entries and builds a
+/// <see cref="SagaProcessor"/> at route-build time.
+/// Supports both callback-style (via <see cref="ISagaDefinition"/>) and
+/// fluent-scope-style (via <see cref="SagaStep"/> / <see cref="EndSaga"/>).
 /// </summary>
-internal sealed class SagaDefinition : ISagaDefinition
+public class SagaDefinition : RouteDefinition, ISagaDefinition, IRouteScope
 {
-    internal readonly List<SagaStepEntry> Entries = [];
-    internal Func<IExchange, CancellationToken, Task>? CompletionCallback;
+    private readonly List<SagaStepEntry> _entries = [];
+    private IRouteDefinition? _parent;
+
+    /// <summary>The collected saga step entries (forward action + optional compensation).</summary>
+    public IReadOnlyList<SagaStepEntry> Entries => _entries;
+
+    /// <summary>Optional callback invoked after all steps complete successfully.</summary>
+    public Func<IExchange, CancellationToken, Task>? CompletionCallback { get; private set; }
+
+    // ── ISagaDefinition (callback-style builder) ──────────────────────────────
 
     /// <inheritdoc />
     public ISagaDefinition Step(Action<IExchange> action, Action<IExchange> compensate)
     {
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(compensate);
-        Entries.Add(new SagaStepEntry(
+        _entries.Add(new SagaStepEntry(
             (e, _) => { action(e); return Task.CompletedTask; },
             (e, _) => { compensate(e); return Task.CompletedTask; }));
         return this;
@@ -28,7 +42,7 @@ internal sealed class SagaDefinition : ISagaDefinition
     {
         ArgumentNullException.ThrowIfNull(action);
         ArgumentNullException.ThrowIfNull(compensate);
-        Entries.Add(new SagaStepEntry(action, compensate));
+        _entries.Add(new SagaStepEntry(action, compensate));
         return this;
     }
 
@@ -36,7 +50,7 @@ internal sealed class SagaDefinition : ISagaDefinition
     public ISagaDefinition Step(Action<IExchange> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        Entries.Add(new SagaStepEntry(
+        _entries.Add(new SagaStepEntry(
             (e, _) => { action(e); return Task.CompletedTask; },
             null));
         return this;
@@ -46,7 +60,7 @@ internal sealed class SagaDefinition : ISagaDefinition
     public ISagaDefinition Step(Func<IExchange, CancellationToken, Task> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        Entries.Add(new SagaStepEntry(action, null));
+        _entries.Add(new SagaStepEntry(action, null));
         return this;
     }
 
@@ -66,12 +80,82 @@ internal sealed class SagaDefinition : ISagaDefinition
         return this;
     }
 
-    /// <summary>Builds the saga route step. Validates at least one step exists.</summary>
+    // ── Scope / fluent-chain DSL ──────────────────────────────────────────────
+
+    /// <summary>Attaches this saga scope to the given parent (called by RouteDefinition.Saga()).</summary>
+    internal void SetParent(IRouteDefinition parent) => _parent = parent;
+
+    /// <summary>Adds a synchronous saga step with both action and compensation.</summary>
+    public SagaDefinition SagaStep(Action<IExchange> action, Action<IExchange> compensate)
+    {
+        Step(action, compensate);
+        return this;
+    }
+
+    /// <summary>Adds a synchronous saga step with no compensation.</summary>
+    public SagaDefinition SagaStep(Action<IExchange> action)
+    {
+        Step(action);
+        return this;
+    }
+
+    /// <summary>Adds an asynchronous saga step with both action and compensation.</summary>
+    public SagaDefinition SagaStep(
+        Func<IExchange, CancellationToken, Task> action,
+        Func<IExchange, CancellationToken, Task> compensate)
+    {
+        Step(action, compensate);
+        return this;
+    }
+
+    /// <summary>Adds an asynchronous saga step with no compensation.</summary>
+    public SagaDefinition SagaStep(Func<IExchange, CancellationToken, Task> action)
+    {
+        Step(action);
+        return this;
+    }
+
+    /// <summary>Sets the saga completion callback (synchronous).</summary>
+    public SagaDefinition OnSagaCompletion(Action<IExchange> callback)
+    {
+        OnCompletion(callback);
+        return this;
+    }
+
+    /// <summary>Sets the saga completion callback (asynchronous).</summary>
+    public SagaDefinition OnSagaCompletion(Func<IExchange, CancellationToken, Task> callback)
+    {
+        OnCompletion(callback);
+        return this;
+    }
+
+    /// <summary>Closes this saga scope and returns the parent route definition.</summary>
+    public IRouteDefinition EndSaga()
+    {
+        return _parent ?? throw new InvalidOperationException(
+            "EndSaga() can only be called on a saga scope opened via RouteDefinition.Saga().");
+    }
+
+    /// <inheritdoc />
+    public IRouteDefinition End() => EndSaga();
+
+    // ── ProcessorDefinition ───────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public override IProcessor CreateProcessor(IRouteContext context)
+    {
+        if (_entries.Count == 0)
+            throw new InvalidOperationException("Saga must have at least one step.");
+        var logger = context.GetService<ILoggerFactory>()?.CreateLogger<SagaProcessor>();
+        return new SagaProcessor(_entries.ToArray(), CompletionCallback, logger);
+    }
+
+    /// <summary>Builds a <see cref="SagaRouteStep"/> projection of this saga for tooling/diagnostics.</summary>
     internal SagaRouteStep Build()
     {
-        if (Entries.Count == 0)
+        if (_entries.Count == 0)
             throw new InvalidOperationException("Saga must have at least one step.");
-        return new SagaRouteStep(Entries.ToArray(), CompletionCallback);
+        return new SagaRouteStep(_entries.ToArray(), CompletionCallback);
     }
 }
 

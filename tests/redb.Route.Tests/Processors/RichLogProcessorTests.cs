@@ -307,13 +307,13 @@ public class RichLogProcessorTests
                 .ShowRouteId()
             .EndLog();
 
-        var step = def.Steps.OfType<RichLogStep>().Single();
-        step.Level.Should().Be(LogLevel.Warning);
-        step.Messages.Should().ContainSingle().Which.Should().Be("msg1");
-        step.MessageFuncs.Should().HaveCount(1);
-        step.HeaderNames.Should().ContainSingle().Which.Should().Be("h1");
-        step.PropertyNames.Should().ContainSingle().Which.Should().Be("p1");
-        step.ShowRouteId.Should().BeTrue();
+        var richLog = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<RichLogScopeDefinition>().Subject;
+        richLog.Level.Should().Be(LogLevel.Warning);
+        richLog.Messages.Should().ContainSingle().Which.Should().Be("msg1");
+        richLog.MessageFuncs.Should().HaveCount(1);
+        richLog.HeaderNames.Should().ContainSingle().Which.Should().Be("h1");
+        richLog.PropertyNames.Should().ContainSingle().Which.Should().Be("p1");
+        richLog.IncludeRouteId.Should().BeTrue();
     }
 
     [Fact]

@@ -23,25 +23,22 @@ public class ScatterGatherTests
     public void DSL_Simple_AddsStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         Func<IExchange, IExchange, IExchange> agg = (a, b) => a;
         def.ScatterGather(agg, "http://a:8080", "http://b:8080");
 
-        def.Steps.Should().ContainSingle(s => s is ScatterGatherStep);
-        var step = def.Steps.OfType<ScatterGatherStep>().Single();
-        step.StaticRecipients.Should().BeEquivalentTo(["http://a:8080", "http://b:8080"]);
-        step.DynamicRecipients.Should().BeNull();
-        step.AggregationStrategy.Should().BeSameAs(agg);
-        step.ParallelProcessing.Should().BeTrue();
-        step.Timeout.Should().Be(TimeSpan.Zero);
+        var sgDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<ScatterGatherDefinition>().Subject;
+        sgDef.StaticRecipients.Should().BeEquivalentTo(["http://a:8080", "http://b:8080"]);
+        sgDef.DynamicRecipients.Should().BeNull();
+        sgDef.AggregationStrategy.Should().BeSameAs(agg);
+        sgDef.ParallelProcessing.Should().BeTrue();
+        sgDef.Timeout.Should().Be(TimeSpan.Zero);
     }
 
     [Fact]
     public void DSL_Simple_NullStrategy_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.ScatterGather(null!, "http://a:8080");
         act.Should().Throw<ArgumentNullException>();
@@ -51,7 +48,6 @@ public class ScatterGatherTests
     public void DSL_Simple_NoRecipients_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.ScatterGather((a, b) => a);
         act.Should().Throw<ArgumentException>();
@@ -65,7 +61,6 @@ public class ScatterGatherTests
     public void DSL_Builder_FullConfig_AddsStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         Func<IExchange, IExchange, IExchange> agg = (a, b) => a;
         def.ScatterGather(sg => sg
@@ -76,21 +71,20 @@ public class ScatterGatherTests
             .MaxDegreeOfParallelism(2)
             .StopOnException());
 
-        var step = def.Steps.OfType<ScatterGatherStep>().Single();
-        step.StaticRecipients.Should().HaveCount(3);
-        step.DynamicRecipients.Should().BeNull();
-        step.AggregationStrategy.Should().BeSameAs(agg);
-        step.ParallelProcessing.Should().BeFalse();
-        step.MaxDegreeOfParallelism.Should().Be(2);
-        step.StopOnException.Should().BeTrue();
-        step.Timeout.Should().Be(TimeSpan.FromSeconds(5));
+        var sgDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<ScatterGatherDefinition>().Subject;
+        sgDef.StaticRecipients.Should().HaveCount(3);
+        sgDef.DynamicRecipients.Should().BeNull();
+        sgDef.AggregationStrategy.Should().BeSameAs(agg);
+        sgDef.ParallelProcessing.Should().BeFalse();
+        sgDef.MaxDegreeOfParallelism.Should().Be(2);
+        sgDef.StopOnException.Should().BeTrue();
+        sgDef.Timeout.Should().Be(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
     public void DSL_Builder_DynamicRecipients_AddsStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         Func<IExchange, IEnumerable<string>> factory = e =>
             e.In.GetHeader<string>("targets")!.Split(',');
@@ -99,16 +93,15 @@ public class ScatterGatherTests
             .Recipients(factory)
             .AggregationStrategy((a, b) => a));
 
-        var step = def.Steps.OfType<ScatterGatherStep>().Single();
-        step.StaticRecipients.Should().BeNull();
-        step.DynamicRecipients.Should().BeSameAs(factory);
+        var sgDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<ScatterGatherDefinition>().Subject;
+        sgDef.StaticRecipients.Should().BeNull();
+        sgDef.DynamicRecipients.Should().BeSameAs(factory);
     }
 
     [Fact]
     public void DSL_Builder_NoStrategy_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.ScatterGather(sg => sg
             .Recipients("http://a:8080"));
@@ -121,7 +114,6 @@ public class ScatterGatherTests
     public void DSL_Builder_NoRecipients_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.ScatterGather(sg => sg
             .AggregationStrategy((a, b) => a));
@@ -136,7 +128,6 @@ public class ScatterGatherTests
         var act = () =>
         {
             var def = new RouteDefinition();
-            def.From("direct://test");
             def.ScatterGather(sg => sg
                 .Recipients("http://a:8080")
                 .AggregationStrategy((a, b) => a)
@@ -152,7 +143,6 @@ public class ScatterGatherTests
         var act = () =>
         {
             var def = new RouteDefinition();
-            def.From("direct://test");
             def.ScatterGather(sg => sg
                 .Recipients("http://a:8080")
                 .AggregationStrategy((a, b) => a)
@@ -170,23 +160,21 @@ public class ScatterGatherTests
     public void Builder_StaticRecipients_OverridesDynamic()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         def.ScatterGather(sg => sg
             .Recipients(e => ["http://dynamic:8080"])
             .Recipients("http://static:8080")               // override: static wins
             .AggregationStrategy((a, b) => a));
 
-        var step = def.Steps.OfType<ScatterGatherStep>().Single();
-        step.StaticRecipients.Should().NotBeNull();
-        step.DynamicRecipients.Should().BeNull();
+        var sgDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<ScatterGatherDefinition>().Subject;
+        sgDef.StaticRecipients.Should().NotBeNull();
+        sgDef.DynamicRecipients.Should().BeNull();
     }
 
     [Fact]
     public void Builder_DynamicRecipients_OverridesStatic()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         Func<IExchange, IEnumerable<string>> factory = e => ["http://dynamic:8080"];
         def.ScatterGather(sg => sg
@@ -194,9 +182,9 @@ public class ScatterGatherTests
             .Recipients(factory)                             // override: dynamic wins
             .AggregationStrategy((a, b) => a));
 
-        var step = def.Steps.OfType<ScatterGatherStep>().Single();
-        step.StaticRecipients.Should().BeNull();
-        step.DynamicRecipients.Should().BeSameAs(factory);
+        var sgDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<ScatterGatherDefinition>().Subject;
+        sgDef.StaticRecipients.Should().BeNull();
+        sgDef.DynamicRecipients.Should().BeSameAs(factory);
     }
 
     // ══════════════════════════════════════════════════════════════

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using MQTTnet;
@@ -6,6 +7,7 @@ using MQTTnet.Protocol;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.MqttNet.Connection;
+using redb.Route.Telemetry;
 
 namespace redb.Route.MqttNet;
 
@@ -71,6 +73,14 @@ internal sealed class MqttProducer : ConnectableProducer
             throw new InvalidOperationException("MQTT producer is not connected. Call Start() first.");
 
         var topic = ResolvePublishTopic(exchange);
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"{topic} publish", ActivityKind.Producer,
+            "messaging.system", "mqtt",
+            _endpoint.Uri.NormalizedKey,
+            destination: topic,
+            operation: "publish");
+
         var payload = SerializeBody(exchange.In.Body);
         var qos = ResolveQos(exchange);
 

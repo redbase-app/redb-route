@@ -1,9 +1,11 @@
 using System.Collections;
+using System.Diagnostics;
 using System.Text.Json;
 using Azure.Messaging.ServiceBus;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.AzureServiceBus;
 
@@ -45,6 +47,13 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
     public override async Task Process(IExchange exchange, CancellationToken ct)
     {
         EnsureStarted();
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"{_endpoint.EntityName} send", ActivityKind.Producer,
+            "messaging.system", "azureservicebus",
+            _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.EntityName,
+            operation: "send");
 
         if (_options.EnableBatch)
             await SendBatchAsync(exchange, ct).ConfigureAwait(false);

@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Net;
 using Amazon.S3;
 using Amazon.S3.Model;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.S3;
 
@@ -57,6 +59,13 @@ internal sealed class S3Producer : ConnectableProducer
             if (Enum.TryParse<S3OperationType>(opStr, ignoreCase: true, out var headerOp))
                 operation = headerOp;
         }
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"s3 {operation}", ActivityKind.Client,
+            "redb.system", "s3",
+            _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.BucketName,
+            operation: operation.ToString());
 
         await DispatchOperationAsync(operation, exchange, ct).ConfigureAwait(false);
     }

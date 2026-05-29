@@ -32,12 +32,13 @@ public class PipelineProcessor : IProcessor
     /// <inheritdoc />
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
-        // Track the last Out message produced by any step so we can restore it
-        // after the pipeline completes. This handles nested pipelines correctly:
-        // intermediate steps merge Out→In and null Out to prevent stale carry-over,
-        // but the final Out is preserved for InOut request/reply callers.
-        IMessage? lastOut = null;
-
+        // Pipeline EIP semantics:
+        // - Intermediate steps that produce Out are merged (Out → In, Out := null) so the
+        //   next step sees the result as its input.
+        // - The final step's Out (if any) is left intact so InOut callers (direct-vm,
+        //   replyTo, RPC) get the reply via exchange.Out.
+        // - If the final step does NOT produce Out, we do not synthesize one from earlier
+        //   steps: any subsequent step that modified In is the authoritative final result.
         for (var i = 0; i < _processors.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
@@ -46,26 +47,15 @@ public class PipelineProcessor : IProcessor
             await _processors[i].Process(exchange, ct).ConfigureAwait(false);
 
             // Pipeline EIP: propagate Out body/headers → In so the next processor sees the result.
-            if (exchange.HasOut)
+            if (exchange.HasOut && i < _processors.Count - 1)
             {
-                lastOut = exchange.Out;
-
-                if (i < _processors.Count - 1)
-                {
-                    var outMsg = exchange.Out!;
-                    exchange.In.Body = outMsg.Body;
-                    exchange.In.ContentType = outMsg.ContentType;
-                    foreach (var (key, value) in outMsg.Headers)
-                        exchange.In.Headers[key] = value;
-                    exchange.Out = null; // prevent stale Out from re-merging on next step
-                }
+                var outMsg = exchange.Out!;
+                exchange.In.Body = outMsg.Body;
+                exchange.In.ContentType = outMsg.ContentType;
+                foreach (var (key, value) in outMsg.Headers)
+                    exchange.In.Headers[key] = value;
+                exchange.Out = null; // prevent stale Out from re-merging on next step
             }
         }
-
-        // Restore the last Out so InOut callers (direct-vm, replyTo, etc.) get the reply.
-        // If the last step itself set Out, it's already there; this handles the case
-        // where the last step did NOT set Out but an earlier step did.
-        if (lastOut != null && !exchange.HasOut)
-            exchange.Out = lastOut;
     }
 }

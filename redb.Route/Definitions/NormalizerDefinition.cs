@@ -1,16 +1,19 @@
-using redb.Route.Abstractions;
+﻿using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Processors;
 
 namespace redb.Route.Definitions;
 
 /// <summary>
-/// Internal builder that collects normalizer when-clauses
-/// and converts them into a <see cref="ChoiceStep"/> with <see cref="TransformStep"/> branches.
+/// Definition for a Normalizer step. Collects when-clauses and builds a
+/// <see cref="ChoiceProcessor"/> with transform branches at route-build time.
 /// </summary>
-internal sealed class NormalizerDefinition : INormalizerDefinition
+public sealed class NormalizerDefinition : ProcessorDefinition, INormalizerDefinition
 {
     private readonly List<(Func<IExchange, bool> Predicate, Func<IExchange, object?> Transform)> _clauses = new();
     private Func<IExchange, object?>? _otherwise;
 
+    /// <inheritdoc />
     public INormalizerDefinition When(
         Func<IExchange, bool> predicate,
         Func<IExchange, object?> transform)
@@ -21,6 +24,7 @@ internal sealed class NormalizerDefinition : INormalizerDefinition
         return this;
     }
 
+    /// <inheritdoc />
     public INormalizerDefinition WhenContentType(
         string contentType,
         Func<IExchange, object?> transform)
@@ -35,6 +39,7 @@ internal sealed class NormalizerDefinition : INormalizerDefinition
         return this;
     }
 
+    /// <inheritdoc />
     public INormalizerDefinition Otherwise(Func<IExchange, object?> transform)
     {
         ArgumentNullException.ThrowIfNull(transform);
@@ -42,9 +47,30 @@ internal sealed class NormalizerDefinition : INormalizerDefinition
         return this;
     }
 
-    /// <summary>
-    /// Builds a <see cref="ChoiceStep"/> where each when-clause wraps a single <see cref="TransformStep"/>.
-    /// </summary>
+    /// <summary>True when no When-clauses have been added yet (used for eager validation in v2 DSL).</summary>
+    internal bool IsEmpty => _clauses.Count == 0;
+
+    /// <inheritdoc />
+    public override IProcessor CreateProcessor(IRouteContext context)
+    {
+        if (_clauses.Count == 0)
+            throw new InvalidOperationException("Normalizer requires at least one When clause.");
+
+        var choice = new ChoiceProcessor();
+        foreach (var (predicate, transform) in _clauses)
+        {
+            var t = transform;
+            choice.When(predicate, new DelegateProcessor(e => { e.In.Body = t(e); }));
+        }
+        if (_otherwise is not null)
+        {
+            var otherwise = _otherwise;
+            choice.SetOtherwise(new DelegateProcessor(e => { e.In.Body = otherwise(e); }));
+        }
+        return choice;
+    }
+
+    /// <summary>Builds a <see cref="ChoiceStep"/> projection of this normalizer for tooling/diagnostics.</summary>
     internal ChoiceStep Build()
     {
         if (_clauses.Count == 0)

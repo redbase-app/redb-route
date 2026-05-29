@@ -32,18 +32,4 @@ public sealed class RedeliveryPolicy
 
     /// <summary>Allow redelivery while the route is stopping. Default: false.</summary>
     public bool AllowRedeliveryWhileStopping { get; init; }
-
-    /// <summary>
-    /// Applies this policy to the given <see cref="IExceptionConfig"/> instance.
-    /// </summary>
-    internal void ApplyTo(IExceptionConfig config)
-    {
-        config.MaxRedeliveriesValue = MaximumRedeliveries;
-        config.RedeliveryDelayValue = RedeliveryDelay;
-        config.BackoffMultiplierValue = BackOffMultiplier;
-        config.UseExponentialBackoffValue = UseExponentialBackOff;
-        config.LogStackTraceValue = LogStackTrace;
-        config.LogExhaustedValue = LogExhausted;
-        config.AllowRedeliveryWhileStoppingValue = AllowRedeliveryWhileStopping;
-    }
 }

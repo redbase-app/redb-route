@@ -3,6 +3,8 @@ using NSubstitute;
 using redb.Core;
 using redb.Core.Data;
 using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Definitions;
 using redb.Route.RedbCore.Extensions;
 using redb.Route.RedbCore.Transactions;
 using redb.Route.Transactions;
@@ -122,13 +124,10 @@ public sealed class RedbTransactedActionTests
     public async Task BeginRedbTransaction_Default_OpensTxAndEnrollsInTransactActions()
     {
         var (route, context, tx) = SetupRouteWithRedb(name: null);
-        var holder = new ProcessorHolder();
-        WireProcessor(route, holder);
-        var exchange = CreateExchange();
+        var exchange = new Exchange();
 
         route.BeginRedbTransaction();
-        holder.Captured.Should().NotBeNull();
-        await holder.Captured!(exchange, CancellationToken.None);
+        await InvokeFirstOutputAsync(route, context, exchange);
 
         await context.GetRedbService().Context.Received(1).BeginTransactionAsync();
 
@@ -141,13 +140,11 @@ public sealed class RedbTransactedActionTests
     [Fact]
     public async Task BeginRedbTransaction_Named_OpensTxUnderNamedKey()
     {
-        var (route, _, tx) = SetupRouteWithRedb(name: "orders-db");
-        var holder = new ProcessorHolder();
-        WireProcessor(route, holder);
-        var exchange = CreateExchange();
+        var (route, context, tx) = SetupRouteWithRedb(name: "orders-db");
+        var exchange = new Exchange();
 
         route.BeginRedbTransaction("orders-db");
-        await holder.Captured!(exchange, CancellationToken.None);
+        await InvokeFirstOutputAsync(route, context, exchange);
 
         var actions = GetActionsBag(exchange);
         actions.Should().ContainKey("redb:orders-db");
@@ -159,13 +156,12 @@ public sealed class RedbTransactedActionTests
     public async Task BeginRedbTransaction_Idempotent_DoesNotOpenSecondTxForSameKey()
     {
         var (route, context, _) = SetupRouteWithRedb(name: null);
-        var holder = new ProcessorHolder();
-        WireProcessor(route, holder);
-        var exchange = CreateExchange();
+        var exchange = new Exchange();
 
         route.BeginRedbTransaction();
-        await holder.Captured!(exchange, CancellationToken.None);
-        await holder.Captured!(exchange, CancellationToken.None); // second invocation
+        var processor = route.Outputs[0].CreateProcessor(context);
+        await processor.Process(exchange, CancellationToken.None);
+        await processor.Process(exchange, CancellationToken.None);
 
         await context.GetRedbService().Context.Received(1).BeginTransactionAsync();
         GetActionsBag(exchange).Should().HaveCount(1);
@@ -174,13 +170,12 @@ public sealed class RedbTransactedActionTests
     [Fact]
     public async Task BeginRedbTransaction_NullContext_Throws()
     {
-        var route = Substitute.For<IRouteDefinition>();
-        route.GetContext().Returns((IRouteContext?)null);
-        var holder = new ProcessorHolder();
-        WireProcessor(route, holder);
+        // Real RouteDefinition with no context attached.
+        var route = new RouteDefinition();
 
         route.BeginRedbTransaction();
-        var act = () => holder.Captured!(CreateExchange(), CancellationToken.None);
+        var processor = route.Outputs[0].CreateProcessor(context: null!);
+        var act = async () => await processor.Process(new Exchange(), CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*RouteContext is not available*");
@@ -188,7 +183,7 @@ public sealed class RedbTransactedActionTests
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    private static (IRouteDefinition route, IRouteContext context, IRedbTransaction tx) SetupRouteWithRedb(string? name)
+    private static (RouteDefinition route, IRouteContext context, IRedbTransaction tx) SetupRouteWithRedb(string? name)
     {
         var redb = Substitute.For<IRedbService>();
         var ctx = Substitute.For<IRedbContext>();
@@ -210,28 +205,16 @@ public sealed class RedbTransactedActionTests
             context.GetFromRegistry<IRedbService>("redb:" + name).Returns(redb);
         }
 
-        var route = Substitute.For<IRouteDefinition>();
-        route.GetContext().Returns(context);
+        var route = new RouteDefinition();
+        route._context = context;
 
         return (route, context, tx);
     }
 
-    private sealed class ProcessorHolder
+    private static async Task InvokeFirstOutputAsync(RouteDefinition route, IRouteContext context, IExchange exchange)
     {
-        public Func<IExchange, CancellationToken, Task>? Captured;
-    }
-
-    private static void WireProcessor(IRouteDefinition route, ProcessorHolder holder)
-    {
-        route.Process(Arg.Any<Func<IExchange, CancellationToken, Task>>())
-            .Returns(ci => { holder.Captured = ci.Arg<Func<IExchange, CancellationToken, Task>>(); return route; });
-    }
-
-    private static IExchange CreateExchange()
-    {
-        var ex = Substitute.For<IExchange>();
-        ex.Properties.Returns(new Dictionary<string, object?>());
-        return ex;
+        var processor = route.Outputs[0].CreateProcessor(context);
+        await processor.Process(exchange, CancellationToken.None);
     }
 
     private static ConcurrentDictionary<string, ITransactedAction> GetActionsBag(IExchange exchange)

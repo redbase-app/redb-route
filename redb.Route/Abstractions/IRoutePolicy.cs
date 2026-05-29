@@ -1,3 +1,4 @@
+#pragma warning disable CS0619
 using redb.Route.Core;
 
 namespace redb.Route.Abstractions;

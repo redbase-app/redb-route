@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.GenericFile;
 
@@ -56,6 +58,13 @@ public abstract class GenericFileProducer<TOptions> : IProducer
         var body = ResolveBody(exchange);
         var targetPath = ResolveTargetPath(exchange);
         var targetDir = Operations.GetParentPath(targetPath);
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            $"file write {ProducerEndpoint.Component.Scheme}", ActivityKind.Producer,
+            "redb.system", ProducerEndpoint.Component.Scheme,
+            ProducerEndpoint.Uri.NormalizedKey,
+            destination: targetPath,
+            operation: "write");
 
         // Validate path (virtual — jail check for remote)
         ValidatePath(targetPath);

@@ -19,6 +19,7 @@ using redb.Route.Sql.Connection;
 using redb.Route.Tcp;
 using redb.Route.WebSocket;
 using Microsoft.Extensions.Logging;
+using redb.Route.Demo.Routes;
 
 namespace redb.Route.Demo;
 
@@ -29,7 +30,7 @@ namespace redb.Route.Demo;
 public static class InitRoute
 {
     private const string PgConn =
-        "Host=localhost;Port=5432;Username=postgres;Password=1;Database=test_redb_route_sql";
+        "Host=localhost;Port=5432;Username=postgres;Password=1;Database=redb";
 
     public static IRouteContext main(IRouteContext context)
     {
@@ -77,7 +78,16 @@ public static class InitRoute
         CreateTable();
 
         // ── Register all demo routes ──
-        ((RouteContext)context).AddRoutes(new DemoRouteBuilder(logger));
+        ((RouteContext)context)
+            .AddRoutes(new MainPipelineRoutes(logger))
+            .AddRoutes(new ErrorHandlingRoutes(logger))
+            .AddRoutes(new EipRoutes(logger))
+            .AddRoutes(new TransportRoutes(logger))
+            .AddRoutes(new DataObservabilityRoutes(logger))
+            .AddRoutes(new TransactionRoutes(logger))
+            .AddRoutes(new LifecycleRoutes(logger))
+            .AddRoutes(new NamedRedbRoutes(logger))
+            .AddRoutes(new ScopeDiagRoutes(logger));
 
         return context;
     }

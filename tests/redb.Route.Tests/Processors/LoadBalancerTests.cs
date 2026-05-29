@@ -369,22 +369,19 @@ public class LoadBalancerTests
     public void DSL_LoadBalance_AddsStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var strategy = new RoundRobinStrategy();
         def.LoadBalance(strategy, "http://a:8080", "http://b:8080");
 
-        def.Steps.Should().ContainSingle(s => s is LoadBalanceStep);
-        var step = def.Steps.OfType<LoadBalanceStep>().Single();
-        step.Strategy.Should().BeSameAs(strategy);
-        step.Endpoints.Should().BeEquivalentTo(["http://a:8080", "http://b:8080"]);
+        var lbDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<LoadBalancerDefinition>().Subject;
+        lbDef.Strategy.Should().BeSameAs(strategy);
+        lbDef.Endpoints.Should().BeEquivalentTo(["http://a:8080", "http://b:8080"]);
     }
 
     [Fact]
     public void DSL_LoadBalance_NullStrategy_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.LoadBalance(null!, "http://a:8080");
         act.Should().Throw<ArgumentNullException>();
@@ -394,7 +391,6 @@ public class LoadBalancerTests
     public void DSL_LoadBalance_NoUris_Throws()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
 
         var act = () => def.LoadBalance(new RoundRobinStrategy());
         act.Should().Throw<ArgumentException>();

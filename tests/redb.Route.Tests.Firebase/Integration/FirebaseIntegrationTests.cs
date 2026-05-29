@@ -4,9 +4,12 @@ using System.Text.Json;
 using Google.Apis.Auth.OAuth2;
 using Google.Cloud.Firestore;
 using Google.Cloud.Storage.V1;
+using OpenTelemetry;
+using OpenTelemetry.Trace;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Firebase;
+using redb.Route.Telemetry;
 using Xunit.Abstractions;
 
 namespace redb.Route.Tests.Firebase.Integration;
@@ -21,6 +24,7 @@ namespace redb.Route.Tests.Firebase.Integration;
 ///   dotnet test --filter "Category=Integration"
 /// </summary>
 [Trait("Category", "Integration")]
+[Collection("FirebaseEnvSensitive")]
 public sealed class FirebaseIntegrationTests : IAsyncLifetime
 {
     private const string ProjectId = "demo-redb";
@@ -483,6 +487,77 @@ public sealed class FirebaseIntegrationTests : IAsyncLifetime
 
         received.Count.Should().BeGreaterThanOrEqualTo(2);
         _output.WriteLine($"Storage consumer polled {received.Count} objects");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  TELEMETRY SMOKE — P1 transport spans
+    // ═══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task FirestoreProducer_EmitsTransportSpanWithFirestoreTags()
+    {
+        var collection = $"smoke-{Guid.NewGuid():N}";
+        var ep = CreateFirestoreEndpoint(collection, $"operation=Set&documentId=doc1");
+        var producer = (FirestoreProducer)ep.CreateProducer();
+        await producer.Start();
+
+        var activities = new List<System.Diagnostics.Activity>();
+        using var tracer = Sdk.CreateTracerProviderBuilder()
+            .AddSource(RouteActivitySource.SourceName)
+            .AddInMemoryExporter(activities)
+            .Build()!;
+
+        var data = new Dictionary<string, object?> { ["smoke"] = true };
+        await producer.Process(new Exchange(new Message(data)));
+        await producer.Stop();
+
+        tracer.ForceFlush(1000);
+        activities.Should().NotBeEmpty();
+        var activity = activities.First();
+        activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
+        activity.Kind.Should().Be(System.Diagnostics.ActivityKind.Client);
+        activity.GetTagItem("db.system").Should().Be("firestore");
+        activity.GetTagItem("messaging.destination.name").Should().Be(collection);
+        activity.GetTagItem("redb.route.endpoint").Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task FirebaseStorageProducer_EmitsTransportSpanWithGcsTags()
+    {
+        var prefix = $"smoke-{Guid.NewGuid():N}/";
+        var ep = CreateStorageEndpoint(TestBucket, $"operation=Upload&prefix={prefix}");
+        var producer = (FirebaseStorageProducer)ep.CreateProducer();
+        await producer.Start();
+
+        var activities = new List<System.Diagnostics.Activity>();
+        using var tracer = Sdk.CreateTracerProviderBuilder()
+            .AddSource(RouteActivitySource.SourceName)
+            .AddInMemoryExporter(activities)
+            .Build()!;
+
+        var msg = new Message(Encoding.UTF8.GetBytes("smoke"));
+        msg.Headers["redbFirebaseStorage.ObjectName"] = $"{prefix}smoke.txt";
+        try
+        {
+            await producer.Process(new Exchange(msg));
+        }
+        catch (Exception ex)
+        {
+            _output.WriteLine($"GCS Upload failed (acceptable for smoke): {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            await producer.Stop();
+        }
+
+        tracer.ForceFlush(1000);
+        activities.Should().NotBeEmpty();
+        var activity = activities.First();
+        activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
+        activity.Kind.Should().Be(System.Diagnostics.ActivityKind.Client);
+        activity.GetTagItem("db.system").Should().Be("gcs");
+        activity.GetTagItem("messaging.destination.name").Should().Be(TestBucket);
+        activity.GetTagItem("redb.route.endpoint").Should().NotBeNull();
     }
 
     // ═══════════════════════════════════════════════════════════════════

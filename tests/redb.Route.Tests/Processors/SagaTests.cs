@@ -319,23 +319,20 @@ public class SagaTests
     public void Dsl_CallbackStyle_RecordsSagaStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
         def.Saga(saga => saga
             .Step(e => { }, e => { })
             .Step(e => { })
             .OnCompletion(e => { }));
 
-        def.Steps.Should().ContainSingle(s => s is SagaRouteStep);
-        var saga = def.Steps.OfType<SagaRouteStep>().Single();
-        saga.Steps.Should().HaveCount(2);
-        saga.OnCompletion.Should().NotBeNull();
+        var sagaDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<SagaDefinition>().Subject;
+        sagaDef.Entries.Should().HaveCount(2);
+        sagaDef.CompletionCallback.Should().NotBeNull();
     }
 
     [Fact]
     public void Dsl_CallbackStyle_NullConfigureThrows()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
         var act = () => def.Saga((Action<ISagaDefinition>)null!);
         act.Should().Throw<ArgumentNullException>();
     }
@@ -348,36 +345,32 @@ public class SagaTests
     public void Dsl_FluentChain_RecordsSagaStep()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
         def.Saga()
             .SagaStep(e => { }, e => { })
             .SagaStep(e => { })
             .OnSagaCompletion(e => { })
             .EndSaga();
 
-        def.Steps.Should().ContainSingle(s => s is SagaRouteStep);
-        var saga = def.Steps.OfType<SagaRouteStep>().Single();
-        saga.Steps.Should().HaveCount(2);
-        saga.OnCompletion.Should().NotBeNull();
+        var sagaDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<SagaDefinition>().Subject;
+        sagaDef.Entries.Should().HaveCount(2);
+        sagaDef.CompletionCallback.Should().NotBeNull();
     }
 
     [Fact]
     public void Dsl_FluentChain_End_ClosesScope()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
         def.Saga()
             .SagaStep(e => { }, e => { })
             .End();
 
-        def.Steps.Should().ContainSingle(s => s is SagaRouteStep);
+        def.Outputs.Should().ContainSingle().Which.Should().BeOfType<SagaDefinition>();
     }
 
     [Fact]
     public void Dsl_FluentChain_AsyncSteps()
     {
         var def = new RouteDefinition();
-        def.From("direct://test");
         def.Saga()
             .SagaStep(
                 (e, ct) => Task.CompletedTask,
@@ -385,8 +378,8 @@ public class SagaTests
             .SagaStep((e, ct) => Task.CompletedTask)
             .EndSaga();
 
-        var saga = def.Steps.OfType<SagaRouteStep>().Single();
-        saga.Steps.Should().HaveCount(2);
+        var sagaDef = def.Outputs.Should().ContainSingle().Which.Should().BeOfType<SagaDefinition>().Subject;
+        sagaDef.Entries.Should().HaveCount(2);
     }
 
     [Fact]

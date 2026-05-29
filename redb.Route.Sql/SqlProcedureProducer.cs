@@ -7,6 +7,7 @@ using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Expressions;
 using redb.Route.Sql.Connection;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Sql;
 
@@ -52,6 +53,12 @@ internal sealed class SqlProcedureProducer : IProducer
     /// <inheritdoc />
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            "sql.procedure", ActivityKind.Client,
+            "db.system", _endpoint.Component.Scheme,
+            _endpoint.Uri.NormalizedKey,
+            destination: _options.ProcedureName);
+
         if (_options.Noop)
         {
             exchange.In.Headers[SqlHeaders.StoredProcedure] = _options.ProcedureName;

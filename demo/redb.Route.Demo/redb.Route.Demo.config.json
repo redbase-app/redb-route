@@ -2,7 +2,7 @@
   "ContextName": "route.demo",
   "AutoStart": true,
   "DemoSettings": {
-    "PostgresConnection": "Host=localhost;Port=5432;Username=postgres;Password=1;Database=test_redb_route_sql",
+    "PostgresConnection": "Host=localhost;Port=5432;Username=postgres;Password=1;Database=redb",
     "HttpPort": 8080,
     "EnableMetrics": true
   },
@@ -10,14 +10,14 @@
     "pg-test": {
       "Provider": "postgres",
       "UsePro": true,
-      "ConnectionString": "Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=redb_tsak;Pooling=true;Include Error Detail=true",
+      "ConnectionString": "Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=redb;Pooling=true;Include Error Detail=true",
       "PropsSaveStrategy": "ChangeTracking",
       "EnsureCreated": true
     },
     "mssql-test": {
       "Provider": "mssql",
       "UsePro": false,
-      "ConnectionString": "Server=msdb;Database=redb_tsak;User Id=sa;Password=1;TrustServerCertificate=true;Command Timeout=600;",
+      "ConnectionString": "Server=msdb;Database=redb;User Id=sa;Password=1;TrustServerCertificate=true;Command Timeout=600;",
       "EnsureCreated": true
     }
   },

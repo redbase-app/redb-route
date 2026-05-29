@@ -1,75 +1,104 @@
 using System;
 using System.Collections.Generic;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Processors;
 
 namespace redb.Route.Definitions;
 
 /// <summary>
-/// Internal builder for <see cref="IScatterGatherDefinition"/>.
-/// Collects configuration and exposes it for step creation.
+/// Definition for a Scatter-Gather step. Collects configuration and creates a
+/// <see cref="ScatterGatherProcessor"/> at route-build time.
 /// </summary>
-internal sealed class ScatterGatherDefinition : IScatterGatherDefinition
+public sealed class ScatterGatherDefinition : ProcessorDefinition, IScatterGatherDefinition
 {
-    internal string[]? StaticRecipients { get; private set; }
-    internal Func<IExchange, IEnumerable<string>>? DynamicRecipients { get; private set; }
-    internal Func<IExchange, IExchange, IExchange>? Strategy { get; private set; }
-    internal TimeSpan TimeoutValue { get; private set; }
-    internal bool IsParallel { get; private set; } = true;
-    internal int MaxDop { get; private set; }
-    internal bool StopOnEx { get; private set; }
+    /// <summary>Fixed recipient URIs (null when dynamic recipients are configured).</summary>
+    public string[]? StaticRecipients { get; private set; }
 
-    /// <inheritdoc />
-    public IScatterGatherDefinition Recipients(params string[] uris)
+    /// <summary>Runtime recipient factory (null when static recipients are configured).</summary>
+    public Func<IExchange, IEnumerable<string>>? DynamicRecipients { get; private set; }
+
+    /// <summary>Mandatory pair-wise aggregation: (accumulated, current) → merged.</summary>
+    public Func<IExchange, IExchange, IExchange>? AggregationStrategy { get; private set; }
+
+    /// <summary>Maximum duration to wait for all responses (default: zero = no timeout).</summary>
+    public TimeSpan Timeout { get; private set; }
+
+    /// <summary>Whether recipients are processed in parallel (default: true).</summary>
+    public bool ParallelProcessing { get; private set; } = true;
+
+    /// <summary>Maximum degree of parallelism (0 = processor count).</summary>
+    public int MaxDegreeOfParallelism { get; private set; }
+
+    /// <summary>Whether to stop immediately on first exception (default: false).</summary>
+    public bool StopOnException { get; private set; }
+
+    // ── IScatterGatherDefinition — explicit to avoid name conflicts with properties ──
+
+    IScatterGatherDefinition IScatterGatherDefinition.Recipients(params string[] uris)
     {
         StaticRecipients = uris ?? throw new ArgumentNullException(nameof(uris));
         DynamicRecipients = null;
         return this;
     }
 
-    /// <inheritdoc />
-    public IScatterGatherDefinition Recipients(Func<IExchange, IEnumerable<string>> factory)
+    IScatterGatherDefinition IScatterGatherDefinition.Recipients(Func<IExchange, IEnumerable<string>> factory)
     {
         DynamicRecipients = factory ?? throw new ArgumentNullException(nameof(factory));
         StaticRecipients = null;
         return this;
     }
 
-    /// <inheritdoc />
-    public IScatterGatherDefinition AggregationStrategy(Func<IExchange, IExchange, IExchange> strategy)
+    IScatterGatherDefinition IScatterGatherDefinition.AggregationStrategy(Func<IExchange, IExchange, IExchange> strategy)
     {
-        Strategy = strategy ?? throw new ArgumentNullException(nameof(strategy));
+        AggregationStrategy = strategy ?? throw new ArgumentNullException(nameof(strategy));
         return this;
     }
 
-    /// <inheritdoc />
-    public IScatterGatherDefinition Timeout(TimeSpan timeout)
+    IScatterGatherDefinition IScatterGatherDefinition.Timeout(TimeSpan timeout)
     {
-        TimeoutValue = timeout >= TimeSpan.Zero
+        Timeout = timeout >= TimeSpan.Zero
             ? timeout
             : throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be non-negative.");
         return this;
     }
 
-    /// <inheritdoc />
-    public IScatterGatherDefinition ParallelProcessing(bool parallel = true)
+    IScatterGatherDefinition IScatterGatherDefinition.ParallelProcessing(bool parallel)
     {
-        IsParallel = parallel;
+        ParallelProcessing = parallel;
         return this;
     }
 
-    /// <inheritdoc />
-    public IScatterGatherDefinition MaxDegreeOfParallelism(int maxDop)
+    IScatterGatherDefinition IScatterGatherDefinition.MaxDegreeOfParallelism(int maxDop)
     {
-        MaxDop = maxDop >= 0
+        MaxDegreeOfParallelism = maxDop >= 0
             ? maxDop
             : throw new ArgumentOutOfRangeException(nameof(maxDop), "Max DOP must be non-negative.");
         return this;
     }
 
-    /// <inheritdoc />
-    public IScatterGatherDefinition StopOnException(bool stop = true)
+    IScatterGatherDefinition IScatterGatherDefinition.StopOnException(bool stop)
     {
-        StopOnEx = stop;
+        StopOnException = stop;
         return this;
+    }
+
+    /// <inheritdoc />
+    public override IProcessor CreateProcessor(IRouteContext context)
+    {
+        if (AggregationStrategy is null)
+            throw new InvalidOperationException("AggregationStrategy is required for ScatterGather.");
+        if (StaticRecipients is null && DynamicRecipients is null)
+            throw new InvalidOperationException("Recipients are required for ScatterGather.");
+
+        var logger = context.GetService<ILoggerFactory>()?.CreateLogger<ScatterGatherProcessor>();
+
+        return StaticRecipients is not null
+            ? new ScatterGatherProcessor(context, StaticRecipients, AggregationStrategy,
+                ParallelProcessing, MaxDegreeOfParallelism, StopOnException, Timeout, logger)
+            : new ScatterGatherProcessor(context, DynamicRecipients!, AggregationStrategy,
+                ParallelProcessing, MaxDegreeOfParallelism, StopOnException, Timeout, logger);
     }
 }
