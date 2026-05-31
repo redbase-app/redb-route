@@ -2,6 +2,8 @@
 
 **Enterprise integration framework for .NET. Wire any system to any system in a few lines of C#.**
 
+> **LLMs / coding agents:** canonical training contract for the whole redb ecosystem → <https://redbase.app/llms.txt>
+
 redb.Route is the .NET equivalent of [Apache Camel](https://camel.apache.org/) — a fluent C# DSL that connects Kafka, RabbitMQ, Redis, SQL, HTTP, gRPC, SFTP, MQTT, S3, and more through `From → Process → To` pipelines. No XML, no message-bus lock-in, no per-endpoint license fees.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route)
