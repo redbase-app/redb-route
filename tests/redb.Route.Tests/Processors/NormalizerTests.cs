@@ -104,64 +104,8 @@ public class NormalizerTests
     }
 
     // ══════════════════════════════════════════════════════════════
-    // Builder — Build output
+    // Builder — chaining
     // ══════════════════════════════════════════════════════════════
-
-    [Fact]
-    public void Build_SingleWhen_ProducesChoiceWithOneClause()
-    {
-        var builder = new NormalizerDefinition();
-        builder.When(e => e.In.Body is string, e => "normalized");
-
-        var choice = builder.Build();
-
-        choice.WhenClauses.Should().HaveCount(1);
-        choice.WhenClauses[0].Steps.Should().ContainSingle(s => s is TransformStep);
-        choice.OtherwiseSteps.Should().BeNull();
-    }
-
-    [Fact]
-    public void Build_MultipleWhen_ProducesMatchingClauses()
-    {
-        var builder = new NormalizerDefinition();
-        builder.When(e => e.In.Body is string, e => "str");
-        builder.When(e => e.In.Body is int, e => "int");
-        builder.When(e => e.In.Body is double, e => "dbl");
-
-        var choice = builder.Build();
-
-        choice.WhenClauses.Should().HaveCount(3);
-    }
-
-    [Fact]
-    public void Build_WithOtherwise_ProducesOtherwiseTransformStep()
-    {
-        var builder = new NormalizerDefinition();
-        builder.When(e => e.In.Body is string, e => "str");
-        builder.Otherwise(e => "fallback");
-
-        var choice = builder.Build();
-
-        choice.OtherwiseSteps.Should().NotBeNull();
-        choice.OtherwiseSteps.Should().ContainSingle(s => s is TransformStep);
-    }
-
-    [Fact]
-    public void Build_WhenContentType_ProducesPredicateClause()
-    {
-        var builder = new NormalizerDefinition();
-        builder.WhenContentType("application/json", e => "json");
-        builder.WhenContentType("application/xml", e => "xml");
-
-        var choice = builder.Build();
-
-        choice.WhenClauses.Should().HaveCount(2);
-        // Each clause should have a TransformStep
-        foreach (var clause in choice.WhenClauses)
-        {
-            clause.Steps.Should().ContainSingle(s => s is TransformStep);
-        }
-    }
 
     [Fact]
     public void Builder_Chaining_ReturnsSameInstance()

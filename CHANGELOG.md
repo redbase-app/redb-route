@@ -40,6 +40,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [3.0.1] — 2026-06-03
+
+### Added
+
+#### DSL — flat fluent navigation across nested scopes
+- **`redb.Route` (DSL)** — added a new universal `End()` extension method
+  on `IRouteDefinition` and a full set of typed `End*()` extension methods
+  (`EndFilter`, `EndChoice`, `EndWhen`, `EndOtherwise`, `EndSplit`,
+  `EndMulticast`, `EndAggregate`, `EndCircuitBreaker`, `EndThrottle`,
+  `EndDebounce`, `EndLoop`, `EndTryCatch`, `EndOnException`, `EndTransaction`,
+  `EndLog`, `EndResequence`, `EndTraced`, `EndMetered`,
+  `EndIdempotentConsumer`, `EndSaga`). Each typed `End*()` walks the
+  `Parent` chain looking for a scope of the requested type and returns its
+  parent route. This means a single `.EndChoice()` call from deep inside
+  `Choice → When → Split → Log` lands directly at the route root —
+  semantically identical to chaining `.EndLog().EndSplit().EndChoice()` but
+  more concise when the intermediate scopes do not need extra steps. Each
+  helper throws a precise `InvalidOperationException` when called outside
+  a matching scope.
+- **`redb.Route` (DSL)** — added `When(...)` and `Otherwise()` as extension
+  methods on `IRouteDefinition`. They walk the `Parent` chain to find the
+  enclosing `ChoiceDefinition` and dispatch to its instance method, so a
+  sibling branch can be opened immediately after a sub-scope closes — for
+  example `.Choice().When(p).Split(...).EndSplit().When(p2).Process(...).EndChoice()`
+  now compiles and behaves the same as the equivalent nested-lambda form.
+  Instance methods on `ChoiceDefinition` / `WhenDefinition` /
+  `OtherwiseDefinition` keep precedence over the extensions, so existing
+  call sites are unaffected.
+- **`redb.Route` (DSL)** — added a focused test fixture (`DeepNestedDslTests`,
+  five scenarios) covering `Choice`/`When`/`Otherwise`/`Split`/`RichLog`
+  composition, `TryCatch` with rich logging inside `DoCatch<T>`, mixed
+  typed and universal `End*()` closers, cascading `EndChoice()` from deep
+  inside, and the diagnostic `InvalidOperationException` raised when
+  `End*()` is called outside any matching scope.
+
+### Removed
+
+#### Legacy `RouteStep` AST
+- **`redb.Route` (DSL)** — removed the legacy `RouteStep` /
+  `RouteStepProjection` AST and the `RouteDefinition.Steps` projection. The
+  `ProcessorDefinition` tree built by the fluent DSL is now the single
+  source of truth for route construction; everything that used to read
+  `Steps` (Normalizer, Saga, integration tests) now uses
+  `CreateProcessor` directly. The legacy files have been moved out of the
+  shipping assembly into `tmp/oldRoute/` for reference only.
+
+### Changed
+
+#### DSL — single source of truth via CRTP base (`RouteDefinitionBase<TSelf>`)
+- **`redb.Route` (DSL)** — the leaf DSL (`To`, `Process`, `ProcessAsync`,
+  `SetBody`, `SetHeader`, `SetProperty`, `RemoveHeader`, `RemoveProperty`,
+  `Transform`, `Validate`, `Marshal` / `Unmarshal`, `ConvertBody`, `Stop`,
+  `Delay`, `Sample`, `BeginTransaction` / `Commit` / `Rollback`,
+  `SetPattern`, `Respond`, `Bean`, `StreamCaching`, `Throw*`, `Log*`, plus
+  every scope-opener: `Filter`, `Choice`, `Split`, `Multicast`, `Loop`,
+  `Aggregate`, `IdempotentConsumer`, `Throttle` / `Debounce` / `KeyedThrottle`,
+  `Metered`, `Traced`, `Resequence`, `Transaction`, `Saga`, `OnException`,
+  `OfType<T>`, `CircuitBreaker`, `TryCatch`, etc.) is now defined exactly
+  once in a new generic CRTP base, `RouteDefinitionBase<TSelf>`, instead of
+  being duplicated across 27 scope-definition classes. Each typed leaf method
+  returns `TSelf`, so chaining always preserves the current scope's concrete
+  type — e.g. `.Filter(p).To("a").SetHeader("k","v")` keeps you on
+  `FilterDefinition`, `.Choice().When(p).To("a")` keeps you on
+  `WhenDefinition`, and only the explicit `End*()` / `End()` step exits the
+  scope. There is no behavioural change for end users; the public DSL
+  surface and route AST shape are identical to 3.0.0.
+- **`redb.Route` (DSL)** — `RouteDefinition` is now a thin
+  `RouteDefinitionBase<RouteDefinition>` subclass that retains only
+  route-level concerns: `RouteId`, `From`, `AutoStart`, `Cluster`,
+  `ProcessingTimeout`, `RoutePolicy`, `OnException` hoisting, and
+  `CreateProcessor`. All other behaviour is inherited.
+- **`redb.Route` (DSL)** — every pipeline-scope class
+  (`FilterDefinition`, `ChoiceDefinition` / `WhenDefinition` /
+  `OtherwiseDefinition`, `CircuitBreakerDefinition` / `FallbackDefinition`,
+  `LoopDefinition`, `SplitDefinition` / `MulticastDefinition`,
+  `TryCatchDefinition` / `CatchDefinition` / `FinallyDefinition`,
+  `IdempotentConsumerDefinition`, `OnExceptionDefinition`,
+  `TransactionDefinition`, `SagaDefinition`, `MeteredDefinition`,
+  `TracedDefinition`, `ResequenceDefinition`, `ThrottleDefinition` /
+  `DebounceDefinition` / `KeyedThrottleDefinition`, `AggregateDefinition`,
+  `OfTypeDefinition<T>`, `OfTypeFilterDefinition<T>`) now inherits from
+  `RouteDefinitionBase<TSelf>` and contains only its own scope-specific
+  configuration (options, branch openers, `End*()` navigation,
+  `CreateProcessor` override). Per-class duplicates of the leaf DSL have been
+  removed.
+- **`redb.Route` (DSL)** — `IRouteDefinition` remains the canonical
+  cross-version contract; `RouteDefinitionBase<TSelf>` provides explicit
+  interface implementations for every leaf method (split into a partial file,
+  `RouteDefinitionBase.IRouteDefinition.cs`), so existing extension methods,
+  test mocks, and `Action<IRouteDefinition>` configurators continue to bind
+  unchanged.
+- **`redb.Route` (DSL)** — non-pipeline definitions (`LoadBalancerDefinition`,
+  `ScatterGatherDefinition`, `NormalizerDefinition`,
+  `RichLogScopeDefinition`) intentionally remain on `ProcessorDefinition`:
+  they have no child `Outputs` pipeline and no leaf DSL — they are
+  configuration builders, and inheriting the CRTP base would have inflated
+  their public surface with methods (`To`, `Process`, …) that are
+  semantically invalid in those scopes.
+
+### Fixed
+- **`redb.Route` (DSL)** — `IRouteDefinition.GetContext()` now correctly
+  returns the owning `IRouteContext` when called on any nested scope
+  (`WhenDefinition`, `LoopDefinition`, `TracedDefinition`, `CatchDefinition`,
+  etc.). Previously it relied on `self as RouteDefinition`, which only
+  matched the route root; after the CRTP refactor scope classes inherit from
+  `RouteDefinitionBase<TSelf>` (not from `RouteDefinition`), and the cast
+  silently returned `null` inside any scope. The accessor now walks the
+  `Parent` chain up to the owning `RouteDefinition` and returns its
+  `Context`. This restores `Context_IsAvailable_In{Choice,Loop,Traced,DoTry}Scope`
+  semantics for extension methods that read context at DSL build time.
+- **`redb.Route` (DSL)** — `SagaDefinition.SetParent` is no longer required:
+  the parent link is now established uniformly through `AddOutput`, which
+  matches every other scope and removes a small inconsistency in the AST
+  build path. Existing user code is unaffected.
+
 ## [3.0.0] — 2026-05-28
 
 ### Added

@@ -104,15 +104,61 @@ internal sealed class MainPipelineRoutes : RouteBuilder
             .SetProperty("pipelineStartMs", e => Environment.TickCount64)
             .Log("[2-PIPE]   pipelineStartMs = ${property.pipelineStartMs}")
 
-            // ── Choice — branch by mode header (nested-lambda DSL) ──
-            .Choice(choice => choice
-                .When(e => GetHeader(e, "mode") == "full", full => full
-                    .Process(e => e.In.Headers["fastTrack"] = GetHeader(e, "priority") == "high" ? "true" : "false"))
-                .When(e => GetHeader(e, "mode") == "short", shortMode => shortMode
-                    .SetHeader("fastTrack", "false"))
-                .Otherwise(other => other
+            // ── Choice — flat fluent DSL with sibling When() / Otherwise().
+            //
+            // This block intentionally uses the new ergonomic style: every branch
+            // returns to IRouteDefinition after EndXxx(), and sibling When() /
+            // Otherwise() are reachable through extension methods that walk the
+            // parent chain back to the enclosing Choice. No nested lambdas needed.
+            //
+            // The "full" branch also showcases TryCatch + RichLog inside the
+            // catch handler — exactly the pattern from DeepNestedDslTests.
+            .Choice()
+                .When(e => GetHeader(e, "mode") == "full")
+                    .SetHeader("fastTrack", e => GetHeader(e, "priority") == "high" ? "true" : "false")
+                    // Priority normalization that throws on unknown values — proves
+                    // the pipeline keeps flowing because the catch sets a sane default.
+                    .TryCatch()
+                        .Process(e =>
+                        {
+                            var p = GetHeader(e, "priority") ?? "";
+                            if (p is not ("high" or "normal" or "low"))
+                                throw new InvalidOperationException($"unknown priority: {p}");
+                            e.In.Headers["stamp.dsl.priority"] = p;
+                        })
+                    .DoCatch<InvalidOperationException>()
+                        // Rich log inside the catch — multi-piece structured entry.
+                        .Log(LogLevel.Warning)
+                            .Message(e => $"priority normalization failed: {e.Exception?.GetType().Name}")
+                            .Header("priority")
+                            .ShowRouteId(true)
+                        .EndLog()
+                        .SetHeader("stamp.dsl.priority", "unknown")
+                        .SetHeader("stamp.dsl.caught", "true")
+                    .EndTryCatch()
+                    .SetHeader("stamp.dsl", "full-branch")
+                .When(e => GetHeader(e, "mode") == "short")
+                    .SetHeader("fastTrack", "false")
+                    .SetHeader("stamp.dsl", "short-branch")
+                .Otherwise()
                     .SetHeader("mode", "default")
-                    .SetHeader("fastTrack", "false")))
+                    .SetHeader("fastTrack", "false")
+                    .SetHeader("stamp.dsl", "default-branch")
+            .EndChoice()
+
+            // ── Rich log scope: one structured line that captures the whole
+            //    branching decision plus a property — the route id is rendered
+            //    as a [rId:demo-pipeline] prefix thanks to ShowRouteId(true).
+            .Log(LogLevel.Information)
+                .Message("pipeline branch decided")
+                .Header("mode")
+                .Header("priority")
+                .Header("fastTrack")
+                .Header("stamp.dsl")
+                .Header("stamp.dsl.priority")
+                .Property("pipelineStartMs")
+                .ShowRouteId(true)
+            .EndLog()
 
             .Log("[2-PIPE] ▸ mode=${header.mode}, fastTrack=${header.fastTrack}")
 
@@ -206,7 +252,8 @@ internal sealed class MainPipelineRoutes : RouteBuilder
 
             // ── Build HTTP response ──
             .Log("[8-DONE] ✔ Pipeline complete for traceId=${header.traceId}, elapsed=${property.pipelineElapsedMs}ms")
-            .RemoveHeader("fastTrack")           // cleanup internal header
+            // NOTE: fastTrack header is intentionally kept — BuildResponse exposes it
+            // under stamps.dsl.fastTrack so the curl response shows the new DSL effect.
             .SetHeader("Content-Type", "application/json")
             .SetBody(e => BuildResponse(e));
     }

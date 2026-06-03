@@ -8,10 +8,11 @@ namespace redb.Route.Definitions;
 /// Scope-opener definition for the CircuitBreaker EIP.
 /// Wraps the downstream pipeline with circuit-breaker protection.
 /// Optionally define a fallback branch with <see cref="OnFallback"/>.
-/// Leaf methods build the <em>main</em> downstream pipeline.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
+/// child steps build the <em>main</em> downstream pipeline.
 /// Close with <see cref="EndCircuitBreaker"/>.
 /// </summary>
-public class CircuitBreakerDefinition : RouteDefinition, IRouteScope
+public class CircuitBreakerDefinition : RouteDefinitionBase<CircuitBreakerDefinition>, IRouteScope
 {
     private int _failureThreshold = 5;
     private TimeSpan? _resetTimeout;
@@ -111,40 +112,15 @@ public class CircuitBreakerDefinition : RouteDefinition, IRouteScope
             pipeline.Add(o.CreateProcessor(context));
         return pipeline;
     }
-
-    // ── Leaf DSL (main downstream) ─────────────────────────────────────────────
-
-    /// <summary>Sends the exchange to an endpoint (main path).</summary>
-    public CircuitBreakerDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes with a synchronous action (main path).</summary>
-    public CircuitBreakerDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes with an asynchronous action (main path).</summary>
-    public CircuitBreakerDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes with a pre-built processor (main path).</summary>
-    public CircuitBreakerDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body (main path).</summary>
-    public CircuitBreakerDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Transforms the exchange body (main path).</summary>
-    public CircuitBreakerDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Sets a header (main path).</summary>
-    public CircuitBreakerDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public CircuitBreakerDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 }
 
 /// <summary>
 /// The fallback branch inside a <see cref="CircuitBreakerDefinition"/>.
-/// Leaf methods build the fallback pipeline executed when the circuit is open.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>; child steps
+/// build the fallback pipeline executed when the circuit is open.
 /// Close with <see cref="EndFallback"/> or <see cref="EndCircuitBreaker"/>.
 /// </summary>
-public class FallbackDefinition : RouteDefinition, IRouteScope
+public class FallbackDefinition : RouteDefinitionBase<FallbackDefinition>, IRouteScope
 {
     private readonly CircuitBreakerDefinition _circuitBreaker;
 
@@ -169,30 +145,4 @@ public class FallbackDefinition : RouteDefinition, IRouteScope
     public override IProcessor CreateProcessor(IRouteContext context)
         => throw new InvalidOperationException(
             "FallbackDefinition is compiled via its parent CircuitBreakerDefinition.CreateProcessor.");
-
-    // ── Leaf DSL (fallback pipeline) ───────────────────────────────────────────
-
-    /// <summary>Sends the exchange to an endpoint (fallback).</summary>
-    public FallbackDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes with a synchronous action (fallback).</summary>
-    public FallbackDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes with an asynchronous action (fallback).</summary>
-    public FallbackDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes with a pre-built processor (fallback).</summary>
-    public FallbackDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body (fallback).</summary>
-    public FallbackDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Transforms the exchange body (fallback).</summary>
-    public FallbackDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Sets a header (fallback).</summary>
-    public FallbackDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public FallbackDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 }

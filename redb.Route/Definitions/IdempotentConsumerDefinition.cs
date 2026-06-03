@@ -10,9 +10,10 @@ namespace redb.Route.Definitions;
 /// Scope-opener definition for the Idempotent Consumer EIP.
 /// When <see cref="CreateProcessor"/> is called, compiles all child <see cref="ProcessorDefinition.Outputs"/>
 /// into an inner pipeline wrapped by an <see cref="IdempotentConsumerProcessor"/>.
-/// Close the scope with <see cref="EndIdempotentConsumer"/>.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
+/// close the scope with <see cref="EndIdempotentConsumer"/>.
 /// </summary>
-public class IdempotentConsumerDefinition : RouteDefinition, IRouteScope
+public class IdempotentConsumerDefinition : RouteDefinitionBase<IdempotentConsumerDefinition>, IRouteScope
 {
     private readonly IIdempotentRepository? _repository;
     private readonly string? _repositoryName;
@@ -79,48 +80,4 @@ public class IdempotentConsumerDefinition : RouteDefinition, IRouteScope
 
     /// <inheritdoc cref="IRouteScope.End"/>
     public IRouteDefinition End() => EndIdempotentConsumer();
-
-    // ── Leaf DSL (mirror of RouteDefinition) ─────────────────────────────────
-
-    /// <summary>Sends the exchange to an endpoint.</summary>
-    public IdempotentConsumerDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes the exchange with a synchronous action.</summary>
-    public IdempotentConsumerDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with an asynchronous action.</summary>
-    public IdempotentConsumerDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with a pre-built processor instance.</summary>
-    public IdempotentConsumerDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body to a static value.</summary>
-    public IdempotentConsumerDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Sets the exchange body using a factory.</summary>
-    public IdempotentConsumerDefinition SetBody(Func<IExchange, object?> factory) { AddOutput(new SetBodyFactoryDefinition(factory)); return this; }
-
-    /// <summary>Sets the exchange body using an <see cref="IExpression"/>.</summary>
-    public IdempotentConsumerDefinition SetBody(IExpression expression) { AddOutput(new SetBodyExpressionDefinition(expression)); return this; }
-
-    /// <summary>Transforms the exchange body.</summary>
-    public IdempotentConsumerDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Removes the exchange body.</summary>
-    public IdempotentConsumerDefinition RemoveBody() { AddOutput(new RemoveBodyDefinition()); return this; }
-
-    /// <summary>Sets a header to a static value.</summary>
-    public IdempotentConsumerDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Removes a header.</summary>
-    public IdempotentConsumerDefinition RemoveHeader(string key) { AddOutput(new RemoveHeaderDefinition(key)); return this; }
-
-    /// <summary>Sets a property to a static value.</summary>
-    public IdempotentConsumerDefinition SetProperty(string key, object? value) { AddOutput(new SetPropertyStaticDefinition(key, value)); return this; }
-
-    /// <summary>Removes a property.</summary>
-    public IdempotentConsumerDefinition RemoveProperty(string key) { AddOutput(new RemovePropertyDefinition(key)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public IdempotentConsumerDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 }

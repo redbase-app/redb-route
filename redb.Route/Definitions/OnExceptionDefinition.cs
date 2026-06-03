@@ -11,9 +11,10 @@ namespace redb.Route.Definitions;
 /// retries, handles, or continues on the configured exception types.
 /// Configure redelivery settings with <see cref="RedeliveryPolicy(Definitions.RedeliveryPolicy)"/>,
 /// <see cref="MaximumRedeliveries"/>, etc., then close with <see cref="EndOnException"/> or
-/// <see cref="IRouteScope.End"/>.
+/// <see cref="IRouteScope.End"/>. Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
+/// child steps build the handler body.
 /// </summary>
-public class OnExceptionDefinition : RouteDefinition, IRouteScope
+public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>, IRouteScope
 {
     private readonly List<Type> _exceptionTypes;
     private int _maxRedeliveries;
@@ -211,38 +212,6 @@ public class OnExceptionDefinition : RouteDefinition, IRouteScope
     private bool _logExhausted = true;
     /// <summary>Current LogExhausted value (default true).</summary>
     public bool LogExhaustedValue => _logExhausted;
-
-    // ── Leaf DSL (handler body) ───────────────────────────────────────────────
-
-    /// <summary>Sends the exchange to an endpoint (handler body).</summary>
-    public OnExceptionDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes with a synchronous action (handler body).</summary>
-    public OnExceptionDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes with an asynchronous action (handler body).</summary>
-    public OnExceptionDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes with a pre-built processor (handler body).</summary>
-    public OnExceptionDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body to a static value (handler body).</summary>
-    public OnExceptionDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Sets the exchange body via a factory function (handler body).</summary>
-    public OnExceptionDefinition SetBody(Func<IExchange, object?> factory) { AddOutput(new SetBodyFactoryDefinition(factory)); return this; }
-
-    /// <summary>Sets a header (handler body).</summary>
-    public OnExceptionDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Transforms the exchange body (handler body).</summary>
-    public OnExceptionDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Logs a message (handler body).</summary>
-    public OnExceptionDefinition Log(string message) { AddOutput(new LogStaticDefinition(message)); return this; }
-
-    /// <summary>Stops exchange processing (handler body).</summary>
-    public OnExceptionDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 
     // ── Navigation ─────────────────────────────────────────────────────────────
 

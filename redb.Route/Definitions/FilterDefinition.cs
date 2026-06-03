@@ -9,8 +9,14 @@ namespace redb.Route.Definitions;
 /// When <see cref="CreateProcessor"/> is called, compiles all child <see cref="ProcessorDefinition.Outputs"/>
 /// into an inner pipeline wrapped by a <see cref="FilterProcessor"/>.
 /// Close the scope with <see cref="EndFilter"/>.
+/// <para>
+/// Inherits the entire fluent leaf-DSL from <see cref="RouteDefinitionBase{TSelf}"/>
+/// with <typeparamref name="TSelf"/> = <see cref="FilterDefinition"/>; calls like
+/// <c>To(...)</c>, <c>Process(...)</c>, <c>SetBody(...)</c> therefore return
+/// <see cref="FilterDefinition"/> directly without locally-redeclared overloads.
+/// </para>
 /// </summary>
-public class FilterDefinition : RouteDefinition, IRouteScope
+public class FilterDefinition : RouteDefinitionBase<FilterDefinition>, IRouteScope
 {
     private readonly Func<IExchange, bool> _predicate;
 
@@ -57,48 +63,4 @@ public class FilterDefinition : RouteDefinition, IRouteScope
 
     /// <inheritdoc cref="IRouteScope.End"/>
     public IRouteDefinition End() => EndFilter();
-
-    // ── Leaf DSL (mirror of RouteDefinition) ─────────────────────────────────
-
-    /// <summary>Sends the exchange to an endpoint.</summary>
-    public FilterDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes the exchange with a synchronous action.</summary>
-    public FilterDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with an asynchronous action.</summary>
-    public FilterDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with a pre-built processor instance.</summary>
-    public FilterDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body to a static value.</summary>
-    public FilterDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Sets the exchange body using a factory.</summary>
-    public FilterDefinition SetBody(Func<IExchange, object?> factory) { AddOutput(new SetBodyFactoryDefinition(factory)); return this; }
-
-    /// <summary>Sets the exchange body using an <see cref="IExpression"/>.</summary>
-    public FilterDefinition SetBody(IExpression expression) { AddOutput(new SetBodyExpressionDefinition(expression)); return this; }
-
-    /// <summary>Transforms the exchange body.</summary>
-    public FilterDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Removes the exchange body.</summary>
-    public FilterDefinition RemoveBody() { AddOutput(new RemoveBodyDefinition()); return this; }
-
-    /// <summary>Sets a header to a static value.</summary>
-    public FilterDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Removes a header.</summary>
-    public FilterDefinition RemoveHeader(string key) { AddOutput(new RemoveHeaderDefinition(key)); return this; }
-
-    /// <summary>Sets a property to a static value.</summary>
-    public FilterDefinition SetProperty(string key, object? value) { AddOutput(new SetPropertyStaticDefinition(key, value)); return this; }
-
-    /// <summary>Removes a property.</summary>
-    public FilterDefinition RemoveProperty(string key) { AddOutput(new RemovePropertyDefinition(key)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public FilterDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 }

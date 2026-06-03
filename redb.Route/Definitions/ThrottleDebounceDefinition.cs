@@ -7,10 +7,11 @@ namespace redb.Route.Definitions;
 /// <summary>
 /// Scope-opener definition for the Throttle EIP.
 /// Limits the rate at which the downstream pipeline processes exchanges.
-/// Leaf methods on this definition build the <em>downstream</em> pipeline.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
+/// child steps build the <em>downstream</em> pipeline.
 /// Close with <see cref="EndThrottle"/>.
 /// </summary>
-public class ThrottleDefinition : RouteDefinition, IRouteScope
+public class ThrottleDefinition : RouteDefinitionBase<ThrottleDefinition>, IRouteScope
 {
     private readonly int _maxPerPeriod;
     private TimeSpan? _period;
@@ -65,42 +66,17 @@ public class ThrottleDefinition : RouteDefinition, IRouteScope
             pipeline.Add(o.CreateProcessor(context));
         return pipeline;
     }
-
-    // ── Leaf DSL ───────────────────────────────────────────────────────────────
-
-    /// <summary>Sends the throttled exchange to an endpoint.</summary>
-    public ThrottleDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes with a synchronous action.</summary>
-    public ThrottleDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes with an asynchronous action.</summary>
-    public ThrottleDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes with a pre-built processor.</summary>
-    public ThrottleDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body.</summary>
-    public ThrottleDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Transforms the exchange body.</summary>
-    public ThrottleDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Sets a header.</summary>
-    public ThrottleDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public ThrottleDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 }
 
 /// <summary>
 /// Scope-opener definition for the Debounce EIP.
 /// Suppresses rapid-fire exchanges per key, forwarding only the last exchange after
 /// a configurable quiet period.
-/// Leaf methods on this definition build the <em>downstream</em> pipeline.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
+/// child steps build the <em>downstream</em> pipeline.
 /// Close with <see cref="EndDebounce"/>.
 /// </summary>
-public class DebounceDefinition : RouteDefinition, IRouteScope
+public class DebounceDefinition : RouteDefinitionBase<DebounceDefinition>, IRouteScope
 {
     private readonly Func<IExchange, string> _keyExtractor;
     private readonly TimeSpan _quietPeriod;
@@ -157,40 +133,15 @@ public class DebounceDefinition : RouteDefinition, IRouteScope
             pipeline.Add(o.CreateProcessor(context));
         return pipeline;
     }
-
-    // ── Leaf DSL ───────────────────────────────────────────────────────────────
-
-    /// <summary>Sends the debounced exchange to an endpoint.</summary>
-    public DebounceDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes the debounced exchange with a synchronous action.</summary>
-    public DebounceDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes the debounced exchange with an asynchronous action.</summary>
-    public DebounceDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes the debounced exchange with a pre-built processor.</summary>
-    public DebounceDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body.</summary>
-    public DebounceDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Transforms the exchange body.</summary>
-    public DebounceDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Sets a header.</summary>
-    public DebounceDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public DebounceDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 }
 
 /// <summary>
 /// Scope-opener definition for the keyed (per-key) Throttle EIP.
 /// Limits the rate at which each unique key can enter the downstream pipeline.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>.
 /// Close with <see cref="EndKeyedThrottle"/>.
 /// </summary>
-public class KeyedThrottleDefinition : RouteDefinition, IRouteScope
+public class KeyedThrottleDefinition : RouteDefinitionBase<KeyedThrottleDefinition>, IRouteScope
 {
     private readonly Func<IExchange, string> _keyExtractor;
     private readonly int _maxPerPeriod;
@@ -252,30 +203,4 @@ public class KeyedThrottleDefinition : RouteDefinition, IRouteScope
             pipeline.Add(o.CreateProcessor(context));
         return pipeline;
     }
-
-    // ── Leaf DSL ───────────────────────────────────────────────────────────────
-
-    /// <summary>Sends the throttled exchange to an endpoint.</summary>
-    public KeyedThrottleDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes with a synchronous action.</summary>
-    public KeyedThrottleDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes with an asynchronous action.</summary>
-    public KeyedThrottleDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes with a pre-built processor.</summary>
-    public KeyedThrottleDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body.</summary>
-    public KeyedThrottleDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Transforms the exchange body.</summary>
-    public KeyedThrottleDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Sets a header.</summary>
-    public KeyedThrottleDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public KeyedThrottleDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 }

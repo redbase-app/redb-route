@@ -25,10 +25,10 @@ public class SagaTests
     // ══════════════════════════════════════════════════════════════
 
     [Fact]
-    public void Definition_NoSteps_BuildThrows()
+    public void Definition_NoSteps_CreateProcessorThrows()
     {
         var def = new SagaDefinition();
-        var act = () => def.Build();
+        var act = () => def.CreateProcessor(new RouteContext());
         act.Should().Throw<InvalidOperationException>();
     }
 
@@ -82,27 +82,25 @@ public class SagaTests
     }
 
     [Fact]
-    public void Definition_SingleStep_BuildsRouteStep()
+    public void Definition_SingleStep_RecordsEntry()
     {
         var def = new SagaDefinition();
         def.Step(e => { });
-        var step = def.Build();
-        step.Steps.Should().HaveCount(1);
-        step.OnCompletion.Should().BeNull();
+        def.Entries.Should().HaveCount(1);
+        def.CompletionCallback.Should().BeNull();
     }
 
     [Fact]
-    public void Definition_MultipleSteps_BuildsInOrder()
+    public void Definition_MultipleSteps_RecordsInOrder()
     {
         var def = new SagaDefinition();
         def.Step(e => { }, e => { });
         def.Step(e => { });
         def.Step((e, ct) => Task.CompletedTask, (e, ct) => Task.CompletedTask);
-        var step = def.Build();
-        step.Steps.Should().HaveCount(3);
-        step.Steps[0].Compensate.Should().NotBeNull();
-        step.Steps[1].Compensate.Should().BeNull();
-        step.Steps[2].Compensate.Should().NotBeNull();
+        def.Entries.Should().HaveCount(3);
+        def.Entries[0].Compensate.Should().NotBeNull();
+        def.Entries[1].Compensate.Should().BeNull();
+        def.Entries[2].Compensate.Should().NotBeNull();
     }
 
     [Fact]
@@ -111,8 +109,7 @@ public class SagaTests
         var def = new SagaDefinition();
         def.Step(e => { });
         def.OnCompletion(e => { });
-        var step = def.Build();
-        step.OnCompletion.Should().NotBeNull();
+        def.CompletionCallback.Should().NotBeNull();
     }
 
     // ══════════════════════════════════════════════════════════════

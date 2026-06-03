@@ -1,18 +1,15 @@
-using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Processors;
 
 namespace redb.Route.Definitions;
 
-
-
 /// <summary>
 /// Scope-opener definition for the Loop EIP.
 /// Repeats the body pipeline either a fixed number of times, a dynamic number of times
-/// resolved from the exchange, or while a predicate holds.
-/// Close with <see cref="EndLoop"/>.
+/// resolved from the exchange, or while a predicate holds. Inherits the leaf DSL from
+/// <see cref="RouteDefinitionBase{TSelf}"/>; close with <see cref="EndLoop"/>.
 /// </summary>
-public class LoopDefinition : RouteDefinition, IRouteScope
+public class LoopDefinition : RouteDefinitionBase<LoopDefinition>, IRouteScope
 {
     private enum LoopMode { Count, CountFactory, While }
 
@@ -65,38 +62,6 @@ public class LoopDefinition : RouteDefinition, IRouteScope
 
     /// <inheritdoc cref="IRouteScope.End"/>
     public IRouteDefinition End() => EndLoop();
-
-    // ── Leaf DSL (loop body) ───────────────────────────────────────────────────
-
-    /// <summary>Sends the exchange to an endpoint (loop body).</summary>
-    public LoopDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes with a synchronous action (loop body).</summary>
-    public LoopDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes with an asynchronous action (loop body).</summary>
-    public LoopDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes with a pre-built processor (loop body).</summary>
-    public LoopDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body to a static value (loop body).</summary>
-    public LoopDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Transforms the exchange body (loop body).</summary>
-    public LoopDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Sets a header (loop body).</summary>
-    public LoopDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Sets a property (loop body).</summary>
-    public LoopDefinition SetProperty(string key, object? value) { AddOutput(new SetPropertyStaticDefinition(key, value)); return this; }
-
-    /// <summary>Logs a static message (loop body).</summary>
-    public LoopDefinition Log(string message, LogLevel level = LogLevel.Information) { AddOutput(new LogStaticDefinition(message, level)); return this; }
-
-    /// <summary>Stops exchange processing (loop body).</summary>
-    public LoopDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 
     // ── IProcessorDefinition ───────────────────────────────────────────────────
 

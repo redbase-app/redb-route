@@ -10,11 +10,11 @@ namespace redb.Route.Definitions;
 /// <see cref="SagaProcessor"/> at route-build time.
 /// Supports both callback-style (via <see cref="ISagaDefinition"/>) and
 /// fluent-scope-style (via <see cref="SagaStep"/> / <see cref="EndSaga"/>).
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>.
 /// </summary>
-public class SagaDefinition : RouteDefinition, ISagaDefinition, IRouteScope
+public class SagaDefinition : RouteDefinitionBase<SagaDefinition>, ISagaDefinition, IRouteScope
 {
     private readonly List<SagaStepEntry> _entries = [];
-    private IRouteDefinition? _parent;
 
     /// <summary>The collected saga step entries (forward action + optional compensation).</summary>
     public IReadOnlyList<SagaStepEntry> Entries => _entries;
@@ -82,9 +82,6 @@ public class SagaDefinition : RouteDefinition, ISagaDefinition, IRouteScope
 
     // ── Scope / fluent-chain DSL ──────────────────────────────────────────────
 
-    /// <summary>Attaches this saga scope to the given parent (called by RouteDefinition.Saga()).</summary>
-    internal void SetParent(IRouteDefinition parent) => _parent = parent;
-
     /// <summary>Adds a synchronous saga step with both action and compensation.</summary>
     public SagaDefinition SagaStep(Action<IExchange> action, Action<IExchange> compensate)
     {
@@ -132,8 +129,8 @@ public class SagaDefinition : RouteDefinition, ISagaDefinition, IRouteScope
     /// <summary>Closes this saga scope and returns the parent route definition.</summary>
     public IRouteDefinition EndSaga()
     {
-        return _parent ?? throw new InvalidOperationException(
-            "EndSaga() can only be called on a saga scope opened via RouteDefinition.Saga().");
+        return (IRouteDefinition)(Parent ?? throw new InvalidOperationException(
+            "EndSaga() can only be called on a saga scope opened via RouteDefinition.Saga()."));
     }
 
     /// <inheritdoc />
@@ -148,14 +145,6 @@ public class SagaDefinition : RouteDefinition, ISagaDefinition, IRouteScope
             throw new InvalidOperationException("Saga must have at least one step.");
         var logger = context.GetService<ILoggerFactory>()?.CreateLogger<SagaProcessor>();
         return new SagaProcessor(_entries.ToArray(), CompletionCallback, logger);
-    }
-
-    /// <summary>Builds a <see cref="SagaRouteStep"/> projection of this saga for tooling/diagnostics.</summary>
-    internal SagaRouteStep Build()
-    {
-        if (_entries.Count == 0)
-            throw new InvalidOperationException("Saga must have at least one step.");
-        return new SagaRouteStep(_entries.ToArray(), CompletionCallback);
     }
 }
 

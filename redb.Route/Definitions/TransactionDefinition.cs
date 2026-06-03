@@ -3,7 +3,6 @@ using redb.Route.Abstractions;
 using redb.Route.ErrorHandling;
 using redb.Route.Processors;
 using redb.Route.Transactions;
-using redb.Route.Validation;
 
 namespace redb.Route.Definitions;
 
@@ -16,9 +15,10 @@ namespace redb.Route.Definitions;
 /// <item>Auto-rolls-back on exception or cancellation.</item>
 /// </list>
 /// No explicit <c>CommitTransaction()</c> / <c>RollbackTransaction()</c> needed.
-/// Close with <see cref="EndTransaction"/> or the universal <see cref="End"/>.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
+/// close with <see cref="EndTransaction"/> or the universal <see cref="End"/>.
 /// </summary>
-public class TransactionDefinition : RouteDefinition, IRouteScope
+public class TransactionDefinition : RouteDefinitionBase<TransactionDefinition>, IRouteScope
 {
     private readonly TransactionPolicy? _policy;
     private int _retryAttempts;
@@ -111,40 +111,4 @@ public class TransactionDefinition : RouteDefinition, IRouteScope
             pipeline.Add(o.CreateProcessor(context));
         return pipeline;
     }
-
-    // ── Leaf DSL ───────────────────────────────────────────────────────────────
-
-    /// <summary>Sends the exchange to an endpoint.</summary>
-    public TransactionDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes the exchange with a synchronous action.</summary>
-    public TransactionDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with an asynchronous action.</summary>
-    public TransactionDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with a pre-built processor instance.</summary>
-    public TransactionDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body to a static value.</summary>
-    public TransactionDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Transforms the exchange body.</summary>
-    public TransactionDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Sets a header to a static value.</summary>
-    public TransactionDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Sets a property to a static value.</summary>
-    public TransactionDefinition SetProperty(string key, object? value) { AddOutput(new SetPropertyStaticDefinition(key, value)); return this; }
-
-    /// <summary>Logs a static message.</summary>
-    public TransactionDefinition Log(string message, LogLevel level = LogLevel.Information) { AddOutput(new LogStaticDefinition(message, level)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public TransactionDefinition Stop() { AddOutput(new StopDefinition()); return this; }
-
-    /// <summary>Validates the exchange using a predicate function.</summary>
-    public TransactionDefinition Validate(Func<IExchange, bool> predicate, string errorMessage = "Validation failed", bool throwOnFailure = true)
-    { AddOutput(new ValidatePredicateDefinition(predicate, errorMessage, throwOnFailure)); return this; }
 }

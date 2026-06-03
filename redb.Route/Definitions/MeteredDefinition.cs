@@ -1,9 +1,6 @@
-using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Processors;
 using redb.Route.Telemetry;
-using redb.Route.Transactions;
-using redb.Route.Validation;
 
 namespace redb.Route.Definitions;
 
@@ -12,9 +9,10 @@ namespace redb.Route.Definitions;
 /// All child steps run inside a single <see cref="MeteredStepProcessor"/> that records
 /// <c>redb.route.step.processed</c>, <c>redb.route.step.failed</c>,
 /// and <c>redb.route.step.duration</c> tagged with <see cref="StepName"/>.
-/// Close with <see cref="EndMetered"/> or the universal <see cref="End"/>.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
+/// close with <see cref="EndMetered"/> or the universal <see cref="End"/>.
 /// </summary>
-public class MeteredDefinition : RouteDefinition, IRouteScope
+public class MeteredDefinition : RouteDefinitionBase<MeteredDefinition>, IRouteScope
 {
     /// <summary>Step name used as a metric tag value for <c>redb.route.step</c>.</summary>
     public string StepName { get; }
@@ -86,50 +84,4 @@ public class MeteredDefinition : RouteDefinition, IRouteScope
             pipeline.Add(o.CreateProcessor(context));
         return pipeline;
     }
-
-    // ── Leaf DSL ───────────────────────────────────────────────────────────────
-
-    /// <summary>Sends the exchange to an endpoint.</summary>
-    public MeteredDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes the exchange with a synchronous action.</summary>
-    public MeteredDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with an asynchronous action.</summary>
-    public MeteredDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with a pre-built processor instance.</summary>
-    public MeteredDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body to a static value.</summary>
-    public MeteredDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Transforms the exchange body.</summary>
-    public MeteredDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Sets a header to a static value.</summary>
-    public MeteredDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Sets a property to a static value.</summary>
-    public MeteredDefinition SetProperty(string key, object? value) { AddOutput(new SetPropertyStaticDefinition(key, value)); return this; }
-
-    /// <summary>Logs a static message.</summary>
-    public MeteredDefinition Log(string message, LogLevel level = LogLevel.Information) { AddOutput(new LogStaticDefinition(message, level)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public MeteredDefinition Stop() { AddOutput(new StopDefinition()); return this; }
-
-    /// <summary>Validates the exchange using a predicate function.</summary>
-    public MeteredDefinition Validate(Func<IExchange, bool> predicate, string errorMessage = "Validation failed", bool throwOnFailure = true)
-    { AddOutput(new ValidatePredicateDefinition(predicate, errorMessage, throwOnFailure)); return this; }
-
-    /// <summary>Begins a transaction scope.</summary>
-    public MeteredDefinition BeginTransaction(TransactionPolicy? policy = null)
-    { AddOutput(new BeginTransactionDefinition(policy)); return this; }
-
-    /// <summary>Commits the transaction.</summary>
-    public MeteredDefinition CommitTransaction() { AddOutput(new CommitTransactionDefinition()); return this; }
-
-    /// <summary>Rolls back the transaction.</summary>
-    public MeteredDefinition RollbackTransaction() { AddOutput(new RollbackTransactionDefinition()); return this; }
 }

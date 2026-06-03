@@ -39,7 +39,6 @@ internal sealed class EipRoutes : RouteBuilder
             .SetHeader("batchId", e => $"batch-{DateTime.UtcNow.Second % 3}")
             .SetBody(e => $"event-{DateTime.UtcNow:ss.fff}")
             .Log("[AGG] ▶ Event: batchId=${header.batchId}, body=${body}")
-
             .Aggregate(
                 correlationKey: e => GetHeader(e, "batchId") ?? "default",
                 aggregationStrategy: (oldEx, newEx) =>

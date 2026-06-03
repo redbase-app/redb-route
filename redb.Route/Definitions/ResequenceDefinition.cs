@@ -7,8 +7,9 @@ namespace redb.Route.Definitions;
 /// Scope-opener definition for the Resequencer EIP. Buffers and reorders incoming
 /// exchanges by a sequence key before delivering them to its child outputs.
 /// Apache Camel parity: <c>.resequence(...).process(...).end()</c>.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>.
 /// </summary>
-public sealed class ResequenceDefinition : RouteDefinition, IRouteScope
+public sealed class ResequenceDefinition : RouteDefinitionBase<ResequenceDefinition>, IRouteScope
 {
     private readonly Func<IExchange, long> _keySelector;
     private readonly int _batchSize;

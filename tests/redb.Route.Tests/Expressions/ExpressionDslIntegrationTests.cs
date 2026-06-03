@@ -702,22 +702,15 @@ public class ExpressionDslIntegrationTests : IAsyncDisposable
                     .SetBody("expr-matched")
             .End();
 
-        // Verify step recording
-        def.Steps.Should().HaveCountGreaterThan(10);
-        def.Steps.OfType<SetBodyExpressionStep>().Should().HaveCount(1);
-        def.Steps.OfType<SetBodyStringExpressionStep>().Should().HaveCount(1);
-        def.Steps.OfType<SetHeaderExpressionStep>().Should().HaveCount(1);
-        def.Steps.OfType<SetHeaderStringExpressionStep>().Should().HaveCount(1);
-        def.Steps.OfType<TransformExpressionStep>().Should().HaveCount(1);
-        def.Steps.OfType<TransformStringExpressionStep>().Should().HaveCount(1);
-        def.Steps.OfType<FilterPredicateStep>().Should().HaveCount(1);
-        def.Steps.OfType<FilterExpressionStep>().Should().HaveCount(1);
-        def.Steps.OfType<SplitExpressionStep>().Should().HaveCount(1);
-        def.Steps.OfType<LogTemplateStep>().Should().HaveCount(1);
-        def.Steps.OfType<ChoiceStep>().Should().HaveCount(1);
-
-        var choice = def.Steps.OfType<ChoiceStep>().First();
-        choice.PredicateClauses.Should().HaveCount(1);
-        choice.ExpressionClauses.Should().HaveCount(1);
+        // Verify outputs (live IProcessorDefinition tree) — the live scope graph after CRTP refactor.
+        def.Outputs.Should().HaveCountGreaterThan(10);
+        def.Outputs.OfType<SetBodyExpressionDefinition>().Should().NotBeEmpty();
+        def.Outputs.OfType<SetHeaderExpressionDefinition>().Should().NotBeEmpty();
+        def.Outputs.OfType<TransformExpressionDefinition>().Should().NotBeEmpty();
+        def.Outputs.OfType<FilterDefinition>().Should().HaveCountGreaterThanOrEqualTo(2);
+        def.Outputs.OfType<SplitDefinition>().Should().HaveCount(1);
+        def.Outputs.OfType<LogStaticDefinition>().Should().HaveCount(1);
+        var choice = def.Outputs.OfType<ChoiceDefinition>().Single();
+        choice.Whens.Should().HaveCount(2);
     }
 }

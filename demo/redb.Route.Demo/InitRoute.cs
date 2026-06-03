@@ -87,7 +87,8 @@ public static class InitRoute
             .AddRoutes(new TransactionRoutes(logger))
             .AddRoutes(new LifecycleRoutes(logger))
             .AddRoutes(new NamedRedbRoutes(logger))
-            .AddRoutes(new ScopeDiagRoutes(logger));
+            .AddRoutes(new ScopeDiagRoutes(logger))
+            .AddRoutes(new DeepDslShowcaseRoutes(logger));
 
         return context;
     }

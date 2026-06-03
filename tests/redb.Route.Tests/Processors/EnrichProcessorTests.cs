@@ -107,7 +107,7 @@ public class EnrichProcessorTests
     [Fact]
     public void Constructor_NullUri_Throws()
     {
-        var act = () => new EnrichProcessor(Substitute.For<IRouteContext>(), null!, (a, b) => a);
+        var act = () => new EnrichProcessor(Substitute.For<IRouteContext>(), (string)null!, (a, b) => a);
         act.Should().Throw<ArgumentNullException>().WithParameterName("resourceUri");
     }
 
@@ -211,7 +211,7 @@ public class PollEnrichProcessorTests
     [Fact]
     public void Constructor_NullUri_Throws()
     {
-        var act = () => new PollEnrichProcessor(Substitute.For<IRouteContext>(), null!, (a, b) => a);
+        var act = () => new PollEnrichProcessor(Substitute.For<IRouteContext>(), (string)null!, (a, b) => a);
         act.Should().Throw<ArgumentNullException>().WithParameterName("resourceUri");
     }
 

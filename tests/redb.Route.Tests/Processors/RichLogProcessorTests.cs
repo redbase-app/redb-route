@@ -345,7 +345,7 @@ public class RichLogProcessorTests
     {
         var def = new RouteDefinition();
         var act = () => def.From("direct://test").ShowRouteId();
-        act.Should().Throw<InvalidOperationException>().WithMessage("*Log() scope*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Log*scope*");
     }
 
     [Fact]
@@ -353,7 +353,7 @@ public class RichLogProcessorTests
     {
         var def = new RouteDefinition();
         var act = () => def.From("direct://test").EndLog();
-        act.Should().Throw<InvalidOperationException>().WithMessage("*Log() scope*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Log*scope*");
     }
 
     // ── Simple Log one-liners still work ──

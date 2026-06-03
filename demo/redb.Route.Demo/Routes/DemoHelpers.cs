@@ -38,6 +38,15 @@ internal static class DemoHelpers
                 grpc = GetHeader(e, "stamp.grpc"),
                 wmq = GetHeader(e, "stamp.wmq"),
                 vm = GetHeader(e, "stamp.vm"),
+                // Stamps produced by the new flat fluent DSL (Choice + sibling When/Otherwise,
+                // TryCatch with rich Catch log) configured in MainPipelineRoutes.cs.
+                dsl = new
+                {
+                    branch         = GetHeader(e, "stamp.dsl"),
+                    priority       = GetHeader(e, "stamp.dsl.priority"),
+                    fastTrack      = GetHeader(e, "fastTrack"),
+                    catchTriggered = GetHeader(e, "stamp.dsl.caught"),
+                },
             },
             pipeline = "HTTP -> Direct -> RabbitMQ -> AMQP -> gRPC -> WMQ -> DirectVM -> "
                      + "SQL(tx) -> Kafka(tap) -> File(tap) -> VM(tap) -> WMQ(tap)",

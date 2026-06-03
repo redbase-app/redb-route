@@ -69,23 +69,4 @@ public sealed class NormalizerDefinition : ProcessorDefinition, INormalizerDefin
         }
         return choice;
     }
-
-    /// <summary>Builds a <see cref="ChoiceStep"/> projection of this normalizer for tooling/diagnostics.</summary>
-    internal ChoiceStep Build()
-    {
-        if (_clauses.Count == 0)
-            throw new InvalidOperationException("Normalizer requires at least one When clause.");
-
-        var whenClauses = _clauses
-            .Select(c => new ChoiceWhenClause(
-                c.Predicate,
-                new RouteStep[] { new TransformStep(c.Transform) }))
-            .ToList();
-
-        var otherwiseSteps = _otherwise is not null
-            ? new RouteStep[] { new TransformStep(_otherwise) }
-            : null;
-
-        return new ChoiceStep(whenClauses, otherwiseSteps);
-    }
 }

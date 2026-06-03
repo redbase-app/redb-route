@@ -412,7 +412,7 @@ public class TracedDslTests : IAsyncDisposable
         var rd = new RouteDefinition();
         var act = () => rd.EndTraced();
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Traced*block*");
+            .WithMessage("*Traced*scope*");
     }
 
     // ── Body modification flows through ──

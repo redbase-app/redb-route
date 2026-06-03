@@ -64,34 +64,34 @@ public sealed class IbmMqConnectionPoolIntegrationTests
         }
     }
 
+    // NOTE: As of the dynamic-endpoints / dedicated-connections refactor (commit aa33e1a1)
+    // each IbmMqProducer / IbmMqConsumer opens its own dedicated MQQueueManager via
+    // IbmMqEndpoint.CreateDedicatedQueueManagerAsync to avoid MQI-call serialisation
+    // deadlocks. The shared component pool (IbmMqComponent._connections) is still used
+    // for endpoint-scoped MQI work (OpenQueueAsync / OpenTopicAsync / OpenTopicForPublishAsync)
+    // and is exercised here directly via IbmMqEndpoint.GetQueueManagerAsync, NOT via
+    // producer.Start (which goes to the dedicated path).
+
     [Fact]
     public async Task Pool_TwoEndpointsIdenticalParams_ShareSingleQueueManager()
     {
-        await DrainAsync(Queue, "DEV.QUEUE.2");
         var component = new IbmMqComponent();
 
         // Two endpoints on different queues but same connection identity \u2192 1 MQQueueManager
         var epA = CreateEndpoint(component, Queue);
         var epB = CreateEndpoint(component, "DEV.QUEUE.2");
 
-        var pa = (IbmMqProducer)epA.CreateProducer();
-        var pb = (IbmMqProducer)epB.CreateProducer();
-        await pa.Start();
-        await pb.Start();
+        var qmA = await epA.GetQueueManagerAsync();
+        var qmB = await epB.GetQueueManagerAsync();
 
         component.PooledConnectionCount.Should().Be(1, "both endpoints have identical inline params");
         var conns = await component.GetPooledConnectionsAsync();
         conns.Should().HaveCount(1);
         conns[0].IsConnected.Should().BeTrue();
+        ReferenceEquals(qmA, qmB).Should().BeTrue("identical inline params share one pooled MQQueueManager");
 
-        await pa.Process(new Exchange(new Message("from-a")));
-        await pb.Process(new Exchange(new Message("from-b")));
-
-        await pa.Stop(); await pb.Stop();
         await epA.Stop(); await epB.Stop();
         await component.DisposeAsync();
-
-        await DrainAsync(Queue, "DEV.QUEUE.2");
         _output.WriteLine("IBM MQ shared QM: 2 endpoints, 1 MQQueueManager.");
     }
 
@@ -118,19 +118,16 @@ public sealed class IbmMqConnectionPoolIntegrationTests
         var epA = CreateEndpoint(component, Queue, "connectionFactory=mq-1");
         var epB = CreateEndpoint(component, Queue, "connectionFactory=mq-2");
 
-        var pa = (IbmMqProducer)epA.CreateProducer();
-        var pb = (IbmMqProducer)epB.CreateProducer();
-        await pa.Start();
-        await pb.Start();
+        var qmA = await epA.GetQueueManagerAsync();
+        var qmB = await epB.GetQueueManagerAsync();
 
         component.PooledConnectionCount.Should().Be(2,
             "two named factories produce two distinct MQQueueManager instances even when params match");
         var conns = await component.GetPooledConnectionsAsync();
         conns.Should().HaveCount(2);
         conns.Should().OnlyContain(c => c.IsConnected);
-        ReferenceEquals(conns[0], conns[1]).Should().BeFalse();
+        ReferenceEquals(qmA, qmB).Should().BeFalse();
 
-        await pa.Stop(); await pb.Stop();
         await epA.Stop(); await epB.Stop();
         await ctx.DisposeAsync();
     }
@@ -138,93 +135,74 @@ public sealed class IbmMqConnectionPoolIntegrationTests
     [Fact]
     public async Task Pool_StopOneEndpoint_PooledQueueManagerRemains_OtherEndpointStillWorks()
     {
-        await DrainAsync(Queue, "DEV.QUEUE.2");
         var component = new IbmMqComponent();
 
         var epA = CreateEndpoint(component, Queue);
         var epB = CreateEndpoint(component, "DEV.QUEUE.2");
 
-        var prodA = (IbmMqProducer)epA.CreateProducer();
-        var prodB = (IbmMqProducer)epB.CreateProducer();
-        await prodA.Start();
-        await prodB.Start();
+        await epA.GetQueueManagerAsync();
+        await epB.GetQueueManagerAsync();
 
         component.PooledConnectionCount.Should().Be(1);
 
-        await prodA.Stop();
         await epA.Stop();
 
         var conns = await component.GetPooledConnectionsAsync();
         conns.Should().HaveCount(1);
         conns[0].IsConnected.Should().BeTrue("pooled MQQueueManager survives endpoint Stop");
 
-        await prodB.Process(new Exchange(new Message("after-a-stopped")));
+        // epB still resolves to the same shared connection after epA stopped.
+        var qmB2 = await epB.GetQueueManagerAsync();
+        ReferenceEquals(qmB2, conns[0]).Should().BeTrue();
 
-        await prodB.Stop();
         await epB.Stop();
         await component.DisposeAsync();
-        await DrainAsync(Queue, "DEV.QUEUE.2");
     }
 
     [Fact]
     public async Task Pool_DisposeAsync_DisconnectsAllPooledQueueManagers()
     {
-        await DrainAsync(Queue);
         var component = new IbmMqComponent();
         var endpoint = CreateEndpoint(component, Queue);
-        var producer = (IbmMqProducer)endpoint.CreateProducer();
 
-        await producer.Start();
-        await producer.Process(new Exchange(new Message("dispose-test")));
+        await endpoint.GetQueueManagerAsync();
 
         var conns = await component.GetPooledConnectionsAsync();
         conns.Should().HaveCount(1);
         var pooled = conns[0];
         pooled.IsConnected.Should().BeTrue();
 
-        await producer.Stop();
         await endpoint.Stop();
-
         await component.DisposeAsync();
 
         pooled.IsConnected.Should().BeFalse("DisposeAsync must disconnect all pooled MQQueueManager instances");
         component.PooledConnectionCount.Should().Be(0);
-        await DrainAsync(Queue);
     }
 
     [Fact]
     public async Task Pool_RestartEndpoint_ReusesPooledQueueManager()
     {
-        await DrainAsync(Queue);
         var component = new IbmMqComponent();
 
         var epA = CreateEndpoint(component, Queue);
-        var prodA = (IbmMqProducer)epA.CreateProducer();
-        await prodA.Start();
-        await prodA.Process(new Exchange(new Message("first")));
+        var initial = await epA.GetQueueManagerAsync();
 
-        var initial = (await component.GetPooledConnectionsAsync())[0];
-
-        await prodA.Stop();
         await epA.Stop();
 
+        // Pool survives endpoint Stop \u2014 it is released only on Component.DisposeAsync.
         var afterStop = await component.GetPooledConnectionsAsync();
         afterStop.Should().HaveCount(1);
         afterStop[0].IsConnected.Should().BeTrue();
         ReferenceEquals(afterStop[0], initial).Should().BeTrue();
 
+        // A fresh endpoint with identical params reuses the same pooled MQQueueManager.
         var epB = CreateEndpoint(component, Queue);
-        var prodB = (IbmMqProducer)epB.CreateProducer();
-        await prodB.Start();
-        await prodB.Process(new Exchange(new Message("second")));
+        var reused = await epB.GetQueueManagerAsync();
 
         component.PooledConnectionCount.Should().Be(1);
-        var conns = await component.GetPooledConnectionsAsync();
-        ReferenceEquals(conns[0], initial).Should().BeTrue("pool reuses the existing MQQueueManager");
+        ReferenceEquals(reused, initial).Should().BeTrue("pool reuses the existing MQQueueManager");
 
-        await prodB.Stop();
         await epB.Stop();
         await component.DisposeAsync();
-        await DrainAsync(Queue);
     }
 }

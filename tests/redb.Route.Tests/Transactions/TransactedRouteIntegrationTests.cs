@@ -55,9 +55,9 @@ public class TransactedRouteIntegrationTests : IAsyncDisposable
         var def = new RouteDefinition();
         def.From("direct://in").Transacted(TransactionPolicy.RequiresNew);
 
-        var step = def.Steps.OfType<TransactedStep>().FirstOrDefault();
-        step.Should().NotBeNull();
-        step!.Policy.Should().BeSameAs(TransactionPolicy.RequiresNew);
+        var txDef = def.Outputs.OfType<TransactionDefinition>().FirstOrDefault();
+        txDef.Should().NotBeNull();
+        txDef!.Policy.Should().BeSameAs(TransactionPolicy.RequiresNew);
     }
 
     [Fact]
@@ -66,9 +66,9 @@ public class TransactedRouteIntegrationTests : IAsyncDisposable
         var def = new RouteDefinition();
         def.From("direct://in").Transacted("RequiresNew");
 
-        var step = def.Steps.OfType<TransactedStep>().FirstOrDefault();
-        step.Should().NotBeNull();
-        step!.Policy!.ScopeOption.Should().Be(System.Transactions.TransactionScopeOption.RequiresNew);
+        var txDef = def.Outputs.OfType<TransactionDefinition>().FirstOrDefault();
+        txDef.Should().NotBeNull();
+        txDef!.Policy!.ScopeOption.Should().Be(System.Transactions.TransactionScopeOption.RequiresNew);
     }
 
     [Fact]

@@ -117,7 +117,7 @@ public class BeanTests
             e.In.Body = await svc.ProcessAsync(e.In.Body!.ToString()!, ct);
         });
 
-        var step = def.Steps.OfType<BeanStep>().Single();
+        var step = def.Outputs.OfType<BeanDefinition>().Single();
         await step.Method(service, exchange, CancellationToken.None);
 
         exchange.In.Body.Should().Be("hello_processed");
@@ -136,7 +136,7 @@ public class BeanTests
             e.In.Body = await svc.ValidateAsync(e.In.Body!.ToString()!);
         });
 
-        var step = def.Steps.OfType<BeanStep>().Single();
+        var step = def.Outputs.OfType<BeanDefinition>().Single();
         await step.Method(service, exchange, CancellationToken.None);
 
         exchange.In.Body.Should().Be("data_validated");
@@ -155,7 +155,7 @@ public class BeanTests
             e.In.Headers["value"] = svc.GetValue();
         });
 
-        var step = def.Steps.OfType<BeanStep>().Single();
+        var step = def.Outputs.OfType<BeanDefinition>().Single();
         await step.Method(service, exchange, CancellationToken.None);
 
         exchange.In.Headers["value"].Should().Be(42);

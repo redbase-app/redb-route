@@ -11,7 +11,7 @@ namespace redb.Route.Definitions;
 /// <c>.OfType&lt;T&gt;()</c> equivalent of <c>choice().when(body().isInstanceOf(T.class))</c>
 /// combined with a transparent unmarshal step.
 /// </summary>
-public class OfTypeDefinition<T> : RouteDefinition
+public class OfTypeDefinition<T> : RouteDefinitionBase<OfTypeDefinition<T>>
 {
     internal OfTypeDefinition() { }
 

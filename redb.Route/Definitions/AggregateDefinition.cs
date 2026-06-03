@@ -7,10 +7,11 @@ namespace redb.Route.Definitions;
 /// Scope-opener definition for the Aggregator EIP.
 /// Collects exchanges sharing the same correlation key, merges them via the aggregation strategy,
 /// and forwards the completed aggregate to the body pipeline when the completion predicate is satisfied.
-/// Leaf methods on this definition build the <em>target</em> pipeline (executed on completed aggregates).
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
+/// child steps build the <em>target</em> pipeline executed on completed aggregates.
 /// Close with <see cref="EndAggregate"/>.
 /// </summary>
-public class AggregateDefinition : RouteDefinition, IRouteScope
+public class AggregateDefinition : RouteDefinitionBase<AggregateDefinition>, IRouteScope
 {
     private readonly Func<IExchange, string> _correlationKey;
     private readonly Func<IExchange, IExchange, IExchange> _aggregationStrategy;
@@ -57,33 +58,4 @@ public class AggregateDefinition : RouteDefinition, IRouteScope
             pipeline.Add(o.CreateProcessor(context));
         return pipeline;
     }
-
-    // ── Leaf DSL (target pipeline — runs on completed aggregates) ──────────────
-
-    /// <summary>Sends the completed aggregate to an endpoint.</summary>
-    public AggregateDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes the completed aggregate with a synchronous action.</summary>
-    public AggregateDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes the completed aggregate with an asynchronous action.</summary>
-    public AggregateDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes the completed aggregate with a pre-built processor.</summary>
-    public AggregateDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body on the completed aggregate.</summary>
-    public AggregateDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Transforms the exchange body on the completed aggregate.</summary>
-    public AggregateDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Sets a header on the completed aggregate.</summary>
-    public AggregateDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Logs a message on the completed aggregate.</summary>
-    public AggregateDefinition Log(string message) { AddOutput(new LogStaticDefinition(message)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public AggregateDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 }

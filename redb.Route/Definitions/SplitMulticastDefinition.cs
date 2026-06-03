@@ -8,9 +8,10 @@ namespace redb.Route.Definitions;
 /// Scope-opener definition for the Splitter EIP.
 /// Splits an exchange into sub-exchanges via a splitter function,
 /// then passes each sub-exchange through the child pipeline (Outputs).
-/// Close with <see cref="EndSplit"/>.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
+/// close with <see cref="EndSplit"/>.
 /// </summary>
-public class SplitDefinition : RouteDefinition, IRouteScope
+public class SplitDefinition : RouteDefinitionBase<SplitDefinition>, IRouteScope
 {
     private readonly Func<IExchange, IEnumerable<object?>>? _splitter;
     private readonly Func<IExchange, IAsyncEnumerable<object?>>? _asyncSplitter;
@@ -117,44 +118,16 @@ public class SplitDefinition : RouteDefinition, IRouteScope
             pipeline.Add(output.CreateProcessor(context));
         return pipeline;
     }
-
-    // ── Leaf DSL ───────────────────────────────────────────────────────────────
-
-    /// <summary>Sends the split exchange to an endpoint.</summary>
-    public SplitDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes each split exchange with a synchronous action.</summary>
-    public SplitDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes each split exchange with an asynchronous action.</summary>
-    public SplitDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes each split exchange with a pre-built processor.</summary>
-    public SplitDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the body to a static value.</summary>
-    public SplitDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Sets the body using a factory.</summary>
-    public SplitDefinition SetBody(Func<IExchange, object?> factory) { AddOutput(new SetBodyFactoryDefinition(factory)); return this; }
-
-    /// <summary>Transforms the body.</summary>
-    public SplitDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Sets a header to a static value.</summary>
-    public SplitDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public SplitDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 }
 
 /// <summary>
 /// Scope-opener definition for the Multicast EIP.
 /// Sends the exchange to all child endpoints (fan-out).
 /// Each output is compiled as one target processor for <see cref="MulticastProcessor"/>.
-/// Close with <see cref="EndMulticast"/>.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
+/// close with <see cref="EndMulticast"/>.
 /// </summary>
-public class MulticastDefinition : RouteDefinition, IRouteScope
+public class MulticastDefinition : RouteDefinitionBase<MulticastDefinition>, IRouteScope
 {
     private bool _parallel = true;
     private bool _stopOnException;
@@ -218,18 +191,4 @@ public class MulticastDefinition : RouteDefinition, IRouteScope
 
         return multicast;
     }
-
-    // ── Leaf/target DSL ────────────────────────────────────────────────────────
-
-    /// <summary>Adds an endpoint target to the multicast fan-out.</summary>
-    public MulticastDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Adds a processor as a multicast target.</summary>
-    public MulticastDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Adds an async processor as a multicast target.</summary>
-    public MulticastDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Adds a pre-built processor as a multicast target.</summary>
-    public MulticastDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
 }

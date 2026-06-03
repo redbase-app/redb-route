@@ -8,8 +8,13 @@ namespace redb.Route.Definitions;
 /// Content-based router scope opener (Choice EIP).
 /// Add branches with <see cref="When(Func{IExchange,bool})"/> / <see cref="Otherwise"/>.
 /// Close with <see cref="EndChoice"/>.
+/// <para>
+/// Inherits the entire leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
+/// however, leaf calls placed directly on a Choice scope are not part of the
+/// standard EIP shape — use <c>When</c> / <c>Otherwise</c> branches instead.
+/// </para>
 /// </summary>
-public class ChoiceDefinition : RouteDefinition, IRouteScope
+public class ChoiceDefinition : RouteDefinitionBase<ChoiceDefinition>, IRouteScope
 {
     private readonly List<WhenDefinition> _whens = [];
     private OtherwiseDefinition? _otherwise;
@@ -119,22 +124,14 @@ public class ChoiceDefinition : RouteDefinition, IRouteScope
             pipeline.Add(o.CreateProcessor(context));
         return pipeline;
     }
-
-    private static bool ConvertToBoolean(object? value) => value switch
-    {
-        bool b => b,
-        string s => bool.TryParse(s, out var result) ? result : !string.IsNullOrEmpty(s),
-        null => false,
-        _ => true
-    };
 }
 
 /// <summary>
 /// A single When branch inside a <see cref="ChoiceDefinition"/>.
-/// Add steps with the leaf DSL, then close with <see cref="EndWhen"/>, <see cref="Otherwise"/>,
-/// or <see cref="EndChoice"/>.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>; close with
+/// <see cref="EndWhen"/>, <see cref="Otherwise"/>, or <see cref="EndChoice"/>.
 /// </summary>
-public class WhenDefinition : RouteDefinition, IRouteScope
+public class WhenDefinition : RouteDefinitionBase<WhenDefinition>, IRouteScope
 {
     internal readonly Func<IExchange, bool> Predicate;
     private readonly ChoiceDefinition _choice;
@@ -168,59 +165,24 @@ public class WhenDefinition : RouteDefinition, IRouteScope
 
     /// <summary>Closes the entire Choice scope and returns the parent route definition.</summary>
     public IRouteDefinition EndChoice() => _choice.EndChoice();
+
     /// <inheritdoc cref="IRouteScope.End"/>
     public IRouteDefinition End() => EndChoice();
+
     // ── IProcessorDefinition ──────────────────────────────────────────────────
 
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
         => throw new InvalidOperationException(
             "WhenDefinition is compiled via its parent ChoiceDefinition.CreateProcessor.");
-
-    // ── Leaf DSL ──────────────────────────────────────────────────────────────
-
-    /// <summary>Sends the exchange to an endpoint.</summary>
-    public WhenDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes the exchange with a synchronous action.</summary>
-    public WhenDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with an asynchronous action.</summary>
-    public WhenDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with a pre-built processor instance.</summary>
-    public WhenDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body to a static value.</summary>
-    public WhenDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Sets the exchange body using a factory.</summary>
-    public WhenDefinition SetBody(Func<IExchange, object?> factory) { AddOutput(new SetBodyFactoryDefinition(factory)); return this; }
-
-    /// <summary>Transforms the exchange body.</summary>
-    public WhenDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Removes the exchange body.</summary>
-    public WhenDefinition RemoveBody() { AddOutput(new RemoveBodyDefinition()); return this; }
-
-    /// <summary>Sets a header to a static value.</summary>
-    public WhenDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Removes a header.</summary>
-    public WhenDefinition RemoveHeader(string key) { AddOutput(new RemoveHeaderDefinition(key)); return this; }
-
-    /// <summary>Sets a property to a static value.</summary>
-    public WhenDefinition SetProperty(string key, object? value) { AddOutput(new SetPropertyStaticDefinition(key, value)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public WhenDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 }
 
 /// <summary>
 /// The Otherwise (fallback) branch inside a <see cref="ChoiceDefinition"/>.
-/// Add steps with the leaf DSL, then close with <see cref="EndOtherwise"/> or <see cref="EndChoice"/>.
+/// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>; close with
+/// <see cref="EndOtherwise"/> or <see cref="EndChoice"/>.
 /// </summary>
-public class OtherwiseDefinition : RouteDefinition, IRouteScope
+public class OtherwiseDefinition : RouteDefinitionBase<OtherwiseDefinition>, IRouteScope
 {
     private readonly ChoiceDefinition _choice;
 
@@ -237,50 +199,14 @@ public class OtherwiseDefinition : RouteDefinition, IRouteScope
 
     /// <summary>Closes the entire Choice scope and returns the parent route definition.</summary>
     public IRouteDefinition EndChoice() => _choice.EndChoice();
+
     /// <inheritdoc cref="IRouteScope.End"/>
     public IRouteDefinition End() => EndChoice();
+
     // ── IProcessorDefinition ──────────────────────────────────────────────────
 
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
         => throw new InvalidOperationException(
             "OtherwiseDefinition is compiled via its parent ChoiceDefinition.CreateProcessor.");
-
-    // ── Leaf DSL ──────────────────────────────────────────────────────────────
-
-    /// <summary>Sends the exchange to an endpoint.</summary>
-    public OtherwiseDefinition To(string uri) { AddOutput(new ToDefinition(uri)); return this; }
-
-    /// <summary>Processes the exchange with a synchronous action.</summary>
-    public OtherwiseDefinition Process(Action<IExchange> action) { AddOutput(new ProcessActionDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with an asynchronous action.</summary>
-    public OtherwiseDefinition Process(Func<IExchange, CancellationToken, Task> action) { AddOutput(new ProcessAsyncDefinition(action)); return this; }
-
-    /// <summary>Processes the exchange with a pre-built processor instance.</summary>
-    public OtherwiseDefinition Process(IProcessor processor) { AddOutput(new ProcessInstanceDefinition(processor)); return this; }
-
-    /// <summary>Sets the exchange body to a static value.</summary>
-    public OtherwiseDefinition SetBody(object? value) { AddOutput(new SetBodyStaticDefinition(value)); return this; }
-
-    /// <summary>Sets the exchange body using a factory.</summary>
-    public OtherwiseDefinition SetBody(Func<IExchange, object?> factory) { AddOutput(new SetBodyFactoryDefinition(factory)); return this; }
-
-    /// <summary>Transforms the exchange body.</summary>
-    public OtherwiseDefinition Transform(Func<IExchange, object?> transform) { AddOutput(new TransformDefinition(transform)); return this; }
-
-    /// <summary>Removes the exchange body.</summary>
-    public OtherwiseDefinition RemoveBody() { AddOutput(new RemoveBodyDefinition()); return this; }
-
-    /// <summary>Sets a header to a static value.</summary>
-    public OtherwiseDefinition SetHeader(string key, object? value) { AddOutput(new SetHeaderStaticDefinition(key, value)); return this; }
-
-    /// <summary>Removes a header.</summary>
-    public OtherwiseDefinition RemoveHeader(string key) { AddOutput(new RemoveHeaderDefinition(key)); return this; }
-
-    /// <summary>Sets a property to a static value.</summary>
-    public OtherwiseDefinition SetProperty(string key, object? value) { AddOutput(new SetPropertyStaticDefinition(key, value)); return this; }
-
-    /// <summary>Stops exchange processing.</summary>
-    public OtherwiseDefinition Stop() { AddOutput(new StopDefinition()); return this; }
 }
