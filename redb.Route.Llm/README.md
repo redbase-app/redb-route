@@ -240,7 +240,7 @@ URI handle many variations without rewrites:
 This is the architectural decision that makes the connector cross-cutting:
 **every existing redb.Route component (Kafka, RabbitMQ, HTTP, SQL, file, redb,
 …) becomes a potential LLM tool with one method call.** No per-connector LLM
-package — `0 bumps` across 22 connectors.
+package — `0 bumps` across all sibling connectors.
 
 ### How tool dispatch works
 
@@ -492,7 +492,7 @@ analogue to what `redb.Route.Llm` does, so the comparison is worth pinning down.
 | Scheduled invocation | only via `from("timer:...").to("langchain4j-chat:...")` — the LLM is producer-only | **`From("llm://factory?schedule=...")` is a first-class consumer** — the LLM endpoint *is* the scheduler |
 | Streaming responses | LangChain4j streaming chat model | `?stream=true` (skeleton) |
 | Registry refs (`#name`) | yes — Camel-wide | yes — framework-wide; works for connection factories **and** prompts |
-| Conversation memory | LangChain4j `ChatMemoryStore` family | header / property conversation id (persistence in Phase 2) |
+| Conversation memory | LangChain4j `ChatMemoryStore` family | header / property conversation id; full persistence via `AddRedbLlmStorage()` |
 | Provider matrix | 25+ via LangChain4j (Anthropic, Bedrock, Vertex, Azure OpenAI, OpenAI, Mistral, Ollama, …) | 14 OpenAI-compatible behind one `OpenAiProvider` (incl. Anthropic Claude via the official OpenAI-compat endpoint, live-tested with Haiku 4.5 + Sonnet 4.6) + stub; native Anthropic Messages API on deck |
 | Embeddings / vector store | yes — `langchain4j-embeddings` + LangChain4j vector stores | Phase 2 (`embed://`, `vector://` schemes planned) |
 | RAG primitives, document loaders, web search | yes — via LangChain4j family | not yet |
@@ -539,7 +539,7 @@ analogue to what `redb.Route.Llm` does, so the comparison is worth pinning down.
       .Process(...);
   ```
 
-  The `0 bumps for 22 connectors` outcome falls out of the architecture —
+  The `0 bumps for all sibling connectors` outcome falls out of the architecture —
   there is nothing to coordinate between the LLM connector and the rest.
 
 - **One `OpenAiProvider` for 14 vendors.** OpenAI, Anthropic (Claude via the
@@ -719,5 +719,5 @@ For phase planning: [doc/PLAN.md](doc/PLAN.md),
    route registry. Already used by Kafka/S3/Firebase connection factories;
    prompts now follow the same convention.
 7. **redb engine for state.** Conversation, idempotency, audit — `[RedbScheme]`
-   POCOs (Phase-2).
+   POCOs, opt-in via `AddRedbLlmStorage()`.
 8. **Stand-alone.** No dependency on Tsak or Identity.
