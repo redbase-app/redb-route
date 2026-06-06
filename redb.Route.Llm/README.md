@@ -580,9 +580,12 @@ analogue to what `redb.Route.Llm` does, so the comparison is worth pinning down.
   several local-only model toolkits).
 - **Embeddings, RAG, document loaders, web search** — already shipping via
   the LangChain4j family. Our `embed://` / `vector://` story lands in Phase 2.
-- **Chat memory stores** — windowed / token-windowed / persistent — come
-  in the box. We expose conversation id today; full memory store will lean
-  on `redb` schemes in Phase 2.
+- **Memory shapes** — windowed / token-windowed sliding-window memory comes
+  in the box with LangChain4j. We ship persistent conversation transcripts
+  via `AddRedbLlmStorage()` (`RedbConversationStore`, tree-backed with
+  `parent_id` integrity), but window-by-N-messages and window-by-K-tokens
+  shapes are not yet first-class — a route can implement them today via
+  `Process` + the conversation store, just not as a one-line option.
 - **Streaming** is production-ready in LangChain4j; in our connector it's a
   skeleton.
 
@@ -628,9 +631,9 @@ familiar redb.Route primitive (`From → Process → To → AsLlmTool → Mock`)
 That's the design target: one scheme, DSL aspects instead of sibling
 components, registry refs that work the same way as the rest of the
 framework. The cost is a younger ecosystem — fewer providers wired, no
-embeddings/vector store yet, leaner memory story. The benefit is that the
-parts we *do* ship feel like the rest of redb.Route, not like a guest
-component grafted on.
+embeddings/vector store yet, no sliding-window memory shapes. The benefit
+is that the parts we *do* ship feel like the rest of redb.Route, not like
+a guest component grafted on.
 
 ## Layout
 
