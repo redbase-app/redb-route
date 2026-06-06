@@ -3,7 +3,7 @@
 Email transport for redb.Route via MailKit. SMTP producer for sending, IMAP/POP3 consumers for receiving with IDLE push, attachments, TLS/SSL, and OAuth.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Mail?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Mail)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

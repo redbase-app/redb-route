@@ -9,7 +9,7 @@ tagging, versioning, ACL management, streaming upload, and Glacier restore.
 Compatible with **AWS S3** and **MinIO** (via `ForcePathStyle`).
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.S3?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.S3)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 | | |
 |---|---|

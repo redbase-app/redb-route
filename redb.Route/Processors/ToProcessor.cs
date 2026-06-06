@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 
@@ -32,15 +33,25 @@ public class ToProcessor : IProcessor
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         var producer = await GetOrCreateProducerAsync(ct).ConfigureAwait(false);
+        var stats = _endpoint as IEndpointStatistics;
+        var sw = stats is not null ? Stopwatch.StartNew() : null;
         try
         {
             await producer.Process(exchange, ct).ConfigureAwait(false);
-            (_endpoint as IEndpointStatistics)?.RecordMessageOut();
+            stats?.RecordMessageOut();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            (_endpoint as IEndpointStatistics)?.RecordError();
+            stats?.RecordError(ex);
             throw;
+        }
+        finally
+        {
+            if (sw is not null)
+            {
+                sw.Stop();
+                stats!.RecordProcessingTime(sw.Elapsed);
+            }
         }
     }
 

@@ -3,7 +3,7 @@
 File system transport for redb.Route. Polling consumer with glob filtering, read locking, and idempotency. Atomic file producer with temp-file writes, append, and conflict strategies.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.File?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.File)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

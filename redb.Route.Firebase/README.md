@@ -9,7 +9,7 @@ FCM producer with full platform support — Android priority/TTL/channel, APNS c
 Shared `IFirebaseCredentialProvider` across all three services — one credential setup, three transports.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Firebase?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Firebase)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 | | |
 |---|---|

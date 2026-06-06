@@ -3,7 +3,7 @@
 Quartz.NET scheduling transport for redb.Route. Cron-expression schedules and interval timers backed by the Quartz scheduler with thread pool management.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Quartz?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Quartz)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

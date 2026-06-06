@@ -25,6 +25,10 @@
     <ProjectReference Include="..\..\redb.Route.Mail\redb.Route.Mail.csproj" />
     <ProjectReference Include="..\..\redb.Route.Sftp\redb.Route.Sftp.csproj" />
     <ProjectReference Include="..\..\redb.Route.IbmMq\redb.Route.IbmMq.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm\redb.Route.Llm.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm.Abstractions\redb.Route.Llm.Abstractions.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm.Tools\redb.Route.Llm.Tools.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Exec\redb.Route.Exec.csproj" />
     <ProjectReference Include="..\..\redb.Route.Core\redb.Route.Core.csproj" />
     <PackageReference Include="redb.Core" Version="3.0.0" />
   </ItemGroup>

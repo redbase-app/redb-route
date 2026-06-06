@@ -3,7 +3,7 @@
 Apache Kafka transport for redb.Route. Consumer (subscribe), producer (publish), consumer groups, transactions, and full Confluent.Kafka configuration.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Kafka?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Kafka)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

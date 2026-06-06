@@ -3,7 +3,7 @@
 LDAP / Active Directory connector for redb.Route. Search, CRUD, authentication, and change tracking — all directory operations as endpoints via Novell.Directory.Ldap.NETStandard.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Ldap?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Ldap)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

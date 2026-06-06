@@ -3,7 +3,7 @@
 Bridge package connecting redb.Route ESB with [redb.Core](https://github.com/redbase-app/redb) EAV storage. Provides persistent idempotent repository backed by redb.Core and typed access to `IRedbService` from route pipelines.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Core?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Core)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

@@ -87,6 +87,17 @@ public interface IProducerTemplate
     Task<object?> RequestBody(string endpointUri, object body);
 
     /// <summary>
+    /// Sends an explicit <see cref="IMessage"/> as the request and waits for the reply body.
+    /// Headers and ContentType on the message are preserved (the message is not re-wrapped).
+    /// </summary>
+    Task<object?> RequestBody(IEndpoint endpoint, IMessage message);
+
+    /// <summary>
+    /// Sends an explicit <see cref="IMessage"/> by URI and waits for the reply body.
+    /// </summary>
+    Task<object?> RequestBody(string endpointUri, IMessage message);
+
+    /// <summary>
     /// Sends a request and returns the reply body cast to <typeparamref name="T"/>.
     /// </summary>
     /// <typeparam name="T">Expected response type.</typeparam>

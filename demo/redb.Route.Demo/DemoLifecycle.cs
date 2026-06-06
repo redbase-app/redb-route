@@ -5,6 +5,52 @@ using redb.Route.Core;
 namespace redb.Route.Demo;
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//   ProducerTemplateStarter — starts the shared ProducerTemplate after context start
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// <summary>
+/// Starts the shared <see cref="ProducerTemplate"/> once the context is up so the
+/// LLM agent engine can dispatch tool routes through it. Without this, the first
+/// tool call from <c>/api/llm/shell</c> would throw "ProducerTemplate is not started".
+/// </summary>
+internal sealed class ProducerTemplateStarter : IRouteLifecycleListener
+{
+    private readonly ProducerTemplate _template;
+    private readonly ILogger? _log;
+
+    public ProducerTemplateStarter(ProducerTemplate template, ILogger? log)
+    {
+        _template = template;
+        _log = log;
+    }
+
+    public Task OnContextStarting(IRouteContext context, CancellationToken ct) => Task.CompletedTask;
+
+    public Task OnContextStarted(IRouteContext context, CancellationToken ct)
+    {
+        if (!_template.IsStarted)
+        {
+            _template.Start();
+            _log?.LogInformation("[LLM] ProducerTemplate started (tool dispatch ready)");
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task OnContextStopping(IRouteContext context, CancellationToken ct)
+    {
+        if (_template.IsStarted) _template.Stop();
+        return Task.CompletedTask;
+    }
+
+    public Task OnContextStopped(IRouteContext context, CancellationToken ct) => Task.CompletedTask;
+    public Task OnRouteStarted(string routeId, CancellationToken ct) => Task.CompletedTask;
+    public Task OnRouteStopped(string routeId, CancellationToken ct) => Task.CompletedTask;
+    public Task OnRouteSuspending(string routeId, CancellationToken ct) => Task.CompletedTask;
+    public Task OnRouteErrored(string routeId, Exception ex, CancellationToken ct) => Task.CompletedTask;
+    public Task OnExchangeTimedOut(string routeId, string exchangeId, TimeSpan elapsed, CancellationToken ct) => Task.CompletedTask;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //   DemoLifecycleListener — logs all context & route lifecycle events
 // ═══════════════════════════════════════════════════════════════════════════════
 

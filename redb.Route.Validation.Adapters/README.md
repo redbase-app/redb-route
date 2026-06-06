@@ -3,7 +3,7 @@
 Validation adapters for [redb.Route](../../README.md): bridges **FluentValidation** and **System.ComponentModel.DataAnnotations** to the `IMessageValidator` contract used in route pipelines.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Validation.Adapters?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Validation.Adapters)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

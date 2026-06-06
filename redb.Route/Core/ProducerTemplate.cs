@@ -185,6 +185,32 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
     }
 
     /// <inheritdoc />
+    public async Task<object?> RequestBody(IEndpoint endpoint, IMessage message)
+    {
+        EnsureStarted();
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(message);
+
+        var exchange = Exchange.Create(message, _scopeFactory);
+        try
+        {
+            exchange.Pattern = ExchangePattern.InOut;
+            var producer = GetOrCreateProducer(endpoint);
+            await producer.Process(exchange).ConfigureAwait(false);
+            return exchange.Out?.Body ?? exchange.In.Body;
+        }
+        finally { await exchange.DisposeAsync().ConfigureAwait(false); }
+    }
+
+    /// <inheritdoc />
+    public async Task<object?> RequestBody(string endpointUri, IMessage message)
+    {
+        EnsureStarted();
+        var endpoint = Context.GetEndpoint(endpointUri);
+        return await RequestBody(endpoint, message).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task<T?> RequestBody<T>(IEndpoint endpoint, object body)
     {
         var result = await RequestBody(endpoint, body).ConfigureAwait(false);

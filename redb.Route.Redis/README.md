@@ -3,7 +3,7 @@
 Redis transport for redb.Route. Pub/Sub, Streams, key-value, lists, sorted sets — all Redis data structures as endpoints via StackExchange.Redis.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Redis?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Redis)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

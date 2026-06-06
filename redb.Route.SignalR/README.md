@@ -9,7 +9,7 @@ Supports JSON and MessagePack protocols, WebSocket / SSE / LongPolling transport
 InOut exchange pattern, lifecycle events, auto-reconnect, and TLS.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.SignalR?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.SignalR)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 | | |
 |---|---|

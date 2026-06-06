@@ -23,6 +23,10 @@
     <Project Path="src/redb.Route.AzureServiceBus/redb.Route.AzureServiceBus.csproj" />
     <Project Path="src/redb.Route/redb.Route.csproj" />
     <Project Path="src/redb.Route.Firebase/redb.Route.Firebase.csproj" />
+    <Project Path="src/redb.Route.Llm.Abstractions/redb.Route.Llm.Abstractions.csproj" />
+    <Project Path="src/redb.Route.Llm/redb.Route.Llm.csproj" />
+    <Project Path="src/redb.Route.Llm.Tools/redb.Route.Llm.Tools.csproj" />
+    <Project Path="src/redb.Route.Exec/redb.Route.Exec.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/redb.Route.Tests.File/redb.Route.Tests.File.csproj" />
@@ -30,7 +34,9 @@
     <Project Path="tests/redb.Route.Tests.Grpc/redb.Route.Tests.Grpc.csproj" />
     <Project Path="tests/redb.Route.Tests.Http/redb.Route.Tests.Http.csproj" />
     <Project Path="tests/redb.Route.Tests.Kafka/redb.Route.Tests.Kafka.csproj" />
+    <Project Path="tests/redb.Route.Tests.Llm/redb.Route.Tests.Llm.csproj" />
     <Project Path="tests/redb.Route.Tests.Tcp/redb.Route.Tests.Tcp.csproj" />
+    <Project Path="tests/redb.Route.Tests.Exec/redb.Route.Tests.Exec.csproj" />
     <Project Path="tests/redb.Route.Tests.WebSocket/redb.Route.Tests.WebSocket.csproj" />
     <Project Path="tests/redb.Route.Tests.Quartz/redb.Route.Tests.Quartz.csproj" />
     <Project Path="tests/redb.Route.Tests.Amqp/redb.Route.Tests.Amqp.csproj" />

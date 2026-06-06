@@ -81,14 +81,34 @@ internal sealed class DeepDslShowcaseRoutes : RouteBuilder
                             var s = (string)e.In.Body!;
                             processed.Add(s.ToUpperInvariant());
                         })
-                        .Log(LogLevel.Debug)
-                            .Message(e => $"processed item={e.In.Body}")  // dynamic
-                            .Message("after-item")                          // static
+
+                        // ── NOTICE THE DIFFERENCE ──
+                        // Both .Log(...) calls below produce equivalent output. The string
+                        // template is compiled internally into the same kind of lambda via
+                        // ExpressionResolver, but it skips formatting entirely when the log
+                        // level is disabled — zero allocation on the hot path.
+
+                        // (A) Lambda — arbitrary C# at runtime.
+                        .Log(e => $"[lambda] item={e.In.Body} branch={e.In.Headers["branch"]}")
+
+                        // (B) String template — ${body}, ${header.x}, ${property.y},
+                        //     ${exception.type|message}, ${routeId} all resolved by the engine.
+                        .Log("[tmpl]   item=${body} branch=${header.branch} [${routeId}]")
+
+                        // (C) Rich-Log scope — structured, multi-line, with headers and
+                        //     properties pulled out as separate fields. .Message() itself
+                        //     accepts BOTH a string template AND a lambda — both are live.
+                        .Log(LogLevel.Information)
+                            .Message("[rich-tmpl]   item=${body}")                       // string template
+                            .Message(e => $"[rich-lambda] upper={((string)e.In.Body!).ToUpperInvariant()}") // lambda
+                            .Header("branch")                                            // pulls header.branch
+                            .Property("item-index")                                      // pulls property.item-index (if set)
+                            .ShowRouteId(true)
                         .EndLog()
                     .EndSplit()  // returns IRouteDefinition, but we are still logically inside the When
 
                     // Sibling-aware: .Log(...) here lives on the When body, not on the Split.
-                    .Log(LogLevel.Information).Message("list branch done").EndLog()
+                    .Log("list branch done [${routeId}]")
 
                 // Branch 2: a non-empty string. Notice that .When() works after .EndSplit()
                 // even though the static type is IRouteDefinition — the extension method
@@ -126,11 +146,21 @@ internal sealed class DeepDslShowcaseRoutes : RouteBuilder
                         // The protected body — always throws for the demo.
                         .Process(e => throw new InvalidOperationException("boom"))
                     .DoCatch<InvalidOperationException>()
-                        // Rich log inside the catch handler. e.Exception is the canonical
-                        // IExchange API — guaranteed to be set by the engine when entering
-                        // the catch block.
+                        // ── NOTICE THE DIFFERENCE ──
+                        // Both lines log the caught exception. The string-template form is
+                        // compiled to a similar lambda internally, but stays readable in DSL.
+
+                        // (A) Lambda — explicit access to exchange.Exception.
+                        .Log(e => $"[lambda] caught: {e.Exception?.GetType().Name}")
+
+                        // (B) String template — ${exception.type|message} resolve exchange.Exception.
+                        .Log("[tmpl]   caught: ${exception.type} — ${exception.message} [${routeId}]")
+
+                        // (C) Rich-Log scope — both .Message(string) and .Message(lambda)
+                        //     execute; ${exception.*} placeholders work inside the template.
                         .Log(LogLevel.Warning)
-                            .Message(e => $"caught: {e.Exception?.GetType().Name}")
+                            .Message("[rich-tmpl]   ${exception.type}: ${exception.message}")     // template
+                            .Message(e => $"[rich-lambda] stack-top={e.Exception?.StackTrace?.Split('\n').FirstOrDefault()?.Trim()}") // lambda
                             .ShowRouteId(true)
                         .EndLog()
                         .Process(e => e.In.Headers["caught"] = true)
@@ -157,9 +187,7 @@ internal sealed class DeepDslShowcaseRoutes : RouteBuilder
                 .When(e => true)
                     .Split(e => new object?[] { 1, 2, 3 })
                         .Process(e => { /* per-item work */ })
-                        .Log(LogLevel.Debug)
-                            .Message(e => $"item={e.In.Body}")
-                        .EndLog()
+                        .Log("item=${body}")
                     // .EndChoice() walks the parent chain past Split and When
                     // and lands at the route root — equivalent to the explicit
                     // .EndSplit().EndChoice() chain.
@@ -167,7 +195,7 @@ internal sealed class DeepDslShowcaseRoutes : RouteBuilder
 
             // Back at the route root. Subsequent steps land here.
             .SetHeader("post-cascade", "ok")
-            .Log(LogLevel.Information).Message("cascade demo done").EndLog();
+            .Log("cascade demo done");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

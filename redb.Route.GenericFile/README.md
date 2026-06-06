@@ -4,7 +4,7 @@ Shared base library for file-based transports in the [redb.Route](../../README.m
 Provides abstract consumer, producer, options, and file-operations interfaces that concrete transports (**File**, **FTP**, **SFTP**) inherit from. Not used directly — include one of the transport-specific packages instead.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.GenericFile?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.GenericFile)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Architecture
 

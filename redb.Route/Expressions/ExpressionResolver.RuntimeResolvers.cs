@@ -65,6 +65,16 @@ public static partial class ExpressionResolver
         }
         else
         {
+            // Pluggable prefix resolvers (e.g. conversation., tool.) take precedence
+            // over the default property fallback so that custom roots aren't masked
+            // by a coincidentally-matching exchange property.
+            var (handled, value) = TryResolveByPrefix(exchange, propertyName);
+            if (handled)
+            {
+                DebugLog($"Resolved via prefix resolver: '{propertyName}' -> {value}");
+                return value;
+            }
+
             DebugLog($"Getting default property: '{propertyName}'");
             return exchange.getProperty<object>(propertyName);
         }

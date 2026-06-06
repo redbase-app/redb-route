@@ -23,7 +23,7 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 
 ## Highlights
 
-- **22 external transports + 5 built-in components** (Direct, SEDA, Timer, Mock, Log).
+- **24 external transports + 5 built-in components** (Direct, SEDA, Timer, Mock, Log). The 24th — `llm:` — is a first-class LLM connector with a universal OpenAI-compatible provider (14 APIs) and a native Anthropic Messages API provider, plus `.AsLlmTool()` to expose any of the other 23 transports as an LLM-callable tool with zero connector changes.
 - **30+ EIP patterns** — Splitter, Aggregator, CBR, WireTap, Saga, Circuit Breaker, Idempotent Consumer, Claim Check, Throttle, Resequencer, Scatter-Gather, and more.
 - **Compiled expression engine** — `${header.x}`, `${header.x++}`, arithmetic, JSONPath, XPath compile to `Func<IExchange, T>` via `System.Linq.Expressions`. No interpreter overhead.
 - **Type-safe fluent builders** — `Kafka.Topic("orders").GroupId("svc").Acks("All")` instead of URI strings.
@@ -141,7 +141,7 @@ builder.Services.AddRedbRoute(route => route.AddRouteBuilder<OrderRoutes>());
 
 Four things you do not get together in any other .NET integration framework:
 
-- **22 transports out of the box.** Kafka, RabbitMQ, Redis, SQL, HTTP, gRPC, SFTP, MQTT, S3, IBM MQ, AMQP 1.0, Azure Service Bus, Elasticsearch, Firebase, LDAP, Mail, TCP, WebSocket, SignalR, FTP, Quartz, File. MassTransit ships 5, Wolverine 4, NServiceBus 7. The competitors expect you to use only message brokers; redb.Route treats files, mailboxes, FTP servers and SQL polling as first-class transports.
+- **24 transports out of the box, including a full LLM connector.** Kafka, RabbitMQ, Redis, SQL, HTTP, gRPC, SFTP, MQTT, S3, IBM MQ, AMQP 1.0, Azure Service Bus, Elasticsearch, Firebase, LDAP, Mail, TCP, WebSocket, SignalR, FTP, Quartz, File, **Exec** (local-process execution), and **`llm:`** (OpenAI-compatible universal provider for 14 vendors + native Anthropic Messages API) — **plus `.AsLlmTool()` that turns any of the other 23 transports into an LLM tool with zero connector changes**. MassTransit ships 5, Wolverine 4, NServiceBus 7. The competitors expect you to use only message brokers; redb.Route treats files, mailboxes, FTP servers, SQL polling, local processes and LLM endpoints as first-class transports — and any of them can become an LLM-callable tool.
 - **Compiled expression engine.** `${header.x}`, `${header.x++}`, arithmetic, JSONPath, XPath are translated to `Func<IExchange, T>` via `System.Linq.Expressions` at route-build time. No interpreter, no per-message parsing, results cached per route. Apache Camel's Simple Language is interpreted; MassTransit / Wolverine / NServiceBus have no expression engine at all.
 - **30+ EIP patterns as first-class DSL.** Filter, Choice, Splitter, Aggregator, Multicast, WireTap, Recipient List, Dynamic Router, Resequencer, Scatter-Gather, Claim Check, Idempotent Consumer, Saga, Circuit Breaker, Throttle, Retry, Dead Letter, Loop, Delay, Debounce, Enrich, Timeout, TryCatch, Transacted, Process, Validate. The .NET competitors give you Saga + Request/Response + Outbox; everything else you write yourself.
 - **Apache 2.0 licensed, no per-endpoint pricing.** NServiceBus is commercial after 2 endpoints. redb.Route is unrestricted for any use, any scale.
@@ -313,7 +313,7 @@ builder.Services.Configure<RouteEngineOptions>(o =>
 | Platform | JVM | .NET | .NET | .NET | **.NET 8/9/10** |
 | License | Apache 2.0 | Apache 2.0 | **Commercial** | MIT | **Apache 2.0** |
 | Focus | EIP routing | Pub/sub + message bus | Message bus | Mediator + message bus | **Enterprise Service Bus (.NET)** |
-| Transports | 300+ | 5 | 7 | 4 | **22 + 5 built-in** |
+| Transports | 300+ | 5 | 7 | 4 | **23 + 5 built-in + LLM** |
 | EIP patterns | 80+ | Saga, R/R, Outbox | Saga, R/R | Saga, R/R, Outbox | **30+** |
 | Expression engine | Simple Language (interpreted) | None | None | None | **Compiled (Linq.Expressions)** |
 | Configuration | XML or Java DSL | C# fluent | C# fluent | C# fluent | **C# fluent only** |
@@ -335,7 +335,7 @@ If you know Camel, you know redb.Route — same EIP patterns, same `from → pro
 | Message object | `Exchange` + `Message` | `IExchange` + `IMessage` |
 | Expression language | Simple Language (interpreted) | StringExpression (compiled) |
 | EIP patterns | 80+ | 30+ (Filter, Choice, Splitter, Aggregator, Multicast, WireTap, Recipient List, Dynamic Router, Resequencer, Scatter-Gather, Claim Check, Idempotent Consumer, Saga, Circuit Breaker, Throttle, Retry, Dead Letter, Loop, Delay, Debounce, Enrich, Timeout, TryCatch, Transacted, …) |
-| Components | 300+ | 22 transports + 5 built-in |
+| Components | 300+ | 24 transports + 5 built-in |
 | Configuration | XML DSL or Java DSL | C# fluent DSL only |
 | Runtime / orchestration | Camel K / JBoss Fuse | [redb.Tsak](#running-routes-in-production--redbtsak) |
 | Platform | JVM | .NET 8 / 9 / 10 |
@@ -379,7 +379,7 @@ A 200-line Camel `RouteBuilder.configure()` typically becomes a 200-line C# `Rou
 
 | Aspect | MassTransit | redb.Route |
 |--------|-------------|------------|
-| Focus | Reliable message bus + Saga | Enterprise Service Bus — 22 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
+| Focus | Reliable message bus + Saga | Enterprise Service Bus — 24 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
 | Routing model | Consumer classes | Route pipelines (`From → Process → To`) |
 | EIP patterns | Saga, Request/Response, Outbox | 30+ EIP patterns |
 | Transports | 5 (RabbitMQ, Kafka, SQS, Azure SB, gRPC) | 22 (+ File, SFTP, SQL, MQTT, TCP, HTTP, FTP, LDAP, IBM MQ, S3, …) |
@@ -390,13 +390,13 @@ A 200-line Camel `RouteBuilder.configure()` typically becomes a 200-line C# `Rou
 | Transactional routes | No | Yes — `.Transacted()` via `TransactionScope` |
 | License | Apache 2.0 | Apache 2.0 |
 
-Use MassTransit for **state-machine sagas with DB persistence** and a built-in transactional outbox table per consumer. Use redb.Route for enterprise integration end-to-end: 30+ EIP patterns, 22 transports, transactional pipelines (`ITransactedAction`), protocol bridging, file processing, and multi-transport pipelines — reliability primitives (publisher confirms, EOS, persistent dedup, polling outbox) composed from DSL building blocks.
+Use MassTransit for **state-machine sagas with DB persistence** and a built-in transactional outbox table per consumer. Use redb.Route for enterprise integration end-to-end: 30+ EIP patterns, 24 transports, transactional pipelines (`ITransactedAction`), protocol bridging, file processing, and multi-transport pipelines — reliability primitives (publisher confirms, EOS, persistent dedup, polling outbox) composed from DSL building blocks.
 
 ### vs NServiceBus
 
 | Aspect | NServiceBus | redb.Route |
 |--------|-------------|------------|
-| Focus | Message bus (reliable delivery + Saga) | Enterprise Service Bus — 22 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
+| Focus | Message bus (reliable delivery + Saga) | Enterprise Service Bus — 24 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
 | Routing model | Message handler classes | Route pipelines |
 | EIP patterns | Saga (persistent), Request/Response | 30+ EIP patterns |
 | Transports | 7 (RabbitMQ, Kafka, SQS, Azure SB, SQL, MSMQ, Learning) | 22 (+ File, SFTP, MQTT, TCP, HTTP, gRPC, FTP, LDAP, IBM MQ, S3, …) |
@@ -405,13 +405,13 @@ Use MassTransit for **state-machine sagas with DB persistence** and a built-in t
 | Monitoring | ServicePulse / ServiceInsight (commercial) | OpenTelemetry + redb.Tsak Web UI |
 | License | **Commercial** (free up to 2 endpoints/app) | Apache 2.0 |
 
-NServiceBus is mature and focused on guaranteed delivery and durable saga. redb.Route is Apache-2.0–licensed and covers enterprise integration end-to-end: 30+ EIP patterns, 22 transports, transactional pipelines (`ITransactedAction`), and a full runtime (redb.Tsak) with clustering, hot-reload, and OTel.
+NServiceBus is mature and focused on guaranteed delivery and durable saga. redb.Route is Apache-2.0–licensed and covers enterprise integration end-to-end: 30+ EIP patterns, 24 transports, transactional pipelines (`ITransactedAction`), and a full runtime (redb.Tsak) with clustering, hot-reload, and OTel.
 
 ### vs Wolverine
 
 | Aspect | Wolverine | redb.Route |
 |--------|-----------|------------|
-| Focus | Mediator + message bus + Saga | Enterprise Service Bus — 22 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
+| Focus | Mediator + message bus + Saga | Enterprise Service Bus — 24 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
 | Routing model | Handler discovery + middleware | Route pipelines (`From → Process → To`) |
 | EIP patterns | Saga, Outbox, Request/Response | 30+ EIP patterns |
 | Transports | 4 (RabbitMQ, Kafka, Azure SB, SQS) | 22 (+ File, SFTP, SQL, MQTT, HTTP, gRPC, FTP, LDAP, IBM MQ, S3, …) |
@@ -420,7 +420,7 @@ NServiceBus is mature and focused on guaranteed delivery and durable saga. redb.
 | Transactional routes | Outbox-based | `.Transacted()` via `TransactionScope` |
 | License | MIT | Apache 2.0 |
 
-Wolverine is excellent at handler-style messaging with Marten-backed sagas. redb.Route covers enterprise integration end-to-end: 30+ EIP patterns, 22 transports, in-process mediator (`RedbController`), pub/sub (SEDA), transactional pipelines, and a full production runtime (redb.Tsak).
+Wolverine is excellent at handler-style messaging with Marten-backed sagas. redb.Route covers enterprise integration end-to-end: 30+ EIP patterns, 24 transports, in-process mediator (`RedbController`), pub/sub (SEDA), transactional pipelines, and a full production runtime (redb.Tsak).
 
 ---
 
@@ -1249,12 +1249,13 @@ flowchart TB
         Tx[TransactionScope]
     end
 
-    subgraph Transports["redb.Route.* — 22 transports"]
+    subgraph Transports["redb.Route.* — 24 transports"]
         Msg["Messaging\nKafka · RabbitMQ · Redis · AzureSB · IbmMq · Amqp"]
         Data["Data stores\nSql · Elasticsearch · Firebase · S3 · Ldap"]
         Net["Network\nHttp · Grpc · WebSocket · SignalR · Tcp"]
         Files["Files\nFile · Ftp · Sftp"]
         Proto["Protocols / Schedule\nMail · MqttNet · Quartz"]
+        AI["AI / Process\nLlm · Exec"]
         Sup["Support\nControllers · GenericFile · Validation.Adapters"]
     end
 
@@ -1287,6 +1288,8 @@ flowchart TB
 | `Mail` | `MailKit` | SMTP, IMAP, POP3, IDLE push |
 | `MqttNet` | `MQTTnet` | MQTT 5.0, shared subscriptions, QoS |
 | `Quartz` | `Quartz.NET` | Cron schedules, interval timers, persistent jobs |
+| `Exec` | `System.Diagnostics.Process` | Local-process execution; allowlist, working-directory pin, timeout, output caps |
+| `Llm` | `HttpClient` (OpenAI-compat + Anthropic Messages) | LLM connector with universal OpenAI-compat provider (14 vendors) and native Anthropic provider; tool-loop agent engine |
 
 ### Saga rollback flow
 
@@ -1368,6 +1371,8 @@ Quick reference for `IRouteDefinition` methods. All of them return `IRouteDefini
 | `tcp:` | redb.Route.Tcp | `Tcp.Listen("host:port")` / `Tcp.Connect("host:port")` |
 | `websocket:` | redb.Route.WebSocket | `Ws.Listen("host:port/path")` / `Ws.Connect("host:port/path")` |
 | `cron:` / `qtimer:` | redb.Route.Quartz | `Cron.Schedule("name", "expr")` / `QTimer.Every("name")` |
+| `exec:` | redb.Route.Exec | `ExecDsl.Run()` (producer) / `ExecDsl.Schedule(...)` (scheduled consumer) |
+| `llm:` | redb.Route.Llm | `Llm.Factory("haiku")` / `Llm.Factory("openai")` / `Llm.Factory("groq")` / … |
 | `asb:` | redb.Route.AzureServiceBus | `Asb.Queue("name")` / `Asb.Topic("name", "sub")` |
 | `es:` | redb.Route.Elasticsearch | `Es.Index("name")` |
 | `fstore:` / `fbstorage:` / `fcm:` | redb.Route.Firebase | `Firestore.Collection("name")` / `FbStorage.Bucket("b")` / `Fcm.Send()` |
@@ -1417,6 +1422,8 @@ What each transport can do as a source (`From`) and as a sink (`To`), and which 
 | Mail | ✅ (IMAP/POP3) | ✅ (SMTP) | — | — | — | IDLE push for IMAP |
 | MqttNet | ✅ | ✅ | — | — | ✅ | MQTT 5.0, shared subscriptions |
 | Quartz | ✅ | — | — | — | — | Cron / interval triggers |
+| Exec | ✅ (scheduled) | ✅ | ✅ | — | — | Local processes; `AllowedCommands` allowlist, `WorkingDirectory` pin, `TimeoutMs`, byte caps; primary use as `.AsLlmTool("shell")` |
+| Llm | — | ✅ | ✅ | — | ✅ | LLM connector — universal OpenAI-compat (14 vendors) + native Anthropic Messages API; tool-loop agent engine; persistent conversation/approval/budget/idempotency stores via `AddRedbLlmStorage()` |
 
 Legend: ✅ supported · — not applicable.
 
@@ -1453,10 +1460,14 @@ For transports that support transactions, combine with `.Transacted()` to wrap p
 | `redb.Route.Ldap` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Ldap?label=)](https://www.nuget.org/packages/redb.Route.Ldap) | LDAP / Active Directory — search, CRUD, auth |
 | `redb.Route.S3` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.S3?label=)](https://www.nuget.org/packages/redb.Route.S3) | AWS S3 / MinIO — upload, download, multipart |
 | `redb.Route.SignalR` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.SignalR?label=)](https://www.nuget.org/packages/redb.Route.SignalR) | SignalR — Hub server and client/broadcast producer |
+| `redb.Route.Llm` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Llm?label=)](https://www.nuget.org/packages/redb.Route.Llm) | LLM connector — `llm:` URI, fluent DSL, agent loop, universal OpenAI-compatible provider (14 APIs), native Anthropic Messages API provider, `AddRedbLlmStorage()` (5 stores / 9 schemas) |
+| `redb.Route.Llm.Abstractions` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Llm.Abstractions?label=)](https://www.nuget.org/packages/redb.Route.Llm.Abstractions) | LLM tool-capability contracts — `ILlmToolDescriptor`, `LlmToolCapability`, `RouteToolBridge`, `[ExposeAsLlmTool]`, `.AsLlmTool()` DSL aspect |
+| `redb.Route.Llm.Tools` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Llm.Tools?label=)](https://www.nuget.org/packages/redb.Route.Llm.Tools) | Utility LLM tools — HttpFetch, JsonPath, XPath, MathEval, RegexExtract, Tavily web search |
+| `redb.Route.Exec` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Exec?label=)](https://www.nuget.org/packages/redb.Route.Exec) | Local-process execution — `exec://run` producer + scheduled consumer, allowlist, working-directory pin, timeout, output caps |
 | `redb.Route.Controllers` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Controllers?label=)](https://www.nuget.org/packages/redb.Route.Controllers) | Controller dispatch — attribute routing, DI, InOut |
 | `redb.Route.Validation.Adapters` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Validation.Adapters?label=)](https://www.nuget.org/packages/redb.Route.Validation.Adapters) | Validation adapters — FluentValidation + DataAnnotations |
 
-27 packages total: core engine + 22 transports + 5 support libraries.
+31 packages total: core engine + 24 transports (incl. `llm:`) + 2 LLM support libraries (Abstractions, Tools) + 4 support libraries (Core, Controllers, GenericFile, Validation.Adapters).
 
 ---
 

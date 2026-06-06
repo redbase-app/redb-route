@@ -4,7 +4,7 @@ Azure Service Bus connector for the [redb.Route](../../README.md) ESB framework.
 Provides a full-featured **producer** (single & batch), **consumer** (PeekLock / ReceiveAndDelete), **session consumer** (FIFO per session), and **transacted acknowledgement**. Uses the `asb` URI scheme.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.AzureServiceBus?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.AzureServiceBus)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Quick Start
 

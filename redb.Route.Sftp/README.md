@@ -3,7 +3,7 @@
 SFTP transport for redb.Route. Polling consumer and atomic producer via SSH.NET — key/password auth, proxy, idempotency, glob filtering, temp-file upload, chmod, and recursive directory traversal.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Sftp?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Sftp)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

@@ -4,8 +4,8 @@
     <Description>LDAP/Active Directory transport for redb.Route ESB framework. Provides Search, Add, Modify, Delete, Compare, Bind operations and directory change polling consumer.</Description>
     <PackageTags>esb;messaging;ldap;activedirectory;ad;directory;redb</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Version>3.0.1</Version>
-    <PackageVersion>3.0.1</PackageVersion>
+    <Version>3.1.0</Version>
+    <PackageVersion>3.1.0</PackageVersion>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="redb.Route.Tests.Ldap" />

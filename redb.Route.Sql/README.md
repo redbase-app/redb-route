@@ -3,7 +3,7 @@
 SQL database transport for redb.Route. Pure ADO.NET polling consumer, query/batch producer, and stored procedure support. Provider-agnostic — works with PostgreSQL, SQL Server, SQLite, MySQL, and any `DbConnection`.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Sql?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Sql)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

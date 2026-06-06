@@ -11,6 +11,7 @@ This changelog covers the **NuGet-published packages**:
 | `redb.Route.Controllers` | Transport-agnostic controller dispatch |
 | `redb.Route.Core` | Bridge to redb.Core EAV storage |
 | `redb.Route.Elasticsearch` | Elasticsearch 8.x transport |
+| `redb.Route.Exec` | Local process execution transport (`exec:` scheme) |
 | `redb.Route.File` | File system transport |
 | `redb.Route.Firebase` | Firebase (Firestore, Cloud Storage, FCM) transport |
 | `redb.Route.Ftp` | FTP/FTPS transport |
@@ -20,6 +21,9 @@ This changelog covers the **NuGet-published packages**:
 | `redb.Route.IbmMq` | IBM MQ transport |
 | `redb.Route.Kafka` | Apache Kafka transport |
 | `redb.Route.Ldap` | LDAP / Active Directory transport |
+| `redb.Route.Llm` | LLM transport — universal OpenAI-compatible provider + native AnthropicProvider |
+| `redb.Route.Llm.Abstractions` | LLM tool-capability contracts (`ILlmToolDescriptor`, `LlmToolCapability`, `.AsLlmTool()` DSL) |
+| `redb.Route.Llm.Tools` | Utility LLM tools — HttpFetch / JsonPath / XPath / MathEval / RegexExtract / Tavily web search |
 | `redb.Route.Mail` | Email transport (SMTP, IMAP, POP3) |
 | `redb.Route.MqttNet` | MQTT 5.0 transport |
 | `redb.Route.Quartz` | Quartz.NET scheduling transport |
@@ -39,6 +43,221 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Note on version history:** redb.Route has been running in production since version 1.0.0.
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
+
+## [3.1.0]
+
+> **Why a minor bump (3.0.x → 3.1.0).** This release ships **four new
+> NuGet packages** (`redb.Route.Llm`, `redb.Route.Llm.Abstractions`,
+> `redb.Route.Llm.Tools`, `redb.Route.Exec`), **one new URI scheme**
+> (`exec:`), a **second LLM provider** (native `AnthropicProvider`), and
+> a **new persistence extension** (`AddRedbLlmStorage`) that brings five
+> stores and nine REDB schemas. All additions are backwards-compatible —
+> no public API on existing packages was removed or renamed — but the
+> surface area added is too large to bury under a patch bump.
+
+### Added
+
+#### `redb.Route.Llm` — first public release
+
+The Camel-style LLM connector becomes a published package. `From("…")`/
+`To("llm://…")`, fluent builder (`Llm.Factory("haiku") …`), Camel-style
+agent loop with tool dispatch, headers/URI options for system prompt,
+conversation id, max tokens, temperature, max iterations, etc. See
+`redb.Route.Llm/README.md` and `doc/USER-GUIDE.md` for the full surface.
+
+- **`OpenAiProvider`** — one provider class covering **14 OpenAI-compatible
+  APIs** through `LlmConnectionFactory.Build()` aliases:
+  `openai`, `anthropic` (OpenAI-compat endpoint), `groq`, `cerebras`,
+  `openrouter`, `gemini` (OpenAI-compat endpoint), `github-models`,
+  `mistral`, `together`, `huggingface`, `deepseek`, `ollama`, `lmstudio`,
+  plus `custom` for any self-hosted gateway. The provider id only switches
+  the default base URL and a couple of provider-specific headers (e.g.
+  OpenRouter's `HTTP-Referer` + `X-Title`).
+- **`AnthropicProvider`** — *native* Messages API transport
+  (`POST /v1/messages`), separate from the OpenAI-compat path. Maps
+  `LlmRequest` to Anthropic's `messages` / `tools` / `tool_use` /
+  `tool_result` content-block model and reassembles `LlmResponse` from
+  the standard envelope. **Streaming is true SSE** —
+  `content_block_start` / `content_block_delta` / `content_block_stop`
+  events are reassembled per block; tool-use blocks accumulate
+  `input_json_delta` partial JSON and surface as a single complete
+  `LlmToolUseBlock` at end-of-block. **Error mapping**: HTTP 429 →
+  `LlmRateLimitException` (honours `retry-after`); HTTP 529
+  ("overloaded") and 5xx → `LlmTransientException`. JSON serialisation
+  uses `JavaScriptEncoder.UnsafeRelaxedJsonEscaping` so Cyrillic /
+  emoji / `&`/`>`/`<` are emitted as UTF-8, not `\uXXXX` — fixes
+  unicode-escaped tool input in `[*-TOOL] ▶ in=…` route logs.
+- **Reasoning-model fallback** in `OpenAiProvider`: when the response
+  `message.content` is empty, the provider falls back to
+  `message.reasoning` so models like Cerebras `gpt-oss-120b` or
+  `zai-glm-4.7` still surface a textual answer through `LlmResponse`.
+- **`AddRedbLlmStorage()`** extension on `IServiceCollection` — wires
+  the LLM connector to a named REDB instance through the Tsak registry
+  key `"redb-factory:{name}"`. Ships **five stores** backed by
+  `IServiceScopeFactory` per named instance:
+  - `IConversationStore` — `RedbConversationStore`: persistent multi-turn
+    memory across runs and processes; `AgentEngine.LoadPathAsync`
+    resumes a transcript by id.
+  - `IApprovalStore` — `RedbApprovalStore`: `IApprovalGate` decisions
+    survive restarts, supports human-in-the-loop tools.
+  - `ICostBudgetStore` — `RedbCostBudgetStore`: per-tenant spend
+    tracking, drives `IBudgetEnforcer` hard cut-offs.
+  - `IToolIdempotencyStore` — `RedbToolIdempotencyStore`: dedup of
+    expensive tool calls across retries.
+  - `IAgentObserver` — `RedbAgentObserver`: full audit of every
+    iteration / tool invocation / approval into the store.
+  - **Nine REDB schemas** (`[RedbScheme]` POCOs):
+    `Conversation`, `Message`, `Approval`, `CostBudget`, `ToolCache`,
+    `ToolAudit`, `KnowledgeChunk`, `PromptTemplate`, `EvalRun`. See
+    `redb.Route.Llm/doc/STORAGE.md` for the recipe catalogue
+    (multi-turn chat, approval gates, hard budget, idempotent retries,
+    audit, branching, scheduled agents).
+- **`#`-registry prompts** — `LlmConnectionFactory` resolves system
+  prompts from a registry by `#name` so prompt text lives in the host's
+  Tsak config layer, not inline in route code.
+- **Live integration test infrastructure** under
+  `tests/redb.Route.Tests.Llm`:
+  - `LiveProviderTests` — 5 scenarios (Smoke / NonAscii / ToolUse /
+    Usage / StopReason) × free-tier providers (GitHub Models, Groq,
+    Cerebras, OpenRouter, Gemini, Mistral, native Anthropic). Live
+    end-to-end coverage with auto-skip when API keys are absent.
+  - `LiveEndToEndTests` — exercises the full
+    `LlmComponent → LlmEndpoint → LlmProducer → AgentEngine`
+    path against a real provider, including a tool-loop driving
+    `IToolRegistry`.
+  - `LiveDslRouteTests` — Apache Camel-style end-to-end routes:
+    `From("direct://...") → Process → To(Llm.Factory(...)) → Process →
+    To("mock://...")`, a two-LLM judge chain, and cross-context RPC
+    over `direct-vm://llm-service` using a shared `SharedVmRegistry`.
+  - `ExecShellToolTests` — agent + `exec:` shell tool against live
+    Anthropic / OpenAI-compat providers.
+  - `UtilityToolTests` — agent + `redb.Route.Llm.Tools` (HttpFetch /
+    JsonPath / XPath / MathEval / RegexExtract / Tavily) against live
+    providers.
+- **`[EnvFact("VAR")]`** xUnit attribute — auto-skips a fact when the
+  named environment variable is missing, so contributors without API
+  keys keep a green build while CI with the right secrets runs the full
+  live matrix.
+- **`[Collection("LiveLlmSerial")]`** — shared collection across all
+  live LLM tests so xUnit parallelism does not multiply free-tier rate
+  limits.
+
+#### `redb.Route.Llm.Abstractions` — first public release
+
+A small, dependency-light contract package. Exists separately from
+`redb.Route.Llm` so any of the **23 transports can expose itself as an
+LLM tool** by implementing `.AsLlmTool(name)` on the `From(uri)` route —
+**zero connector version bumps**, zero transitive dependency on the LLM
+provider implementation.
+
+- **`ILlmToolDescriptor`** — descriptor contract: capability metadata +
+  endpoint URI the agent dispatches to.
+- **`LlmToolCapability`** — `Name`, `Description`, `InputSchema`
+  (JSON Schema string), `LlmToolSafety` (`SideEffect`,
+  `Caching`, `Cost`, `RequiresApproval`, `RequiredClaims`).
+- **`IToolDescriptorRegistry`** — global registry; populated by
+  `.AsLlmTool(...)` at route-build time, queried by `AgentEngine` at
+  dispatch time.
+- **`RouteToolBridge`** — bridges any `From(uri)` endpoint into the
+  LLM tool surface. Forwards the model's JSON input through the host's
+  producer template, inheriting the parent agent route's transaction
+  scope, headers, principal and DI scope.
+- **`[ExposeAsLlmTool]`** attribute — alternative to the fluent DSL:
+  decorate a handler class and the bootstrapper turns it into a
+  registered descriptor.
+- **`.AsLlmTool(name)` DSL aspect** in `LlmToolDsl` — Apache-Camel-style
+  metadata aspect placed immediately after `.From(uri)`. Closes with
+  `.End()` or `.Then()`. Example:
+  ```csharp
+  From("direct:order-lookup")
+      .AsLlmTool("get_order")
+          .Description("Returns order details by id.")
+          .Input("""{"type":"object","properties":{"orderId":{"type":"string"}},"required":["orderId"]}""")
+          .SideEffect(ToolSideEffect.ReadOnly)
+          .Cost(ToolCostClass.Cheap)
+      .Then()
+      .Bean<IOrderService>((svc, ex) => svc.HandleAsync(ex));
+  ```
+  Works with **any** transport: `Direct`, `Http`, `Grpc`, `Sql`,
+  `Sftp`, `File`, `Redis`, `Exec`, etc. for request-response tools;
+  `Kafka`, `MQTT`, `Mail`, `SignalR` for fire-and-forget action tools.
+
+#### `redb.Route.Llm.Tools` — first public release
+
+Six ready-to-use utility tools that live as ordinary `RouteBuilder`
+classes registered by `.AsLlmTool(...)`, so they participate in the
+same transaction scope, telemetry, error handling and DI as any other
+route. All optional — depend only on what the agent needs.
+
+| Tool | Purpose |
+|------|---------|
+| `HttpFetchTool` | `GET <url>` with size cap and host allowlist; returns body + status + headers. Built on `redb.Route.Http`. |
+| `JsonPathTool` | Evaluate a JSONPath expression against a JSON document. Built on the core compiled-`JPath` engine. |
+| `XPathTool` | Evaluate an XPath expression against an XML document. Built on the core compiled-`XPath` engine. |
+| `MathEvalTool` | Safe arithmetic evaluator (integers / decimals / `+ - * / % ^`, parentheses, common functions). |
+| `RegexExtractTool` | Apply a regex to a string; return all matches and named groups. |
+| `TavilyWebSearchTool` | Tavily Search API (`https://api.tavily.com/search`); returns top-N results with snippets. API key via `TAVILY_API_KEY`. |
+
+#### `redb.Route.Exec` — first public release
+
+Local-process execution transport. New URI scheme `exec:` with two
+operations: `exec://run` (one-shot producer) and a scheduled consumer
+that runs commands on a `cron:` / `qtimer:` trigger.
+
+- **`AllowedCommands(params string[])`** — explicit allowlist. Every
+  invocation whose command is not on the list is rejected before a
+  process starts; this is the security envelope for LLM-driven shells.
+- **`WorkingDirectory(string)`** — pinned CWD; relative paths in tool
+  arguments resolve there, files written in one call survive to the
+  next. Without this, processes inherit the worker's CWD (e.g. the
+  source tree under `dotnet run`).
+- **`TimeoutMs`** — hard kill on timeout.
+- **`MaxStdoutBytes` / `MaxStderrBytes`** — cap captured output.
+- **Output headers** — `redbExec.ExitCode`, `redbExec.StdoutBytes`,
+  `redbExec.StderrBytes`, plus `redbExec.TimedOut`.
+- **`exec:` request schema** — `{"command":"<name>","args":["..."]}`;
+  `redbExec` headers, `stdout`, `stderr`, `exitCode` returned. Designed
+  to drop straight into `.AsLlmTool("shell")` for an LLM-driven shell;
+  the demo `redb.Route.Demo` HTTP showcase wires it into a Claude
+  agent. See `redb.Route.Exec/README.md`.
+
+#### Demo — `redb.Route.Demo` HTTP LLM showcase
+
+Two endpoints in `LlmHttpRoutes` modelled as the simplest possible
+Camel-readable round-trip:
+
+- `POST /api/llm/ask` — body is the user prompt, six-step route asks
+  Claude Haiku, logs token usage + stop reason, returns the model's
+  reply as plain text. Conversation memory via `X-Chat-Id` header.
+- `POST /api/llm/shell` — same shape but the agent has a `shell` tool
+  wired through `ExecComponent` with a pinned scratch directory under
+  `Path.GetTempPath()/redb-llm-shell/`, allowlist `{cmd, pwsh,
+  powershell}` on Windows / `{sh, bash}` on Linux, 5 s timeout,
+  8 KiB stdout/stderr caps.
+
+### Fixed
+
+- **`OpenAiProvider.BuildRequestBody`** — `LlmToolResultBlock` now always
+  emits `role: "tool"` regardless of the original `LlmMessage.Role` of
+  the block it lives on. Previously, when `AgentEngine` produced an
+  Anthropic-style `role: "user"` message that carried a tool-result
+  block, strict OpenAI-compatible gateways (Groq) rejected the request
+  with `400 messages.X : for role:user content not nullable`. The
+  provider now partitions blocks per message and emits a separate
+  `role: tool` entry per tool-result block.
+- **`AnthropicProvider.JsonOpts`** — switched `Encoder` to
+  `JavaScriptEncoder.UnsafeRelaxedJsonEscaping`. Without it,
+  `block["input"]?.ToJsonString(JsonOpts)` (response-parse path,
+  surfaced as `LlmToolUseBlock.InputJson`) escaped Cyrillic / emoji
+  / `&`/`>`/`<` to `\uXXXX` and made tool-input route logs
+  unreadable. Matches `JsonMessageSerializer.DefaultOptions` — safe
+  for HTTP API responses; only unsafe inside HTML / inline JS, which
+  this code path never produces.
+- **`AgentEngine`** — now invokes `IConversationStore.LoadPathAsync`
+  when a `ConversationId` is present on the request. The persisted
+  transcript was being written but not read back, so resumed runs
+  saw an empty history. With the fix, multi-turn chat works end-to-end
+  via `RedbConversationStore` (`AddRedbLlmStorage()`).
 
 ## [3.0.1] — 2026-06-03
 

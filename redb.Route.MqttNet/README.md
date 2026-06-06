@@ -3,7 +3,7 @@
 MQTT 5.0 transport for redb.Route via MQTTnet. Subscribe consumer, publish producer, shared subscriptions, QoS levels, retained messages, and TLS.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.MqttNet?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.MqttNet)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

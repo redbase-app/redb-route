@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <!-- CS1591 NOT suppressed — every public member MUST have XML doc -->
+    <!-- CS1591 NOT suppressed вЂ” every public member MUST have XML doc -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
   <!-- Package metadata -->
@@ -13,11 +13,11 @@
     <Authors>redbase</Authors>
     <Company>redbase</Company>
     <Product>REDB Route</Product>
-    <Copyright>Copyright © redbase 2026</Copyright>
+    <Copyright>Copyright В© redbase 2026</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/redbase-app/redb</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <Version>3.0.1</Version>
-    <PackageVersion>3.0.1</PackageVersion>
+    <Version>3.1.0</Version>
+    <PackageVersion>3.1.0</PackageVersion>
   </PropertyGroup>
 </Project>

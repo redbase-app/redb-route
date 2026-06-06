@@ -3,7 +3,7 @@
 RabbitMQ transport for redb.Route. Consumer and producer with exchanges, queues, dead-letter, priority, TTL, and the official RabbitMQ.Client 7.x.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.RabbitMQ?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.RabbitMQ)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

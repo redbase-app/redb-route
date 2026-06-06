@@ -3,7 +3,7 @@
 TCP transport for redb.Route. Socket-based producer (client) and consumer (server) with text-line, length-prefixed, and raw framing modes, TLS, and InOut request-reply patterns.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Tcp?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Tcp)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

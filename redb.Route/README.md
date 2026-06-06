@@ -3,7 +3,7 @@
 Core ESB engine — async-first message routing with fluent C# DSL, 24 EIP processors, unified expression engine with 17 predicates, OpenTelemetry telemetry, and built-in components (Direct, SEDA, Timer, Mock, Log).
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

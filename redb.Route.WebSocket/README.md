@@ -3,7 +3,7 @@
 WebSocket transport for redb.Route. ClientWebSocket producer and Kestrel-based WebSocket server consumer with text/binary frames, ping/pong, reconnect, and subprotocol support.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.WebSocket?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.WebSocket)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Installation
 

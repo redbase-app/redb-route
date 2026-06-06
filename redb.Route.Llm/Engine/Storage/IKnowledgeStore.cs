@@ -1,0 +1,108 @@
+using System.Collections.Concurrent;
+
+namespace redb.Route.Llm.Engine.Storage;
+
+/// <summary>
+/// Persists embedding-backed knowledge chunks for retrieval-augmented agent
+/// runs. The MVP contract is intentionally narrow — upsert + cosine-similarity
+/// query over an opaque vector. Providers that index the chunks separately
+/// (e.g. pgvector, Qdrant) wrap this interface.
+/// </summary>
+public interface IKnowledgeStore
+{
+    /// <summary>Persists or replaces a chunk by its <see cref="KnowledgeChunk.Id"/>.</summary>
+    Task UpsertAsync(KnowledgeChunk chunk, CancellationToken ct = default);
+
+    /// <summary>Drops a chunk by id; no-op when not found.</summary>
+    Task DeleteAsync(string chunkId, CancellationToken ct = default);
+
+    /// <summary>Returns the <paramref name="topK"/> most-similar chunks for the query embedding.</summary>
+    Task<IReadOnlyList<KnowledgeSearchResult>> SearchAsync(
+        ReadOnlyMemory<float> queryEmbedding,
+        int topK,
+        string? collection = null,
+        CancellationToken ct = default);
+}
+
+/// <summary>A single embedded knowledge chunk.</summary>
+public sealed class KnowledgeChunk
+{
+    /// <summary>Stable identifier — caller-supplied so updates can replace a chunk in place.</summary>
+    public required string Id { get; init; }
+
+    /// <summary>Optional collection / namespace partition (e.g. tenant id, document set).</summary>
+    public string? Collection { get; init; }
+
+    /// <summary>Original chunk text shown to the model when the chunk is retrieved.</summary>
+    public required string Text { get; init; }
+
+    /// <summary>Embedding vector; dimensionality is implementation-defined.</summary>
+    public required ReadOnlyMemory<float> Embedding { get; init; }
+
+    /// <summary>Optional structured metadata (JSON) — e.g. source URL, page number.</summary>
+    public string? MetadataJson { get; init; }
+
+    /// <summary>Wall-clock timestamp the chunk was last upserted.</summary>
+    public DateTime UpdatedAtUtc { get; init; } = DateTime.UtcNow;
+}
+
+/// <summary>A chunk returned by <see cref="IKnowledgeStore.SearchAsync"/>, with score.</summary>
+public sealed record KnowledgeSearchResult(KnowledgeChunk Chunk, double Score);
+
+/// <summary>
+/// In-memory knowledge store — does an O(N) cosine-similarity scan on every
+/// query. Suitable for unit tests and small fixtures only; swap in the
+/// production store for anything larger than a few thousand chunks.
+/// </summary>
+public sealed class InMemoryKnowledgeStore : IKnowledgeStore
+{
+    private readonly ConcurrentDictionary<string, KnowledgeChunk> _chunks = new(StringComparer.Ordinal);
+
+    /// <inheritdoc />
+    public Task UpsertAsync(KnowledgeChunk chunk, CancellationToken ct = default)
+    {
+        _chunks[chunk.Id] = chunk;
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task DeleteAsync(string chunkId, CancellationToken ct = default)
+    {
+        _chunks.TryRemove(chunkId, out _);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<KnowledgeSearchResult>> SearchAsync(
+        ReadOnlyMemory<float> queryEmbedding, int topK, string? collection = null, CancellationToken ct = default)
+    {
+        var query = queryEmbedding.Span;
+        var ranked = new List<KnowledgeSearchResult>();
+
+        foreach (var chunk in _chunks.Values)
+        {
+            if (collection is not null && !string.Equals(chunk.Collection, collection, StringComparison.Ordinal))
+                continue;
+            var score = CosineSimilarity(query, chunk.Embedding.Span);
+            ranked.Add(new KnowledgeSearchResult(chunk, score));
+        }
+
+        var top = ranked.OrderByDescending(r => r.Score).Take(Math.Max(1, topK)).ToArray();
+        return Task.FromResult<IReadOnlyList<KnowledgeSearchResult>>(top);
+    }
+
+    private static double CosineSimilarity(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
+    {
+        var len = Math.Min(a.Length, b.Length);
+        if (len == 0) return 0d;
+        double dot = 0, na = 0, nb = 0;
+        for (var i = 0; i < len; i++)
+        {
+            dot += a[i] * b[i];
+            na += a[i] * a[i];
+            nb += b[i] * b[i];
+        }
+        var denom = Math.Sqrt(na) * Math.Sqrt(nb);
+        return denom <= 0 ? 0d : dot / denom;
+    }
+}

@@ -4,7 +4,7 @@ FTP/FTPS transport for the [redb.Route](../../README.md) ESB framework.
 Polling consumer and atomic producer powered by FluentFTP — passive/active mode, FTPS (TLS), glob filtering, idempotency, temp-file upload, recursive directories, and jail-path protection.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Ftp?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Ftp)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](../../LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
 ## Quick Start
 
