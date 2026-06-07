@@ -42,7 +42,7 @@
   <!-- Module packaging properties -->
   <PropertyGroup Condition="false">
     <TsakModuleName>redb.Route.Demo</TsakModuleName>
-    <TsakLibsDir>$(MSBuildThisFileDirectory)..\redb.Tsak\src\redb.Tsak.Worker\Libs</TsakLibsDir>
+    <TsakLibsDir>$(MSBuildThisFileDirectory)..\..\..\redb.Tsak\src\redb.Tsak.Worker\Libs</TsakLibsDir>
   </PropertyGroup>
 
   <!-- After build: create .tpkg (ZIP with manifest + DLL + config) and copy to Tsak Libs -->

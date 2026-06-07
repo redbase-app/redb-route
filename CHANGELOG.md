@@ -44,6 +44,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [3.1.1] — Unreleased
+
+> ⚠️ **Not yet published to NuGet.** This bump applies to **`redb.Route.Llm`
+> and `redb.Route.Exec` only** — every other package stays at 3.1.0. Two
+> targeted bug fixes affecting the LLM agent loop and the process-execution
+> transport on Windows. No public API was added, removed, or renamed.
+
+### Fixed
+
+#### `redb.Route.Llm` — orphan `tool_use` recovery on conversation load
+
+`AgentEngine.RunAsync` now sanitises the loaded conversation path: if the
+last persisted message is an assistant turn that has `tool_use` blocks
+without a matching `tool_result` user turn after it (the previous run was
+cancelled, timed out, or threw between persisting the assistant message
+and dispatching the tool — see `AgentEngine.cs` lines 195/222), a
+synthetic `tool_result(error: "orphaned_tool_use_recovered")` user message
+is appended and persisted before the new user prompt is added.
+
+Without this, any provider that strictly enforces tool_use/tool_result
+pairing — notably Anthropic's Messages API
+(`400 invalid_request_error: tool_use ids were found without tool_result
+blocks immediately after`) — 400's forever on every subsequent request,
+poisoning the conversation permanently. `RedeliveryPolicy` then multiplies
+the failure across retries.
+
+The recovery is logged at warning level (`Recovered {N} orphaned tool_use
+block(s) in conversation {Conv} on load.`) so production occurrences are
+visible. Applies uniformly to `InMemoryConversationStore` and
+`RedbConversationStore` — recovery happens after `LoadPathAsync`,
+provider-agnostic.
+
+#### `redb.Route.Exec` — child stdout/stderr decoded with the host's OEM codepage on Windows
+
+`ExecProducer` now sets `ProcessStartInfo.StandardOutputEncoding` /
+`StandardErrorEncoding` to the host console's active codepage (cp437,
+cp932, cp936, cp949, …) on Windows, falling back to UTF-8 on Linux/macOS.
+Without this, .NET defaulted to UTF-8 when reading the redirected
+streams while `cmd.exe` / `fsutil` / `wmic` / `net` emit OEM bytes — the
+mismatch surfaced as U+FFFD replacement characters in `redbExec.Stdout`
+and the downstream JSON tool body, breaking LLM agents on
+Japanese / Chinese / Korean / Greek / Turkish-locale Windows hosts (any
+non-Latin OEM codepage).
+
+Adds a dependency on `System.Text.Encoding.CodePages` 9.0.0 — the BCL
+only ships ASCII/UTF-8/UTF-16/UTF-32 encodings on .NET; cp932/cp936/cp949
+require `CodePagesEncodingProvider`.
+
+---
+
 ## [3.1.0]
 
 > **Why a minor bump (3.0.x → 3.1.0).** This release ships **four new

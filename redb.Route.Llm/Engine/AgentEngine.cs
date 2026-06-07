@@ -98,6 +98,39 @@ public sealed class AgentEngine : IAgentEngine
                 transcript.Add(node.Message);
             if (path.Count > 0)
                 attachUnderId = path[^1].Id;
+
+            // Orphan tool_use recovery: if the loaded transcript ends with an
+            // assistant message that has unmatched tool_use blocks (e.g. a prior
+            // run was cancelled / timed out between persisting the assistant
+            // turn and dispatching tools), synthesize error tool_result blocks
+            // so the next provider call doesn't 400 on "tool_use without matching
+            // tool_result". Without this, the conversation poisons itself
+            // permanently for InMemory and any persistent store alike.
+            if (transcript.Count > 0 && transcript[^1].Role == "assistant")
+            {
+                var orphanResults = new List<LlmContentBlock>();
+                foreach (var block in transcript[^1].Content)
+                {
+                    if (block is LlmToolUseBlock orphan)
+                        orphanResults.Add(new LlmToolResultBlock(
+                            orphan.ToolUseId,
+                            "{\"error\":\"orphaned_tool_use_recovered\"}",
+                            IsError: true));
+                }
+
+                if (orphanResults.Count > 0)
+                {
+                    var recovery = new LlmMessage { Role = "user", Content = orphanResults };
+                    transcript.Add(recovery);
+                    attachUnderId = await PersistMessageAsync(
+                        request, attachUnderId, recovery,
+                        iteration: 0, stopReason: null, usage: LlmUsage.Empty,
+                        toolUseId: null, ct).ConfigureAwait(false);
+                    _logger?.LogWarning(
+                        "Recovered {Count} orphaned tool_use block(s) in conversation {Conv} on load.",
+                        orphanResults.Count, convIdToLoad);
+                }
+            }
         }
 
         transcript.Add(new LlmMessage { Role = "user", Content = request.UserContent });

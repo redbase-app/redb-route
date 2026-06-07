@@ -229,7 +229,12 @@ public sealed class ExecProducer : ConnectableProducer
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = false,
-            WorkingDirectory = _options.WorkingDirectory ?? string.Empty
+            WorkingDirectory = _options.WorkingDirectory ?? string.Empty,
+            // Decode child output using the host console's active codepage. Without this, .NET
+            // defaults to UTF-8 while cmd.exe / wmic / net / fsutil emit OEM bytes (cp866 on RU,
+            // cp437 on EN, cp932 on JP, …) — the mismatch shows up as U+FFFD replacement chars.
+            StandardOutputEncoding = ConsoleOutputEncoding,
+            StandardErrorEncoding  = ConsoleOutputEncoding,
         };
 
         foreach (var a in args)
@@ -246,6 +251,28 @@ public sealed class ExecProducer : ConnectableProducer
 
         return psi;
     }
+
+    /// <summary>
+    /// Encoding used to decode the child process's stdout/stderr. On Windows this is the
+    /// active console codepage (OEM); elsewhere UTF-8. Computed once per process.
+    /// </summary>
+    private static readonly Encoding ConsoleOutputEncoding = ResolveConsoleOutputEncoding();
+
+    private static Encoding ResolveConsoleOutputEncoding()
+    {
+        if (!OperatingSystem.IsWindows())
+            return Encoding.UTF8;
+
+        // CodePagesEncodingProvider gives us cp866/cp1251/etc. on .NET (which only ships
+        // ASCII/UTF-8/UTF-16/UTF-32 in the BCL).
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
+        try { return Encoding.GetEncoding(GetOEMCP()); }
+        catch { return Console.OutputEncoding; }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern int GetOEMCP();
 
     private async Task<ExecResult> RunAsync(ProcessStartInfo psi, CancellationToken ct)
     {

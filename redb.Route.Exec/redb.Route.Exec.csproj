@@ -12,6 +12,10 @@
     <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Needed for OEM codepages (cp866, cp1251, …) when decoding cmd.exe stdout on Windows. -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="9.0.0" />
+  </ItemGroup>
+  <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 </Project>
