@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using redb.Route.Abstractions;
 using redb.Route.Llm.Providers;
 
 namespace redb.Route.Llm.Engine.Storage;
@@ -10,6 +11,14 @@ namespace redb.Route.Llm.Engine.Storage;
 /// from any node — required to model regenerate / parallel tool-calls / what-if
 /// flows. The flat "append-only history" pattern falls out naturally when the
 /// caller always passes the previously-appended message id as <c>parentId</c>.
+/// <para>
+/// The optional <c>exchange</c> parameter on every method carries the current
+/// route exchange when the call originates from inside a route pipeline.
+/// REDB-backed implementations resolve a per-exchange <c>IRedbService</c>
+/// (and its named siblings via <see cref="LlmKeys.RedbName"/>) through
+/// <c>IRouteContext.GetRedbService(name, exchange)</c>, which already manages
+/// per-exchange scopes and disposal. In-memory implementations ignore it.
+/// </para>
 /// </summary>
 public interface IConversationStore
 {
@@ -23,6 +32,7 @@ public interface IConversationStore
         string? parentId,
         LlmMessage message,
         ConversationMessageMeta meta,
+        IExchange? exchange = null,
         CancellationToken ct = default);
 
     /// <summary>
@@ -32,6 +42,7 @@ public interface IConversationStore
     Task<IReadOnlyList<ConversationMessage>> LoadPathAsync(
         string conversationId,
         string? leafId = null,
+        IExchange? exchange = null,
         CancellationToken ct = default);
 
     /// <summary>
@@ -40,6 +51,7 @@ public interface IConversationStore
     /// </summary>
     Task<IReadOnlyList<ConversationMessage>> LoadTreeAsync(
         string conversationId,
+        IExchange? exchange = null,
         CancellationToken ct = default);
 }
 
@@ -98,7 +110,7 @@ public sealed class InMemoryConversationStore : IConversationStore
     private readonly ConcurrentDictionary<string, List<ConversationMessage>> _byConversation = new();
 
     /// <inheritdoc />
-    public Task<string> AppendAsync(string conversationId, string? parentId, LlmMessage message, ConversationMessageMeta meta, CancellationToken ct = default)
+    public Task<string> AppendAsync(string conversationId, string? parentId, LlmMessage message, ConversationMessageMeta meta, IExchange? exchange = null, CancellationToken ct = default)
     {
         var id = Guid.NewGuid().ToString("N");
         var node = new ConversationMessage
@@ -116,7 +128,7 @@ public sealed class InMemoryConversationStore : IConversationStore
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<ConversationMessage>> LoadPathAsync(string conversationId, string? leafId = null, CancellationToken ct = default)
+    public Task<IReadOnlyList<ConversationMessage>> LoadPathAsync(string conversationId, string? leafId = null, IExchange? exchange = null, CancellationToken ct = default)
     {
         if (!_byConversation.TryGetValue(conversationId, out var bucket))
             return Task.FromResult<IReadOnlyList<ConversationMessage>>([]);
@@ -143,7 +155,7 @@ public sealed class InMemoryConversationStore : IConversationStore
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<ConversationMessage>> LoadTreeAsync(string conversationId, CancellationToken ct = default)
+    public Task<IReadOnlyList<ConversationMessage>> LoadTreeAsync(string conversationId, IExchange? exchange = null, CancellationToken ct = default)
     {
         if (!_byConversation.TryGetValue(conversationId, out var bucket))
             return Task.FromResult<IReadOnlyList<ConversationMessage>>([]);

@@ -9,6 +9,7 @@ using redb.Route.Llm.Engine.Observability;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Expressions;
 using redb.Route.Llm.Storage.Redb;
+using redb.Route.Llm.Tools;
 
 namespace redb.Route.Llm.Extensions;
 
@@ -81,6 +82,11 @@ public static class LlmServiceCollectionExtensions
         services.TryAddSingleton<IConversationStore, InMemoryConversationStore>();
         services.TryAddSingleton<IApprovalStore, InMemoryApprovalStore>();
         services.TryAddSingleton<ICostBudgetStore, InMemoryCostBudgetStore>();
+        services.TryAddSingleton<IPromptTemplateRegistry, InMemoryPromptTemplateRegistry>();
+        services.TryAddSingleton<IToolCacheStore, InMemoryToolCacheStore>();
+        services.TryAddSingleton<IEvalRunStore, InMemoryEvalRunStore>();
+        services.TryAddSingleton<IKnowledgeStore, InMemoryKnowledgeStore>();
+        services.TryAddSingleton<IBatchStore, InMemoryBatchStore>();
 
         services.AddSingleton<ILlmComponentRegistrar>(sp =>
         {
@@ -140,6 +146,68 @@ public static class LlmServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Scans <typeparamref name="T"/> for class-level and method-level
+    /// <see cref="ExposeAsLlmToolAttribute"/> declarations and registers a
+    /// <see cref="RouteToolBridge"/> descriptor for each one. The caller is
+    /// responsible for mounting the actual route on the produced endpoint URI
+    /// (e.g. <c>From("direct:llm.tools.weather").Process(...)</c>) — this
+    /// helper only exposes descriptors to the model.
+    /// <para>
+    /// The endpoint URI for each tool is built via <paramref name="endpointUriFactory"/>;
+    /// when omitted the default is <c>direct:llm.tools.{toolName}</c>.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="T">Type to scan. Class-level attribute exposes the type itself
+    /// as one tool; method-level attributes expose each annotated method as a separate tool.</typeparam>
+    /// <param name="services">DI services.</param>
+    /// <param name="endpointUriFactory">Optional override. Receives the tool name from the attribute.</param>
+    public static IServiceCollection AddLlmToolsFromType<T>(
+        this IServiceCollection services,
+        Func<string, string>? endpointUriFactory = null)
+        => AddLlmToolsFromType(services, typeof(T), endpointUriFactory);
+
+    /// <summary>Non-generic overload of <see cref="AddLlmToolsFromType{T}"/>.</summary>
+    public static IServiceCollection AddLlmToolsFromType(
+        this IServiceCollection services,
+        Type type,
+        Func<string, string>? endpointUriFactory = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(type);
+
+        endpointUriFactory ??= static name => $"direct:llm.tools.{name}";
+
+        var classAttr = (ExposeAsLlmToolAttribute?)Attribute.GetCustomAttribute(
+            type, typeof(ExposeAsLlmToolAttribute), inherit: false);
+        if (classAttr is not null)
+        {
+            services.AddLlmTool(new RouteToolBridge(
+                classAttr.ToCapability(RouteToolBridge.DefaultInputSchema),
+                endpointUriFactory(classAttr.Name)));
+        }
+
+        const System.Reflection.BindingFlags methodFlags =
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.DeclaredOnly;
+
+        foreach (var method in type.GetMethods(methodFlags))
+        {
+            var attr = (ExposeAsLlmToolAttribute?)Attribute.GetCustomAttribute(
+                method, typeof(ExposeAsLlmToolAttribute), inherit: false);
+            if (attr is null) continue;
+
+            services.AddLlmTool(new RouteToolBridge(
+                attr.ToCapability(RouteToolBridge.DefaultInputSchema),
+                endpointUriFactory(attr.Name)));
+        }
+
+        return services;
+    }
+
+    /// <summary>
     /// Replaces the in-memory storage fallbacks with redb-backed implementations of
     /// <see cref="IConversationStore"/>, <see cref="IToolIdempotencyStore"/>,
     /// <see cref="IApprovalStore"/>, <see cref="ICostBudgetStore"/> and the
@@ -154,22 +222,43 @@ public static class LlmServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddRedbLlmStorage(this IServiceCollection services)
     {
+        // Schemes for every props row used below are auto-synced by the host's
+        // own `redb.InitializeAsync()` (it scans loaded assemblies for
+        // [RedbScheme] — see RedbServiceBase.AutoSyncSchemesAsync). The host
+        // owns startup; stores stay free of any "is the scheme there yet?"
+        // gates.
+
         services.AddSingleton<IConversationStore>(sp =>
-            new RedbConversationStore(sp.GetRequiredService<IServiceScopeFactory>()));
+            new RedbConversationStore(sp.GetRequiredService<IRouteContext>()));
 
         services.AddSingleton<IToolIdempotencyStore>(sp =>
             new RedbToolIdempotencyStore(
                 sp.GetRequiredService<IIdempotentRepository>(),
-                sp.GetRequiredService<IServiceScopeFactory>()));
+                sp.GetRequiredService<IRouteContext>()));
 
         services.AddSingleton<IApprovalStore>(sp =>
-            new RedbApprovalStore(sp.GetRequiredService<IServiceScopeFactory>()));
+            new RedbApprovalStore(sp.GetRequiredService<IRouteContext>()));
 
         services.AddSingleton<ICostBudgetStore>(sp =>
-            new RedbCostBudgetStore(sp.GetRequiredService<IServiceScopeFactory>()));
+            new RedbCostBudgetStore(sp.GetRequiredService<IRouteContext>()));
+
+        services.AddSingleton<IPromptTemplateRegistry>(sp =>
+            new RedbPromptTemplateRegistry(sp.GetRequiredService<IRouteContext>()));
+
+        services.AddSingleton<IToolCacheStore>(sp =>
+            new RedbToolResultCache(sp.GetRequiredService<IRouteContext>()));
+
+        services.AddSingleton<IEvalRunStore>(sp =>
+            new RedbEvalRunStore(sp.GetRequiredService<IRouteContext>()));
+
+        services.AddSingleton<IKnowledgeStore>(sp =>
+            new RedbKnowledgeStore(sp.GetRequiredService<IRouteContext>()));
+
+        services.AddSingleton<IBatchStore>(sp =>
+            new RedbBatchStore(sp.GetRequiredService<IRouteContext>()));
 
         services.Replace(ServiceDescriptor.Singleton<IAgentObserver>(sp =>
-            new RedbAuditObserver(sp.GetRequiredService<IServiceScopeFactory>())));
+            new RedbAuditObserver(sp.GetRequiredService<IRouteContext>())));
 
         return services;
     }

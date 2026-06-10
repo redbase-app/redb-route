@@ -7,6 +7,13 @@ namespace redb.Route.Llm.Engine.Storage;
 /// single side effect. The contract is intentionally a thin wrapper over
 /// <see cref="IIdempotentRepository"/> — the redb-backed implementation reuses
 /// the existing <c>IdempotentEntryProps</c> table to avoid duplicating schema.
+/// <para>
+/// The optional <c>exchange</c> parameter on every method carries the route
+/// pipeline's current exchange; REDB-backed implementations resolve a
+/// per-exchange <see cref="redb.Core.IRedbService"/> through
+/// <c>IRouteContext.GetRedbService(name, exchange)</c>. In-memory
+/// implementations ignore it.
+/// </para>
 /// </summary>
 public interface IToolIdempotencyStore
 {
@@ -18,6 +25,7 @@ public interface IToolIdempotencyStore
     Task<ToolIdempotencyReservation> TryReserveAsync(
         string conversationId,
         string toolUseId,
+        IExchange? exchange = null,
         CancellationToken ct = default);
 
     /// <summary>Persists the tool output JSON for the previously-reserved key.</summary>
@@ -25,12 +33,14 @@ public interface IToolIdempotencyStore
         string conversationId,
         string toolUseId,
         string outputJson,
+        IExchange? exchange = null,
         CancellationToken ct = default);
 
     /// <summary>Releases the reservation on failure so a retry can re-run the tool.</summary>
     Task ReleaseAsync(
         string conversationId,
         string toolUseId,
+        IExchange? exchange = null,
         CancellationToken ct = default);
 }
 
@@ -71,7 +81,7 @@ public sealed class InMemoryToolIdempotencyStore : IToolIdempotencyStore
     }
 
     /// <inheritdoc />
-    public async Task<ToolIdempotencyReservation> TryReserveAsync(string conversationId, string toolUseId, CancellationToken ct = default)
+    public async Task<ToolIdempotencyReservation> TryReserveAsync(string conversationId, string toolUseId, IExchange? exchange = null, CancellationToken ct = default)
     {
         var key = BuildKey(conversationId, toolUseId);
         var added = await _repository.Add(key, ct).ConfigureAwait(false);
@@ -83,7 +93,7 @@ public sealed class InMemoryToolIdempotencyStore : IToolIdempotencyStore
     }
 
     /// <inheritdoc />
-    public async Task CompleteAsync(string conversationId, string toolUseId, string outputJson, CancellationToken ct = default)
+    public async Task CompleteAsync(string conversationId, string toolUseId, string outputJson, IExchange? exchange = null, CancellationToken ct = default)
     {
         var key = BuildKey(conversationId, toolUseId);
         _outputs[key] = outputJson;
@@ -91,7 +101,7 @@ public sealed class InMemoryToolIdempotencyStore : IToolIdempotencyStore
     }
 
     /// <inheritdoc />
-    public async Task ReleaseAsync(string conversationId, string toolUseId, CancellationToken ct = default)
+    public async Task ReleaseAsync(string conversationId, string toolUseId, IExchange? exchange = null, CancellationToken ct = default)
     {
         var key = BuildKey(conversationId, toolUseId);
         _outputs.TryRemove(key, out _);

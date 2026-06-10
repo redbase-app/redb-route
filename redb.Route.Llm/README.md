@@ -84,8 +84,12 @@ Pieces:
     `huggingface`, `deepseek`, `ollama`, `lmstudio`, plus a generic `custom`
     for any self-hosted gateway.
   - **`StubProvider`** — deterministic echo for unit tests / CI without keys.
-  - A native `AnthropicProvider` (Messages API) is still on deck for parity
-    features the OpenAI-compat surface doesn't expose.
+  - **`AnthropicProvider`** — native Anthropic Messages API client. Selected
+    via `Provider = "anthropic"` and ships in parallel to the OpenAI-compat
+    path; reads true Messages-API SSE (`message_start` /
+    `content_block_delta` / `message_stop`) for `?stream=true`, and exists
+    so we can land features the OpenAI-compat surface flattens away
+    (prompt caching, computer-use, fine-grained image blocks).
 - **`IAgentEngine`** — the tool-use loop. One inbound exchange = one agent run =
   N provider calls. Handles iterations, transcript, tool dispatch, governance hooks.
 - **`IToolDescriptorRegistry`** + **`RouteToolBridge`** — tools-as-routes machinery
@@ -457,7 +461,7 @@ llm://<connectionFactoryName>
     &systemPromptRef=<literal | #registry-key>
     &initialBodyRef=<literal | #registry-key>     # consumer only
     &conversation=none|header|property
-    &stream=true                                   # producer only
+    &stream=true                                   # producer only (HTTP→SSE, WS→per-frame)
     &schedule=500ms|30s|5m|1h                      # consumer only
     &maxIterations=8
     &tools=*|name1,name2
@@ -470,7 +474,7 @@ llm://<connectionFactoryName>
 | `systemPromptRef` | yes (header beats it) | yes |
 | `initialBodyRef` | n/a | yes |
 | `conversation` | yes | yes (`header` resolves to none — consumer-born exchanges have no inbound header) |
-| `stream` | yes (`Out.Body = IAsyncEnumerable<string>`) | n/a |
+| `stream` | yes (`Out.Body = IAsyncEnumerable<string>`; `HttpConsumer` flushes as SSE, `WsConsumer` as one text frame per token) | n/a |
 | `schedule` | n/a | required |
 | `maxIterations` | yes | yes |
 | `tools` | yes | yes |
@@ -490,7 +494,7 @@ analogue to what `redb.Route.Llm` does, so the comparison is worth pinning down.
 | Tool dispatch into a route | `langchain4j-tools://name` (separate component) | `.AsLlmTool("name")` (DSL aspect on any `From(...)`) |
 | Agent loop (multi-turn tool use) | `langchain4j-agent://...` | built into `IAgentEngine` |
 | Scheduled invocation | only via `from("timer:...").to("langchain4j-chat:...")` — the LLM is producer-only | **`From("llm://factory?schedule=...")` is a first-class consumer** — the LLM endpoint *is* the scheduler |
-| Streaming responses | LangChain4j streaming chat model | `?stream=true` (skeleton) |
+| Streaming responses | LangChain4j streaming chat model | `?stream=true` end-to-end: producer emits `IAsyncEnumerable<string>`; `redb.Route.Http` flushes per-chunk as SSE (`event: done` trailer carries final `llm.tokens.*` / `llm.cost.usd` / `llm.stop_reason`); `redb.Route.WebSocket` yields one `Text` frame per token |
 | Registry refs (`#name`) | yes — Camel-wide | yes — framework-wide; works for connection factories **and** prompts |
 | Conversation memory | LangChain4j `ChatMemoryStore` family | header / property conversation id; full persistence via `AddRedbLlmStorage()` |
 | Provider matrix | 25+ via LangChain4j (Anthropic, Bedrock, Vertex, Azure OpenAI, OpenAI, Mistral, Ollama, …) | 14 OpenAI-compatible behind one `OpenAiProvider` (incl. Anthropic Claude via the official OpenAI-compat endpoint, live-tested with Haiku 4.5 + Sonnet 4.6) + stub; native Anthropic Messages API on deck |
@@ -586,8 +590,13 @@ analogue to what `redb.Route.Llm` does, so the comparison is worth pinning down.
   `parent_id` integrity), but window-by-N-messages and window-by-K-tokens
   shapes are not yet first-class — a route can implement them today via
   `Process` + the conversation store, just not as a one-line option.
-- **Streaming** is production-ready in LangChain4j; in our connector it's a
-  skeleton.
+- **Streaming** is production-ready in both: LangChain4j ships its own
+  `StreamingChatModel`, our `LlmProducer` emits `IAsyncEnumerable<string>`
+  into `Out.Body` and the HTTP / WebSocket consumers flush it on the wire
+  (`text/event-stream` with an `event: done` summary trailer / one
+  `WebSocketMessageType.Text` frame per token). For Anthropic Claude the
+  native `AnthropicProvider` reads true SSE deltas; for the 14 OpenAI-compat
+  backends `OpenAiProvider.StreamAsync` is the producer.
 
 ### Architectural differences worth knowing
 
@@ -689,11 +698,26 @@ LlmConsumer.cs          PeriodicTimer scheduler, fires AgentEngine on each tick
       Mistral / Cerebras / Gemini / OpenRouter / **Anthropic Claude** and a
       deterministic DSL showcase (`BasicChat`, `InlineLlm`, `ToolRoute`,
       `ChainedLlm`, `HttpFetchTool`, `RegistryDrivenPrompt`, `ClaudeChat`).
-- [ ] Native `AnthropicProvider` (Messages API) — Claude already works through
-      the OpenAI-compat endpoint; native provider is for features the compat
-      surface doesn't expose.
+- [x] Native `AnthropicProvider` (Messages API) — shipped, runs alongside
+      the OpenAI-compat path. Selected via `Provider = "anthropic"`. Reads
+      true Messages-API SSE (`message_start` / `content_block_delta` /
+      `message_stop`) for streaming; Messages-API-only features (prompt
+      caching, computer-use, fine-grained image blocks) land here as needed.
 - [ ] Governance hooks: budget / shadow / approval / idempotency (Phase-1 §2).
-- [ ] Streaming producer surface (Phase-1 §1).
+- [x] **Streaming producer surface** end-to-end. `LlmProducer.ProcessStreamingAsync`
+      writes `IAsyncEnumerable<string>` to `Out.Body`, sets
+      `Content-Type: text/event-stream` and the `llm.streaming` header.
+      `redb.Route.Http` (`HttpConsumer`) flushes each yield as one SSE
+      `data:` frame with `Cache-Control: no-cache, no-transform` /
+      `X-Accel-Buffering: no` / `IHttpResponseBodyFeature.DisableBuffering()`,
+      followed by an `event: done` trailer carrying `llm.tokens.in/out`,
+      `llm.stop_reason`, `llm.cost.usd`, `llm.tool.iterations`,
+      `llm.model.id`, `llm.provider.id`. `redb.Route.WebSocket`
+      (`WsConsumer`) yields one `WebSocketMessageType.Text` frame per
+      non-empty chunk with `endOfMessage=true`. Test coverage:
+      `HttpStreamingTests` (4), `WsStreamingTests` (2), env-gated
+      `LiveStreamingTests` against Anthropic Claude (native SSE), Groq,
+      Cerebras, Gemini, Mistral and OpenRouter.
 - [ ] More first-party tools (SQL / file / redb scheme).
 
 See [doc/USER-GUIDE.md](doc/USER-GUIDE.md) — the full long-form guide

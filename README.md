@@ -23,7 +23,7 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 
 ## Highlights
 
-- **24 external transports + 5 built-in components** (Direct, SEDA, Timer, Mock, Log). The 24th — `llm:` — is a first-class LLM connector with a universal OpenAI-compatible provider (14 APIs) and a native Anthropic Messages API provider, plus `.AsLlmTool()` to expose any of the other 23 transports as an LLM-callable tool with zero connector changes.
+- **24 external transports + 5 built-in components** (Direct, SEDA, Timer, Mock, Log). The 24th — `llm:` — is a first-class LLM connector with a universal OpenAI-compatible provider (14 APIs) and a native Anthropic Messages API provider, plus `.AsLlmTool()` to expose any of the other 23 transports as an LLM-callable tool with zero connector changes. Token-by-token streaming runs end-to-end: `?stream=true` on an `llm://` step lands on the wire as Server-Sent Events through `redb.Route.Http` (with an `event: done` summary trailer) or as one `Text` frame per token through `redb.Route.WebSocket`.
 - **30+ EIP patterns** — Splitter, Aggregator, CBR, WireTap, Saga, Circuit Breaker, Idempotent Consumer, Claim Check, Throttle, Resequencer, Scatter-Gather, and more.
 - **Compiled expression engine** — `${header.x}`, `${header.x++}`, arithmetic, JSONPath, XPath compile to `Func<IExchange, T>` via `System.Linq.Expressions`. No interpreter overhead.
 - **Type-safe fluent builders** — `Kafka.Topic("orders").GroupId("svc").Acks("All")` instead of URI strings.
@@ -1289,7 +1289,7 @@ flowchart TB
 | `MqttNet` | `MQTTnet` | MQTT 5.0, shared subscriptions, QoS |
 | `Quartz` | `Quartz.NET` | Cron schedules, interval timers, persistent jobs |
 | `Exec` | `System.Diagnostics.Process` | Local-process execution; allowlist, working-directory pin, timeout, output caps |
-| `Llm` | `HttpClient` (OpenAI-compat + Anthropic Messages) | LLM connector with universal OpenAI-compat provider (14 vendors) and native Anthropic provider; tool-loop agent engine |
+| `Llm` | `HttpClient` (OpenAI-compat + Anthropic Messages) | LLM connector with universal OpenAI-compat provider (14 vendors) and native Anthropic provider; tool-loop agent engine; **token-by-token streaming** (`?stream=true` → `IAsyncEnumerable<string>` surfaced as SSE over `redb.Route.Http` with an `event: done` summary trailer / one `Text` frame per token over `redb.Route.WebSocket`) |
 
 ### Saga rollback flow
 

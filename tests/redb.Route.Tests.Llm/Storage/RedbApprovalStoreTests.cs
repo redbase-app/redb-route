@@ -31,7 +31,7 @@ public sealed class RedbApprovalStoreTests
     [Fact]
     public async Task Record_Then_Find_Approved()
     {
-        var store = new RedbApprovalStore(_fx.ScopeFactory);
+        var store = new RedbApprovalStore(_fx.RouteContext);
         var convId = $"c-{Guid.NewGuid():N}";
         var approvalId = $"a-{Guid.NewGuid():N}";
 
@@ -49,7 +49,7 @@ public sealed class RedbApprovalStoreTests
     [Fact]
     public async Task Record_Denied_PreservesReason()
     {
-        var store = new RedbApprovalStore(_fx.ScopeFactory);
+        var store = new RedbApprovalStore(_fx.RouteContext);
         var approvalId = $"a-{Guid.NewGuid():N}";
 
         var req = MakeRequest($"c-{Guid.NewGuid():N}", "tu-2");
@@ -65,7 +65,7 @@ public sealed class RedbApprovalStoreTests
     [Fact]
     public async Task Find_Unknown_ReturnsNull()
     {
-        var store = new RedbApprovalStore(_fx.ScopeFactory);
+        var store = new RedbApprovalStore(_fx.RouteContext);
         (await store.FindAsync("does-not-exist")).Should().BeNull();
     }
 }

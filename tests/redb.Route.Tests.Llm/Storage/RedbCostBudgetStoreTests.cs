@@ -14,7 +14,7 @@ public sealed class RedbCostBudgetStoreTests
     [Fact]
     public async Task GetUsage_Empty_ReturnsZero()
     {
-        var store = new RedbCostBudgetStore(_fx.ScopeFactory);
+        var store = new RedbCostBudgetStore(_fx.RouteContext);
         var usage = await store.GetUsageAsync($"c-{Guid.NewGuid():N}");
         usage.Should().Be(AgentUsage.Zero);
     }
@@ -22,7 +22,7 @@ public sealed class RedbCostBudgetStoreTests
     [Fact]
     public async Task Add_Accumulates_AcrossCalls()
     {
-        var store = new RedbCostBudgetStore(_fx.ScopeFactory);
+        var store = new RedbCostBudgetStore(_fx.RouteContext);
         var convId = $"c-{Guid.NewGuid():N}";
 
         var u1 = await store.AddAsync(convId, new AgentUsage(100, 50, 0.01m));
@@ -44,7 +44,7 @@ public sealed class RedbCostBudgetStoreTests
     [Fact]
     public async Task Reset_RemovesAccumulator()
     {
-        var store = new RedbCostBudgetStore(_fx.ScopeFactory);
+        var store = new RedbCostBudgetStore(_fx.RouteContext);
         var convId = $"c-{Guid.NewGuid():N}";
 
         await store.AddAsync(convId, new AgentUsage(10, 5, 0.001m));
@@ -57,7 +57,7 @@ public sealed class RedbCostBudgetStoreTests
     [Fact]
     public async Task Add_PerConversation_Isolated()
     {
-        var store = new RedbCostBudgetStore(_fx.ScopeFactory);
+        var store = new RedbCostBudgetStore(_fx.RouteContext);
         var c1 = $"c-{Guid.NewGuid():N}";
         var c2 = $"c-{Guid.NewGuid():N}";
 

@@ -111,11 +111,14 @@ public static class InitRoute
 
         // Conversation store — Tsak registers an IServiceScopeFactory per named redb
         // instance under "redb-factory:{name}" (see NamedRedbRoutes for usage).
-        // Plug it straight into RedbConversationStore so chat history survives restarts.
-        var redbScopeFactory = context.GetFromRegistry<IServiceScopeFactory>("redb-factory:pg-test")
-            ?? throw new InvalidOperationException(
-                "redb-factory:pg-test not in registry — check Redb section in redb.Route.Demo.config.json");
-
+        // RedbConversationStore now takes IRouteContext directly: per-call it asks
+        // context.GetRedbService("pg-test", exchange) which:
+        //   1) reuses the per-exchange scope cached in exchange.Properties on repeat calls,
+        //   2) creates a fresh scope from "redb-factory:pg-test" and caches it on first call,
+        //   3) falls back to a singleton via "redb:pg-test" when no exchange is in scope.
+        // Result: no manual scope-factory plumbing here, scope is auto-disposed with the exchange.
+        // The string "pg-test" must match the named instance configured in
+        // redb.Route.Demo.config.json under the Redb section.
         context.AddService(typeof(IAgentEngine), new AgentEngine(
             logger: null,
             producerTemplate: producerTemplate,
@@ -124,7 +127,8 @@ public static class InitRoute
             approval: null,
             redaction: null,
             shadow: null,
-            conversation: new RedbConversationStore(redbScopeFactory),//conversation: new InMemoryConversationStore(),
+            conversation: new RedbConversationStore(context, defaultRedbName: "pg-test"),
+            //conversation: new InMemoryConversationStore(),
             idempotency: null,
             approvalStore: null));
         context.AddLifecycleListener(new ProducerTemplateStarter(producerTemplate, logger));

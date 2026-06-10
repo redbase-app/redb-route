@@ -50,7 +50,7 @@ public sealed class LlmEvalRunner
         var result = Score(@case, response, failure, sw.Elapsed);
 
         if (_store is not null)
-            await _store.SaveAsync(ToRecord(@case, result), ct).ConfigureAwait(false);
+            await _store.SaveAsync(ToRecord(@case, result), ct: ct).ConfigureAwait(false);
 
         return result;
     }

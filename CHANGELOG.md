@@ -46,10 +46,239 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.1.1] — Unreleased
 
-> ⚠️ **Not yet published to NuGet.** This bump applies to **`redb.Route.Llm`
-> and `redb.Route.Exec` only** — every other package stays at 3.1.0. Two
-> targeted bug fixes affecting the LLM agent loop and the process-execution
-> transport on Windows. No public API was added, removed, or renamed.
+> ⚠️ **Not yet published to NuGet.** This bump applies to **`redb.Route.Llm`,
+> `redb.Route.Llm.Tools`, `redb.Route.Http`, `redb.Route.WebSocket` and
+> `redb.Route.Exec`** — every other package stays at 3.1.0. The release
+> bundles four areas of work: (1) end-to-end token-by-token streaming on
+> the wire (`IAsyncEnumerable<string>` response bodies → SSE / chunked text
+> over HTTP, one text frame per token over WebSocket); (2) REDB-backed
+> stores for the remaining state surfaces (`IBatchStore`, `IEvalRunStore`,
+> `IKnowledgeStore`, `IPromptTemplateRegistry`, `IToolCacheStore`); (3)
+> async-batch callback plumbing (`LlmCallbackProcessor` + new
+> `llm.batch.*` headers); (4) a thin DSL/tool split across the homeless
+> tools in `redb.Route.Llm.Tools`. Plus a named-redb-per-exchange hint
+> (`?redb=<name>`) and two targeted bug fixes (LLM agent loop orphan
+> tool_use recovery, Exec OEM codepage on Windows). **No public API was
+> removed or renamed.** The store-interface additions are optional
+> parameters with defaults — existing implementations and call sites
+> compile unchanged.
+
+### Added
+
+#### `redb.Route.Llm` / `redb.Route.Http` / `redb.Route.WebSocket` — end-to-end streaming wire contract for LLM token deltas
+
+`LlmProducer.ProcessStreamingAsync` already emits an `IAsyncEnumerable<string>`
+of provider token deltas into `exchange.Out.Body` when `?stream=true` (or the
+`llm.streaming` header) is set on the LLM endpoint. As of 3.1.0 only the
+producer surface existed; downstream transports buffered the enumerable into
+a single response. **3.1.1 wires the contract end-to-end** so a route like
+
+```csharp
+From("http://+:8080/chat")
+    .To("llm://claude?stream=true")
+    // Out.Body is IAsyncEnumerable<string> here
+    // HttpConsumer flushes each yield as one SSE 'data:' frame
+```
+
+streams token-by-token to the browser, and the equivalent WebSocket route
+
+```csharp
+From("ws://+:9001/chat")
+    .To("llm://claude?stream=true")
+    // Each yield → one WebSocketMessageType.Text frame, endOfMessage=true
+```
+
+streams token-by-token to the WebSocket client. No new types, no new options
+— transports inspect `Out.Body` and pick the right wire shape.
+
+**Producer-side contract** — `LlmProducer` now sets two response markers
+alongside the streaming body:
+- `Out.ContentType ??= "text/event-stream"` when not already set, so the HTTP
+  transport defaults to SSE framing.
+- `Out.Headers[LlmHeaders.Streaming] = true` (`"llm.streaming"`) — a stable
+  signal any downstream component can branch on. Visible in `WireTap` /
+  `Multicast` / audit routes.
+
+Late-bound summary headers (`llm.tokens.in`, `llm.tokens.out`,
+`llm.stop_reason`, `llm.tool.iterations`) are written **after** the
+`IAsyncEnumerable` completes; `llm.provider.id` and `llm.model.id` are
+written up-front. Transports collect them post-enumeration and surface them
+in a transport-appropriate way (see HTTP `event: done` trailer below).
+
+> **Scope.** The streaming path calls `ILlmProvider.StreamAsync` directly
+> and bypasses `AgentEngine` — so tools (`?tools=`) are not dispatched,
+> `AddRedbLlmStorage()` stores are not invoked, and governance hooks do not
+> fire on a streamed turn. Use streaming for user-facing rendering of a
+> single assistant turn; keep the non-streaming path when you need tools,
+> persistence, approvals or budgets.
+
+**`HttpConsumer` (`redb.Route.Http`).** Detects `Out.Body is
+IAsyncEnumerable<string>` and picks one of two writers based on
+`Out.ContentType`:
+- `text/event-stream` → SSE: per-line `data: ` prefix, blank-line terminator
+  per yield, response flushed per chunk. The stream ends with
+  `event: done\ndata: {…json…}\n\n` whose payload is built opportunistically
+  from whichever `llm.*` summary headers are present on the message at
+  end-of-stream (`llm.tokens.in`, `llm.tokens.out`, `llm.cost.usd`,
+  `llm.stop_reason`, `llm.tool.iterations`, `llm.model.id`,
+  `llm.provider.id`) — missing headers are omitted from the JSON, custom
+  ones (e.g. a pricing-table-derived `llm.cost.usd`) ride along for free.
+- anything else → chunked plain text: one yield = one chunk on the
+  Transfer-Encoding stream, no SSE framing, no trailer.
+
+Both writers set the standard "do-not-buffer-me" envelope:
+`Cache-Control: no-cache, no-transform`, `X-Accel-Buffering: no`, and
+`IHttpResponseBodyFeature.DisableBuffering()`. This neutralises nginx and
+similar reverse-proxy buffers and is what makes SSE actually progressive on
+the wire (without `X-Accel-Buffering: no` nginx by default holds the whole
+response until the upstream closes). Empty / null chunks are skipped — LLM
+providers periodically emit empty SSE keep-alives that must not turn into
+empty wire chunks. Client cancellation (`HttpClient` aborts the request)
+propagates into the server-side `await foreach` via `HttpContext.RequestAborted`,
+so the upstream provider stream is torn down promptly — no pinned upstream
+sockets.
+
+**`WsConsumer` (`redb.Route.WebSocket`).** Detects the same body type in the
+InOut branch of `HandleWebSocket` and yields **one
+`WebSocketMessageType.Text` frame per yield with `endOfMessage=true`**. Order
+is preserved (the per-connection receive loop awaits each `SendAsync` before
+reading the next inbound frame, so writes are naturally serial per socket);
+empty chunks are skipped. The cancellation token is the consumer's
+drain-safe `_drain.ProcessingToken`, so an in-flight stream completes during
+a graceful stop. The non-streaming `ResolveResponseBody` path is unchanged
+for non-`IAsyncEnumerable` bodies.
+
+**Tests.** Two transport-level test suites pin the wire contract without
+needing any LLM provider:
+- `redb.Route.Tests.Http/HttpStreamingTests` — `Sse_PerChunkFlush_AndDoneTrailer`,
+  `ChunkedPlain_NoSseFraming_NoTrailer`,
+  `ChunksArriveProgressively_NotBuffered`, and
+  `ClientCancel_PropagatesToEnumerator`. Verifies SSE line framing, the
+  `event: done` JSON payload, progressive arrival (first byte well before
+  last yield), and that aborting the `HttpClient` request surfaces on the
+  server-side enumerator within seconds.
+- `redb.Route.Tests.WebSocket/WsStreamingTests` —
+  `Streaming_OneFramePerYield_OrderPreserved` and
+  `Streaming_EmptyChunksSkipped`. Verifies one-frame-per-yield, ordered
+  delivery, and that null / empty yields do not produce wire frames.
+
+A new env-gated suite — `redb.Route.Tests.Llm/LiveStreamingTests` — exercises
+`ILlmProvider.StreamAsync` end-to-end against real free-tier providers
+(Anthropic Claude Haiku 4.5 via `AnthropicProvider` native SSE, plus Groq /
+Cerebras / Gemini / Mistral / OpenRouter via `OpenAiProvider`). Each test
+asserts more-than-one chunk on the wire (proves real streaming), at least one
+text delta, the expected substring in the accumulated answer, and a non-null
+terminal `StopReason`. Auto-skips when the corresponding key env var is
+missing, same as `LiveProviderTests`.
+
+#### `redb.Route.Llm` — REDB-backed stores for the remaining state surfaces
+
+The agent loop ships in-memory defaults for every governance surface; 3.1.0
+shipped REDB-backed `Conversation`, `Approval`, `CostBudget`,
+`ToolIdempotency` and `AuditObserver` stores. 3.1.1 lands the rest:
+
+- `RedbBatchStore` (`IBatchStore`) — tracks async-batch jobs submitted to
+  Anthropic Message Batches / OpenAI Batch / vLLM batch endpoints; the
+  callback webhook correlates back to the originating conversation through
+  this store. Backed by the new `LlmBatchProps` schema.
+- `RedbEvalRunStore` (`IEvalRunStore`) — persists evaluation runs by
+  scenario / fingerprint for leaderboard queries.
+- `RedbKnowledgeStore` (`IKnowledgeStore`) — RAG retrieval over the
+  `KnowledgeChunkProps` schema.
+- `RedbPromptTemplateRegistry` (`IPromptTemplateRegistry`) — versioned
+  prompt store (the previous default was in-memory only).
+- `RedbToolResultCache` (`IToolCacheStore`) — deterministic-tool result
+  cache with TTL.
+
+All five are opt-in through the same `AddRedbLlmStorage()` extension
+(`ServiceCollectionExtensions` grew the appropriate `TryAddSingleton`
+wiring) and ride on the existing `IRedbService` resolution path. A new
+`ToolIdempotencyProps` schema replaces the ad-hoc storage shape used in
+3.1.0 — see *Changed* below.
+
+#### `redb.Route.Llm` — async-batch callback plumbing
+
+- `LlmCallbackProcessor` — a vanilla `IProcessor` that consumes inbound
+  webhook callbacks from async-batch LLM APIs. Wired into any HTTP route
+  (no new URI scheme): resolves the batch id from header / query / JSON body,
+  deduplicates via `IToolIdempotencyStore` (keyed `"batch:<id>"`),
+  populates conversation / provider / model headers from the original
+  submission stored in `IBatchStore`, and marks the batch completed. A
+  duplicate callback sets `LlmHeaders.BatchDuplicate=true` so a downstream
+  `Choice().When(...).Stop()` can drop it cleanly.
+- New `LlmHeaders` constants: `BatchId` (`llm.batch.id`), `BatchStatus`
+  (`llm.batch.status`), `BatchDuplicate` (`llm.batch.duplicate`),
+  `ConversationMessageId` (`llm.conversation.message.id`).
+
+#### `redb.Route.Llm` — named-redb hint per exchange (`?redb=<name>`)
+
+The LLM connector now lets a route pin which named `IRedbService` instance
+its persistence stores write to. Useful when one Tsak host runs multiple
+LLM products against different DBs.
+
+- New URI option `?redb=<name>` parsed into `LlmEndpointOptions.Redb`.
+- New property key `LlmKeys.RedbName` (`llm.redb.name`) stamped onto
+  `IExchange.Properties` by `LlmProducer`; storage implementations resolve
+  the redb instance via `IRouteContext.GetRedbService(name, exchange)`.
+- Every `I*Store` method gained an optional `IExchange? exchange = null`
+  parameter so REDB-backed implementations can read this hint without
+  changing call sites — in-memory implementations ignore it. **Source-
+  compatible**: every interface change is an optional parameter with a
+  default; existing implementations and call sites compile unchanged.
+- Default `unnamed` `IRedbService` from the route context is used when no
+  hint is set, matching the 3.1.0 behaviour exactly.
+
+#### `redb.Route.Llm.Tools` — DSL / tool split
+
+Each homeless tool was reshaped into a thin `IProcessor` (`*Tool.cs`) plus
+a fluent route-DSL extension (`*Dsl.cs`) that mounts the processor with
+typed options. Affects `HttpFetchTool`, `JsonPathTool`, `MathEvalTool`,
+`RegexExtractTool`, `TavilyWebSearchTool`, `XPathTool`. The user-visible
+DSL shape is:
+
+```csharp
+From("direct:fetch-weather")
+    .AsLlmTool("get_weather")
+        .Description("Fetches weather for a URL.")
+        .Input("""{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}""")
+    .Then()
+    .HttpFetch(new HttpFetchOptions { HostAllowlist = ["api.weather.gov"] });
+```
+
+A new shared helper `LlmToolJson` centralises the small JSON-payload
+parsing / writing that every tool was duplicating. The split keeps the
+agent-engine surface unchanged — tool descriptors and registry stay the
+same; only the way you wire a tool *into a route* moves to a one-line DSL
+call.
+
+#### `redb.Route.Llm` — small additions
+
+- `LlmMetrics` exposes one more counter for stream chunks alongside the
+  existing call / iteration / token meters.
+- `LlmConsumer` honours the same `?redb=` hint when scheduling a
+  `From("llm://...")` agent run, so scheduled agents persist into the same
+  named DB as inbound producer calls.
+- `Engine/PromptRef`, `Engine/Eval/LlmEvalRunner` updated for the new
+  store signatures.
+
+### Changed
+
+- **`redb.Route.Llm` I*Store contracts.** Every store interface in
+  `redb.Route.Llm/Engine/Storage/*` (`IApprovalStore`, `IConversationStore`,
+  `ICostBudgetStore`, `IEvalRunStore`, `IKnowledgeStore`,
+  `IPromptTemplateRegistry`, `IToolCacheStore`, `IToolIdempotencyStore`)
+  gained an optional `IExchange? exchange = null` parameter to thread the
+  named-redb hint through. **Source-compatible**: optional with default,
+  existing implementations / call sites compile unchanged.
+- **`ToolIdempotencyProps` schema** — the per-tool-call idempotency rows
+  moved from the generic `ToolCacheProps` shape to a dedicated
+  `ToolIdempotencyProps` schema with explicit lifecycle fields. The two
+  surfaces previously shared one table; splitting them lets the cache TTL
+  and the idempotency receipt evolve independently. **No data migration
+  shipped** — early-3.1.x adopters running `AddRedbLlmStorage()` against
+  populated data should treat this as fresh state (the wider rollout
+  happens with the `Phase 2` story, where stores get their migration
+  helpers).
 
 ### Fixed
 

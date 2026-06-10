@@ -24,7 +24,4 @@ public class ToolCacheProps
 
     /// <summary>Optional expiry; null = no TTL.</summary>
     public DateTimeOffset? ExpiresAtUtc { get; set; }
-
-    /// <summary>Cumulative read count — useful for cache-effectiveness reports.</summary>
-    public long HitCount { get; set; }
 }

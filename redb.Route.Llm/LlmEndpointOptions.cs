@@ -68,6 +68,22 @@ public sealed class LlmEndpointOptions : EndpointOptions
     /// </summary>
     public string? Tools { get; set; }
 
+    /// <summary>
+    /// Optional name of the <see cref="redb.Core.IRedbService"/> the LLM stores
+    /// (conversation, approval, batch, idempotency, knowledge, ...) should target
+    /// for this endpoint. The producer/consumer publishes the value into
+    /// <c>exchange.Properties[LlmKeys.RedbName]</c>; storage implementations resolve
+    /// the redb instance via <c>context.GetRedbService(name, exchange)</c>, which
+    /// already takes care of per-exchange scoping and disposal.
+    /// <para>
+    /// When null or empty the default unnamed <c>IRedbService</c> registered in the
+    /// route context is used — typically the host-wide instance from
+    /// <c>services.AddRedb()</c>.
+    /// </para>
+    /// URI form: <c>llm://factory?redb=my-llm-db</c>.
+    /// </summary>
+    public string? Redb { get; set; }
+
     /// <inheritdoc />
     public override void Validate()
     {

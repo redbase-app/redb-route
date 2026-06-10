@@ -16,7 +16,7 @@ public sealed class RedbToolIdempotencyStoreTests
     public RedbToolIdempotencyStoreTests(PostgresProFixture fx) => _fx = fx;
 
     private RedbToolIdempotencyStore NewStore() =>
-        new(new InMemoryIdempotentRepository(), _fx.ScopeFactory);
+        new(new InMemoryIdempotentRepository(), _fx.RouteContext);
 
     [Fact]
     public async Task Reserve_FirstCall_IsNew()

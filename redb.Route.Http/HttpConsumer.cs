@@ -313,12 +313,130 @@ public class HttpConsumer : IConsumer
             {
                 await stream.CopyToAsync(httpContext.Response.Body, httpContext.RequestAborted).ConfigureAwait(false);
             }
+            else if (body is IAsyncEnumerable<string> asyncStrings)
+            {
+                // Streaming body: per-yield flush, no transport buffering.
+                //   - text/event-stream → SSE framing (data: ...\n\n + final 'event: done').
+                //   - everything else    → chunked plain text (each yield = one chunk).
+                // The framing choice is driven by the response Content-Type, which is the
+                // canonical signal carried end-to-end (HTTP Accept ↔ Content-Type), rather
+                // than a private header. Producers that opt-in to streaming should set
+                // ContentType="text/event-stream" on Out (LlmProducer does this for
+                // ?stream=true).
+                var useSse = responseContentType is not null
+                    && responseContentType.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase);
+
+                // Hint to nginx / cloud LB to not buffer the response. Cache-Control
+                // 'no-transform' also blocks gzip middleware from buffering for compression.
+                httpContext.Response.Headers["Cache-Control"] = "no-cache, no-transform";
+                httpContext.Response.Headers["X-Accel-Buffering"] = "no";
+
+                // Disable ASP.NET response buffering so per-chunk WriteAsync hits the
+                // socket immediately. Safe to call after headers are set but before
+                // the first body byte is written.
+                httpContext.Features
+                    .Get<Microsoft.AspNetCore.Http.Features.IHttpResponseBodyFeature>()
+                    ?.DisableBuffering();
+
+                if (useSse)
+                    await WriteSseStreamAsync(httpContext, responseMsg, asyncStrings, httpContext.RequestAborted).ConfigureAwait(false);
+                else
+                    await WriteChunkedTextStreamAsync(httpContext, asyncStrings, httpContext.RequestAborted).ConfigureAwait(false);
+            }
             else if (body is not null)
             {
                 await httpContext.Response.WriteAsync(
                     body.ToString() ?? string.Empty, httpContext.RequestAborted).ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    /// Pumps an <see cref="IAsyncEnumerable{T}"/> of text chunks to the response
+    /// as plain chunked-transfer (one yield = one chunk). Caller is responsible
+    /// for setting Content-Type and disabling buffering.
+    /// </summary>
+    private static async Task WriteChunkedTextStreamAsync(
+        Microsoft.AspNetCore.Http.HttpContext httpContext,
+        IAsyncEnumerable<string> source,
+        CancellationToken ct)
+    {
+        await foreach (var chunk in source.WithCancellation(ct).ConfigureAwait(false))
+        {
+            if (string.IsNullOrEmpty(chunk)) continue;
+            await httpContext.Response.WriteAsync(chunk, ct).ConfigureAwait(false);
+            await httpContext.Response.Body.FlushAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Pumps an <see cref="IAsyncEnumerable{T}"/> of text chunks to the response
+    /// as Server-Sent Events. Each yield becomes one <c>data:</c> frame; a final
+    /// <c>event: done</c> carries late-bound message headers
+    /// (<c>llm.tokens.in</c>, <c>llm.tokens.out</c>, <c>llm.stop_reason</c>, …)
+    /// that the producer writes only after the stream completes.
+    /// </summary>
+    private static async Task WriteSseStreamAsync(
+        Microsoft.AspNetCore.Http.HttpContext httpContext,
+        IMessage responseMsg,
+        IAsyncEnumerable<string> source,
+        CancellationToken ct)
+    {
+        await foreach (var chunk in source.WithCancellation(ct).ConfigureAwait(false))
+        {
+            if (string.IsNullOrEmpty(chunk)) continue;
+            // SSE spec: each line of the payload needs its own 'data: ' prefix;
+            // a blank line terminates the event.
+            var startIdx = 0;
+            for (var i = 0; i < chunk.Length; i++)
+            {
+                if (chunk[i] != '\n') continue;
+                var line = chunk.Substring(startIdx, i - startIdx);
+                await httpContext.Response.WriteAsync("data: " + line + "\n", ct).ConfigureAwait(false);
+                startIdx = i + 1;
+            }
+            if (startIdx < chunk.Length)
+            {
+                await httpContext.Response.WriteAsync(
+                    "data: " + chunk.Substring(startIdx) + "\n", ct).ConfigureAwait(false);
+            }
+            await httpContext.Response.WriteAsync("\n", ct).ConfigureAwait(false);
+            await httpContext.Response.Body.FlushAsync(ct).ConfigureAwait(false);
+        }
+
+        // Final 'done' event — serialises late-bound stream-summary headers
+        // (LlmHeaders.TokensIn/Out, StopReason, ...) that the producer set after
+        // the IAsyncEnumerable finished iterating.
+        var trailerJson = BuildSseTrailerJson(responseMsg);
+        if (trailerJson is not null)
+        {
+            await httpContext.Response.WriteAsync("event: done\ndata: " + trailerJson + "\n\n", ct).ConfigureAwait(false);
+            await httpContext.Response.Body.FlushAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Builds the JSON payload for the SSE <c>event: done</c> trailer. Picks up
+    /// streaming-summary headers (anything under the <c>llm.</c> namespace plus
+    /// the standard <c>llm.tokens.*</c> / <c>llm.stop_reason</c>). Returns
+    /// <c>null</c> when there's nothing useful to send.
+    /// </summary>
+    private static string? BuildSseTrailerJson(IMessage responseMsg)
+    {
+        var keys = new[]
+        {
+            "llm.tokens.in", "llm.tokens.out", "llm.cost.usd",
+            "llm.stop_reason", "llm.tool.iterations",
+            "llm.model.id", "llm.provider.id"
+        };
+        Dictionary<string, object?>? payload = null;
+        foreach (var k in keys)
+        {
+            if (!responseMsg.Headers.TryGetValue(k, out var v) || v is null) continue;
+            payload ??= new Dictionary<string, object?>(StringComparer.Ordinal);
+            payload[k] = v is string ? v : v.ToString();
+        }
+        return payload is null ? null : System.Text.Json.JsonSerializer.Serialize(payload);
     }
 
     private static bool IsInternalHeader(string key)

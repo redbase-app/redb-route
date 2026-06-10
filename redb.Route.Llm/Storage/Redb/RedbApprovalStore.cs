@@ -1,9 +1,10 @@
-using Microsoft.Extensions.DependencyInjection;
 using redb.Core;
 using redb.Core.Models.Entities;
+using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Governance;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Storage.Redb.Schemas;
+using redb.Route.RedbCore.Extensions;
 
 namespace redb.Route.Llm.Storage.Redb;
 
@@ -11,24 +12,40 @@ namespace redb.Route.Llm.Storage.Redb;
 /// REDB-backed <see cref="IApprovalStore"/>. One <see cref="ApprovalProps"/>
 /// row per decision; the approval id lives on the indexed
 /// <c>_objects.value_string</c> column.
+/// <para>
+/// The store does not own an <see cref="IRedbService"/> instance — each call
+/// resolves one through <c>IRouteContext.GetRedbService(name, exchange)</c>,
+/// which honours the per-exchange scope cache. The redb name is read from
+/// <c>exchange.Properties[LlmKeys.RedbName]</c> (set by the LLM endpoint URI),
+/// falling back to the constructor-supplied default name and then to the host's
+/// default unnamed instance.
+/// </para>
 /// </summary>
 public sealed class RedbApprovalStore : IApprovalStore
 {
-    private readonly IServiceScopeFactory _scopeFactory;
-    private bool _schemeEnsured;
-    private readonly SemaphoreSlim _ensureLock = new(1, 1);
+    private readonly IRouteContext _context;
+    private readonly string? _defaultRedbName;
 
-    /// <summary>Creates the store. Scheme is synced lazily on first use.</summary>
-    public RedbApprovalStore(IServiceScopeFactory scopeFactory)
+    /// <summary>Creates the store. Scheme is synced by the host's redb.InitializeAsync().</summary>
+    public RedbApprovalStore(IRouteContext context, string? defaultRedbName = null)
     {
-        _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _defaultRedbName = defaultRedbName;
+    }
+
+    private IRedbService Resolve(IExchange? exchange)
+    {
+        var name = _defaultRedbName;
+        if (exchange is not null
+            && exchange.Properties.TryGetValue(LlmKeys.RedbName, out var raw)
+            && raw is string s && s.Length > 0)
+            name = s;
+        return _context.GetRedbService(name ?? string.Empty, exchange);
     }
 
     /// <inheritdoc />
-    public async Task RecordAsync(ApprovalRequest request, ApprovalDecision decision, CancellationToken ct = default)
+    public async Task RecordAsync(ApprovalRequest request, ApprovalDecision decision, IExchange? exchange = null, CancellationToken ct = default)
     {
-        await EnsureSchemeAsync().ConfigureAwait(false);
-
         var id = decision.ApprovalId ?? Guid.NewGuid().ToString("N");
         var row = new RedbObject<ApprovalProps>
         {
@@ -46,18 +63,14 @@ public sealed class RedbApprovalStore : IApprovalStore
             }
         };
 
-        using var scope = _scopeFactory.CreateScope();
-        var redb = scope.ServiceProvider.GetRequiredService<IRedbService>();
+        var redb = Resolve(exchange);
         await redb.SaveAsync(row).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public async Task<ApprovalRecord?> FindAsync(string approvalId, CancellationToken ct = default)
+    public async Task<ApprovalRecord?> FindAsync(string approvalId, IExchange? exchange = null, CancellationToken ct = default)
     {
-        await EnsureSchemeAsync().ConfigureAwait(false);
-
-        using var scope = _scopeFactory.CreateScope();
-        var redb = scope.ServiceProvider.GetRequiredService<IRedbService>();
+        var redb = Resolve(exchange);
         var hit = await redb.Query<ApprovalProps>()
             .WhereRedb(x => x.ValueString == approvalId)
             .FirstOrDefaultAsync()
@@ -73,20 +86,5 @@ public sealed class RedbApprovalStore : IApprovalStore
             Reason = hit.Props.Reason,
             CreatedAtUtc = hit.Props.DecidedAtUtc.UtcDateTime
         };
-    }
-
-    private async Task EnsureSchemeAsync()
-    {
-        if (_schemeEnsured) return;
-        await _ensureLock.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            if (_schemeEnsured) return;
-            using var scope = _scopeFactory.CreateScope();
-            var redb = scope.ServiceProvider.GetRequiredService<IRedbService>();
-            await redb.SyncSchemeAsync<ApprovalProps>().ConfigureAwait(false);
-            _schemeEnsured = true;
-        }
-        finally { _ensureLock.Release(); }
     }
 }

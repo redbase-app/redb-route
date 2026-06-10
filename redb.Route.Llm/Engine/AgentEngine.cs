@@ -93,7 +93,7 @@ public sealed class AgentEngine : IAgentEngine
         if (_conversation is not null && request.ConversationId is { } convIdToLoad)
         {
             var path = await _conversation.LoadPathAsync(
-                convIdToLoad, request.ConversationParentMessageId, ct).ConfigureAwait(false);
+                convIdToLoad, request.ConversationParentMessageId, request.Exchange, ct).ConfigureAwait(false);
             foreach (var node in path)
                 transcript.Add(node.Message);
             if (path.Count > 0)
@@ -349,7 +349,7 @@ public sealed class AgentEngine : IAgentEngine
             };
             var decision = await _approval.AwaitAsync(approvalReq, ct).ConfigureAwait(false);
             if (_approvalStore is not null)
-                await _approvalStore.RecordAsync(approvalReq, decision, ct).ConfigureAwait(false);
+                await _approvalStore.RecordAsync(approvalReq, decision, request.Exchange, ct).ConfigureAwait(false);
             if (!decision.Approved)
             {
                 await _observer.OnToolInvokedAsync(new AgentToolInvocationContext
@@ -372,7 +372,7 @@ public sealed class AgentEngine : IAgentEngine
         ToolIdempotencyReservation? reservation = null;
         if (_idempotency is not null && request.ConversationId is { } convId)
         {
-            reservation = await _idempotency.TryReserveAsync(convId, use.ToolUseId, ct).ConfigureAwait(false);
+            reservation = await _idempotency.TryReserveAsync(convId, use.ToolUseId, request.Exchange, ct).ConfigureAwait(false);
             if (!reservation.IsNew)
             {
                 await _observer.OnToolInvokedAsync(new AgentToolInvocationContext
@@ -398,7 +398,7 @@ public sealed class AgentEngine : IAgentEngine
             LlmMetrics.ToolInvocations.Add(1, new KeyValuePair<string, object?>("llm.tool.name", use.Name));
 
             if (reservation is not null && request.ConversationId is { } completeConvId)
-                await _idempotency!.CompleteAsync(completeConvId, use.ToolUseId, output, ct).ConfigureAwait(false);
+                await _idempotency!.CompleteAsync(completeConvId, use.ToolUseId, output, request.Exchange, ct).ConfigureAwait(false);
 
             var redactedOutput = _redaction.Redact(output, RedactionContext.ToolOutput);
 
@@ -423,7 +423,7 @@ public sealed class AgentEngine : IAgentEngine
             _logger?.LogError(ex, "Tool '{Name}' failed", use.Name);
 
             if (reservation is not null && request.ConversationId is { } releaseConvId)
-                await _idempotency!.ReleaseAsync(releaseConvId, use.ToolUseId, ct).ConfigureAwait(false);
+                await _idempotency!.ReleaseAsync(releaseConvId, use.ToolUseId, request.Exchange, ct).ConfigureAwait(false);
 
             await _observer.OnToolInvokedAsync(new AgentToolInvocationContext
             {
@@ -467,6 +467,7 @@ public sealed class AgentEngine : IAgentEngine
                 Usage = usage,
                 ToolUseId = toolUseId
             },
+            request.Exchange,
             ct).ConfigureAwait(false);
     }
 

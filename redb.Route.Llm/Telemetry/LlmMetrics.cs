@@ -69,4 +69,19 @@ public static class LlmMetrics
     public static readonly Counter<long> ToolFailures =
         Meter.CreateCounter<long>("redb.route.llm.tool.failures", "calls",
             "Number of tool invocations that threw an exception.");
+
+    /// <summary>Tool-cache reads that returned a live (non-expired) cached output. Tag <c>llm.tool.name</c> when known.</summary>
+    public static readonly Counter<long> ToolCacheHits =
+        Meter.CreateCounter<long>("redb.route.llm.tool_cache.hits", "reads",
+            "Tool-cache reads that returned a live cached output.");
+
+    /// <summary>Tool-cache reads that found no row (cold key).</summary>
+    public static readonly Counter<long> ToolCacheMisses =
+        Meter.CreateCounter<long>("redb.route.llm.tool_cache.misses", "reads",
+            "Tool-cache reads that found no row.");
+
+    /// <summary>Tool-cache reads that found an expired row (and triggered lazy eviction).</summary>
+    public static readonly Counter<long> ToolCacheExpired =
+        Meter.CreateCounter<long>("redb.route.llm.tool_cache.expired", "reads",
+            "Tool-cache reads that found an expired row.");
 }

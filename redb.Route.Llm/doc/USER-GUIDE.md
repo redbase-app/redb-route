@@ -26,11 +26,12 @@
 12. [URI parameter reference](#uri-parameter-reference)
 13. [Headers reference](#headers-reference)
 14. [Observability — headers, OTel, tsak.web](#observability--headers-otel-tsakweb)
-15. [Storage & Persistence](#storage--persistence)
-16. [Testing strategy](#testing-strategy)
-17. [Apache Camel comparison](#apache-camel-comparison)
-18. [Roadmap](#roadmap)
-19. [FAQ](#faq)
+15. [Streaming responses (`?stream=true`)](#streaming-responses-streamtrue)
+16. [Storage & Persistence](#storage--persistence)
+17. [Testing strategy](#testing-strategy)
+18. [Apache Camel comparison](#apache-camel-comparison)
+19. [Roadmap](#roadmap)
+20. [FAQ](#faq)
 
 ---
 
@@ -517,7 +518,7 @@ Anthropic publishes an OpenAI-compatible endpoint that speaks the same `chat/com
 
 — and our universal `OpenAiProvider` handles requests, responses, tool calls, streaming and finish reasons identically. No new provider class, no Anthropic SDK, no separate retry logic.
 
-A native `AnthropicProvider` (Messages API) is still on the roadmap, but it's reserved for features the OpenAI-compat surface doesn't expose: prompt caching, computer-use, fine-grained image content blocks. **For 95% of production chat / tool-use use cases, the OpenAI-compat path is fine.**
+A native `AnthropicProvider` (Messages API) **also ships** alongside the OpenAI-compat path — `f.Provider = "anthropic"` resolves to it. It exists to consume features the OpenAI-compat surface flattens away — notably the **true Messages-API SSE stream** (`message_start` / `content_block_delta` / `message_stop`), which is what `?stream=true` against `provider=anthropic` delivers end-to-end via `HttpConsumer` / `WsConsumer`. **For non-streaming chat / tool-use, either path is fine.** Pick OpenAI-compat for vendor portability, pick native Anthropic for the streaming and Messages-API-only features (prompt caching, computer-use, fine-grained image blocks) as they land.
 
 ### Models
 
@@ -630,7 +631,7 @@ llm://<connectionFactoryName>
     &systemPromptRef=<literal | #registry-key>
     &initialBodyRef=<literal | #registry-key>     # consumer only
     &conversation=none|header|property
-    &stream=true                                   # producer only (skeleton in Phase 1)
+    &stream=true                                   # producer only — HTTP→SSE, WS→per-frame
     &schedule=500ms|30s|5m|1h                      # consumer only
     &maxIterations=8
     &tools=*|name1,name2
@@ -643,7 +644,7 @@ llm://<connectionFactoryName>
 | `systemPromptRef` | yes (header beats it) | yes | Honours `#`-ref. |
 | `initialBodyRef` | n/a | yes | Honours `#`-ref. The consumer's user-prompt source. |
 | `conversation` | yes | yes (`header` resolves to none — consumer-born exchanges have no inbound header) | Future: persistent memory backends. |
-| `stream` | yes (`Out.Body = IAsyncEnumerable<string>`) | n/a | Phase 1 skeleton. |
+| `stream` | yes (`Out.Body = IAsyncEnumerable<string>`) | n/a | Producer-only. End-to-end on the wire via `redb.Route.Http` (SSE with `event: done` summary trailer) and `redb.Route.WebSocket` (one text frame per token). See [Streaming responses](#streaming-responses-streamtrue). |
 | `schedule` | n/a | required | `500ms` / `30s` / `5m` / `1h`. |
 | `maxIterations` | yes | yes | Hard ceiling on tool-loop turns. Default 8. |
 | `tools` | yes | yes | `*`, CSV, or omitted. |
@@ -671,6 +672,8 @@ llm://<connectionFactoryName>
 | `llm.tool.iterations` | How many loop steps the agent took. |
 | `llm.stop_reason` | `EndTurn`, `ToolUse`, `MaxTokens`, `Other`. |
 | `llm.raw_stop_reason` | Vendor-native value (`"stop"`, `"tool_calls"`, `"length"`, `"content_filter"`). |
+| `llm.streaming` | `true` when the response body is an `IAsyncEnumerable<string>` of token deltas. Set by `LlmProducer` when `?stream=true` is in effect; downstream transports branch on it (or on `Out.Body` shape) to pick a streaming wire frame. |
+| `llm.cost.usd` | Estimated cost of the call in USD (when the model has a known price). Carried into the SSE `event: done` trailer alongside the token / stop-reason fields. |
 
 These flow downstream like any other headers — `WireTap` them to your metrics pipeline, branch on them, log them, persist them.
 
@@ -687,6 +690,91 @@ The connector hooks into redb.Route's existing observability stack. Nothing extr
 **Endpoint statistics.** `LlmEndpoint` exposes `IEndpointStatistics`: `MessagesIn`, `MessagesOut`, `BytesIn`, throughput, `LastErrorMessage`, `HealthStatus`. `tsak.web` reads these the same way it reads from Kafka or RabbitMQ — no per-connector adapter.
 
 **Cost dashboards.** Persist `llm.tokens.in` / `llm.tokens.out` to your OLAP store via a `WireTap` route, multiply by the per-vendor rate, you have a cost dashboard. The connector doesn't ship a cost calculator (vendor pricing changes too often), but every input it needs is already on the message.
+
+---
+
+## Streaming responses (`?stream=true`)
+
+For user-facing chat surfaces a 4-second "please wait" before the assistant replies feels broken even when the total wall-clock is identical. The connector therefore ships a true token-by-token streaming path that runs **end-to-end** — from provider HTTP SSE through `LlmProducer` to the public HTTP or WebSocket consumer that fronts the route.
+
+No new types, no new DSL shape: just `?stream=true` on the URI (or the `llm.streaming` header on the inbound exchange).
+
+### The wire contract
+
+When streaming is in effect, `LlmProducer.ProcessStreamingAsync` writes an `IAsyncEnumerable<string>` of provider token deltas into `exchange.Out.Body`, sets `Out.ContentType ??= "text/event-stream"` and `Out.Headers["llm.streaming"] = true`. Late-bound summary headers — `llm.tokens.in`, `llm.tokens.out`, `llm.stop_reason`, `llm.tool.iterations` — are populated **after** the enumerable completes (`llm.provider.id` and `llm.model.id` are populated up-front). Transports read these post-enumeration and surface them in a transport-appropriate way.
+
+> **Trade-off you should know.** The streaming producer path **does not run the agent tool-loop**. It calls `ILlmProvider.StreamAsync` directly and bypasses `AgentEngine` — which means tools are not dispatched, `AddRedbLlmStorage()` stores (`RedbConversationStore`, `RedbAuditObserver`, `RedbApprovalStore`, `RedbToolIdempotencyStore`, `RedbCostBudgetStore`) are not invoked, and governance hooks do not fire. Use `?stream=true` for user-facing rendering of a chat reply; use the non-streaming path when you need tools, persistence, approvals or budgets. Restoring full agent semantics over the streaming wire is on the Phase-2 list.
+
+Downstream transports inspect `Out.Body`:
+
+- `redb.Route.Http` (`HttpConsumer`): picks SSE or chunked plain text based on `Content-Type`, flushes per yield, sets the right "do-not-buffer-me" envelope.
+- `redb.Route.WebSocket` (`WsConsumer`): one `WebSocketMessageType.Text` frame per yield, `endOfMessage=true`, order preserved.
+- Anything else (Kafka, RabbitMQ, mock…): reads the body as the framework's default object — streaming becomes a stringified enumerable, which is rarely what you want. Streaming is meaningful only against transports that themselves have a streaming wire shape.
+
+### Over HTTP — Server-Sent Events with a `done` trailer
+
+```csharp
+From("http://+:8080/chat")
+    .To("llm://claude?stream=true");
+```
+
+The browser receives:
+
+```text
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Cache-Control: no-cache, no-transform
+X-Accel-Buffering: no
+Transfer-Encoding: chunked
+
+data: Hello
+
+data: , 
+
+data: world
+
+data: !
+
+event: done
+data: {"llm.tokens.in":12,"llm.tokens.out":4,"llm.stop_reason":"EndTurn","llm.tool.iterations":1,"llm.model.id":"claude-haiku-4-5","llm.provider.id":"anthropic"}
+
+```
+
+Key points:
+
+- `Cache-Control: no-cache, no-transform` defeats the gzip middleware that otherwise buffers the response for compression.
+- `X-Accel-Buffering: no` is the nginx hint that disables its proxy buffer — without it nginx holds the whole response until the upstream closes, defeating SSE.
+- `IHttpResponseBodyFeature.DisableBuffering()` turns off ASP.NET's own response buffer so each `WriteAsync` hits the socket immediately.
+- Empty / null yields are silently skipped — providers periodically emit empty keep-alive deltas that must not turn into empty wire chunks.
+- The terminal `event: done` frame's payload is a JSON object built from whichever `llm.*` summary headers are present on the message at end-of-stream (`llm.tokens.in`, `llm.tokens.out`, `llm.cost.usd`, `llm.stop_reason`, `llm.tool.iterations`, `llm.model.id`, `llm.provider.id`). Missing headers are simply omitted from the payload — the contract is "opportunistic": if your route enriches `Out.Headers` with a custom `llm.cost.usd` (e.g. in a `WireTap` to a pricing table), it lands in the trailer for free.
+- Client cancellation (`HttpClient.CancelPendingRequests`, tab close, browser navigation) propagates into the server-side `await foreach` via `HttpContext.RequestAborted`, so the upstream provider stream is torn down promptly.
+
+If the response Content-Type is something other than `text/event-stream`, the transport falls back to **chunked plain text**: one yield = one Transfer-Encoding chunk, no SSE framing, no trailer. Useful for clients that want progressive plain text without the SSE protocol layer (curl pipelines, log tails, etc.).
+
+### Over WebSocket — one Text frame per token
+
+```csharp
+From("ws://+:9001/chat")
+    .To("llm://claude?stream=true");
+```
+
+Each provider token delta becomes one `WebSocketMessageType.Text` frame with `endOfMessage=true`. Order is preserved (the per-connection receive loop awaits each `SendAsync` before reading the next inbound frame, so writes are naturally serial per socket); empty chunks are skipped; the cancellation token is the consumer's drain-safe `_drain.ProcessingToken`, so a streaming response completes during a graceful shutdown rather than being torn mid-message.
+
+The non-streaming path (`Out.Body` is a `string` / `byte[]` / etc.) is unchanged — one full response frame, just as in 3.1.0.
+
+> **Known limitation.** `WsConsumer.HandleWebSocket` currently does not echo a client-initiated Close frame — it returns on the first inbound Close without sending one back. Browser clients dispose the underlying socket cleanly, but C# `ClientWebSocket` callers that rely on `CloseAsync()` returning normally will see `remote party closed without handshake`. As a workaround, in tests rely on `using` / `Dispose` to tear down the connection instead of an explicit `CloseAsync`. This is unrelated to streaming and predates 3.1.1; a follow-up will echo the Close.
+
+### Picking a streaming provider
+
+- **`AnthropicProvider`** (`Provider = "anthropic"`) reads true Anthropic Messages SSE (`message_start` / `content_block_delta` / `message_stop` events) and yields one string per text delta. This is the reference for what streaming "should" feel like.
+- **`OpenAiProvider`** (`Provider = "openai" | "groq" | "cerebras" | "gemini" | "mistral" | "openrouter" | ...`) consumes the universal OpenAI-compat `data: {...}\n\n` SSE shape and yields `choices[0].delta.content` chunks. Works the same against all 14 OpenAI-compatible vendors.
+- **`StubProvider`** has no streaming — it returns the whole reply as a single `await foreach` yield for deterministic tests.
+
+### Tests that pin the contract
+
+- `redb.Route.Tests.Http/HttpStreamingTests` (4 tests) — verifies SSE framing, the `event: done` JSON payload, chunked-plain fallback, **progressive arrival** (asserts first chunk arrives well before the last yield is produced, proving no buffering), and that aborting the `HttpClient` request surfaces on the server-side enumerator within seconds.
+- `redb.Route.Tests.WebSocket/WsStreamingTests` (2 tests) — one-frame-per-yield, empty-chunk skipping.
+- `redb.Route.Tests.Llm/LiveStreamingTests` (env-gated, 6 providers) — each test asserts `ChunkCount > 1` (proves the wire is genuinely streamed, not faked from a buffered response), at least one text delta, the expected substring in the accumulated answer, and a non-null terminal `StopReason`. Skips when the relevant `REDB_LLM_*_KEY` env var is missing, same as `LiveProviderTests`.
 
 ---
 
@@ -780,7 +868,7 @@ Camel's LLM story lives in a family — `camel-langchain4j-chat`, `-embeddings`,
 | Tool dispatch into a route | `langchain4j-tools://name` (separate component) | `.AsLlmTool("name")` (DSL aspect on any `From(...)`) |
 | Agent loop | `langchain4j-agent://...` | built into `IAgentEngine` |
 | Scheduled invocation | only via `from("timer:...").to("langchain4j-chat:...")` — the LLM is producer-only | **`From("llm://factory?schedule=...")` is a first-class consumer** |
-| Streaming responses | LangChain4j streaming chat model | `?stream=true` (skeleton) |
+| Streaming responses | LangChain4j streaming chat model | `?stream=true` end-to-end: `Out.Body = IAsyncEnumerable<string>`, `HttpConsumer` flushes as SSE with `event: done` summary trailer, `WsConsumer` as one text frame per token |
 | Registry refs (`#name`) | yes — Camel-wide | yes — framework-wide; works for connection factories *and* prompts |
 | Provider matrix | 25+ via LangChain4j (Anthropic, Bedrock, Vertex, Azure OpenAI, OpenAI, Mistral, Ollama, …) | 14 OpenAI-compatible behind one `OpenAiProvider` (incl. Anthropic Claude live-tested) |
 | Embeddings / vector store | yes — `langchain4j-embeddings` + LangChain4j vector stores | Phase 2 (`embed://`, `vector://` schemes planned) |
@@ -806,7 +894,6 @@ Camel's LLM story lives in a family — `camel-langchain4j-chat`, `-embeddings`,
 - Wider provider matrix (Bedrock, Vertex, Azure OpenAI with native auth).
 - Embeddings, RAG, document loaders, web search shipping today (we're Phase 2).
 - Chat memory stores in the box.
-- Production-ready streaming.
 
 ### Architectural differences worth knowing
 
@@ -831,6 +918,7 @@ Camel's LLM story lives in a family — `camel-langchain4j-chat`, `-embeddings`,
 - ✅ `IPromptTemplateRegistry` + `InMemoryPromptTemplateRegistry`.
 - ✅ OTel + tsak.web statistics.
 - ✅ DSL showcase test suite (BasicChat, InlineLlm, ToolRoute, ChainedLlm, HttpFetchTool, RegistryDrivenPrompt, ClaudeChat).
+- ✅ **Streaming end-to-end** (`?stream=true`): `LlmProducer` emits `IAsyncEnumerable<string>`; `redb.Route.Http` flushes per-chunk as SSE (`event: done` JSON trailer with final usage / stop reason / cost); `redb.Route.WebSocket` yields one text frame per token. Live-tested against Anthropic Claude (native SSE), Groq, Cerebras, Gemini, Mistral, OpenRouter.
 
 ### Phase 1.5 (next session — confirmed scope)
 

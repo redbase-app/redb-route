@@ -359,10 +359,11 @@ return output;
 
 `RedbToolIdempotencyStore` keeps the reservation in `IIdempotentRepository`
 (the same redb infra `redb.Route.Processors` uses) and the response body in
-`ToolCacheProps`. Forgot what happened last night?
-`redb.Query<ToolCacheProps>().Where(p => p.ToolName == "transfer_money")`
-gives you a log with `HitCount` (how many retries hit cache) — your network
-problem is right there in front of you.
+`ToolCacheProps`. Hit-rate, miss-rate and TTL evictions are emitted as
+OpenTelemetry counters on the shared `redb.Route` meter
+(`redb.route.llm.tool_cache.hits` / `.misses` / `.expired`, tagged with
+`llm.tool.name`) so the engine never writes to the row on a read — add
+`.AddMeter("redb.Route")` to your OTel pipeline and the dashboard is there.
 
 ---
 
@@ -463,7 +464,7 @@ Two rules pervade everything:
 | `MessageProps`        | `LLM Conversation Message`    | Role, Iteration, CreatedAtUtc, ProviderId?, ModelId?, StopReason?, ToolUseId?, InputTokens, OutputTokens, Content[] | tree-child; `value_long` = root id; `Content` is a typed array of `MessageContentBlock` |
 | `ApprovalProps`       | `LLM Approval`                | ConversationId?, ToolName, ToolUseId, Approved, Reason?, ApprovedBy?, DecidedAtUtc, InputJson                      | one row per decision |
 | `CostBudgetProps`     | `LLM Cost Budget`             | PeriodStartUtc?, InputTokens, OutputTokens, CostUsd, UpdatedAtUtc                                                  | one row per conversation; `value_string` = conv id |
-| `ToolCacheProps`      | `LLM Tool Cache`              | ToolName?, OutputJson, CreatedAtUtc, ExpiresAtUtc?, HitCount                                                       | `value_string` = `{conv}:{toolUseId}` |
+| `ToolCacheProps`      | `LLM Tool Cache`              | ToolName?, OutputJson, CreatedAtUtc, ExpiresAtUtc?                                                                 | `value_string` = `{conv}:{toolUseId}`; hit/miss/expire counts live on the `redb.Route` OTel meter, not in the row |
 | `ToolAuditProps`      | `LLM Tool Audit`              | ConversationId, MessageId?, ToolName, ToolUseId, InvokedAtUtc, DurationMs, Outcome, SkipReason?, InputJson, OutputJson?, ErrorMessage? | one row per invocation |
 | `KnowledgeChunkProps` | `LLM Knowledge Chunk`         | ChunkId, Collection?, Text, Embedding[], Dimension, MetadataJson?, UpdatedAtUtc                                    | Phase 2 RAG; `Embedding` is a native `float[]` |
 | `PromptTemplateProps` | `LLM Prompt Template`         | Name, Version, Body, Description?, CreatedAtUtc                                                                    | Phase 2; `(Name, Version)` is the business key |
@@ -556,6 +557,17 @@ a conversation tree is usually small (tens of messages).
   without a predicate — you'll see other TFMs' rows.
 - **Postgres Pro free tier.** All 16 storage tests fit inside the 1024-query
   free-tier budget on a single run.
+- **Streaming (`?stream=true`) currently bypasses the agent loop.** The
+  streaming producer path (`LlmProducer.ProcessStreamingAsync`) calls
+  `ILlmProvider.StreamAsync` directly and **does not** invoke `AgentEngine`
+  — which means `RedbConversationStore`, `RedbApprovalStore`,
+  `RedbCostBudgetStore`, `RedbToolIdempotencyStore` and `RedbAuditObserver`
+  see nothing from a streamed turn. Tools (`?tools=`) are also intentionally
+  not dispatched in stream mode. If you need persistence + streaming on the
+  same route today, drive persistence with a parallel non-streaming `WireTap`
+  to a deterministic `llm://` step, or split the user-visible response from
+  the audit-visible one. Restoring full agent-loop semantics on top of the
+  streaming wire is on the Phase-2 list.
 
 ---
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Governance;
 
 namespace redb.Route.Llm.Engine.Storage;
@@ -7,14 +8,22 @@ namespace redb.Route.Llm.Engine.Storage;
 /// Persists approval decisions for audit and replay. Every call answered by
 /// <see cref="IApprovalGate"/> should land here so reviewers can correlate the
 /// gate's verdict with the resulting tool call.
+/// <para>
+/// The optional <c>exchange</c> parameter on every method carries the route
+/// pipeline's current exchange; REDB-backed implementations resolve a
+/// per-exchange <see cref="redb.Core.IRedbService"/> through
+/// <c>IRouteContext.GetRedbService(name, exchange)</c> using the named-redb
+/// hint stored in <see cref="LlmKeys.RedbName"/>. In-memory implementations
+/// ignore it.
+/// </para>
 /// </summary>
 public interface IApprovalStore
 {
     /// <summary>Records a decision against the pending request.</summary>
-    Task RecordAsync(ApprovalRequest request, ApprovalDecision decision, CancellationToken ct = default);
+    Task RecordAsync(ApprovalRequest request, ApprovalDecision decision, IExchange? exchange = null, CancellationToken ct = default);
 
     /// <summary>Looks up the previously-recorded decision for <paramref name="approvalId"/>.</summary>
-    Task<ApprovalRecord?> FindAsync(string approvalId, CancellationToken ct = default);
+    Task<ApprovalRecord?> FindAsync(string approvalId, IExchange? exchange = null, CancellationToken ct = default);
 }
 
 /// <summary>An approval decision joined with the request that triggered it.</summary>
@@ -48,7 +57,7 @@ public sealed class InMemoryApprovalStore : IApprovalStore
     private readonly ConcurrentDictionary<string, ApprovalRecord> _records = new(StringComparer.Ordinal);
 
     /// <inheritdoc />
-    public Task RecordAsync(ApprovalRequest request, ApprovalDecision decision, CancellationToken ct = default)
+    public Task RecordAsync(ApprovalRequest request, ApprovalDecision decision, IExchange? exchange = null, CancellationToken ct = default)
     {
         var id = decision.ApprovalId ?? Guid.NewGuid().ToString("N");
         _records[id] = new ApprovalRecord
@@ -64,6 +73,6 @@ public sealed class InMemoryApprovalStore : IApprovalStore
     }
 
     /// <inheritdoc />
-    public Task<ApprovalRecord?> FindAsync(string approvalId, CancellationToken ct = default) =>
+    public Task<ApprovalRecord?> FindAsync(string approvalId, IExchange? exchange = null, CancellationToken ct = default) =>
         Task.FromResult(_records.TryGetValue(approvalId, out var rec) ? rec : null);
 }

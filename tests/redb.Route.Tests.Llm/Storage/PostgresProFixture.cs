@@ -5,6 +5,8 @@ using redb.Core;
 using redb.Core.Models.Configuration;
 using redb.Core.Pro.Extensions;
 using redb.Postgres.Pro.Extensions;
+using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Llm.Storage.Redb.Schemas;
 
 namespace redb.Route.Tests.Llm.Storage;
@@ -25,6 +27,16 @@ public sealed class PostgresProFixture : IAsyncLifetime
     public IRedbService Redb { get; private set; } = null!;
     public ServiceProvider ServiceProvider { get; private set; } = null!;
     public IServiceScopeFactory ScopeFactory => ServiceProvider.GetRequiredService<IServiceScopeFactory>();
+
+    /// <summary>
+    /// Real <see cref="RouteContext"/> with the fixture's <see cref="IRedbService"/>
+    /// registered as the default unnamed instance. Stores resolve it via
+    /// <c>context.GetRedbService(name, exchange)</c> — when <c>name</c> is empty
+    /// (the test path), the extension falls back to <c>context.GetService&lt;IRedbService&gt;()</c>
+    /// which returns the fixture's redb. No per-exchange scoping is needed for
+    /// these unit tests — they call store methods with <c>exchange: null</c>.
+    /// </summary>
+    public IRouteContext RouteContext { get; private set; } = null!;
 
     public async Task InitializeAsync()
     {
@@ -52,6 +64,10 @@ public sealed class PostgresProFixture : IAsyncLifetime
 
         ServiceProvider = services.BuildServiceProvider();
         Redb = ServiceProvider.GetRequiredService<IRedbService>();
+
+        RouteContext = new RouteContext();
+        RouteContext.SetServiceProvider(ServiceProvider);
+        RouteContext.AddService(typeof(IRedbService), Redb);
 
         try { await Redb.InitializeAsync(ensureCreated: true); }
         catch { await Redb.InitializeAsync(); }
@@ -91,6 +107,7 @@ public sealed class PostgresProFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        RouteContext?.Dispose();
         if (ServiceProvider is IAsyncDisposable ad)
             await ad.DisposeAsync();
         else

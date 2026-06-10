@@ -22,7 +22,18 @@ using redb.Route.Llm.Engine.Observability;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Extensions;
 
-// Uncomment together with the REDB block below to swap InMemory → Postgres-backed memory:
+// ─── REDB-BACKED MEMORY (optional) ───────────────────────────────────────────
+// To swap the in-memory conversation store for a Postgres-backed one:
+//   STEP 1: uncomment the two PackageReference lines in Llm.HttpShell.csproj.
+//   STEP 2: uncomment the three `using` lines just below and the
+//           `services.AddRedb(...)` line further down.
+//   STEP 3: in the AgentEngine constructor, swap `new InMemoryConversationStore()`
+//           for `new RedbConversationStore(ctx)` (see the comment there).
+//
+// RedbConversationStore takes the IRouteContext directly. On every call it asks
+// `context.GetRedbService(name, exchange)`, which auto-creates a per-exchange
+// IServiceScope (cached in exchange.Properties, disposed when the exchange ends)
+// — so we don't need to plumb an IServiceScopeFactory ourselves.
 // using redb.Core.Extensions;
 // using redb.Postgres.Extensions;
 // using redb.Route.Llm.Storage.Redb;
@@ -42,7 +53,8 @@ services.AddLogging(b => b
 services.AddSingleton<IRouteContext>(_ => ctx);
 services.AddSingleton<ILogger>(sp => sp.GetRequiredService<ILoggerFactory>().CreateLogger("redb.Route"));
 
-// Uncomment to enable REDB-backed conversation memory (Postgres):
+// STEP 2 of 3 — register the default (unnamed) IRedbService. RedbConversationStore
+// will pick it up via context.GetRedbService("", exchange) → per-exchange scope.
 // services.AddRedb(o => o.UsePostgres("Host=localhost;Port=5432;Username=postgres;Password=1;Database=redb"));
 
 var sp = services.BuildServiceProvider();
@@ -51,9 +63,6 @@ ctx = new RouteContext(sp, contextId: "llm-http-shell");
 // RouteContext.GetService<T>() looks only in its own service map (no fallback to the
 // IServiceProvider), so .Log(...) steps stay silent unless we hand it the logger factory:
 ctx.AddService(typeof(ILoggerFactory), sp.GetRequiredService<ILoggerFactory>());
-
-// Uncomment together with the line above to grab a scope factory for RedbConversationStore:
-// var redbScopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
 
 // ─── 3. Components: HTTP + LLM + Exec ────────────────────────────────────────
 ctx.AddComponent(new HttpComponent { ServerManager = new SharedHttpServerManager() });
@@ -87,7 +96,8 @@ var engine = new AgentEngine(
     redaction:        new NoopRedactionFilter(),
     shadow:           new NoopShadowRunner(),
     conversation:     new InMemoryConversationStore(),  // X-Chat-Id history (lost on restart)
-    // conversation:     new RedbConversationStore(redbScopeFactory),  // ← swap in for Postgres-backed persistence
+    // STEP 3 of 3 — swap the line above for the line below to persist chat history in Postgres:
+    // conversation:     new RedbConversationStore(ctx),
     idempotency:      null,
     approvalStore:    null);
 ctx.AddService(typeof(IAgentEngine), engine);

@@ -1,8 +1,9 @@
-using Microsoft.Extensions.DependencyInjection;
 using redb.Core;
 using redb.Core.Models.Entities;
+using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Observability;
 using redb.Route.Llm.Storage.Redb.Schemas;
+using redb.Route.RedbCore.Extensions;
 
 namespace redb.Route.Llm.Storage.Redb;
 
@@ -10,17 +11,25 @@ namespace redb.Route.Llm.Storage.Redb;
 /// REDB-backed <see cref="IAgentObserver"/> that persists one
 /// <see cref="ToolAuditProps"/> row per tool invocation. Non-blocking by
 /// contract — failures are swallowed so audit problems never break a run.
+/// <para>
+/// The observer is invoked from inside the agent loop, not from a route
+/// pipeline, and therefore has no <c>IExchange</c> in scope. It resolves the
+/// <see cref="IRedbService"/> through <c>IRouteContext.GetRedbService(name,
+/// exchange: null)</c> using the constructor-supplied default name (or the
+/// host's default unnamed instance when null). A custom observer can be
+/// substituted to pipe audit rows into a named redb instance.
+/// </para>
 /// </summary>
 public sealed class RedbAuditObserver : IAgentObserver
 {
-    private readonly IServiceScopeFactory _scopeFactory;
-    private bool _schemeEnsured;
-    private readonly SemaphoreSlim _ensureLock = new(1, 1);
+    private readonly IRouteContext _context;
+    private readonly string? _defaultRedbName;
 
-    /// <summary>Creates the observer. Scheme is synced lazily on first event.</summary>
-    public RedbAuditObserver(IServiceScopeFactory scopeFactory)
+    /// <summary>Creates the observer. Scheme is synced by the host's redb.InitializeAsync().</summary>
+    public RedbAuditObserver(IRouteContext context, string? defaultRedbName = null)
     {
-        _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _defaultRedbName = defaultRedbName;
     }
 
     /// <inheritdoc />
@@ -34,8 +43,6 @@ public sealed class RedbAuditObserver : IAgentObserver
     {
         try
         {
-            await EnsureSchemeAsync().ConfigureAwait(false);
-
             var outcome = context.Exception is not null
                 ? "error"
                 : context.Skipped
@@ -60,8 +67,7 @@ public sealed class RedbAuditObserver : IAgentObserver
                 }
             };
 
-            using var scope = _scopeFactory.CreateScope();
-            var redb = scope.ServiceProvider.GetRequiredService<IRedbService>();
+            var redb = _context.GetRedbService(_defaultRedbName ?? string.Empty, exchange: null);
             await redb.SaveAsync(row).ConfigureAwait(false);
         }
         catch
@@ -72,19 +78,4 @@ public sealed class RedbAuditObserver : IAgentObserver
 
     /// <inheritdoc />
     public Task OnRunCompletedAsync(AgentRunCompletedContext context, CancellationToken ct = default) => Task.CompletedTask;
-
-    private async Task EnsureSchemeAsync()
-    {
-        if (_schemeEnsured) return;
-        await _ensureLock.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            if (_schemeEnsured) return;
-            using var scope = _scopeFactory.CreateScope();
-            var redb = scope.ServiceProvider.GetRequiredService<IRedbService>();
-            await redb.SyncSchemeAsync<ToolAuditProps>().ConfigureAwait(false);
-            _schemeEnsured = true;
-        }
-        finally { _ensureLock.Release(); }
-    }
 }

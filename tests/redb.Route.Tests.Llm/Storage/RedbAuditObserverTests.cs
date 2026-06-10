@@ -53,7 +53,7 @@ public sealed class RedbAuditObserverTests
     [Fact]
     public async Task OnToolInvoked_Success_PersistsRow()
     {
-        var obs = new RedbAuditObserver(_fx.ScopeFactory);
+        var obs = new RedbAuditObserver(_fx.RouteContext);
         var convId = $"c-{Guid.NewGuid():N}";
 
         await obs.OnToolInvokedAsync(MakeCtx(convId, "http_fetch", "tu-1"));
@@ -72,7 +72,7 @@ public sealed class RedbAuditObserverTests
     [Fact]
     public async Task OnToolInvoked_Exception_PersistsErrorOutcome()
     {
-        var obs = new RedbAuditObserver(_fx.ScopeFactory);
+        var obs = new RedbAuditObserver(_fx.RouteContext);
         var convId = $"c-{Guid.NewGuid():N}";
 
         await obs.OnToolInvokedAsync(MakeCtx(
@@ -88,7 +88,7 @@ public sealed class RedbAuditObserverTests
     [Fact]
     public async Task OnToolInvoked_DeniedSkip_ClassifiesAsDenied()
     {
-        var obs = new RedbAuditObserver(_fx.ScopeFactory);
+        var obs = new RedbAuditObserver(_fx.RouteContext);
         var convId = $"c-{Guid.NewGuid():N}";
 
         await obs.OnToolInvokedAsync(MakeCtx(

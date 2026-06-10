@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using redb.Route.Abstractions;
 
 namespace redb.Route.Llm.Engine.Storage;
 
@@ -7,20 +8,44 @@ namespace redb.Route.Llm.Engine.Storage;
 /// runs. The MVP contract is intentionally narrow — upsert + cosine-similarity
 /// query over an opaque vector. Providers that index the chunks separately
 /// (e.g. pgvector, Qdrant) wrap this interface.
+/// <para>
+/// The optional <c>exchange</c> parameter on every method carries the route
+/// pipeline's current exchange; REDB-backed implementations resolve a
+/// per-exchange <see cref="redb.Core.IRedbService"/> through
+/// <c>IRouteContext.GetRedbService(name, exchange)</c>. In-memory
+/// implementations ignore it.
+/// </para>
 /// </summary>
 public interface IKnowledgeStore
 {
     /// <summary>Persists or replaces a chunk by its <see cref="KnowledgeChunk.Id"/>.</summary>
-    Task UpsertAsync(KnowledgeChunk chunk, CancellationToken ct = default);
+    Task UpsertAsync(KnowledgeChunk chunk, IExchange? exchange = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Persists or replaces many chunks at once. Bulk-friendly stores commit
+    /// the whole set in a single transaction — orders of magnitude faster than
+    /// looping <see cref="UpsertAsync"/>. The default implementation falls back
+    /// to a sequential loop for stores that have no bulk path.
+    /// </summary>
+    async Task UpsertManyAsync(IEnumerable<KnowledgeChunk> chunks, IExchange? exchange = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(chunks);
+        foreach (var chunk in chunks)
+        {
+            ct.ThrowIfCancellationRequested();
+            await UpsertAsync(chunk, exchange, ct).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>Drops a chunk by id; no-op when not found.</summary>
-    Task DeleteAsync(string chunkId, CancellationToken ct = default);
+    Task DeleteAsync(string chunkId, IExchange? exchange = null, CancellationToken ct = default);
 
     /// <summary>Returns the <paramref name="topK"/> most-similar chunks for the query embedding.</summary>
     Task<IReadOnlyList<KnowledgeSearchResult>> SearchAsync(
         ReadOnlyMemory<float> queryEmbedding,
         int topK,
         string? collection = null,
+        IExchange? exchange = null,
         CancellationToken ct = default);
 }
 
@@ -59,14 +84,14 @@ public sealed class InMemoryKnowledgeStore : IKnowledgeStore
     private readonly ConcurrentDictionary<string, KnowledgeChunk> _chunks = new(StringComparer.Ordinal);
 
     /// <inheritdoc />
-    public Task UpsertAsync(KnowledgeChunk chunk, CancellationToken ct = default)
+    public Task UpsertAsync(KnowledgeChunk chunk, IExchange? exchange = null, CancellationToken ct = default)
     {
         _chunks[chunk.Id] = chunk;
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
-    public Task DeleteAsync(string chunkId, CancellationToken ct = default)
+    public Task DeleteAsync(string chunkId, IExchange? exchange = null, CancellationToken ct = default)
     {
         _chunks.TryRemove(chunkId, out _);
         return Task.CompletedTask;
@@ -74,7 +99,7 @@ public sealed class InMemoryKnowledgeStore : IKnowledgeStore
 
     /// <inheritdoc />
     public Task<IReadOnlyList<KnowledgeSearchResult>> SearchAsync(
-        ReadOnlyMemory<float> queryEmbedding, int topK, string? collection = null, CancellationToken ct = default)
+        ReadOnlyMemory<float> queryEmbedding, int topK, string? collection = null, IExchange? exchange = null, CancellationToken ct = default)
     {
         var query = queryEmbedding.Span;
         var ranked = new List<KnowledgeSearchResult>();

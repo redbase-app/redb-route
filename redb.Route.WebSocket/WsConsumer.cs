@@ -259,8 +259,21 @@ public sealed class WsConsumer : IConsumer
                 // InOut: send response frame (use drain-safe token so response completes during drain)
                 if (_options.InOut && exchange.Exception is null && exchange.HasOut && exchange.Out!.Body is not null)
                 {
-                    var (responseData, responseType) = ResolveResponseBody(exchange);
-                    await ws.SendAsync(responseData, responseType, endOfMessage: true, _drain.ProcessingToken).ConfigureAwait(false);
+                    if (exchange.Out.Body is IAsyncEnumerable<string> asyncStrings)
+                    {
+                        await foreach (var chunk in asyncStrings.WithCancellation(_drain.ProcessingToken).ConfigureAwait(false))
+                        {
+                            if (string.IsNullOrEmpty(chunk)) continue;
+                            var bytes = _encoding.GetBytes(chunk);
+                            await ws.SendAsync(bytes, WebSocketMessageType.Text,
+                                endOfMessage: true, _drain.ProcessingToken).ConfigureAwait(false);
+                        }
+                    }
+                    else
+                    {
+                        var (responseData, responseType) = ResolveResponseBody(exchange);
+                        await ws.SendAsync(responseData, responseType, endOfMessage: true, _drain.ProcessingToken).ConfigureAwait(false);
+                    }
                 }
 
                 Interlocked.Increment(ref _processedCount);

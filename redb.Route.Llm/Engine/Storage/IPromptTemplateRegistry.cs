@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using redb.Route.Abstractions;
 
 namespace redb.Route.Llm.Engine.Storage;
 
@@ -6,6 +7,13 @@ namespace redb.Route.Llm.Engine.Storage;
 /// Resolves a named prompt template into the actual system / user text the
 /// engine should send to the provider. Versioning is required so that a
 /// recorded eval run can be replayed against the exact template that produced it.
+/// <para>
+/// The optional <c>exchange</c> parameter on every method carries the route
+/// pipeline's current exchange; REDB-backed implementations resolve a
+/// per-exchange <see cref="redb.Core.IRedbService"/> through
+/// <c>IRouteContext.GetRedbService(name, exchange)</c>. In-memory
+/// implementations ignore it.
+/// </para>
 /// </summary>
 public interface IPromptTemplateRegistry
 {
@@ -13,13 +21,13 @@ public interface IPromptTemplateRegistry
     /// Returns the requested template. When <paramref name="version"/> is null,
     /// the latest version is returned.
     /// </summary>
-    Task<PromptTemplate?> GetAsync(string name, string? version = null, CancellationToken ct = default);
+    Task<PromptTemplate?> GetAsync(string name, string? version = null, IExchange? exchange = null, CancellationToken ct = default);
 
     /// <summary>Registers or updates a template version.</summary>
-    Task SetAsync(PromptTemplate template, CancellationToken ct = default);
+    Task SetAsync(PromptTemplate template, IExchange? exchange = null, CancellationToken ct = default);
 
     /// <summary>Enumerates every version of every template — used for tooling.</summary>
-    Task<IReadOnlyList<PromptTemplate>> ListAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<PromptTemplate>> ListAsync(IExchange? exchange = null, CancellationToken ct = default);
 }
 
 /// <summary>A versioned prompt template.</summary>
@@ -47,7 +55,7 @@ public sealed class InMemoryPromptTemplateRegistry : IPromptTemplateRegistry
     private readonly ConcurrentDictionary<string, PromptTemplate> _templates = new(StringComparer.Ordinal);
 
     /// <inheritdoc />
-    public Task<PromptTemplate?> GetAsync(string name, string? version = null, CancellationToken ct = default)
+    public Task<PromptTemplate?> GetAsync(string name, string? version = null, IExchange? exchange = null, CancellationToken ct = default)
     {
         if (version is not null)
         {
@@ -62,14 +70,14 @@ public sealed class InMemoryPromptTemplateRegistry : IPromptTemplateRegistry
     }
 
     /// <inheritdoc />
-    public Task SetAsync(PromptTemplate template, CancellationToken ct = default)
+    public Task SetAsync(PromptTemplate template, IExchange? exchange = null, CancellationToken ct = default)
     {
         _templates[Key(template.Name, template.Version)] = template;
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<PromptTemplate>> ListAsync(CancellationToken ct = default) =>
+    public Task<IReadOnlyList<PromptTemplate>> ListAsync(IExchange? exchange = null, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<PromptTemplate>>(_templates.Values.ToArray());
 
     private static string Key(string name, string version) => $"{name}@{version}";

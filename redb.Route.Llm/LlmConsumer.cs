@@ -116,6 +116,22 @@ public sealed class LlmConsumer : IConsumer
 
     private async Task FireOnceAsync(CancellationToken ct)
     {
+        var tickSw = Stopwatch.StartNew();
+        try
+        {
+            await FireOnceCoreAsync(ct).ConfigureAwait(false);
+            // Each scheduler tick produces exactly one downstream exchange.
+            _endpoint.RecordMessageOut();
+        }
+        finally
+        {
+            tickSw.Stop();
+            _endpoint.RecordProcessingTime(tickSw.Elapsed);
+        }
+    }
+
+    private async Task FireOnceCoreAsync(CancellationToken ct)
+    {
         var ctx = (_endpoint.Component as ComponentBase)?.Context;
         var factory = _endpoint.ResolvedFactory
             ?? ctx?.GetFromRegistry<LlmConnectionFactory>(_endpoint.ConnectionFactoryName)
@@ -130,12 +146,16 @@ public sealed class LlmConsumer : IConsumer
 
         var templateRegistry = services?.GetService<IPromptTemplateRegistry>()
             ?? ctx?.GetService<IPromptTemplateRegistry>();
-        var initialBody = await PromptRef.ResolveAsync(_options.InitialBodyRef, templateRegistry, ctx, ct).ConfigureAwait(false)
+        var initialBody = await PromptRef.ResolveAsync(_options.InitialBodyRef, templateRegistry, ctx, exchange: null, ct).ConfigureAwait(false)
             ?? string.Empty;
-        var systemPrompt = await PromptRef.ResolveAsync(_options.SystemPromptRef, templateRegistry, ctx, ct).ConfigureAwait(false);
+        var systemPrompt = await PromptRef.ResolveAsync(_options.SystemPromptRef, templateRegistry, ctx, exchange: null, ct).ConfigureAwait(false);
 
         var scopeFactory = services?.GetService<IServiceScopeFactory>();
         var exchange = Exchange.Create(new Message(initialBody), scopeFactory);
+
+        // Make the configured named-redb visible to every downstream store.
+        if (!string.IsNullOrEmpty(_options.Redb))
+            exchange.Properties[LlmKeys.RedbName] = _options.Redb;
 
         var registry = services?.GetService<IToolDescriptorRegistry>()
             ?? ctx?.GetService<IToolDescriptorRegistry>();

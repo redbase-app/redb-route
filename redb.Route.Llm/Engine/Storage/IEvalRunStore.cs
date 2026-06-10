@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Governance;
 
 namespace redb.Route.Llm.Engine.Storage;
@@ -6,19 +7,40 @@ namespace redb.Route.Llm.Engine.Storage;
 /// <summary>
 /// Persists the outcome of a recorded evaluation run. Used by the eval harness
 /// to track regression scores between agent / prompt / model versions.
+/// <para>
+/// The optional <c>exchange</c> parameter on every method carries the route
+/// pipeline's current exchange; REDB-backed implementations resolve a
+/// per-exchange <see cref="redb.Core.IRedbService"/> through
+/// <c>IRouteContext.GetRedbService(name, exchange)</c>. In-memory
+/// implementations ignore it.
+/// </para>
 /// </summary>
 public interface IEvalRunStore
 {
     /// <summary>Persists a completed evaluation run.</summary>
-    Task SaveAsync(EvalRunRecord record, CancellationToken ct = default);
+    Task SaveAsync(EvalRunRecord record, IExchange? exchange = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Persists many evaluation runs at once. Bulk-friendly stores commit the
+    /// whole set in a single transaction; the default falls back to a loop.
+    /// </summary>
+    async Task SaveManyAsync(IEnumerable<EvalRunRecord> records, IExchange? exchange = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        foreach (var record in records)
+        {
+            ct.ThrowIfCancellationRequested();
+            await SaveAsync(record, exchange, ct).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>Loads a single run by its identifier.</summary>
-    Task<EvalRunRecord?> GetAsync(string runId, CancellationToken ct = default);
+    Task<EvalRunRecord?> GetAsync(string runId, IExchange? exchange = null, CancellationToken ct = default);
 
     /// <summary>
     /// Lists runs filtered by scenario name. Returns newest first.
     /// </summary>
-    Task<IReadOnlyList<EvalRunRecord>> ListAsync(string? scenario = null, int take = 50, CancellationToken ct = default);
+    Task<IReadOnlyList<EvalRunRecord>> ListAsync(string? scenario = null, int take = 50, IExchange? exchange = null, CancellationToken ct = default);
 }
 
 /// <summary>An evaluation run snapshot.</summary>
@@ -80,18 +102,18 @@ public sealed class InMemoryEvalRunStore : IEvalRunStore
     private readonly ConcurrentDictionary<string, EvalRunRecord> _records = new(StringComparer.Ordinal);
 
     /// <inheritdoc />
-    public Task SaveAsync(EvalRunRecord record, CancellationToken ct = default)
+    public Task SaveAsync(EvalRunRecord record, IExchange? exchange = null, CancellationToken ct = default)
     {
         _records[record.RunId] = record;
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
-    public Task<EvalRunRecord?> GetAsync(string runId, CancellationToken ct = default) =>
+    public Task<EvalRunRecord?> GetAsync(string runId, IExchange? exchange = null, CancellationToken ct = default) =>
         Task.FromResult(_records.TryGetValue(runId, out var rec) ? rec : null);
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<EvalRunRecord>> ListAsync(string? scenario = null, int take = 50, CancellationToken ct = default)
+    public Task<IReadOnlyList<EvalRunRecord>> ListAsync(string? scenario = null, int take = 50, IExchange? exchange = null, CancellationToken ct = default)
     {
         IEnumerable<EvalRunRecord> q = _records.Values;
         if (scenario is not null)

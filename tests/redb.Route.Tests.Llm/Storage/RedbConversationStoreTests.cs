@@ -26,7 +26,7 @@ public sealed class RedbConversationStoreTests
     [Fact]
     public async Task Append_LoadPath_LoadTree_LinearConversation()
     {
-        var store = new RedbConversationStore(_fx.ScopeFactory);
+        var store = new RedbConversationStore(_fx.RouteContext);
         var convId = $"c-{Guid.NewGuid():N}";
 
         var t0 = DateTime.UtcNow;
@@ -47,7 +47,7 @@ public sealed class RedbConversationStoreTests
     [Fact]
     public async Task LoadPath_Branching_ResolvesCorrectLeaf()
     {
-        var store = new RedbConversationStore(_fx.ScopeFactory);
+        var store = new RedbConversationStore(_fx.RouteContext);
         var convId = $"c-{Guid.NewGuid():N}";
 
         var t0 = DateTime.UtcNow;
@@ -65,7 +65,7 @@ public sealed class RedbConversationStoreTests
     [Fact]
     public async Task LoadPath_NullLeaf_PicksLatestLeafByCreatedAt()
     {
-        var store = new RedbConversationStore(_fx.ScopeFactory);
+        var store = new RedbConversationStore(_fx.RouteContext);
         var convId = $"c-{Guid.NewGuid():N}";
 
         var t0 = DateTime.UtcNow;

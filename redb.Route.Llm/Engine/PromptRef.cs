@@ -25,6 +25,7 @@ internal static class PromptRef
         string? raw,
         IPromptTemplateRegistry? templates,
         IRouteContext? context,
+        IExchange? exchange,
         CancellationToken ct)
     {
         if (string.IsNullOrEmpty(raw)) return null;
@@ -35,7 +36,7 @@ internal static class PromptRef
 
         if (templates is not null)
         {
-            var tmpl = await templates.GetAsync(name, version: null, ct).ConfigureAwait(false);
+            var tmpl = await templates.GetAsync(name, version: null, exchange, ct).ConfigureAwait(false);
             if (tmpl is not null) return tmpl.Body;
         }
 

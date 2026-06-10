@@ -1,11 +1,12 @@
 using System.Collections.Concurrent;
-using Microsoft.Extensions.DependencyInjection;
 using redb.Core;
 using redb.Core.Models.Contracts;
 using redb.Core.Models.Entities;
+using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Providers;
 using redb.Route.Llm.Storage.Redb.Schemas;
+using redb.Route.RedbCore.Extensions;
 
 namespace redb.Route.Llm.Storage.Redb;
 
@@ -21,18 +22,52 @@ namespace redb.Route.Llm.Storage.Redb;
 /// on each message for the conversation FK (== root <c>_objects.id</c>).
 /// Content blocks are stored as a typed nested array, no JSON marshalling
 /// for our own schema.
+/// <para>
+/// The <see cref="IRedbService"/> is resolved per call through
+/// <see cref="RedbRouteExtensions.GetRedbService(IRouteContext, string, IExchange?)"/>:
+/// when an <see cref="IExchange"/> is supplied (the engine forwards the route
+/// pipeline's exchange) the route framework hands out a per-exchange scoped
+/// instance and disposes it with the exchange. The named instance —
+/// <c>?redb=my-llm-db</c> on the URI — is read from
+/// <c>exchange.Properties[LlmKeys.RedbName]</c>; missing or null falls back to
+/// the default <c>IRedbService</c> registered in the context (the host's
+/// instance from <c>services.AddRedb()</c>).
+/// </para>
 /// </summary>
 public sealed class RedbConversationStore : IConversationStore
 {
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly ConcurrentDictionary<string, long> _rootIds = new(StringComparer.Ordinal);
-    private bool _schemesEnsured;
-    private readonly SemaphoreSlim _ensureLock = new(1, 1);
+    private readonly IRouteContext _context;
+    private readonly string? _defaultRedbName;
+    private readonly ConcurrentDictionary<string, CachedRoot> _rootIds = new(StringComparer.Ordinal);
+    private static readonly TimeSpan RootCacheTtl = TimeSpan.FromMinutes(10);
 
-    /// <summary>Creates a new store. Schemes are synced lazily on first call.</summary>
-    public RedbConversationStore(IServiceScopeFactory scopeFactory)
+    /// <summary>
+    /// Creates a new store backed by the route context's redb instance(s).
+    /// </summary>
+    /// <param name="context">Route context that knows how to resolve named/default <see cref="IRedbService"/>.</param>
+    /// <param name="defaultRedbName">
+    /// Optional default name. When the runtime exchange does not carry
+    /// <see cref="LlmKeys.RedbName"/> in its properties this name is used; when
+    /// it is null/empty the default unnamed instance is used.
+    /// </param>
+    public RedbConversationStore(IRouteContext context, string? defaultRedbName = null)
     {
-        _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+        _context = context ?? throw new ArgumentNullException(nameof(context));
+        _defaultRedbName = defaultRedbName;
+    }
+
+    private readonly record struct CachedRoot(long Id, DateTimeOffset ExpiresAt);
+
+    private IRedbService Resolve(IExchange? exchange)
+    {
+        var name = _defaultRedbName;
+        if (exchange is not null
+            && exchange.Properties.TryGetValue(LlmKeys.RedbName, out var raw)
+            && raw is string s && s.Length > 0)
+        {
+            name = s;
+        }
+        return _context.GetRedbService(name ?? string.Empty, exchange);
     }
 
     /// <inheritdoc />
@@ -41,12 +76,10 @@ public sealed class RedbConversationStore : IConversationStore
         string? parentMessageId,
         LlmMessage message,
         ConversationMessageMeta meta,
+        IExchange? exchange = null,
         CancellationToken ct = default)
     {
-        await EnsureSchemesAsync().ConfigureAwait(false);
-
-        using var scope = _scopeFactory.CreateScope();
-        var redb = scope.ServiceProvider.GetRequiredService<IRedbService>();
+        var redb = Resolve(exchange);
 
         var rootId = await GetOrCreateRootIdAsync(redb, conversationId, ct).ConfigureAwait(false);
         var rootObj = await redb.LoadAsync<ConversationProps>(rootId).ConfigureAwait(false)
@@ -85,6 +118,9 @@ public sealed class RedbConversationStore : IConversationStore
         rootObj.Props.LastActivityAtUtc = meta.CreatedAtUtc;
         rootObj.Props.TotalInputTokens += meta.Usage.InputTokens;
         rootObj.Props.TotalOutputTokens += meta.Usage.OutputTokens;
+        // Framework does not auto-stamp date_modify; mirror LastActivityAtUtc.
+        rootObj.date_modify = new DateTimeOffset(
+            DateTime.SpecifyKind(meta.CreatedAtUtc, DateTimeKind.Utc));
         await redb.SaveAsync(rootObj).ConfigureAwait(false);
 
         return newId;
@@ -92,12 +128,9 @@ public sealed class RedbConversationStore : IConversationStore
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<ConversationMessage>> LoadPathAsync(
-        string conversationId, string? leafId = null, CancellationToken ct = default)
+        string conversationId, string? leafId = null, IExchange? exchange = null, CancellationToken ct = default)
     {
-        await EnsureSchemesAsync().ConfigureAwait(false);
-
-        using var scope = _scopeFactory.CreateScope();
-        var redb = scope.ServiceProvider.GetRequiredService<IRedbService>();
+        var redb = Resolve(exchange);
 
         var rootId = await GetOrCreateRootIdAsync(redb, conversationId, ct).ConfigureAwait(false);
 
@@ -109,21 +142,25 @@ public sealed class RedbConversationStore : IConversationStore
         }
         else
         {
-            // Latest leaf in the conversation: load all descendants, find ids
-            // that aren't parents of any other descendant, pick the most recent.
+            // Server-side latest-leaf detection: WhereLeaves filters the
+            // descendant subtree to nodes without children at the SQL level,
+            // then ORDER BY _objects.date_create DESC LIMIT 1 picks the
+            // freshest. Avoids hauling the whole conversation transcript just
+            // to compute a parent-id set in C#.
             var rootObj = await redb.LoadAsync<ConversationProps>(rootId).ConfigureAwait(false);
             if (rootObj is null) return [];
 
-            var rows = await redb.TreeQuery<MessageProps>(rootObj)
-                .ToFlatListAsync()
+            var latestLeaf = await redb.TreeQuery<MessageProps>(rootObj)
+                .WhereLeaves()
+                .OrderByDescendingRedb(o => o.DateCreate)
+                .FirstOrDefaultAsync()
                 .ConfigureAwait(false);
-            if (rows.Count == 0) return [];
+            if (latestLeaf is null) return [];
 
-            var parentIds = new HashSet<long>(rows.Where(r => r.parent_id is not null).Select(r => r.parent_id!.Value));
-            var leaves = rows.Where(r => !parentIds.Contains(r.id)).ToList();
-            if (leaves.Count == 0) return [];
-
-            leafObj = leaves.OrderByDescending(r => r.Props.CreatedAtUtc).First();
+            // The path walker needs a TreeRedbObject; reload the leaf as a
+            // single-node tree to satisfy GetPathToRootAsync.
+            leafObj = await redb.LoadTreeAsync<MessageProps>(latestLeaf.id, maxDepth: 0).ConfigureAwait(false);
+            if (leafObj is null) return [];
         }
 
         // Server-side ancestor walk; returns root → leaf order. The conversation
@@ -141,15 +178,12 @@ public sealed class RedbConversationStore : IConversationStore
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<ConversationMessage>> LoadTreeAsync(
-        string conversationId, CancellationToken ct = default)
-        => await LoadAllMessagesAsync(conversationId).ConfigureAwait(false);
+        string conversationId, IExchange? exchange = null, CancellationToken ct = default)
+        => await LoadAllMessagesAsync(conversationId, exchange).ConfigureAwait(false);
 
-    private async Task<List<ConversationMessage>> LoadAllMessagesAsync(string conversationId)
+    private async Task<List<ConversationMessage>> LoadAllMessagesAsync(string conversationId, IExchange? exchange)
     {
-        await EnsureSchemesAsync().ConfigureAwait(false);
-
-        using var scope = _scopeFactory.CreateScope();
-        var redb = scope.ServiceProvider.GetRequiredService<IRedbService>();
+        var redb = Resolve(exchange);
 
         var rootId = await GetOrCreateRootIdAsync(redb, conversationId, CancellationToken.None).ConfigureAwait(false);
         var rootObj = await redb.LoadAsync<ConversationProps>(rootId).ConfigureAwait(false);
@@ -211,7 +245,12 @@ public sealed class RedbConversationStore : IConversationStore
 
     private async Task<long> GetOrCreateRootIdAsync(IRedbService redb, string conversationId, CancellationToken ct)
     {
-        if (_rootIds.TryGetValue(conversationId, out var cached)) return cached;
+        // TTL-bound cache: stale entries (e.g. someone purged the conversation
+        // out-of-band) self-heal after RootCacheTtl instead of pinning a dead
+        // id for the whole process lifetime.
+        var now = DateTimeOffset.UtcNow;
+        if (_rootIds.TryGetValue(conversationId, out var cached) && cached.ExpiresAt > now)
+            return cached.Id;
 
         var hit = await redb.Query<ConversationProps>()
             .WhereRedb(x => x.ValueString == conversationId)
@@ -220,11 +259,10 @@ public sealed class RedbConversationStore : IConversationStore
 
         if (hit is not null)
         {
-            _rootIds[conversationId] = hit.id;
+            _rootIds[conversationId] = new CachedRoot(hit.id, now + RootCacheTtl);
             return hit.id;
         }
 
-        var now = DateTimeOffset.UtcNow;
         var root = new RedbObject<ConversationProps>
         {
             value_string = conversationId,
@@ -237,7 +275,7 @@ public sealed class RedbConversationStore : IConversationStore
             }
         };
         var id = await redb.SaveAsync(root).ConfigureAwait(false);
-        _rootIds[conversationId] = id;
+        _rootIds[conversationId] = new CachedRoot(id, now + RootCacheTtl);
         return id;
     }
 
@@ -248,22 +286,6 @@ public sealed class RedbConversationStore : IConversationStore
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
         return hit is null ? null : await redb.LoadTreeAsync<MessageProps>(hit.id, maxDepth: 0).ConfigureAwait(false);
-    }
-
-    private async Task EnsureSchemesAsync()
-    {
-        if (_schemesEnsured) return;
-        await _ensureLock.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            if (_schemesEnsured) return;
-            using var scope = _scopeFactory.CreateScope();
-            var redb = scope.ServiceProvider.GetRequiredService<IRedbService>();
-            await redb.SyncSchemeAsync<ConversationProps>().ConfigureAwait(false);
-            await redb.SyncSchemeAsync<MessageProps>().ConfigureAwait(false);
-            _schemesEnsured = true;
-        }
-        finally { _ensureLock.Release(); }
     }
 
     private static MessageContentBlock[] ToStoredBlocks(IReadOnlyList<LlmContentBlock> blocks)
