@@ -15,7 +15,7 @@ namespace redb.Route.Llm.Providers;
 /// + <see cref="LlmConnectionFactory.ApiKey"/> + <see cref="LlmConnectionFactory.ModelId"/>
 /// the same provider talks to OpenAI, Groq, Cerebras, OpenRouter, Google Gemini
 /// (compat mode), GitHub Models, Mistral, Together, HuggingFace router, DeepSeek,
-/// LM Studio, vLLM, llama.cpp server and Ollama.
+/// xAI Grok, LM Studio, vLLM, llama.cpp server and Ollama.
 /// </para>
 /// <para>
 /// Maps <see cref="LlmRequest"/> ↔ OpenAI <c>messages</c>/<c>tools</c>/<c>tool_calls</c>
@@ -79,6 +79,7 @@ public sealed class OpenAiProvider : ILlmProvider
         "together" or "togetherai" => new("https://api.together.xyz/v1/"),
         "huggingface" or "hf" => new("https://router.huggingface.co/v1/"),
         "deepseek" => new("https://api.deepseek.com/v1/"),
+        "grok" or "xai" => new("https://api.x.ai/v1/"),
         "ollama" => new("http://localhost:11434/v1/"),
         "lmstudio" => new("http://localhost:1234/v1/"),
         _ => new("https://api.openai.com/v1/")

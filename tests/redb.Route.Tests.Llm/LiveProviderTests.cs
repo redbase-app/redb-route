@@ -17,6 +17,7 @@ namespace redb.Route.Tests.Llm;
 /// <code>
 /// $env:REDB_LLM_GITHUB_KEY      = "ghp_..."   # GitHub PAT — GitHub Models, free
 /// $env:REDB_LLM_GROQ_KEY        = "gsk_..."   # console.groq.com
+/// $env:REDB_LLM_GROK_KEY        = "xai-..."   # console.x.ai (xAI Grok)
 /// $env:REDB_LLM_CEREBRAS_KEY    = "csk-..."   # cloud.cerebras.ai
 /// $env:REDB_LLM_OPENROUTER_KEY  = "sk-or-..." # openrouter.ai (:free models)
 /// $env:REDB_LLM_GEMINI_KEY      = "AIza..."   # aistudio.google.com
@@ -205,6 +206,14 @@ public sealed class LiveProviderTests
     [EnvFact("REDB_LLM_GROQ_KEY")] public Task Groq_Usage()    => UsageReportedAsync(Groq());
     [EnvFact("REDB_LLM_GROQ_KEY")] public Task Groq_Stop()     => StopReasonAsync(Groq());
     private static LlmConnectionFactory Groq() => MakeFactory("groq", "groq", "llama-3.3-70b-versatile", "REDB_LLM_GROQ_KEY");
+
+    // ---------- xAI Grok ----------
+    [EnvFact("REDB_LLM_GROK_KEY")] public Task Grok_Smoke()    => SmokeAsync(Grok());
+    [EnvFact("REDB_LLM_GROK_KEY")] public Task Grok_NonAscii() => NonAsciiAsync(Grok());
+    [EnvFact("REDB_LLM_GROK_KEY")] public Task Grok_ToolUse()  => ToolUseAsync(Grok());
+    [EnvFact("REDB_LLM_GROK_KEY")] public Task Grok_Usage()    => UsageReportedAsync(Grok());
+    [EnvFact("REDB_LLM_GROK_KEY")] public Task Grok_Stop()     => StopReasonAsync(Grok());
+    private static LlmConnectionFactory Grok() => MakeFactory("grok", "grok", "grok-3-mini", "REDB_LLM_GROK_KEY");
 
     // ---------- Cerebras (current free models: gpt-oss-120b, zai-glm-4.7) ----------
     [EnvFact("REDB_LLM_CEREBRAS_KEY")] public Task Cerebras_Smoke()    => SmokeAsync(Cerebras());

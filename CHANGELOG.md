@@ -261,6 +261,25 @@ call.
 - `Engine/PromptRef`, `Engine/Eval/LlmEvalRunner` updated for the new
   store signatures.
 
+#### `redb.Route.Llm` — xAI Grok provider alias
+
+`OpenAiProvider.ResolveDefaultBaseUrl` gains a `"grok"` / `"xai"` alias
+that resolves to `https://api.x.ai/v1/`. No other changes: tool calls,
+streaming, budget enforcement and conversation memory work identically to
+every other OpenAI-compatible provider.
+
+```csharp
+new LlmConnectionFactory("grok")
+{
+    Provider = "grok",
+    ModelId  = "grok-3-mini",
+    ApiKey   = Environment.GetEnvironmentVariable("REDB_LLM_GROK_KEY")
+}
+```
+
+`LiveProviderTests` extended with five Grok scenarios (Smoke / NonAscii /
+ToolUse / Usage / StopReason), gated on `REDB_LLM_GROK_KEY`.
+
 ### Changed
 
 - **`redb.Route.Llm` I*Store contracts.** Every store interface in
