@@ -47,6 +47,18 @@ public sealed class AgentRequest
 
     /// <summary>Per-call max-tokens override.</summary>
     public int? MaxTokens { get; init; }
+
+    /// <summary>
+    /// Optional name of the prompt template that produced <see cref="SystemPrompt"/>.
+    /// When set together with <see cref="PromptTemplateVersion"/>, the engine
+    /// stamps every persisted assistant message with the (name, version) pair so
+    /// auditors can reconstruct "which exact prompt drove this answer". Stays
+    /// null when the caller does not use a managed template.
+    /// </summary>
+    public string? PromptTemplateName { get; init; }
+
+    /// <summary>Version of the prompt template named by <see cref="PromptTemplateName"/>.</summary>
+    public string? PromptTemplateVersion { get; init; }
 }
 
 /// <summary>Final agent response.</summary>

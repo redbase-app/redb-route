@@ -280,6 +280,55 @@ new LlmConnectionFactory("grok")
 `LiveProviderTests` extended with five Grok scenarios (Smoke / NonAscii /
 ToolUse / Usage / StopReason), gated on `REDB_LLM_GROK_KEY`.
 
+#### `redb.Route.Llm` — per-message audit fields on `MessageProps` (compliance / replay)
+
+Every assistant turn now persists the full set of inputs the provider call
+was made under. This closes the audit gap that previously forced auditors
+to trust that "the system prompt and sampling settings were the same as the
+ones currently in config" — now they're stamped on the row that produced
+the answer.
+
+`MessageProps` (and its mirror `ConversationMessageMeta`) gain seven
+nullable columns:
+
+| Field | Set on | Purpose |
+|---|---|---|
+| `Temperature`, `MaxTokens`, `TopP` | assistant rows | effective sampling values after merging request + factory defaults |
+| `PromptTemplateName`, `PromptTemplateVersion` | every row in the run | FK pair into `PromptTemplateProps` — pins the exact prompt text |
+| `ToolSetHash` | assistant rows | SHA-256 of the canonical (name + description + InputSchema) of the tool set exposed on this call; detects tool-surface drift across runs |
+| `ProviderSystemFingerprint` | assistant rows | OpenAI's `system_fingerprint` (and any echoing OpenAI-compatible provider — xAI, Together); null on Anthropic / Gemini-compat / Ollama |
+
+Wiring:
+
+- `AgentRequest` gains `PromptTemplateName` + `PromptTemplateVersion`.
+  Callers that resolve a managed prompt template via
+  `IPromptTemplateRegistry` set the pair so the engine can stamp it on
+  every persisted message of the run.
+- `AgentEngine` computes `ToolSetHash` once per run (canonical sort by
+  name, raw `InputSchema` folded in verbatim — schema string changes show
+  up as hash drift, which is exactly the auditor signal) and pipes it
+  alongside the effective `Temperature` / `MaxTokens` / `TopP` into
+  `PersistMessageAsync`.
+- `OpenAiProvider.CompleteAsync` reads `system_fingerprint` from the
+  response root and surfaces it on `LlmResponse.ProviderSystemFingerprint`;
+  the engine forwards it to the assistant message row.
+- `RedbConversationStore` writes the seven fields into `MessageProps` on
+  append and rehydrates them on load; nothing else in the persist /
+  materialise path changes.
+
+Because every new column is nullable on both `MessageProps` and
+`ConversationMessageMeta`, existing rows and existing call sites compile
+and load unchanged. **No migrations required** — REDB picks up the new
+props automatically.
+
+> **What this still cannot solve.** Closed-source provider drift where the
+> backend does not surface a fingerprint (Anthropic, most Gemini-compat
+> endpoints): when the provider silently re-releases a model under the
+> same id, no per-message capture on our side can detect it. For
+> compliance-bound deployments the only honest answer remains self-hosted
+> (`ollama`, `lmstudio`, vLLM via `huggingface`) — the alias surface for
+> those is unchanged.
+
 ### Changed
 
 - **`redb.Route.Llm` I*Store contracts.** Every store interface in

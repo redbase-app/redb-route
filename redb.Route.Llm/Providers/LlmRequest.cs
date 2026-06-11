@@ -105,6 +105,15 @@ public sealed class LlmResponse
 
     /// <summary>Provider-native raw stop reason for diagnostics.</summary>
     public string? RawStopReason { get; init; }
+
+    /// <summary>
+    /// Opaque backend-configuration fingerprint surfaced by some providers
+    /// (OpenAI's <c>system_fingerprint</c>; xAI / Together echo it; Anthropic
+    /// does not). When two otherwise identical calls return different
+    /// fingerprints, the model was re-released under the same id — the only
+    /// signal an auditor has to detect silent provider drift.
+    /// </summary>
+    public string? ProviderSystemFingerprint { get; init; }
 }
 
 /// <summary>

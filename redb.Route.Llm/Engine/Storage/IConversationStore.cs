@@ -80,6 +80,37 @@ public sealed class ConversationMessageMeta
 
     /// <summary>Tool-use id when the message is a tool result.</summary>
     public string? ToolUseId { get; init; }
+
+    /// <summary>
+    /// Effective sampling temperature passed to the provider for the call
+    /// that produced this assistant message; null on user / tool-result rows.
+    /// </summary>
+    public double? Temperature { get; init; }
+
+    /// <summary>Effective max-output-tokens cap; null on non-assistant rows.</summary>
+    public int? MaxTokens { get; init; }
+
+    /// <summary>Effective top-p value; null on non-assistant rows.</summary>
+    public double? TopP { get; init; }
+
+    /// <summary>Prompt-template name resolved at call time (FK into <c>PromptTemplateProps</c>).</summary>
+    public string? PromptTemplateName { get; init; }
+
+    /// <summary>Prompt-template version paired with <see cref="PromptTemplateName"/>.</summary>
+    public string? PromptTemplateVersion { get; init; }
+
+    /// <summary>
+    /// Stable hash of the tool-capabilities set exposed to the model on this
+    /// call. Allows auditors to detect tool-surface drift across runs.
+    /// </summary>
+    public string? ToolSetHash { get; init; }
+
+    /// <summary>
+    /// Opaque provider-side fingerprint identifying the backend configuration
+    /// that served the call (OpenAI's <c>system_fingerprint</c>). Null when the
+    /// provider does not surface one.
+    /// </summary>
+    public string? ProviderSystemFingerprint { get; init; }
 }
 
 /// <summary>A persisted conversation message with its tree placement and metadata.</summary>

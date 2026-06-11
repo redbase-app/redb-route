@@ -109,6 +109,13 @@ public sealed class RedbConversationStore : IConversationStore
                 ToolUseId = meta.ToolUseId,
                 InputTokens = meta.Usage.InputTokens,
                 OutputTokens = meta.Usage.OutputTokens,
+                Temperature = meta.Temperature,
+                MaxTokens = meta.MaxTokens,
+                TopP = meta.TopP,
+                PromptTemplateName = meta.PromptTemplateName,
+                PromptTemplateVersion = meta.PromptTemplateVersion,
+                ToolSetHash = meta.ToolSetHash,
+                ProviderSystemFingerprint = meta.ProviderSystemFingerprint,
                 Content = ToStoredBlocks(message.Content)
             }
         };
@@ -238,7 +245,14 @@ public sealed class RedbConversationStore : IConversationStore
                 ModelId = row.Props.ModelId,
                 StopReason = ParseStopReason(row.Props.StopReason),
                 Usage = new LlmUsage(row.Props.InputTokens, row.Props.OutputTokens),
-                ToolUseId = row.Props.ToolUseId
+                ToolUseId = row.Props.ToolUseId,
+                Temperature = row.Props.Temperature,
+                MaxTokens = row.Props.MaxTokens,
+                TopP = row.Props.TopP,
+                PromptTemplateName = row.Props.PromptTemplateName,
+                PromptTemplateVersion = row.Props.PromptTemplateVersion,
+                ToolSetHash = row.Props.ToolSetHash,
+                ProviderSystemFingerprint = row.Props.ProviderSystemFingerprint
             }
         };
     }

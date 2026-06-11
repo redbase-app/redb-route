@@ -457,12 +457,19 @@ public sealed class OpenAiProvider : ILlmProvider
             usage = new LlmUsage(inT, outT);
         }
 
+        // OpenAI exposes system_fingerprint at the response root; xAI / Together
+        // echo it on most models; Anthropic-compat / Gemini-compat / Ollama
+        // typically leave it null. Auditors compare the value across otherwise
+        // identical calls to detect silent backend re-releases.
+        var fingerprint = json["system_fingerprint"]?.GetValue<string?>();
+
         return new LlmResponse
         {
             Content = blocks,
             StopReason = stop,
             Usage = usage,
-            RawStopReason = rawStop
+            RawStopReason = rawStop,
+            ProviderSystemFingerprint = fingerprint
         };
     }
 

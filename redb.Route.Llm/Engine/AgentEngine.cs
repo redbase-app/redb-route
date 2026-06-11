@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
@@ -76,6 +78,10 @@ public sealed class AgentEngine : IAgentEngine
 
         var provider = request.Factory.Build();
         var capabilities = ProjectCapabilities(request.Tools);
+        var toolSetHash = ComputeToolSetHash(capabilities);
+        var effectiveTemperature = request.Temperature ?? request.Factory.Temperature;
+        var effectiveMaxTokens = request.MaxTokens ?? request.Factory.MaxTokens;
+        var effectiveTopP = request.Factory.TopP;
 
         var runCtx = new AgentRunContext
         {
@@ -125,7 +131,10 @@ public sealed class AgentEngine : IAgentEngine
                     attachUnderId = await PersistMessageAsync(
                         request, attachUnderId, recovery,
                         iteration: 0, stopReason: null, usage: LlmUsage.Empty,
-                        toolUseId: null, ct).ConfigureAwait(false);
+                        toolUseId: null,
+                        temperature: null, maxTokens: null, topP: null,
+                        toolSetHash: null, providerSystemFingerprint: null,
+                        ct).ConfigureAwait(false);
                     _logger?.LogWarning(
                         "Recovered {Count} orphaned tool_use block(s) in conversation {Conv} on load.",
                         orphanResults.Count, convIdToLoad);
@@ -145,6 +154,8 @@ public sealed class AgentEngine : IAgentEngine
             stopReason: null,
             usage: LlmUsage.Empty,
             toolUseId: null,
+            temperature: null, maxTokens: null, topP: null,
+            toolSetHash: null, providerSystemFingerprint: null,
             ct).ConfigureAwait(false);
 
         var iter = 0;
@@ -179,9 +190,9 @@ public sealed class AgentEngine : IAgentEngine
                     SystemPrompt = request.SystemPrompt,
                     Messages = transcript,
                     Tools = capabilities,
-                    Temperature = request.Temperature ?? request.Factory.Temperature,
-                    MaxTokens = request.MaxTokens ?? request.Factory.MaxTokens,
-                    TopP = request.Factory.TopP
+                    Temperature = effectiveTemperature,
+                    MaxTokens = effectiveMaxTokens,
+                    TopP = effectiveTopP
                 };
 
                 var providerTag = new KeyValuePair<string, object?>("llm.provider", request.Factory.Provider);
@@ -228,7 +239,13 @@ public sealed class AgentEngine : IAgentEngine
                 parentMessageId = await PersistMessageAsync(
                     request, parentMessageId, transcript[^1],
                     iteration: iter, stopReason: last.StopReason, usage: last.Usage,
-                    toolUseId: null, ct).ConfigureAwait(false);
+                    toolUseId: null,
+                    temperature: effectiveTemperature,
+                    maxTokens: effectiveMaxTokens,
+                    topP: effectiveTopP,
+                    toolSetHash: toolSetHash,
+                    providerSystemFingerprint: last.ProviderSystemFingerprint,
+                    ct).ConfigureAwait(false);
 
                 PublishConversationContext(request, transcript, iter, totalUsage);
 
@@ -255,7 +272,10 @@ public sealed class AgentEngine : IAgentEngine
                 parentMessageId = await PersistMessageAsync(
                     request, parentMessageId, transcript[^1],
                     iteration: iter, stopReason: null, usage: LlmUsage.Empty,
-                    toolUseId: null, ct).ConfigureAwait(false);
+                    toolUseId: null,
+                    temperature: null, maxTokens: null, topP: null,
+                    toolSetHash: null, providerSystemFingerprint: null,
+                    ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -449,6 +469,11 @@ public sealed class AgentEngine : IAgentEngine
         LlmStopReason? stopReason,
         LlmUsage usage,
         string? toolUseId,
+        double? temperature,
+        int? maxTokens,
+        double? topP,
+        string? toolSetHash,
+        string? providerSystemFingerprint,
         CancellationToken ct)
     {
         if (_conversation is null || request.ConversationId is null) return parentId;
@@ -465,7 +490,14 @@ public sealed class AgentEngine : IAgentEngine
                 ModelId = request.Factory.ModelId,
                 StopReason = stopReason,
                 Usage = usage,
-                ToolUseId = toolUseId
+                ToolUseId = toolUseId,
+                Temperature = temperature,
+                MaxTokens = maxTokens,
+                TopP = topP,
+                PromptTemplateName = request.PromptTemplateName,
+                PromptTemplateVersion = request.PromptTemplateVersion,
+                ToolSetHash = toolSetHash,
+                ProviderSystemFingerprint = providerSystemFingerprint
             },
             request.Exchange,
             ct).ConfigureAwait(false);
@@ -560,4 +592,28 @@ public sealed class AgentEngine : IAgentEngine
     }
 
     private static string EscapeJson(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    /// <summary>
+    /// Stable hash of the tool-capability set exposed to the model on a single
+    /// run. Sorted by name; the source <c>InputSchema</c> string is folded in
+    /// verbatim — if its key order or whitespace changes between runs, the
+    /// hash changes too, which is exactly the signal an auditor wants
+    /// ("the same prompt saw a different tool surface yesterday"). Returns
+    /// null for the empty set so unused-tool runs don't pollute the column.
+    /// </summary>
+    private static string? ComputeToolSetHash(IReadOnlyList<LlmToolCapability> capabilities)
+    {
+        if (capabilities.Count == 0) return null;
+
+        var sb = new StringBuilder();
+        foreach (var cap in capabilities.OrderBy(c => c.Name, StringComparer.Ordinal))
+        {
+            sb.Append(cap.Name).Append('\n');
+            sb.Append(cap.Description ?? string.Empty).Append('\n');
+            sb.Append(cap.InputSchema ?? string.Empty).Append('\n');
+            sb.Append("---\n");
+        }
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
 }

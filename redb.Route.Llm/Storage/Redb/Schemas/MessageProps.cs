@@ -50,6 +50,45 @@ public class MessageProps
     public int OutputTokens { get; set; }
 
     /// <summary>
+    /// Effective sampling temperature passed to the provider for the call that
+    /// produced this assistant message; null on user / tool-result rows.
+    /// </summary>
+    public double? Temperature { get; set; }
+
+    /// <summary>Effective max-output-tokens cap; null on non-assistant rows.</summary>
+    public int? MaxTokens { get; set; }
+
+    /// <summary>Effective top-p value; null on non-assistant rows.</summary>
+    public double? TopP { get; set; }
+
+    /// <summary>
+    /// Prompt-template name resolved at call time. Pairs with
+    /// <see cref="PromptTemplateVersion"/> and a row in <c>PromptTemplateProps</c>
+    /// to lock down "which exact prompt drove this answer".
+    /// </summary>
+    public string? PromptTemplateName { get; set; }
+
+    /// <summary>Prompt-template version (paired with <see cref="PromptTemplateName"/>).</summary>
+    public string? PromptTemplateVersion { get; set; }
+
+    /// <summary>
+    /// Stable hash of the tool-capabilities set exposed to the model on this
+    /// call (canonical JSON of {name, description, schema} sorted by name,
+    /// SHA-256, hex). Lets auditors detect "the same prompt saw a different
+    /// tool surface yesterday".
+    /// </summary>
+    public string? ToolSetHash { get; set; }
+
+    /// <summary>
+    /// Opaque provider-side fingerprint identifying the exact backend
+    /// configuration that served the call (OpenAI returns this as
+    /// <c>system_fingerprint</c>; other OpenAI-compatible providers may or may
+    /// not). When the value changes between two otherwise identical requests,
+    /// the provider re-released the model under the same id.
+    /// </summary>
+    public string? ProviderSystemFingerprint { get; set; }
+
+    /// <summary>
     /// Content blocks for this message, stored as a typed nested array. Each
     /// block carries a discriminator (<see cref="MessageContentBlock.Kind"/>)
     /// plus the fields used by the matching <c>LlmContentBlock</c> variant.
