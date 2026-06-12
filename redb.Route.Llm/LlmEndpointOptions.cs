@@ -84,6 +84,39 @@ public sealed class LlmEndpointOptions : EndpointOptions
     /// </summary>
     public string? Redb { get; set; }
 
+    /// <summary>
+    /// Principal identifier expression for audit. Either a literal value
+    /// (<c>"system"</c>) or a header reference (<c>"${header.X-User-Id}"</c>);
+    /// <see cref="LlmProducer"/> resolves it pre-call against the inbound
+    /// exchange and stamps the value on every persisted row of the run as
+    /// <c>MessageProps.UserId</c>. Falls back to the <c>llm.user.id</c>
+    /// header when this is null.
+    /// </summary>
+    public string? User { get; set; }
+
+    /// <summary>
+    /// Comma-separated audit tags expressed as <c>key=value</c> pairs (each
+    /// <c>value</c> may be a literal or a <c>${header.X}</c> expression).
+    /// Example: <c>tier=${header.X-Tier},bucket=A</c>. Builders normally
+    /// populate this through repeated <c>.Audit(k, v)</c> calls — values are
+    /// URL-encoded before joining so commas / equals signs in literal values
+    /// are safe. Header-driven tags (<c>llm.audit.&lt;name&gt;</c>) merge on
+    /// top of these; headers win on collision.
+    /// </summary>
+    public string? Audit { get; set; }
+
+    /// <summary>
+    /// Prompt-template name persisted alongside every row of the run as
+    /// <c>MessageProps.PromptTemplateName</c>. Pairs with
+    /// <see cref="PromptTemplateVersion"/> so auditors can lock down which
+    /// exact prompt drove an answer. Independent of <see cref="SystemPromptRef"/>:
+    /// you can carry name/version even when the prompt body comes from elsewhere.
+    /// </summary>
+    public string? PromptTemplateName { get; set; }
+
+    /// <summary>Prompt-template version paired with <see cref="PromptTemplateName"/>.</summary>
+    public string? PromptTemplateVersion { get; set; }
+
     /// <inheritdoc />
     public override void Validate()
     {

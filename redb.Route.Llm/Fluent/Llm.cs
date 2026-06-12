@@ -33,6 +33,10 @@ public sealed class LlmBuilder
     private string? _initialBodyRef;
     private string? _maxIterations;
     private string? _tools;
+    private string? _user;
+    private readonly List<KeyValuePair<string, string>> _auditTags = [];
+    private string? _promptTemplateName;
+    private string? _promptTemplateVersion;
 
     internal LlmBuilder(string factory)
     {
@@ -79,6 +83,45 @@ public sealed class LlmBuilder
     /// <summary>Exposes every descriptor registered in the global tool registry.</summary>
     public LlmBuilder UseAllTools() { _tools = "*"; return this; }
 
+    /// <summary>
+    /// Principal identifier for audit — literal value (<c>"system"</c>) or a
+    /// header reference (<c>"${header.X-User-Id}"</c>). The producer resolves
+    /// this expression pre-call against the inbound exchange and stamps the
+    /// resolved value on every persisted row of the run as
+    /// <c>MessageProps.UserId</c>. When unset, <c>LlmHeaders.UserId</c>
+    /// (<c>llm.user.id</c>) is used as a fallback.
+    /// </summary>
+    public LlmBuilder User(string expression) { _user = expression; return this; }
+
+    /// <summary>
+    /// Adds one audit tag to the run. <paramref name="value"/> may be a literal
+    /// or a <c>${header.X}</c> expression. The producer resolves the value
+    /// pre-call and stamps the (key, value) pair on every persisted row as
+    /// <c>MessageProps.AuditTags</c> entry. Headers named
+    /// <c>llm.audit.&lt;key&gt;</c> merge on top of these; headers win on
+    /// collision. Repeatable — call once per tag.
+    /// </summary>
+    public LlmBuilder Audit(string key, string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        _auditTags.Add(new KeyValuePair<string, string>(key, value ?? string.Empty));
+        return this;
+    }
+
+    /// <summary>
+    /// Locks the prompt-template (name, version) pair onto every persisted row
+    /// of the run as <c>MessageProps.PromptTemplateName</c> /
+    /// <c>PromptTemplateVersion</c>. Independent of <see cref="SystemPromptRef"/>
+    /// — you can carry name/version even when the prompt body comes from
+    /// elsewhere.
+    /// </summary>
+    public LlmBuilder PromptTemplate(string name, string version)
+    {
+        _promptTemplateName = name;
+        _promptTemplateVersion = version;
+        return this;
+    }
+
     /// <summary>Implicit conversion to <see cref="EndpointUri"/> for use in <c>.To(...)</c> / <c>.From(...)</c>.</summary>
     public static implicit operator EndpointUri(LlmBuilder b) => EndpointUriParser.Parse(b.ToString());
 
@@ -100,6 +143,24 @@ public sealed class LlmBuilder
         Append(sb, ref first, "initialBodyRef", _initialBodyRef);
         Append(sb, ref first, "maxIterations", _maxIterations);
         Append(sb, ref first, "tools", _tools);
+        Append(sb, ref first, "user", _user);
+        Append(sb, ref first, "audit", BuildAuditCsv(_auditTags));
+        Append(sb, ref first, "promptTemplateName", _promptTemplateName);
+        Append(sb, ref first, "promptTemplateVersion", _promptTemplateVersion);
+        return sb.ToString();
+    }
+
+    private static string? BuildAuditCsv(List<KeyValuePair<string, string>> tags)
+    {
+        if (tags.Count == 0) return null;
+        var sb = new StringBuilder();
+        for (var i = 0; i < tags.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(HttpUtility.UrlEncode(tags[i].Key))
+              .Append('=')
+              .Append(HttpUtility.UrlEncode(tags[i].Value));
+        }
         return sb.ToString();
     }
 

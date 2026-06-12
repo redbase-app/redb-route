@@ -72,4 +72,33 @@ public sealed class LlmEndpointOptionsTests
         var act = () => opts.Validate();
         act.Should().NotThrow();
     }
+
+    [Fact]
+    public void BindFromUri_PullsUser()
+    {
+        var opts = Bind("llm://c?user=system");
+        opts.User.Should().Be("system");
+    }
+
+    [Fact]
+    public void BindFromUri_PullsUserHeaderExpression()
+    {
+        var opts = Bind("llm://c?user=" + System.Web.HttpUtility.UrlEncode("${header.X-User-Id}"));
+        opts.User.Should().Be("${header.X-User-Id}");
+    }
+
+    [Fact]
+    public void BindFromUri_PullsAuditCsv()
+    {
+        var opts = Bind("llm://c?audit=tier%3Dgold%2Cbucket%3DA");
+        opts.Audit.Should().Be("tier=gold,bucket=A");
+    }
+
+    [Fact]
+    public void BindFromUri_PullsPromptTemplateNameAndVersion()
+    {
+        var opts = Bind("llm://c?promptTemplateName=triage&promptTemplateVersion=v3");
+        opts.PromptTemplateName.Should().Be("triage");
+        opts.PromptTemplateVersion.Should().Be("v3");
+    }
 }

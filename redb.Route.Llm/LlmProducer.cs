@@ -109,6 +109,8 @@ public sealed class LlmProducer : ConnectableProducer
         var systemPrompt = await ResolveSystemPromptAsync(exchange, ct).ConfigureAwait(false);
         var conversationId = ResolveConversationId(exchange);
         var tools = ResolveTools(exchange);
+        var userId = ResolveUserId(exchange);
+        var auditTags = ResolveAuditTags(exchange);
 
         // Endpoint-level statistics (consumed by tsak / tsak.web dashboard).
         // MessagesOut + Errors are tracked by ToProcessor; here we add bytes and timing.
@@ -125,7 +127,11 @@ public sealed class LlmProducer : ConnectableProducer
             ConversationId = conversationId,
             MaxIterations = _options.MaxIterations,
             Temperature = _options.Temperature,
-            MaxTokens = _options.MaxTokens
+            MaxTokens = _options.MaxTokens,
+            PromptTemplateName = _options.PromptTemplateName,
+            PromptTemplateVersion = _options.PromptTemplateVersion,
+            UserId = userId,
+            AuditTags = auditTags
         };
 
         var sw = Stopwatch.StartNew();
@@ -207,6 +213,100 @@ public sealed class LlmProducer : ConnectableProducer
         var ctx = (_endpoint.Component as ComponentBase)?.Context;
         var registry = ctx?.GetService<IToolDescriptorRegistry>();
         return ToolFilter.Resolve(registry, _options.Tools);
+    }
+
+    /// <summary>
+    /// Resolves the principal id stamped on every persisted row of this run.
+    /// Order: <c>?user=</c> option (literal or <c>${header.X}</c> expression),
+    /// then the <c>llm.user.id</c> header. Returns null when neither is set —
+    /// callers downstream record the row with a null UserId rather than fail.
+    /// </summary>
+    private string? ResolveUserId(IExchange exchange)
+    {
+        var resolved = ResolveExpression(_options.User, exchange);
+        if (!string.IsNullOrEmpty(resolved)) return resolved;
+
+        return exchange.In.GetHeader<string>(LlmHeaders.UserId);
+    }
+
+    /// <summary>
+    /// Resolves audit tags from two sources: the <c>?audit=</c> CSV option and
+    /// any inbound header named <c>llm.audit.&lt;name&gt;</c>. Headers merge on
+    /// top of option values (header wins on collision). Returns null when no
+    /// tags are configured so the persistence layer can skip the column.
+    /// </summary>
+    private IReadOnlyDictionary<string, string>? ResolveAuditTags(IExchange exchange)
+    {
+        Dictionary<string, string>? tags = null;
+
+        // 1. Builder-side CSV (key=value,key=${header.X}).
+        if (!string.IsNullOrEmpty(_options.Audit))
+        {
+            foreach (var pair in _options.Audit.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var eq = pair.IndexOf('=');
+                if (eq <= 0) continue;
+                var key = System.Web.HttpUtility.UrlDecode(pair[..eq]);
+                var rawValue = System.Web.HttpUtility.UrlDecode(pair[(eq + 1)..]);
+                var resolved = ResolveExpression(rawValue, exchange) ?? string.Empty;
+                if (string.IsNullOrEmpty(key)) continue;
+                tags ??= new Dictionary<string, string>(StringComparer.Ordinal);
+                tags[key] = resolved;
+            }
+        }
+
+        // 2. Header-driven tags (llm.audit.<name>) — header wins on collision.
+        foreach (var kv in exchange.In.Headers)
+        {
+            if (kv.Key.Length <= LlmHeaders.AuditTagPrefix.Length) continue;
+            if (!kv.Key.StartsWith(LlmHeaders.AuditTagPrefix, StringComparison.Ordinal)) continue;
+
+            var key = kv.Key[LlmHeaders.AuditTagPrefix.Length..];
+            if (string.IsNullOrEmpty(key)) continue;
+
+            var value = kv.Value switch
+            {
+                null => string.Empty,
+                string s => s,
+                _ => kv.Value.ToString() ?? string.Empty
+            };
+            tags ??= new Dictionary<string, string>(StringComparer.Ordinal);
+            tags[key] = value;
+        }
+
+        return tags;
+    }
+
+    /// <summary>
+    /// Lightweight resolver for <c>${header.NAME}</c> / <c>${property.NAME}</c>
+    /// expressions. Anything else is returned as a literal so callers can use
+    /// fixed values (<c>"system"</c>) just as easily as references.
+    /// </summary>
+    private static string? ResolveExpression(string? expression, IExchange exchange)
+    {
+        if (string.IsNullOrEmpty(expression)) return expression;
+        if (!expression.StartsWith("${", StringComparison.Ordinal) ||
+            !expression.EndsWith("}", StringComparison.Ordinal))
+            return expression;
+
+        var inner = expression[2..^1];
+        if (inner.StartsWith("header.", StringComparison.Ordinal))
+        {
+            var name = inner[7..];
+            return exchange.In.Headers.TryGetValue(name, out var v) && v is not null
+                ? v.ToString()
+                : null;
+        }
+        if (inner.StartsWith("property.", StringComparison.Ordinal))
+        {
+            var name = inner[9..];
+            return exchange.Properties.TryGetValue(name, out var v) && v is not null
+                ? v.ToString()
+                : null;
+        }
+        // Unknown prefix — keep the original expression so producers / observers
+        // can detect the misconfiguration instead of silently dropping it.
+        return expression;
     }
 
     private static void WriteResponse(IExchange exchange, AgentResponse response, LlmConnectionFactory factory)

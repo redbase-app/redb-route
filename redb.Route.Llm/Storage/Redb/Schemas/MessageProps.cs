@@ -89,6 +89,15 @@ public class MessageProps
     public string? ProviderSystemFingerprint { get; set; }
 
     /// <summary>
+    /// Stable identifier of the principal that initiated the call (end-user,
+    /// service account, on-behalf-of subject — the host decides). Captured
+    /// pre-call from the fluent builder (<c>.User(...)</c>) or the
+    /// <c>llm.user.id</c> header; the same value is stamped on every row of
+    /// the same agent turn (system / user / tool / assistant).
+    /// </summary>
+    public string? UserId { get; set; }
+
+    /// <summary>
     /// Content blocks for this message, stored as a typed nested array. Each
     /// block carries a discriminator (<see cref="MessageContentBlock.Kind"/>)
     /// plus the fields used by the matching <c>LlmContentBlock</c> variant.
@@ -97,6 +106,17 @@ public class MessageProps
     /// those payloads are intentionally schema-less.
     /// </summary>
     public MessageContentBlock[] Content { get; set; } = [];
+
+    /// <summary>
+    /// Free-form audit tags for this row. Stored as a native REDB
+    /// <see cref="Dictionary{TKey,TValue}"/> so LINQ-to-SQL queries like
+    /// <c>x.AuditTags["ab-bucket"] == "A"</c> or
+    /// <c>x.AuditTags.ContainsKey("tier")</c> run server-side via
+    /// <c>redb.Query&lt;MessageProps&gt;()</c>. Captured pre-call (fluent
+    /// <c>.Audit(k,v)</c> or <c>llm.audit.&lt;name&gt;</c> headers) and stamped
+    /// identically on every row of the same turn.
+    /// </summary>
+    public Dictionary<string, string>? AuditTags { get; set; }
 }
 
 /// <summary>

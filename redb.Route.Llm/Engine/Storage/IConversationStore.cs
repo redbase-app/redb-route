@@ -111,6 +111,22 @@ public sealed class ConversationMessageMeta
     /// provider does not surface one.
     /// </summary>
     public string? ProviderSystemFingerprint { get; init; }
+
+    /// <summary>
+    /// Stable identifier of the principal that initiated the agent turn that
+    /// produced this row. The same value is stamped on every row of the turn
+    /// (system / user / tool / assistant) so audit queries always have a
+    /// consistent subject. Captured pre-call; null when no principal is wired.
+    /// </summary>
+    public string? UserId { get; init; }
+
+    /// <summary>
+    /// Free-form audit tags captured pre-call from the fluent
+    /// <c>.Audit(k,v)</c> builder and / or <c>llm.audit.&lt;name&gt;</c> headers.
+    /// The same snapshot is stamped on every row of the turn. Null / empty
+    /// when no tags are wired.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? AuditTags { get; init; }
 }
 
 /// <summary>A persisted conversation message with its tree placement and metadata.</summary>

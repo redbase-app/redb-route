@@ -76,4 +76,68 @@ public sealed class RedbConversationStoreTests
         var path = await store.LoadPathAsync(convId);
         path.Last().Id.Should().Be(newer);
     }
+
+    [Fact]
+    public async Task UserId_AuditTags_RoundTripThroughRedb()
+    {
+        var store = new RedbConversationStore(_fx.RouteContext);
+        var convId = $"c-{Guid.NewGuid():N}";
+
+        var meta = new ConversationMessageMeta
+        {
+            CreatedAtUtc = DateTime.UtcNow,
+            Iteration = 0,
+            Usage = new LlmUsage(10, 5),
+            UserId = "alice@example.com",
+            AuditTags = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["tier"] = "gold",
+                ["bucket"] = "A",
+                ["region"] = "eu-west"
+            }
+        };
+
+        var id = await store.AppendAsync(convId, null, LlmMessage.User("hi"), meta);
+
+        var tree = await store.LoadTreeAsync(convId);
+        var row = tree.Should().ContainSingle(r => r.Id == id).Subject;
+
+        row.Meta.UserId.Should().Be("alice@example.com");
+        row.Meta.AuditTags.Should().NotBeNull();
+        row.Meta.AuditTags!["tier"].Should().Be("gold");
+        row.Meta.AuditTags!["bucket"].Should().Be("A");
+        row.Meta.AuditTags!["region"].Should().Be("eu-west");
+    }
+
+    [Fact]
+    public async Task AuditTags_QueryableViaDictionaryIndexer()
+    {
+        // Proves the REDB Pro Dictionary-on-Props LINQ-to-SQL path works for our schema:
+        // server-side filter via `m => m.AuditTags["tier"] == "gold"` — no client-side scan.
+        var store = new RedbConversationStore(_fx.RouteContext);
+        var convId = $"c-{Guid.NewGuid():N}";
+
+        await store.AppendAsync(convId, null, LlmMessage.User("Q"),
+            new ConversationMessageMeta
+            {
+                CreatedAtUtc = DateTime.UtcNow,
+                Usage = LlmUsage.Empty,
+                AuditTags = new Dictionary<string, string>(StringComparer.Ordinal) { ["tier"] = "gold" }
+            });
+        await store.AppendAsync(convId, null, LlmMessage.User("Q"),
+            new ConversationMessageMeta
+            {
+                CreatedAtUtc = DateTime.UtcNow.AddSeconds(1),
+                Usage = LlmUsage.Empty,
+                AuditTags = new Dictionary<string, string>(StringComparer.Ordinal) { ["tier"] = "silver" }
+            });
+
+        var goldRows = await _fx.Redb
+            .Query<redb.Route.Llm.Storage.Redb.Schemas.MessageProps>()
+            .Where(m => m.AuditTags!["tier"] == "gold")
+            .ToListAsync();
+
+        goldRows.Should().NotBeEmpty();
+        goldRows.Should().OnlyContain(r => r.Props.AuditTags!["tier"] == "gold");
+    }
 }

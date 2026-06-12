@@ -102,4 +102,63 @@ public sealed class LlmBuilderTests
         uri.Scheme.Should().Be("llm");
         uri.Path.Should().Be("claude");
     }
+
+    [Fact]
+    public void User_LiteralExpression_SetsParam()
+    {
+        LlmDsl.Factory("c").User("system").AsUri().Should().Contain("user=system");
+    }
+
+    [Fact]
+    public void User_HeaderExpression_IsUrlEncodedOnce()
+    {
+        var uri = LlmDsl.Factory("c").User("${header.X-User-Id}").AsUri();
+        // ${header.X-User-Id} → URL-encoded values can be %24/%24 etc; just assert the key/value survive a parse.
+        var parsed = EndpointUriParser.Parse(uri);
+        parsed.RawParameters["user"].Should().Be("${header.X-User-Id}");
+    }
+
+    [Fact]
+    public void Audit_SinglePair_SetsParam()
+    {
+        var uri = LlmDsl.Factory("c").Audit("tier", "gold").AsUri();
+        var parsed = EndpointUriParser.Parse(uri);
+        parsed.RawParameters["audit"].Should().Be("tier=gold");
+    }
+
+    [Fact]
+    public void Audit_MultiplePairs_JoinedWithComma()
+    {
+        var uri = LlmDsl.Factory("c").Audit("tier", "gold").Audit("bucket", "A").AsUri();
+        var parsed = EndpointUriParser.Parse(uri);
+        parsed.RawParameters["audit"].Should().Be("tier=gold,bucket=A");
+    }
+
+    [Fact]
+    public void Audit_ValueWithCommaAndEquals_RoundTripsAfterUrlDecode()
+    {
+        var uri = LlmDsl.Factory("c").Audit("expr", "a=1,b=2").AsUri();
+        var parsed = EndpointUriParser.Parse(uri);
+        // The CSV uses URL-encoded commas/equals inside the value, so the inner comma
+        // does NOT split the pair — the producer's CSV parser sees "expr=a%3D1%2Cb%3D2"
+        // (or similar) and URL-decodes each side.
+        parsed.RawParameters["audit"].Should().Contain("expr=");
+        parsed.RawParameters["audit"].Split(',').Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void Audit_NullKey_Throws()
+    {
+        var b = LlmDsl.Factory("c");
+        var act = () => b.Audit(null!, "v");
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void PromptTemplate_SetsBothParams()
+    {
+        var uri = LlmDsl.Factory("c").PromptTemplate("triage", "v3").AsUri();
+        uri.Should().Contain("promptTemplateName=triage");
+        uri.Should().Contain("promptTemplateVersion=v3");
+    }
 }

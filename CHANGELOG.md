@@ -331,6 +331,69 @@ props automatically.
 > (`ollama`, `lmstudio`, vLLM via `huggingface`) — the alias surface for
 > those is unchanged.
 
+#### `redb.Route.Llm` — `UserId` + free-form `AuditTags` on every persisted row
+
+The 3.1.1 audit-fields work above pinned the *machine* side of the call (model
+id, prompt hash, tool-set hash, sampling settings). This follow-up extends the
+same `MessageProps` row with the *human / governance* side — **who** issued
+the call and **under what business labels** — so a single row answers the
+auditor's full question without joining to anything external.
+
+`MessageProps` (and the mirror `ConversationMessageMeta`) gain two more
+nullable columns:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `UserId` | `string?` | Principal id stamped on every row of the run — pulled from the producer's `?user=` URI option (literal or `${header.X}` expression) or, falling back, the `llm.user.id` header. |
+| `AuditTags` | `Dictionary<string,string>?` | Free-form `key → value` audit labels stamped on every row. Sources merged at producer time: the `?audit=key=val,key=val` URI CSV (each side URL-encoded so commas/equals in literal values are safe) ⊕ inbound `llm.audit.<name>` headers; **headers win on collision** so per-call dimensions can override per-route defaults. |
+
+`AuditTags` is a real REDB Pro `Dictionary<string,string>` — not JSON. That
+means the column is queryable through native LINQ-to-SQL (see
+`redb.Examples/E060_DictContainsKey`, `E061_DictIndexer`,
+`E062_DictNestedClass`):
+
+```csharp
+// Pull every row that came from a specific tenant, server-side, no client scan:
+var rows = await redb.Query<MessageProps>()
+    .Where(m => m.AuditTags!["tenant"] == "acme-prod"
+             && m.UserId == "alice@acme.com")
+    .ToListAsync();
+```
+
+DSL surface — three new fluent methods on `LlmBuilder`:
+
+```csharp
+.To(LlmDsl.Factory("haiku")
+    .User("${header.X-User-Id}")          // principal — literal or ${header.X}
+    .Audit("tenant", "${header.X-Tenant}") // repeatable, dynamic
+    .Audit("env",    "prod")              // repeatable, literal
+    .PromptTemplate("triage", "v1")       // (name, version) pinned per row
+    .AsUri())
+```
+
+Wiring (additive, no breaking changes — every new field is nullable on both
+DTOs and every public method keeps its existing signature):
+
+- `LlmHeaders` gains `UserId = "llm.user.id"` and `AuditTagPrefix = "llm.audit."`.
+- `LlmEndpointOptions` gains `User`, `Audit` (CSV), `PromptTemplateName`,
+  `PromptTemplateVersion`. Bound from URI by reflection like the rest of the
+  options — no parser change.
+- `LlmProducer` resolves `${header.X}` / `${property.X}` / literal expressions
+  pre-call against the inbound exchange, merges the `?audit=` CSV with any
+  `llm.audit.<name>` headers (header wins on collision), and pipes the
+  resolved values through `AgentRequest`.
+- `AgentEngine.PersistMessageAsync` reads `request.UserId` / `request.AuditTags`
+  and stamps both onto every `ConversationMessageMeta` it creates — same row
+  cardinality (system / user / tool-result / assistant), no extra writes.
+- `RedbConversationStore` writes both fields on append and rehydrates them on
+  load. `Dictionary<string,string>` materialises through the framework's
+  native dict serialiser; no custom JSON path on either side.
+
+Demo: see [`demos/Llm.AuditShell/`](demos/Llm.AuditShell/) — single-file
+HTTP shell that exposes both option-side defaults and header-side overrides,
+plus the swap comment for `RedbConversationStore` and the LINQ-by-AuditTags
+query above.
+
 #### `redb.Route.Llm.Mcp` — new package — MCP-client connector for the agent toolset
 
 `redb.Route.Llm.Mcp` is a producer-only NuGet that lets the agent consume

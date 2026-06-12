@@ -59,6 +59,21 @@ public sealed class AgentRequest
 
     /// <summary>Version of the prompt template named by <see cref="PromptTemplateName"/>.</summary>
     public string? PromptTemplateVersion { get; init; }
+
+    /// <summary>
+    /// Stable identifier of the principal that initiated this run (end-user,
+    /// service account, on-behalf-of subject — host decides). Persisted on
+    /// every row of the run so audit queries always have a consistent subject.
+    /// Null when no principal is wired.
+    /// </summary>
+    public string? UserId { get; init; }
+
+    /// <summary>
+    /// Free-form audit tags captured pre-call (operator-controlled key/value
+    /// pairs — e.g. <c>ab-bucket=A</c>, <c>tier=premium</c>). The same snapshot
+    /// is stamped on every row of the run; null / empty when no tags are wired.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? AuditTags { get; init; }
 }
 
 /// <summary>Final agent response.</summary>

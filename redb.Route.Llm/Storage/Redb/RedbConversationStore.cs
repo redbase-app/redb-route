@@ -116,6 +116,10 @@ public sealed class RedbConversationStore : IConversationStore
                 PromptTemplateVersion = meta.PromptTemplateVersion,
                 ToolSetHash = meta.ToolSetHash,
                 ProviderSystemFingerprint = meta.ProviderSystemFingerprint,
+                UserId = meta.UserId,
+                AuditTags = meta.AuditTags is { Count: > 0 }
+                    ? new Dictionary<string, string>(meta.AuditTags, StringComparer.Ordinal)
+                    : null,
                 Content = ToStoredBlocks(message.Content)
             }
         };
@@ -252,7 +256,11 @@ public sealed class RedbConversationStore : IConversationStore
                 PromptTemplateName = row.Props.PromptTemplateName,
                 PromptTemplateVersion = row.Props.PromptTemplateVersion,
                 ToolSetHash = row.Props.ToolSetHash,
-                ProviderSystemFingerprint = row.Props.ProviderSystemFingerprint
+                ProviderSystemFingerprint = row.Props.ProviderSystemFingerprint,
+                UserId = row.Props.UserId,
+                AuditTags = row.Props.AuditTags is { Count: > 0 }
+                    ? new Dictionary<string, string>(row.Props.AuditTags, StringComparer.Ordinal)
+                    : null
             }
         };
     }

@@ -71,4 +71,23 @@ public static class LlmHeaders
     /// (set only when the originating <see cref="redb.Route.Llm.Engine.Storage.BatchJobRecord.AppendToConversation"/> is true).
     /// </summary>
     public const string ConversationMessageId = "llm.conversation.message.id";
+
+    /// <summary>
+    /// Stable identifier of the principal that initiated this call. Read by
+    /// <see cref="LlmProducer"/> when the fluent builder declares
+    /// <c>.User("${header.X-User-Id}")</c> (or any literal expression) and
+    /// stamped on every persisted row of the run as
+    /// <c>MessageProps.UserId</c> / <c>ConversationMessageMeta.UserId</c>.
+    /// </summary>
+    public const string UserId = "llm.user.id";
+
+    /// <summary>
+    /// Header-name prefix for free-form audit tags. Any inbound exchange
+    /// header named <c>llm.audit.&lt;tag&gt;</c> is captured by
+    /// <see cref="LlmProducer"/> and stamped on every persisted row of the
+    /// run as <c>MessageProps.AuditTags</c> entry <c>{ Key=&lt;tag&gt;, Value=&lt;header value&gt; }</c>.
+    /// Tags also accumulate from the fluent <c>.Audit(k, v)</c> builder; both
+    /// sources merge (header overrides builder).
+    /// </summary>
+    public const string AuditTagPrefix = "llm.audit.";
 }

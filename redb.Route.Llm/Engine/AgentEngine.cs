@@ -497,7 +497,9 @@ public sealed class AgentEngine : IAgentEngine
                 PromptTemplateName = request.PromptTemplateName,
                 PromptTemplateVersion = request.PromptTemplateVersion,
                 ToolSetHash = toolSetHash,
-                ProviderSystemFingerprint = providerSystemFingerprint
+                ProviderSystemFingerprint = providerSystemFingerprint,
+                UserId = request.UserId,
+                AuditTags = request.AuditTags
             },
             request.Exchange,
             ct).ConfigureAwait(false);
