@@ -24,6 +24,7 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 ## Highlights
 
 - **24 external transports + 5 built-in components** (Direct, SEDA, Timer, Mock, Log). The 24th — `llm:` — is a first-class LLM connector with a universal OpenAI-compatible provider (14 APIs) and a native Anthropic Messages API provider, plus `.AsLlmTool()` to expose any of the other 23 transports as an LLM-callable tool with zero connector changes. Token-by-token streaming runs end-to-end: `?stream=true` on an `llm://` step lands on the wire as Server-Sent Events through `redb.Route.Http` (with an `event: done` summary trailer) or as one `Text` frame per token through `redb.Route.WebSocket`.
+- **MCP client connector — `mcp:` URI.** `redb.Route.Llm.Mcp` spawns external **Model Context Protocol** servers (stdio or HTTP+SSE), runs `initialize` + `tools/list` on startup and registers every remote tool into `IToolDescriptorRegistry` as a first-class `ILlmToolDescriptor`. The agent picks them up like any native tool — full audit (`ToolSetHash`), governance (`Safety`), observability and approval flow inherited automatically. Cancellation is threaded all the way through: an aborted agent iteration emits a JSON-RPC `notifications/cancelled` and the in-flight `tools/call` unwinds. One package = the entire community MCP ecosystem (Serena, filesystem, git, fetch, github, sqlite, …) becomes callable from a redb agent.
 - **30+ EIP patterns** — Splitter, Aggregator, CBR, WireTap, Saga, Circuit Breaker, Idempotent Consumer, Claim Check, Throttle, Resequencer, Scatter-Gather, and more.
 - **Compiled expression engine** — `${header.x}`, `${header.x++}`, arithmetic, JSONPath, XPath compile to `Func<IExchange, T>` via `System.Linq.Expressions`. No interpreter overhead.
 - **Type-safe fluent builders** — `Kafka.Topic("orders").GroupId("svc").Acks("All")` instead of URI strings.
@@ -1290,6 +1291,7 @@ flowchart TB
 | `Quartz` | `Quartz.NET` | Cron schedules, interval timers, persistent jobs |
 | `Exec` | `System.Diagnostics.Process` | Local-process execution; allowlist, working-directory pin, timeout, output caps |
 | `Llm` | `HttpClient` (OpenAI-compat + Anthropic Messages) | LLM connector with universal OpenAI-compat provider (14 vendors) and native Anthropic provider; tool-loop agent engine; **token-by-token streaming** (`?stream=true` → `IAsyncEnumerable<string>` surfaced as SSE over `redb.Route.Http` with an `event: done` summary trailer / one `Text` frame per token over `redb.Route.WebSocket`) |
+| `Mcp` | JSON-RPC 2.0 over stdio / HTTP+SSE | Model Context Protocol client. Spawns external MCP servers, runs `initialize` + `tools/list`, projects every remote tool into `IToolDescriptorRegistry` as `McpToolDescriptor`. Producer-only (`mcp://server/tool`). Cancellation forwarded as `notifications/cancelled`. |
 
 ### Saga rollback flow
 
@@ -1373,6 +1375,7 @@ Quick reference for `IRouteDefinition` methods. All of them return `IRouteDefini
 | `cron:` / `qtimer:` | redb.Route.Quartz | `Cron.Schedule("name", "expr")` / `QTimer.Every("name")` |
 | `exec:` | redb.Route.Exec | `ExecDsl.Run()` (producer) / `ExecDsl.Schedule(...)` (scheduled consumer) |
 | `llm:` | redb.Route.Llm | `Llm.Factory("haiku")` / `Llm.Factory("openai")` / `Llm.Factory("groq")` / … |
+| `mcp:` | redb.Route.Llm.Mcp | `mcp://serverName/toolName` — auto-registered from MCP `tools/list` |
 | `asb:` | redb.Route.AzureServiceBus | `Asb.Queue("name")` / `Asb.Topic("name", "sub")` |
 | `es:` | redb.Route.Elasticsearch | `Es.Index("name")` |
 | `fstore:` / `fbstorage:` / `fcm:` | redb.Route.Firebase | `Firestore.Collection("name")` / `FbStorage.Bucket("b")` / `Fcm.Send()` |
@@ -1424,6 +1427,7 @@ What each transport can do as a source (`From`) and as a sink (`To`), and which 
 | Quartz | ✅ | — | — | — | — | Cron / interval triggers |
 | Exec | ✅ (scheduled) | ✅ | ✅ | — | — | Local processes; `AllowedCommands` allowlist, `WorkingDirectory` pin, `TimeoutMs`, byte caps; primary use as `.AsLlmTool("shell")` |
 | Llm | — | ✅ | ✅ | — | ✅ | LLM connector — universal OpenAI-compat (14 vendors) + native Anthropic Messages API; tool-loop agent engine; persistent conversation/approval/budget/idempotency stores via `AddRedbLlmStorage()` |
+| Mcp | — | ✅ | — | — | — | MCP-client connector — spawns external MCP servers (stdio + HTTP/SSE), auto-discovers tools via `tools/list` and registers them as `ILlmToolDescriptor`. Cancellation forwarded as `notifications/cancelled`; auto-restart on transport failure |
 
 Legend: ✅ supported · — not applicable.
 
@@ -1463,11 +1467,12 @@ For transports that support transactions, combine with `.Transacted()` to wrap p
 | `redb.Route.Llm` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Llm?label=)](https://www.nuget.org/packages/redb.Route.Llm) | LLM connector — `llm:` URI, fluent DSL, agent loop, universal OpenAI-compatible provider (14 APIs), native Anthropic Messages API provider, `AddRedbLlmStorage()` (5 stores / 9 schemas) |
 | `redb.Route.Llm.Abstractions` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Llm.Abstractions?label=)](https://www.nuget.org/packages/redb.Route.Llm.Abstractions) | LLM tool-capability contracts — `ILlmToolDescriptor`, `LlmToolCapability`, `RouteToolBridge`, `[ExposeAsLlmTool]`, `.AsLlmTool()` DSL aspect |
 | `redb.Route.Llm.Tools` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Llm.Tools?label=)](https://www.nuget.org/packages/redb.Route.Llm.Tools) | Utility LLM tools — HttpFetch, JsonPath, XPath, MathEval, RegexExtract, Tavily web search |
+| `redb.Route.Llm.Mcp` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Llm.Mcp?label=)](https://www.nuget.org/packages/redb.Route.Llm.Mcp) | MCP-client connector — `mcp:` URI, stdio + HTTP/SSE transports, auto-discovery via `tools/list`, cancellation forwarded as `notifications/cancelled`, auto-restart on transport failure |
 | `redb.Route.Exec` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Exec?label=)](https://www.nuget.org/packages/redb.Route.Exec) | Local-process execution — `exec://run` producer + scheduled consumer, allowlist, working-directory pin, timeout, output caps |
 | `redb.Route.Controllers` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Controllers?label=)](https://www.nuget.org/packages/redb.Route.Controllers) | Controller dispatch — attribute routing, DI, InOut |
 | `redb.Route.Validation.Adapters` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Validation.Adapters?label=)](https://www.nuget.org/packages/redb.Route.Validation.Adapters) | Validation adapters — FluentValidation + DataAnnotations |
 
-31 packages total: core engine + 24 transports (incl. `llm:`) + 2 LLM support libraries (Abstractions, Tools) + 4 support libraries (Core, Controllers, GenericFile, Validation.Adapters).
+32 packages total: core engine + 24 transports (incl. `llm:`) + 3 LLM support libraries (Abstractions, Tools, Mcp) + 4 support libraries (Core, Controllers, GenericFile, Validation.Adapters).
 
 ---
 

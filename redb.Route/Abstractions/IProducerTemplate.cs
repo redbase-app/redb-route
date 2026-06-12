@@ -75,27 +75,29 @@ public interface IProducerTemplate
     /// </summary>
     /// <param name="endpoint">Target endpoint instance.</param>
     /// <param name="body">Request body.</param>
+    /// <param name="cancellationToken">Token to cancel the in-flight request.</param>
     /// <returns>The response body from <see cref="IExchange.Out"/>, or <c>null</c>.</returns>
-    Task<object?> RequestBody(IEndpoint endpoint, object body);
+    Task<object?> RequestBody(IEndpoint endpoint, object body, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sends a request by URI and waits for the reply body asynchronously.
     /// </summary>
     /// <param name="endpointUri">Target endpoint URI.</param>
     /// <param name="body">Request body.</param>
+    /// <param name="cancellationToken">Token to cancel the in-flight request.</param>
     /// <returns>The response body from <see cref="IExchange.Out"/>, or <c>null</c>.</returns>
-    Task<object?> RequestBody(string endpointUri, object body);
+    Task<object?> RequestBody(string endpointUri, object body, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sends an explicit <see cref="IMessage"/> as the request and waits for the reply body.
     /// Headers and ContentType on the message are preserved (the message is not re-wrapped).
     /// </summary>
-    Task<object?> RequestBody(IEndpoint endpoint, IMessage message);
+    Task<object?> RequestBody(IEndpoint endpoint, IMessage message, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sends an explicit <see cref="IMessage"/> by URI and waits for the reply body.
     /// </summary>
-    Task<object?> RequestBody(string endpointUri, IMessage message);
+    Task<object?> RequestBody(string endpointUri, IMessage message, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sends a request and returns the reply body cast to <typeparamref name="T"/>.
@@ -103,8 +105,9 @@ public interface IProducerTemplate
     /// <typeparam name="T">Expected response type.</typeparam>
     /// <param name="endpoint">Target endpoint instance.</param>
     /// <param name="body">Request body.</param>
+    /// <param name="cancellationToken">Token to cancel the in-flight request.</param>
     /// <returns>The typed response body, or <c>default</c>.</returns>
-    Task<T?> RequestBody<T>(IEndpoint endpoint, object body);
+    Task<T?> RequestBody<T>(IEndpoint endpoint, object body, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sends a request by URI and returns the reply body cast to <typeparamref name="T"/>.
@@ -112,8 +115,9 @@ public interface IProducerTemplate
     /// <typeparam name="T">Expected response type.</typeparam>
     /// <param name="endpointUri">Target endpoint URI.</param>
     /// <param name="body">Request body.</param>
+    /// <param name="cancellationToken">Token to cancel the in-flight request.</param>
     /// <returns>The typed response body, or <c>default</c>.</returns>
-    Task<T?> RequestBody<T>(string endpointUri, object body);
+    Task<T?> RequestBody<T>(string endpointUri, object body, CancellationToken cancellationToken = default);
 
     // ── Lifecycle ──
 

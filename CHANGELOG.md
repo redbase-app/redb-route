@@ -47,21 +47,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [3.1.1] — Unreleased
 
 > ⚠️ **Not yet published to NuGet.** This bump applies to **`redb.Route.Llm`,
-> `redb.Route.Llm.Tools`, `redb.Route.Http`, `redb.Route.WebSocket` and
-> `redb.Route.Exec`** — every other package stays at 3.1.0. The release
-> bundles four areas of work: (1) end-to-end token-by-token streaming on
-> the wire (`IAsyncEnumerable<string>` response bodies → SSE / chunked text
-> over HTTP, one text frame per token over WebSocket); (2) REDB-backed
-> stores for the remaining state surfaces (`IBatchStore`, `IEvalRunStore`,
-> `IKnowledgeStore`, `IPromptTemplateRegistry`, `IToolCacheStore`); (3)
-> async-batch callback plumbing (`LlmCallbackProcessor` + new
-> `llm.batch.*` headers); (4) a thin DSL/tool split across the homeless
-> tools in `redb.Route.Llm.Tools`. Plus a named-redb-per-exchange hint
-> (`?redb=<name>`) and two targeted bug fixes (LLM agent loop orphan
-> tool_use recovery, Exec OEM codepage on Windows). **No public API was
-> removed or renamed.** The store-interface additions are optional
-> parameters with defaults — existing implementations and call sites
-> compile unchanged.
+> `redb.Route.Llm.Tools`, `redb.Route.Llm.Mcp`, `redb.Route.Http`,
+> `redb.Route.WebSocket` and `redb.Route.Exec`** — every other package stays
+> at 3.1.0. The release bundles four areas of work: (1) end-to-end
+> token-by-token streaming on the wire (`IAsyncEnumerable<string>` response
+> bodies → SSE / chunked text over HTTP, one text frame per token over
+> WebSocket); (2) REDB-backed stores for the remaining state surfaces
+> (`IBatchStore`, `IEvalRunStore`, `IKnowledgeStore`,
+> `IPromptTemplateRegistry`, `IToolCacheStore`); (3) async-batch callback
+> plumbing (`LlmCallbackProcessor` + new `llm.batch.*` headers); (4) a thin
+> DSL/tool split across the homeless tools in `redb.Route.Llm.Tools`. Plus a
+> named-redb-per-exchange hint (`?redb=<name>`), the new
+> `redb.Route.Llm.Mcp` MCP-client connector that brings the community
+> ecosystem of Model Context Protocol servers into the agent toolset, and
+> two targeted bug fixes (LLM agent loop orphan tool_use recovery, Exec OEM
+> codepage on Windows). **No public API was removed or renamed.** The
+> store-interface additions are optional parameters with defaults — existing
+> implementations and call sites compile unchanged.
 
 ### Added
 
@@ -329,6 +331,79 @@ props automatically.
 > (`ollama`, `lmstudio`, vLLM via `huggingface`) — the alias surface for
 > those is unchanged.
 
+#### `redb.Route.Llm.Mcp` — new package — MCP-client connector for the agent toolset
+
+`redb.Route.Llm.Mcp` is a producer-only NuGet that lets the agent consume
+the **community ecosystem** of Model Context Protocol servers (filesystem,
+git, fetch, github, sqlite, Serena, …) without writing a C# adapter per
+server. The package adds the `mcp://` URI scheme — `mcp://serverName/toolName`
+invokes `tools/call` on the named MCP server with the exchange body as JSON
+arguments — and wires a hosted service that, on host startup, spawns each
+registered server, performs the `initialize` + `tools/list` handshake, and
+projects every remote tool into the existing `IToolDescriptorRegistry` as
+an `McpToolDescriptor : ILlmToolDescriptor`. The agent picks them up via
+DI like any native tool.
+
+Because every MCP tool becomes a regular `LlmToolCapability`, the existing
+audit (`ToolSetHash`), governance (`Safety` overrides per `(server, tool)`
+regex), observability (`OnToolInvokedAsync`) and approval pipeline apply
+verbatim — no parallel code paths.
+
+**Transports.** `McpTransport.Stdio(command, args, env, workDir)` spawns an
+external process and exchanges newline-delimited UTF-8 JSON-RPC frames over
+stdin/stdout (stdin writes serialised through a `SemaphoreSlim`, stderr
+drained to the logger at trace, stdout pump skips non-JSON lines). The
+encoding is BOM-less UTF-8 (`UTF8Encoding(false)`) — the static
+`Encoding.UTF8` emits a BOM on first WriteLine and many MCP servers
+(Serena, Anthropic reference) reject the BOM-prefixed first frame as
+invalid JSON. `McpTransport.Http(baseUrl, apiKey)` POSTs JSON-RPC to the
+base URL and opens an SSE channel for server-initiated frames
+(`notifications/tools/list_changed` triggers a registry rebuild).
+
+**Cancellation.** `IProducerTemplate.RequestBody(uri, body, ct)` (the
+CT-aware overload) threads the cancellation token through `IProducer.Process`
+and into `IMcpClient.CallToolAsync(ct)`. On cancel the client emits a
+JSON-RPC `notifications/cancelled` for the pending request id and removes
+the TCS so callers stop waiting.
+
+**Tool name budget.** Provider tool-name caps (Anthropic / OpenAI) max at 64
+chars. `McpToolDescriptor.BuildModelFacingName(server, tool)` sanitises both
+parts to `[a-zA-Z0-9_]`, truncates the server prefix to 24 chars and the
+tool to 36, and joins with `__` (e.g. `serena__get_symbols_overview`).
+Duplicates after truncation are logged and skipped.
+
+**Wiring.**
+
+```csharp
+services.AddRedbRoute()
+        .AddRedbRouteLlm()
+        .AddRedbRouteMcp()
+        .AddMcpServer("serena", McpTransport.Stdio(
+            "uvx",
+            ["--from", "git+https://github.com/oraios/serena",
+             "serena", "start-mcp-server",
+             "--context", "ide",
+             "--project", projectPath]));
+```
+
+The hosted service registers before `RouteHostedService`, so descriptors
+are in the registry by the time routes compile.
+
+**Status / liveness.** `IMcpClient.Status` exposes
+`Idle / Connecting / Healthy / Restarting / Dead`; the producer
+short-circuits with `McpException` when a registered client is `Dead` (no
+silent hangs on a torn-down transport).
+
+#### `redb.Route.Llm` — `IProducerTemplate.RequestBody(uri, body, ct)` CT-aware overload
+
+`IProducerTemplate` gained a third overload that accepts a
+`CancellationToken`. Existing call sites that use the two-argument form
+compile unchanged (the no-CT overload remains as a `ct: CancellationToken.None`
+shim). `AgentEngine.DispatchToolEndpointAsync` now threads its run-level CT
+through to the producer, so an aborted agent iteration cancels the in-flight
+tool RPC at the transport layer instead of waiting for it to finish before
+unwinding.
+
 ### Changed
 
 - **`redb.Route.Llm` I*Store contracts.** Every store interface in
@@ -388,6 +463,17 @@ non-Latin OEM codepage).
 Adds a dependency on `System.Text.Encoding.CodePages` 9.0.0 — the BCL
 only ships ASCII/UTF-8/UTF-16/UTF-32 encodings on .NET; cp932/cp936/cp949
 require `CodePagesEncodingProvider`.
+
+#### `redb.Route.Llm.Mcp` — stdio client transitions to `Dead` on transport failure
+
+`McpClientBase.OnTransportFailed` now sets `Status = McpClientStatus.Dead`
+in addition to failing pending requests. Previously, when an stdio child
+process exited unexpectedly (or the read pump tripped), the client failed
+in-flight requests but kept reporting `Healthy`, so subsequent
+`tools/call` requests went through the producer and silently hung waiting
+on a defunct stdin. The producer's `if (Status is Dead) throw` short
+circuit was unreachable. The fix makes process death immediately
+observable both at the registry level and at the producer level.
 
 ---
 

@@ -160,7 +160,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
     // ── Request/Reply ──
 
     /// <inheritdoc />
-    public async Task<object?> RequestBody(IEndpoint endpoint, object body)
+    public async Task<object?> RequestBody(IEndpoint endpoint, object body, CancellationToken cancellationToken = default)
     {
         EnsureStarted();
         ArgumentNullException.ThrowIfNull(endpoint);
@@ -170,22 +170,22 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         {
             exchange.Pattern = ExchangePattern.InOut;
             var producer = GetOrCreateProducer(endpoint);
-            await producer.Process(exchange).ConfigureAwait(false);
+            await producer.Process(exchange, cancellationToken).ConfigureAwait(false);
             return exchange.Out?.Body ?? exchange.In.Body;
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
     }
 
     /// <inheritdoc />
-    public async Task<object?> RequestBody(string endpointUri, object body)
+    public async Task<object?> RequestBody(string endpointUri, object body, CancellationToken cancellationToken = default)
     {
         EnsureStarted();
         var endpoint = Context.GetEndpoint(endpointUri);
-        return await RequestBody(endpoint, body).ConfigureAwait(false);
+        return await RequestBody(endpoint, body, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public async Task<object?> RequestBody(IEndpoint endpoint, IMessage message)
+    public async Task<object?> RequestBody(IEndpoint endpoint, IMessage message, CancellationToken cancellationToken = default)
     {
         EnsureStarted();
         ArgumentNullException.ThrowIfNull(endpoint);
@@ -196,24 +196,24 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         {
             exchange.Pattern = ExchangePattern.InOut;
             var producer = GetOrCreateProducer(endpoint);
-            await producer.Process(exchange).ConfigureAwait(false);
+            await producer.Process(exchange, cancellationToken).ConfigureAwait(false);
             return exchange.Out?.Body ?? exchange.In.Body;
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
     }
 
     /// <inheritdoc />
-    public async Task<object?> RequestBody(string endpointUri, IMessage message)
+    public async Task<object?> RequestBody(string endpointUri, IMessage message, CancellationToken cancellationToken = default)
     {
         EnsureStarted();
         var endpoint = Context.GetEndpoint(endpointUri);
-        return await RequestBody(endpoint, message).ConfigureAwait(false);
+        return await RequestBody(endpoint, message, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public async Task<T?> RequestBody<T>(IEndpoint endpoint, object body)
+    public async Task<T?> RequestBody<T>(IEndpoint endpoint, object body, CancellationToken cancellationToken = default)
     {
-        var result = await RequestBody(endpoint, body).ConfigureAwait(false);
+        var result = await RequestBody(endpoint, body, cancellationToken).ConfigureAwait(false);
         if (result is null)
             return default;
         if (result is T typed)
@@ -230,11 +230,11 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<T?> RequestBody<T>(string endpointUri, object body)
+    public async Task<T?> RequestBody<T>(string endpointUri, object body, CancellationToken cancellationToken = default)
     {
         EnsureStarted();
         var endpoint = Context.GetEndpoint(endpointUri);
-        return await RequestBody<T>(endpoint, body).ConfigureAwait(false);
+        return await RequestBody<T>(endpoint, body, cancellationToken).ConfigureAwait(false);
     }
 
     // ── Lifecycle ──

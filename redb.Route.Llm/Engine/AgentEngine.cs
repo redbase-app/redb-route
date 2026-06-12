@@ -570,7 +570,7 @@ public sealed class AgentEngine : IAgentEngine
         }
 
         ct.ThrowIfCancellationRequested();
-        var reply = await _producerTemplate.RequestBody(endpointUri, msg).ConfigureAwait(false);
+        var reply = await _producerTemplate.RequestBody(endpointUri, msg, ct).ConfigureAwait(false);
         return SerializeReply(reply);
     }
 

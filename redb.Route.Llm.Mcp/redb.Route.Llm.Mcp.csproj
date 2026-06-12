@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Llm.Mcp</PackageId>
+    <Description>MCP (Model Context Protocol) client connector for redb.Route.Llm. Spawns external MCP servers (stdio + HTTP+SSE), discovers their tools via tools/list, and registers them as ILlmToolDescriptor entries so the agent picks them up like any native tool. Inherits redb.Route audit/governance/observability for free.</Description>
+    <PackageTags>llm;mcp;model-context-protocol;ai;agents;tools;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Llm.Mcp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.Llm.Abstractions\redb.Route.Llm.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>
