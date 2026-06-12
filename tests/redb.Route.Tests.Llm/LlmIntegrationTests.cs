@@ -79,7 +79,10 @@ public sealed class LlmIntegrationTests
         ex.Out!.Body.Should().Be("[stub] translate this");
         ex.Out.Headers[LlmHeaders.ProviderId].Should().Be("stub");
         ex.Out.Headers[LlmHeaders.ModelId].Should().Be("echo-1");
-        endpoint.MessagesIn.Should().Be(0);
+        // LlmProducer.Process counts each agent turn as MessagesIn=1 / MessagesOut=1
+        // so the tsak dashboard sees throughput on `.To(LlmDsl....AsUri())` hops.
+        endpoint.MessagesIn.Should().Be(1);
+        endpoint.MessagesOut.Should().Be(1);
         endpoint.BytesIn.Should().Be("translate this".Length);
     }
 

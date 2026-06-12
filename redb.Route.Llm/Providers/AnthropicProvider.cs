@@ -437,7 +437,8 @@ public sealed class AnthropicProvider : ILlmProvider
             Content = blocks,
             StopReason = stop,
             Usage = usage,
-            RawStopReason = rawStop
+            RawStopReason = rawStop,
+            ProviderResponseId = json["id"]?.GetValue<string?>()
         };
     }
 

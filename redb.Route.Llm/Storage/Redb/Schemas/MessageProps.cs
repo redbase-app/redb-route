@@ -98,6 +98,66 @@ public class MessageProps
     public string? UserId { get; set; }
 
     /// <summary>
+    /// Connection-factory alias used for this call (e.g. <c>"haiku"</c>,
+    /// <c>"gpt-mini"</c>) — the operator-chosen profile name from
+    /// <c>LlmConnectionFactory.Name</c>. Audits the *intent* (which configured
+    /// connection was selected) on top of <see cref="ProviderId"/> /
+    /// <see cref="ModelId"/> (which model actually answered). Differs from the
+    /// (provider, model) pair when the host registers multiple connections to
+    /// the same provider with different keys / quotas / regions.
+    /// </summary>
+    public string? FactoryName { get; set; }
+
+    /// <summary>
+    /// Effective base URL the request was sent to, as configured on
+    /// <c>LlmConnectionFactory.BaseUrl</c>. Null when the factory used the
+    /// provider's built-in default endpoint. Captures self-hosted gateways
+    /// (vLLM, llama.cpp, in-house proxies) that auditors otherwise have to
+    /// chase through environment configuration.
+    /// </summary>
+    public string? BaseUrl { get; set; }
+
+    /// <summary>
+    /// Provider-issued response identifier surfaced by the backend (top-level
+    /// <c>id</c> on OpenAI / Anthropic / xAI / Together responses). Null on
+    /// non-assistant rows or when the provider does not surface one. Lets an
+    /// auditor cross-reference a persisted row with the provider's own usage
+    /// / billing logs.
+    /// </summary>
+    public string? ProviderResponseId { get; set; }
+
+    /// <summary>
+    /// Wall-clock time (milliseconds) the provider spent producing this
+    /// assistant turn — measured around <c>ILlmProvider.CompleteAsync</c>.
+    /// Null on user / tool-result / system rows.
+    /// </summary>
+    public long? LatencyMs { get; set; }
+
+    /// <summary>
+    /// Stable, non-secret fingerprint of the API key used for this call —
+    /// SHA-256 of the key, first 16 hex chars. Lets a host with multiple keys
+    /// per provider (per-tenant, per-environment, rotation pairs) tell which
+    /// key served a given row without storing the key itself. Null when the
+    /// factory exposes no <c>ApiKey</c> (e.g. on-host providers, secret-ref
+    /// resolution skipped).
+    /// </summary>
+    public string? ApiKeyFingerprint { get; set; }
+
+    /// <summary>
+    /// How many times the route framework retried the inbound exchange before
+    /// the call succeeded — the operator-visible "this row is from a retry"
+    /// signal. Read from <c>exchange.Properties["RetryAttempt"]</c>
+    /// (set by <c>RetryProcessor</c>) with fallbacks to
+    /// <c>exchange.In.Headers["CamelRedeliveryCounter"]</c>
+    /// (<c>OnExceptionProcessor</c>) and
+    /// <c>exchange.In.Headers["CamelDeadLetterRedeliveryCount"]</c>
+    /// (<c>DeadLetterProcessor</c>). Null when no retry counter is on the
+    /// exchange (first / only delivery). Same value stamped on every row of
+    /// the same agent turn.
+    /// </summary>
+    public int? RetryCount { get; set; }
+
+    /// <summary>
     /// Content blocks for this message, stored as a typed nested array. Each
     /// block carries a discriminator (<see cref="MessageContentBlock.Kind"/>)
     /// plus the fields used by the matching <c>LlmContentBlock</c> variant.

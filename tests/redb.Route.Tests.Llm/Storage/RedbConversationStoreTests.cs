@@ -94,7 +94,13 @@ public sealed class RedbConversationStoreTests
                 ["tier"] = "gold",
                 ["bucket"] = "A",
                 ["region"] = "eu-west"
-            }
+            },
+            FactoryName = "haiku",
+            BaseUrl = "https://api.anthropic.com/",
+            ProviderResponseId = "msg_round_trip_01",
+            LatencyMs = 1234,
+            ApiKeyFingerprint = "0123456789abcdef",
+            RetryCount = 4
         };
 
         var id = await store.AppendAsync(convId, null, LlmMessage.User("hi"), meta);
@@ -107,6 +113,12 @@ public sealed class RedbConversationStoreTests
         row.Meta.AuditTags!["tier"].Should().Be("gold");
         row.Meta.AuditTags!["bucket"].Should().Be("A");
         row.Meta.AuditTags!["region"].Should().Be("eu-west");
+        row.Meta.FactoryName.Should().Be("haiku");
+        row.Meta.BaseUrl.Should().Be("https://api.anthropic.com/");
+        row.Meta.ProviderResponseId.Should().Be("msg_round_trip_01");
+        row.Meta.LatencyMs.Should().Be(1234);
+        row.Meta.ApiKeyFingerprint.Should().Be("0123456789abcdef");
+        row.Meta.RetryCount.Should().Be(4);
     }
 
     [Fact]

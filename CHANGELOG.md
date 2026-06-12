@@ -394,6 +394,69 @@ HTTP shell that exposes both option-side defaults and header-side overrides,
 plus the swap comment for `RedbConversationStore` and the LINQ-by-AuditTags
 query above.
 
+#### `redb.Route.Llm` — operator-side audit fields: factory alias, base URL, provider response id, latency, key fingerprint, retry count
+
+Building on the `UserId` + `AuditTags` row above, this slice closes the
+"which connection actually answered, and how long did it take?" gap on the
+*operator* side — the dimensions a host already knows pre-call but had to
+reconstruct from logs after the fact. Six more nullable columns on
+`MessageProps` / `ConversationMessageMeta`:
+
+| Field | Type | Stamped on | Source |
+|---|---|---|---|
+| `FactoryName` | `string?` | every row | `LlmConnectionFactory.Name` (the operator-chosen profile alias, e.g. `"haiku"`, `"gpt-mini"`) |
+| `BaseUrl` | `string?` | every row | `LlmConnectionFactory.BaseUrl` (null → provider default endpoint was used) |
+| `ProviderResponseId` | `string?` | assistant rows | provider response top-level `id` (OpenAI / xAI / Together / Anthropic) |
+| `LatencyMs` | `long?` | assistant rows | wall-clock around `ILlmProvider.CompleteAsync` |
+| `ApiKeyFingerprint` | `string?` | every row | SHA-256 of `LlmConnectionFactory.ApiKey`, first 16 hex chars (non-secret) |
+| `RetryCount` | `int?` | every row | route-framework retry counter on the inbound exchange (see fallback chain below) |
+
+Why this matters in audit: when a host registers multiple connections to the
+same provider — different keys per tenant, separate quotas per environment,
+old/new key during rotation — the (provider, model) pair is no longer enough
+to answer "which configured connection served this row?". `FactoryName` +
+`BaseUrl` + `ApiKeyFingerprint` make the answer one column lookup.
+`ProviderResponseId` cross-references the provider's own usage / billing
+logs; `LatencyMs` lets a compliance pull profile p99 per (tenant, model)
+without touching application telemetry.
+
+LINQ-to-SQL example — slow-tail rows for a specific configured connection:
+
+```csharp
+var slowGoldRows = await redb.Query<MessageProps>()
+    .Where(m => m.FactoryName == "haiku"
+             && m.AuditTags!["tier"] == "gold"
+             && m.LatencyMs > 5000)
+    .OrderByDescending(m => m.LatencyMs)
+    .ToListAsync();
+```
+
+Wiring (additive, every field nullable on both DTOs):
+
+- `LlmResponse` gains `ProviderResponseId`. Both providers — `OpenAiProvider`
+  and `AnthropicProvider` — parse the top-level `id` from the response JSON.
+- `AgentEngine.PersistMessageAsync` accepts two new optional parameters
+  (`providerResponseId`, `latencyMs`). The assistant-persist site passes
+  `last.ProviderResponseId` and the stopwatch elapsed around the provider
+  call; non-assistant sites pass `null, null`. `FactoryName` / `BaseUrl` /
+  `ApiKeyFingerprint` are computed inside `PersistMessageAsync` from
+  `request.Factory` so every row of the run carries them with no per-call-site
+  plumbing change.
+- `ApiKeyFingerprint` is computed via `SHA256.HashData` of the UTF-8 key
+  bytes, then `Convert.ToHexString(hash[..8]).ToLowerInvariant()` → 16 hex
+  chars. Empty / null key → null fingerprint. The key itself never reaches
+  the conversation store.
+- `RetryCount` is read once at the top of `RunAsync` from the inbound
+  exchange and stamped identically on every row of the turn. Source order:
+  `exchange.Properties["RetryAttempt"]` (set by `RetryProcessor` for the
+  per-step `.Retry(...)` DSL), then `exchange.In.Headers["CamelRedeliveryCounter"]`
+  (set by `OnExceptionProcessor`), then
+  `exchange.In.Headers["CamelDeadLetterRedeliveryCount"]` (set by
+  `DeadLetterProcessor`). Null when none are present (first / only delivery).
+- `RedbConversationStore` writes and rehydrates all six fields. No schema
+  migration needed — REDB stores added props on existing rows transparently.
+
+
 #### `redb.Route.Llm.Mcp` — new package — MCP-client connector for the agent toolset
 
 `redb.Route.Llm.Mcp` is a producer-only NuGet that lets the agent consume

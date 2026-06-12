@@ -127,6 +127,50 @@ public sealed class ConversationMessageMeta
     /// when no tags are wired.
     /// </summary>
     public IReadOnlyDictionary<string, string>? AuditTags { get; init; }
+
+    /// <summary>
+    /// Connection-factory alias used for this call (<c>LlmConnectionFactory.Name</c>) —
+    /// the operator-chosen profile name. Audits the *intent* on top of
+    /// <see cref="ProviderId"/> / <see cref="ModelId"/>.
+    /// </summary>
+    public string? FactoryName { get; init; }
+
+    /// <summary>
+    /// Effective base URL set on the connection factory. Null when the
+    /// factory used the provider's built-in default endpoint.
+    /// </summary>
+    public string? BaseUrl { get; init; }
+
+    /// <summary>
+    /// Provider-issued response identifier (top-level <c>id</c> on
+    /// OpenAI / Anthropic / xAI / Together). Null on non-assistant rows.
+    /// </summary>
+    public string? ProviderResponseId { get; init; }
+
+    /// <summary>
+    /// Wall-clock time (milliseconds) the provider spent producing the
+    /// assistant turn this row belongs to. Null on non-assistant rows.
+    /// </summary>
+    public long? LatencyMs { get; init; }
+
+    /// <summary>
+    /// Stable, non-secret fingerprint of the API key used for the call —
+    /// SHA-256 of the key, first 16 hex chars. Null when the factory exposes
+    /// no <c>ApiKey</c>.
+    /// </summary>
+    public string? ApiKeyFingerprint { get; init; }
+
+    /// <summary>
+    /// How many times the route framework retried the inbound exchange before
+    /// the call succeeded. Read from
+    /// <c>exchange.Properties["RetryAttempt"]</c> (set by
+    /// <c>RetryProcessor</c>) with fallbacks to
+    /// <c>exchange.In.Headers["CamelRedeliveryCounter"]</c>
+    /// (<c>OnExceptionProcessor</c>) and
+    /// <c>exchange.In.Headers["CamelDeadLetterRedeliveryCount"]</c>
+    /// (<c>DeadLetterProcessor</c>). Null on first / only delivery.
+    /// </summary>
+    public int? RetryCount { get; init; }
 }
 
 /// <summary>A persisted conversation message with its tree placement and metadata.</summary>

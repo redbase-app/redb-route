@@ -114,6 +114,14 @@ public sealed class LlmResponse
     /// signal an auditor has to detect silent provider drift.
     /// </summary>
     public string? ProviderSystemFingerprint { get; init; }
+
+    /// <summary>
+    /// Provider-issued response identifier (OpenAI / xAI / Together: top-level
+    /// <c>id</c>; Anthropic: top-level <c>id</c>). Used by auditors to
+    /// cross-reference a persisted row with the provider's own usage / billing
+    /// logs. Null when the provider does not surface one.
+    /// </summary>
+    public string? ProviderResponseId { get; init; }
 }
 
 /// <summary>

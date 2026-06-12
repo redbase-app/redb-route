@@ -93,6 +93,8 @@ public sealed class AgentEngine : IAgentEngine
         };
         await _observer.OnRunStartedAsync(runCtx, ct).ConfigureAwait(false);
 
+        var retryCount = ReadRetryCount(request.Exchange);
+
         var transcript = new List<LlmMessage>();
         string? attachUnderId = request.ConversationParentMessageId;
 
@@ -134,6 +136,8 @@ public sealed class AgentEngine : IAgentEngine
                         toolUseId: null,
                         temperature: null, maxTokens: null, topP: null,
                         toolSetHash: null, providerSystemFingerprint: null,
+                        providerResponseId: null, latencyMs: null,
+                        retryCount: retryCount,
                         ct).ConfigureAwait(false);
                     _logger?.LogWarning(
                         "Recovered {Count} orphaned tool_use block(s) in conversation {Conv} on load.",
@@ -156,6 +160,8 @@ public sealed class AgentEngine : IAgentEngine
             toolUseId: null,
             temperature: null, maxTokens: null, topP: null,
             toolSetHash: null, providerSystemFingerprint: null,
+            providerResponseId: null, latencyMs: null,
+            retryCount: retryCount,
             ct).ConfigureAwait(false);
 
         var iter = 0;
@@ -245,6 +251,9 @@ public sealed class AgentEngine : IAgentEngine
                     topP: effectiveTopP,
                     toolSetHash: toolSetHash,
                     providerSystemFingerprint: last.ProviderSystemFingerprint,
+                    providerResponseId: last.ProviderResponseId,
+                    latencyMs: (long)sw.Elapsed.TotalMilliseconds,
+                    retryCount: retryCount,
                     ct).ConfigureAwait(false);
 
                 PublishConversationContext(request, transcript, iter, totalUsage);
@@ -275,6 +284,8 @@ public sealed class AgentEngine : IAgentEngine
                     toolUseId: null,
                     temperature: null, maxTokens: null, topP: null,
                     toolSetHash: null, providerSystemFingerprint: null,
+                    providerResponseId: null, latencyMs: null,
+                    retryCount: retryCount,
                     ct).ConfigureAwait(false);
             }
         }
@@ -474,6 +485,9 @@ public sealed class AgentEngine : IAgentEngine
         double? topP,
         string? toolSetHash,
         string? providerSystemFingerprint,
+        string? providerResponseId,
+        long? latencyMs,
+        int? retryCount,
         CancellationToken ct)
     {
         if (_conversation is null || request.ConversationId is null) return parentId;
@@ -499,10 +513,60 @@ public sealed class AgentEngine : IAgentEngine
                 ToolSetHash = toolSetHash,
                 ProviderSystemFingerprint = providerSystemFingerprint,
                 UserId = request.UserId,
-                AuditTags = request.AuditTags
+                AuditTags = request.AuditTags,
+                FactoryName = string.IsNullOrEmpty(request.Factory.Name) ? null : request.Factory.Name,
+                BaseUrl = request.Factory.BaseUrl?.ToString(),
+                ProviderResponseId = providerResponseId,
+                LatencyMs = latencyMs,
+                ApiKeyFingerprint = ComputeApiKeyFingerprint(request.Factory.ApiKey),
+                RetryCount = retryCount
             },
             request.Exchange,
             ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads the retry counter the route framework stamps on the inbound
+    /// exchange before the engine runs. Sources, in priority order: the
+    /// per-step <c>RetryProcessor</c> property, the <c>OnExceptionProcessor</c>
+    /// header, then the <c>DeadLetterProcessor</c> header. Returns null when
+    /// none are present (first / only delivery).
+    /// </summary>
+    private static int? ReadRetryCount(IExchange exchange)
+    {
+        if (exchange.Properties.TryGetValue("RetryAttempt", out var prop) && TryToInt(prop, out var fromProp))
+            return fromProp;
+        if (exchange.In?.Headers is { } headers)
+        {
+            if (headers.TryGetValue("CamelRedeliveryCounter", out var redeliv) && TryToInt(redeliv, out var fromRedeliv))
+                return fromRedeliv;
+            if (headers.TryGetValue("CamelDeadLetterRedeliveryCount", out var dlq) && TryToInt(dlq, out var fromDlq))
+                return fromDlq;
+        }
+        return null;
+
+        static bool TryToInt(object? raw, out int value)
+        {
+            switch (raw)
+            {
+                case int i: value = i; return true;
+                case long l: value = (int)l; return true;
+                case string s when int.TryParse(s, out var parsed): value = parsed; return true;
+                default: value = 0; return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Stable, non-secret fingerprint of the API key — SHA-256 of the UTF-8
+    /// bytes, first 16 hex chars. Empty / null key → null fingerprint.
+    /// </summary>
+    private static string? ComputeApiKeyFingerprint(string? apiKey)
+    {
+        if (string.IsNullOrEmpty(apiKey)) return null;
+        Span<byte> hash = stackalloc byte[32];
+        SHA256.HashData(Encoding.UTF8.GetBytes(apiKey), hash);
+        return Convert.ToHexString(hash[..8]).ToLowerInvariant();
     }
 
     private async Task SafeRunShadowAsync(ILlmProvider provider, LlmRequest request, LlmResponse response, CancellationToken ct)

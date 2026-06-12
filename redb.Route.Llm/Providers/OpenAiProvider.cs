@@ -462,6 +462,7 @@ public sealed class OpenAiProvider : ILlmProvider
         // typically leave it null. Auditors compare the value across otherwise
         // identical calls to detect silent backend re-releases.
         var fingerprint = json["system_fingerprint"]?.GetValue<string?>();
+        var responseId = json["id"]?.GetValue<string?>();
 
         return new LlmResponse
         {
@@ -469,7 +470,8 @@ public sealed class OpenAiProvider : ILlmProvider
             StopReason = stop,
             Usage = usage,
             RawStopReason = rawStop,
-            ProviderSystemFingerprint = fingerprint
+            ProviderSystemFingerprint = fingerprint,
+            ProviderResponseId = responseId
         };
     }
 

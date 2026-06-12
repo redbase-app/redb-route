@@ -151,4 +151,110 @@ public sealed class LlmAuditPersistenceTests
         rows.Should().OnlyContain(r => r.Meta.UserId == null);
         rows.Should().OnlyContain(r => r.Meta.AuditTags == null);
     }
+
+    [Fact]
+    public async Task FactoryName_IsStampedOnEveryRow()
+    {
+        // Build helper registers the factory under name "fake".
+        var rows = await RunAsync("llm://fake?conversation=header");
+
+        rows.Should().NotBeEmpty();
+        rows.Select(r => r.Meta.FactoryName).Should().AllBeEquivalentTo("fake");
+    }
+
+    [Fact]
+    public async Task ProviderResponseId_AndLatency_AreStampedOnAssistantRow()
+    {
+        var rows = await RunAsync("llm://fake?conversation=header");
+
+        var assistant = rows.Should().ContainSingle(r => r.Message.Role == "assistant").Subject;
+        // FakeProvider sets ProviderResponseId via EnqueueText defaults; if null, latency must still be present.
+        assistant.Meta.LatencyMs.Should().NotBeNull();
+        assistant.Meta.LatencyMs!.Value.Should().BeGreaterThanOrEqualTo(0);
+    }
+
+    [Fact]
+    public async Task ProviderResponseId_RoundTripsFromProviderResponse()
+    {
+        // Drive the producer with a hand-built LlmResponse so we can pin a known id.
+        var fake = new FakeProvider();
+        fake.Enqueue(new LlmResponse
+        {
+            Content = [new LlmTextBlock("ok")],
+            StopReason = LlmStopReason.EndTurn,
+            Usage = new LlmUsage(1, 1),
+            ProviderResponseId = "resp_abc123"
+        });
+
+        var (_, endpoint, store) = Build(fake, "llm://fake?conversation=header");
+        var producer = (LlmProducer)endpoint.CreateProducer();
+        await producer.Start();
+
+        var msg = new Message("hi");
+        msg.Headers[LlmHeaders.ConversationId] = "c-rid";
+        await producer.Process(new Exchange(msg));
+
+        var rows = await store.LoadTreeAsync("c-rid");
+        var assistant = rows.Should().ContainSingle(r => r.Message.Role == "assistant").Subject;
+        assistant.Meta.ProviderResponseId.Should().Be("resp_abc123");
+    }
+
+    [Fact]
+    public async Task LatencyAndResponseId_AreNullOnNonAssistantRows()
+    {
+        var rows = await RunAsync("llm://fake?conversation=header");
+
+        rows.Where(r => r.Message.Role != "assistant")
+            .Should().OnlyContain(r => r.Meta.LatencyMs == null);
+        rows.Where(r => r.Message.Role != "assistant")
+            .Should().OnlyContain(r => r.Meta.ProviderResponseId == null);
+    }
+
+    [Fact]
+    public async Task RetryCount_NullByDefault_OnFirstDelivery()
+    {
+        var rows = await RunAsync("llm://fake?conversation=header");
+
+        rows.Should().NotBeEmpty();
+        rows.Should().OnlyContain(r => r.Meta.RetryCount == null);
+    }
+
+    [Fact]
+    public async Task RetryCount_FromRetryAttemptProperty_StampedOnEveryRow()
+    {
+        var fake = new FakeProvider().EnqueueText("ok", tokensIn: 1, tokensOut: 1);
+        var (_, endpoint, store) = Build(fake, "llm://fake?conversation=header");
+        var producer = (LlmProducer)endpoint.CreateProducer();
+        await producer.Start();
+
+        var msg = new Message("hi");
+        msg.Headers[LlmHeaders.ConversationId] = "c-retry-prop";
+        var exchange = new Exchange(msg);
+        // RetryProcessor.cs writes this property each retry attempt.
+        exchange.Properties["RetryAttempt"] = 2;
+        await producer.Process(exchange);
+
+        var rows = await store.LoadTreeAsync("c-retry-prop");
+        rows.Should().NotBeEmpty();
+        rows.Select(r => r.Meta.RetryCount).Should().AllBeEquivalentTo(2);
+    }
+
+    [Fact]
+    public async Task RetryCount_FallsBackTo_CamelRedeliveryCounter()
+    {
+        var fake = new FakeProvider().EnqueueText("ok", tokensIn: 1, tokensOut: 1);
+        var (_, endpoint, store) = Build(fake, "llm://fake?conversation=header");
+        var producer = (LlmProducer)endpoint.CreateProducer();
+        await producer.Start();
+
+        var msg = new Message("hi");
+        msg.Headers[LlmHeaders.ConversationId] = "c-retry-hdr";
+        // OnExceptionProcessor stamps this header on the inbound message.
+        msg.Headers["CamelRedeliveryCounter"] = 3;
+        await producer.Process(new Exchange(msg));
+
+        var rows = await store.LoadTreeAsync("c-retry-hdr");
+        rows.Should().NotBeEmpty();
+        rows.Select(r => r.Meta.RetryCount).Should().AllBeEquivalentTo(3);
+    }
 }

@@ -120,6 +120,12 @@ public sealed class RedbConversationStore : IConversationStore
                 AuditTags = meta.AuditTags is { Count: > 0 }
                     ? new Dictionary<string, string>(meta.AuditTags, StringComparer.Ordinal)
                     : null,
+                FactoryName = meta.FactoryName,
+                BaseUrl = meta.BaseUrl,
+                ProviderResponseId = meta.ProviderResponseId,
+                LatencyMs = meta.LatencyMs,
+                ApiKeyFingerprint = meta.ApiKeyFingerprint,
+                RetryCount = meta.RetryCount,
                 Content = ToStoredBlocks(message.Content)
             }
         };
@@ -260,7 +266,13 @@ public sealed class RedbConversationStore : IConversationStore
                 UserId = row.Props.UserId,
                 AuditTags = row.Props.AuditTags is { Count: > 0 }
                     ? new Dictionary<string, string>(row.Props.AuditTags, StringComparer.Ordinal)
-                    : null
+                    : null,
+                FactoryName = row.Props.FactoryName,
+                BaseUrl = row.Props.BaseUrl,
+                ProviderResponseId = row.Props.ProviderResponseId,
+                LatencyMs = row.Props.LatencyMs,
+                ApiKeyFingerprint = row.Props.ApiKeyFingerprint,
+                RetryCount = row.Props.RetryCount
             }
         };
     }
