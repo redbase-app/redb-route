@@ -1,11 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\redb.Route\redb.Route.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Controllers\redb.Route.Controllers.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Http\redb.Route.Http.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.SignalR\redb.Route.SignalR.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Grpc\redb.Route.Grpc.csproj" />
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Controllers\redb.Route.Controllers.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Http\redb.Route.Http.csproj" />
+    <ProjectReference Include="..\..\redb.Route.SignalR\redb.Route.SignalR.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Grpc\redb.Route.Grpc.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,3 +19,4 @@
   </ItemGroup>
 
 </Project>
+

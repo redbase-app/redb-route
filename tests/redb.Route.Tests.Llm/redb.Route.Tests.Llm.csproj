@@ -5,11 +5,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\redb.Route\redb.Route.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Llm\redb.Route.Llm.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Llm.Abstractions\redb.Route.Llm.Abstractions.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Llm.Tools\redb.Route.Llm.Tools.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Exec\redb.Route.Exec.csproj" />
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm\redb.Route.Llm.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm.Abstractions\redb.Route.Llm.Abstractions.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm.Tools\redb.Route.Llm.Tools.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Exec\redb.Route.Exec.csproj" />
     <PackageReference Include="redb.Core.Pro" Version="3.2.0" />
     <PackageReference Include="redb.Postgres.Pro" Version="3.2.0" />
   </ItemGroup>

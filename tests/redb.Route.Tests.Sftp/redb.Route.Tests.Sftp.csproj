@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\redb.Route\redb.Route.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.GenericFile\redb.Route.GenericFile.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Sftp\redb.Route.Sftp.csproj" />
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.GenericFile\redb.Route.GenericFile.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Sftp\redb.Route.Sftp.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -11,3 +11,4 @@
   </ItemGroup>
 
 </Project>
+

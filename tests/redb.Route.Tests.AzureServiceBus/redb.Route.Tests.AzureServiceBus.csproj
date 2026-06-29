@@ -1,8 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\redb.Route\redb.Route.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.AzureServiceBus\redb.Route.AzureServiceBus.csproj" />
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.AzureServiceBus\redb.Route.AzureServiceBus.csproj" />
   </ItemGroup>
 
 </Project>
+

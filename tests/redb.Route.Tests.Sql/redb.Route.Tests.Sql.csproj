@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\redb.Route\redb.Route.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Sql\redb.Route.Sql.csproj" />
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Sql\redb.Route.Sql.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -11,3 +11,4 @@
   </ItemGroup>
 
 </Project>
+

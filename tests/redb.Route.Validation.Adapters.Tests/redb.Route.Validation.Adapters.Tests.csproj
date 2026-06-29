@@ -6,7 +6,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\redb.Route.Validation.Adapters\redb.Route.Validation.Adapters.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Validation.Adapters\redb.Route.Validation.Adapters.csproj" />
   </ItemGroup>
 
 </Project>
+

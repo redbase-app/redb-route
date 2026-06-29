@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\redb.Route\redb.Route.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Llm\redb.Route.Llm.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Llm.Abstractions\redb.Route.Llm.Abstractions.csproj" />
-    <ProjectReference Include="..\..\src\redb.Route.Llm.Mcp\redb.Route.Llm.Mcp.csproj" />
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm\redb.Route.Llm.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm.Abstractions\redb.Route.Llm.Abstractions.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm.Mcp\redb.Route.Llm.Mcp.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -14,3 +14,4 @@
   </ItemGroup>
 
 </Project>
+
