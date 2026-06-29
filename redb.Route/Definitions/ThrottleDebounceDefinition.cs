@@ -15,6 +15,7 @@ public class ThrottleDefinition : RouteDefinitionBase<ThrottleDefinition>, IRout
 {
     private readonly int _maxPerPeriod;
     private TimeSpan? _period;
+    private bool _rejectOnOverflow;
 
     internal ThrottleDefinition(int maxPerPeriod)
     {
@@ -27,6 +28,18 @@ public class ThrottleDefinition : RouteDefinitionBase<ThrottleDefinition>, IRout
 
     /// <summary>Sets the time period for the rate limit (default: 1 second).</summary>
     public ThrottleDefinition Period(TimeSpan period) { _period = period; return this; }
+
+    /// <summary>
+    /// Opt into RFC 6585 §4 rejection semantics: overflow exchanges are short-circuited with
+    /// HTTP 429 + <c>Retry-After</c> (RFC 7231 §7.1.3) instead of semaphore-waiting until a
+    /// slot frees. Recommended for any HTTP-facing endpoint — silent waits look like a hung
+    /// server to clients and break liveness probes. Default is <c>false</c> (legacy wait).
+    /// </summary>
+    public ThrottleDefinition RejectOnOverflow(bool reject = true)
+    {
+        _rejectOnOverflow = reject;
+        return this;
+    }
 
     // ── Navigation ─────────────────────────────────────────────────────────────
 
@@ -46,7 +59,7 @@ public class ThrottleDefinition : RouteDefinitionBase<ThrottleDefinition>, IRout
         IProcessor downstream = BuildPipeline(Outputs, context);
         var loggerFactory = context.GetService<ILoggerFactory>();
         var logger = loggerFactory?.CreateLogger<ThrottleProcessor>();
-        return new ThrottleProcessor(downstream, _maxPerPeriod, _period, logger);
+        return new ThrottleProcessor(downstream, _maxPerPeriod, _period, _rejectOnOverflow, logger);
     }
 
     private static IProcessor BuildPipeline(IList<IProcessorDefinition> outputs, IRouteContext context)
@@ -146,6 +159,7 @@ public class KeyedThrottleDefinition : RouteDefinitionBase<KeyedThrottleDefiniti
     private readonly Func<IExchange, string> _keyExtractor;
     private readonly int _maxPerPeriod;
     private readonly TimeSpan? _period;
+    private bool _rejectOnOverflow;
 
     /// <summary>Gets the key extractor function.</summary>
     public Func<IExchange, string> KeyExtractor => _keyExtractor;
@@ -163,6 +177,20 @@ public class KeyedThrottleDefinition : RouteDefinitionBase<KeyedThrottleDefiniti
             throw new ArgumentOutOfRangeException(nameof(maxPerPeriod), "Must be > 0.");
         _maxPerPeriod = maxPerPeriod;
         _period = period;
+    }
+
+    // ── Options ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Opt into RFC 6585 §4 rejection semantics: overflow exchanges are short-circuited with
+    /// HTTP 429 + <c>Retry-After</c> (RFC 7231 §7.1.3) instead of semaphore-waiting until a
+    /// slot frees. Recommended for any HTTP-facing endpoint — silent waits look like a hung
+    /// server to clients and break liveness probes. Default is <c>false</c> (legacy wait).
+    /// </summary>
+    public KeyedThrottleDefinition RejectOnOverflow(bool reject = true)
+    {
+        _rejectOnOverflow = reject;
+        return this;
     }
 
     // ── Navigation ─────────────────────────────────────────────────────────────
@@ -183,7 +211,7 @@ public class KeyedThrottleDefinition : RouteDefinitionBase<KeyedThrottleDefiniti
         IProcessor downstream = BuildPipeline(Outputs, context);
         var loggerFactory = context.GetService<ILoggerFactory>();
         var logger = loggerFactory?.CreateLogger<KeyedThrottleProcessor>();
-        return new KeyedThrottleProcessor(downstream, _keyExtractor, _maxPerPeriod, _period, logger);
+        return new KeyedThrottleProcessor(downstream, _keyExtractor, _maxPerPeriod, _period, _rejectOnOverflow, logger);
     }
 
     private static IProcessor BuildPipeline(IList<IProcessorDefinition> outputs, IRouteContext context)

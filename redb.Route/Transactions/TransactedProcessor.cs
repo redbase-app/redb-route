@@ -11,9 +11,10 @@ namespace redb.Route.Transactions;
 /// <para>
 /// Transports (Kafka, Redis, RabbitMQ, etc.) register <see cref="ITransactedAction"/> instances
 /// in <c>exchange.Properties["TRANSACT_ACTION"]</c> as a
-/// <see cref="ConcurrentDictionary{TKey,TValue}"/> keyed by a unique name
-/// (typically the endpoint URI). On success all actions are committed; on failure
-/// they are rolled back.
+/// <see cref="ConcurrentDictionary{TKey,TValue}"/> keyed by a per-message-unique name
+/// (e.g. <c>kafka-send-{guid}</c>, <c>rabbitmq-ack-{deliveryTag}</c>, <c>asb-ack-{sequence}</c> —
+/// never the endpoint URI, so parallel fan-out branches to the same endpoint never collide).
+/// On success all actions are committed; on failure they are rolled back.
 /// </para>
 /// </summary>
 public sealed class TransactedProcessor : IProcessor
@@ -50,13 +51,26 @@ public sealed class TransactedProcessor : IProcessor
 
         using var scope = _policy.CreateScope();
 
+        // var diagScopeId = System.Transactions.Transaction.Current?.TransactionInformation.LocalIdentifier ?? "<null>";
+        // System.Console.WriteLine(
+        //     $"[Diag-TX-SCOPE] CREATED routeId={GetRouteIdSafe(exchange)} scopeId={diagScopeId} " +
+        //     $"thread={System.Environment.CurrentManagedThreadId}");
+
         _logger?.LogDebug(
             "Transaction started (ScopeOption={ScopeOption}, IsolationLevel={IsolationLevel}, Timeout={Timeout}).",
             _policy.ScopeOption, _policy.IsolationLevel, _policy.Timeout);
 
         try
         {
+            // System.Console.WriteLine(
+            //     $"[Diag-TX-SCOPE] PRE-INNER routeId={GetRouteIdSafe(exchange)} scopeId={diagScopeId} " +
+            //     $"ambient={(System.Transactions.Transaction.Current?.TransactionInformation.LocalIdentifier ?? "<null>")} " +
+            //     $"thread={System.Environment.CurrentManagedThreadId}");
             await _inner.Process(exchange, ct).ConfigureAwait(false);
+            // System.Console.WriteLine(
+            //     $"[Diag-TX-SCOPE] POST-INNER routeId={GetRouteIdSafe(exchange)} scopeId={diagScopeId} " +
+            //     $"ambient={(System.Transactions.Transaction.Current?.TransactionInformation.LocalIdentifier ?? "<null>")} " +
+            //     $"thread={System.Environment.CurrentManagedThreadId}");
 
             // Commit all deferred transport actions
             await CommitActions(exchange, ct).ConfigureAwait(false);
@@ -137,4 +151,18 @@ public sealed class TransactedProcessor : IProcessor
     /// </summary>
     internal static ConcurrentDictionary<string, ITransactedAction>? GetActionsPublic(IExchange exchange)
         => GetActions(exchange);
+
+    /// <summary>[Diag-TX-SCOPE] — best-effort RouteId lookup from the exchange.</summary>
+    private static string GetRouteIdSafe(IExchange exchange)
+    {
+        try
+        {
+            if (exchange.Properties != null
+                && exchange.Properties.TryGetValue("CamelRouteId", out var rid) && rid is string s)
+                return s;
+            return exchange.In?.Headers?.GetType().GetProperty("RouteId")?.GetValue(exchange.In.Headers) as string
+                ?? "<unknown>";
+        }
+        catch { return "<error>"; }
+    }
 }

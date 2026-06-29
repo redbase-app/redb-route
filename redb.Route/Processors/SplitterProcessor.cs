@@ -1,6 +1,7 @@
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Telemetry;
+using redb.Route.Transactions;
 
 namespace redb.Route.Processors;
 
@@ -194,7 +195,9 @@ public class SplitterProcessor : IProcessor
                     var succeeded = false;
                     try
                     {
-                        await _target.Process(splitExchange, ct).ConfigureAwait(false);
+                        // Isolate this branch under a dependent clone of the ambient transaction so
+                        // concurrent branches never share one Transaction.Current (see DependentTransactionBranch).
+                        await DependentTransactionBranch.RunAsync(() => _target.Process(splitExchange, ct)).ConfigureAwait(false);
                         results[idx] = splitExchange;
                         succeeded = true;
                     }

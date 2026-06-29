@@ -92,7 +92,11 @@ public sealed class TcpTelemetrySmokeTests : IAsyncLifetime
 
         tracer.ForceFlush(1000);
         activities.Should().NotBeEmpty();
-        var activity = activities.Single();
+        // Filter to THIS producer's span by its unique destination port — the in-memory
+        // exporter listens on the process-global RouteActivitySource and can capture spans
+        // emitted by other test classes running in parallel.
+        var activity = activities.Single(a =>
+            Equals(a.GetTagItem("messaging.destination.name"), $"127.0.0.1:{_port}"));
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
         activity.Kind.Should().Be(ActivityKind.Client);
         activity.GetTagItem("network.transport").Should().Be("tcp");

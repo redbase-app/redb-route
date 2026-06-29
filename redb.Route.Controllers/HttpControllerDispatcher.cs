@@ -252,6 +252,19 @@ public sealed class HttpControllerDispatcher : IProcessor
                 result = JsonSerializer.SerializeToUtf8Bytes(result, _jsonOptions);
             exchange.Out.Body = result;
         }
+        else
+        {
+            // No response body (controller returned null → 204 No Content). The
+            // `exchange.Out ??= exchange.In.Clone()` above carries In.Body into Out,
+            // which for HTTP requests with Content-Length: 0 is `Array.Empty<byte>()`
+            // (non-null byte[]). Without clearing it here the downstream HTTP consumer
+            // sees `body is byte[]` and calls Response.Body.WriteAsync(...), and Kestrel
+            // hard-throws on 204 per RFC 7230 §3.3.3 / RFC 9112 §6.1
+            // ("Writing to the response body is invalid for responses with status code 204"
+            // from HttpProtocol.FirstWriteAsyncInternal, even for zero-length writes).
+            // The request body was input; it must not echo into the response.
+            exchange.Out.Body = null;
+        }
 
         // Respect response meta already set by the controller (e.g. via facade Forward
         // that propagated an inner OnException 5xx). Dispatcher only fills in defaults.

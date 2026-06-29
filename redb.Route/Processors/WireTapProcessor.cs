@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Telemetry;
+using redb.Route.Transactions;
 
 namespace redb.Route.Processors;
 
@@ -46,6 +47,17 @@ public class WireTapProcessor : IProcessor
 
         _onPrepare?.Invoke(clone);
 
+        // The detached branch must NOT share the originating transaction's deferred transport
+        // actions. TransactedProcessor owns that dictionary (Properties["TRANSACT_ACTION"]) and
+        // commits/rolls it back; Exchange.Clone() copies Properties shallowly, so the tap clone
+        // would otherwise hold the SAME ConcurrentDictionary and could race the main commit. The
+        // tap runs with the ambient transaction suppressed (see DetachedDispatch.Enter), so it has
+        // no part in that set.
+        clone.Properties.Remove(TransactedProcessor.TransactActionPropertyKey);
+
+        // Capture ambient trace + transaction state on the ORIGINATING thread, before dispatch.
+        var origin = DetachedDispatch.Capture();
+
         // Fire-and-forget: do not await, but catch and log errors.
         // The tap branch must NOT inherit the caller's CancellationToken — otherwise
         // cancelling the main pipeline (e.g. an HTTP request being aborted) would
@@ -53,6 +65,9 @@ public class WireTapProcessor : IProcessor
         // are "InOnly, detached": the side branch lives on its own lifecycle.
         _ = Task.Run(async () =>
         {
+            // Detached frame: suppress the leaked ambient transaction (which has very likely
+            // completed by now) and re-root telemetry as a span linked to the originating trace.
+            using var frame = DetachedDispatch.Enter(origin, "redb.route.wiretap");
             try
             {
                 await _tap.Process(clone, CancellationToken.None).ConfigureAwait(false);

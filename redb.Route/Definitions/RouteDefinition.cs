@@ -20,15 +20,14 @@ public class RouteDefinition : RouteDefinitionBase<RouteDefinition>
 
         // Detect inline OnException blocks declared inside the route body. In Apache Camel
         // these are route-scoped — they wrap the entire route pipeline regardless of where
-        // they appear textually. We hoist them out of the linear pipeline into a stack of
-        // wrappers around the remaining body steps.
-        var hasInlineOnException = false;
-        for (var i = 0; i < Outputs.Count; i++)
-        {
-            if (Outputs[i] is OnExceptionDefinition) { hasInlineOnException = true; break; }
-        }
+        // they appear textually, INCLUDING inside nested scopes (Transacted, Traced,
+        // Metered, Throttle, ...). We collect them recursively, mark them hoisted (so their
+        // CreateProcessor compiles to a no-op at the declaration site), then wrap the
+        // remaining body with the handler envelopes.
+        var onExceptions = new List<OnExceptionDefinition>();
+        CollectAndMarkOnExceptions(Outputs, onExceptions);
 
-        if (!hasInlineOnException)
+        if (onExceptions.Count == 0)
         {
             if (Outputs.Count == 1)
                 return Outputs[0].CreateProcessor(context);
@@ -43,25 +42,13 @@ public class RouteDefinition : RouteDefinitionBase<RouteDefinition>
             return pipeline;
         }
 
-        return CreateProcessorWithOnExceptionHoisting(context);
-    }
-
-    private IProcessor CreateProcessorWithOnExceptionHoisting(IRouteContext context)
-    {
         var bodySteps = new List<IProcessor>();
-        var onExceptions = new List<OnExceptionDefinition>();
-
         foreach (var output in Outputs)
         {
-            if (output is OnExceptionDefinition oe)
-            {
-                onExceptions.Add(oe);
-            }
-            else
-            {
-                var p = output.CreateProcessor(context);
-                if (p != null) bodySteps.Add(p);
-            }
+            if (output is OnExceptionDefinition)
+                continue;
+            var p = output.CreateProcessor(context);
+            if (p != null) bodySteps.Add(p);
         }
 
         IProcessor body;
@@ -86,5 +73,23 @@ public class RouteDefinition : RouteDefinitionBase<RouteDefinition>
             body = oe.WrapBody(body, context);
 
         return body;
+    }
+
+    private static void CollectAndMarkOnExceptions(
+        IList<IProcessorDefinition> outputs, List<OnExceptionDefinition> acc)
+    {
+        foreach (var output in outputs)
+        {
+            if (output is OnExceptionDefinition oe)
+            {
+                // Do not descend into the handler steps — a nested OnException inside a
+                // handler pipeline is unsupported and fails fast at compilation.
+                oe.MarkHoisted();
+                acc.Add(oe);
+                continue;
+            }
+            if (output.Outputs.Count > 0)
+                CollectAndMarkOnExceptions(output.Outputs, acc);
+        }
     }
 }

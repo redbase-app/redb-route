@@ -110,7 +110,9 @@ public class ToProcessorTests
         var act = () => processor.Process(new Exchange(new Message("data")));
         await act.Should().ThrowAsync<InvalidOperationException>();
 
-        ((IEndpointStatistics)endpoint).Received(1).RecordError();
+        // Production records the error WITH the exception (ToProcessor calls RecordError(ex)),
+        // so assert the Exception overload — RecordError() (parameterless) is a different call.
+        ((IEndpointStatistics)endpoint).Received(1).RecordError(Arg.Any<Exception>());
         ((IEndpointStatistics)endpoint).DidNotReceive().RecordMessageOut();
     }
 

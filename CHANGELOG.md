@@ -9,7 +9,7 @@ This changelog covers the **NuGet-published packages**:
 | `redb.Route.Amqp` | AMQP 1.0 transport |
 | `redb.Route.AzureServiceBus` | Azure Service Bus transport |
 | `redb.Route.Controllers` | Transport-agnostic controller dispatch |
-| `redb.Route.Core` | Bridge to redb.Core EAV storage |
+| `redb.Route.Core` | Bridge to redb.Core props storage |
 | `redb.Route.Elasticsearch` | Elasticsearch 8.x transport |
 | `redb.Route.Exec` | Local process execution transport (`exec:` scheme) |
 | `redb.Route.File` | File system transport |
@@ -23,6 +23,7 @@ This changelog covers the **NuGet-published packages**:
 | `redb.Route.Ldap` | LDAP / Active Directory transport |
 | `redb.Route.Llm` | LLM transport — universal OpenAI-compatible provider + native AnthropicProvider |
 | `redb.Route.Llm.Abstractions` | LLM tool-capability contracts (`ILlmToolDescriptor`, `LlmToolCapability`, `.AsLlmTool()` DSL) |
+| `redb.Route.Llm.Mcp` | MCP-client connector (`mcp:` scheme) — spawns external Model Context Protocol servers, auto-discovers tools via `tools/list` |
 | `redb.Route.Llm.Tools` | Utility LLM tools — HttpFetch / JsonPath / XPath / MathEval / RegexExtract / Tavily web search |
 | `redb.Route.Mail` | Email transport (SMTP, IMAP, POP3) |
 | `redb.Route.MqttNet` | MQTT 5.0 transport |
@@ -44,12 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
-## [3.1.1] — Unreleased
+## [3.2.0] — 2026-06-29
 
-> ⚠️ **Not yet published to NuGet.** This bump applies to **`redb.Route.Llm`,
-> `redb.Route.Llm.Tools`, `redb.Route.Llm.Mcp`, `redb.Route.Http`,
-> `redb.Route.WebSocket` and `redb.Route.Exec`** — every other package stays
-> at 3.1.0. The release bundles four areas of work: (1) end-to-end
+> ⚠️ **Not yet published to NuGet.** All `redb.Route.*` packages are versioned
+> together at **3.2.0**; the code changes in this release land in **`redb.Route`,
+> `redb.Route.Llm`, `redb.Route.Llm.Tools`, `redb.Route.Llm.Mcp`,
+> `redb.Route.Http`, `redb.Route.WebSocket` and `redb.Route.Exec`** (the other
+> connectors are version-aligned, no code changes). The release bundles four areas of work: (1) end-to-end
 > token-by-token streaming on the wire (`IAsyncEnumerable<string>` response
 > bodies → SSE / chunked text over HTTP, one text frame per token over
 > WebSocket); (2) REDB-backed stores for the remaining state surfaces
@@ -66,6 +68,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > implementations and call sites compile unchanged.
 
 ### Added
+
+#### `redb.Route` — `ThrottleProcessor` / `KeyedThrottleProcessor` RFC 6585 §4 rejection mode
+
+Both throttle processors gain an opt-in `rejectOnOverflow` constructor flag
+(default `false` for backward compatibility) plus a matching fluent
+`.RejectOnOverflow()` method on `ThrottleDefinition` and
+`KeyedThrottleDefinition`. When set, overflow exchanges are short-circuited
+with **HTTP 429 Too Many Requests** + a **`Retry-After`** header carrying
+the current rate-limit period in delta-seconds (RFC 7231 §7.1.3), and a
+small structured JSON body:
+
+```json
+{
+  "error": "rate_limit_exceeded",
+  "error_description": "Rate limit exceeded. Retry after 1 second(s).",
+  "retry_after": 1
+}
+```
+
+The behaviour is now selectable per-route in the DSL:
+
+```csharp
+// Legacy: silent semaphore-wait until a slot frees (still the default).
+.Throttle(maxPerPeriod: 10)
+
+// RFC 6585 — fast-fail with 429 + Retry-After. Recommended for HTTP-facing
+// routes; the silent-wait variant looks like a hung server to clients.
+.Throttle(maxPerPeriod: 10).RejectOnOverflow()
+
+// Same option on the per-key (per-IP / per-client_id) variant.
+.Throttle(e => e.GetClientId(), maxPerPeriod: 10, period: TimeSpan.FromSeconds(1))
+    .RejectOnOverflow()
+```
+
+The non-blocking `SemaphoreSlim.Wait(0)` probe replaces the unconditional
+`await WaitAsync(ct)` so a slot is only acquired when one is actually
+available — the legacy mode still falls back to `WaitAsync` to preserve
+the exact old timing for callers that didn't opt in.
+
+Implementation lives in two places: the per-processor flag, and a shared
+`ThrottleRejection.Apply(exchange, period)` helper that writes the 429
+response (`redbHttp.ResponseCode`, `Retry-After`, JSON body) and calls
+`exchange.Stop()` so no downstream processor (WireTap, tx commit,
+idempotency capture) runs against the rejected exchange. Apache Camel's
+`Throttler` has the same axis (`rejectExecution=true/false`) — this
+brings the redb.Route EIP into parity.
+
+The default stays `false` so every existing route continues to behave
+exactly as it did in 3.1.0 and earlier; opting in is a per-route choice.
 
 #### `redb.Route.Llm` / `redb.Route.Http` / `redb.Route.WebSocket` — end-to-end streaming wire contract for LLM token deltas
 
@@ -551,6 +602,182 @@ unwinding.
 
 ### Fixed
 
+#### `redb.Route` — `ProducerTemplate.SendAsync` / `RequestBody` auto-start the resolved producer
+
+`IProducerTemplate.SendAsync(endpointUri, …)` resolved an endpoint via
+`Context.GetEndpoint(uri)` → cached an `IProducer` via `endpoint.CreateProducer()` →
+called `producer.Process(exchange)` directly. For `DirectVm` / `Direct` /
+`Seda` producers this was fine because they don't extend `ConnectableProducer`,
+but for **every** other transport (`HttpProducer`, `KafkaProducer`, `AmqpProducer`,
+`AzureServiceBusProducer`, `MqttNetProducer`, `RabbitMqProducer`, `RedisProducer`,
+`SmtpProducer`, `LdapProducer`, `WmqProducer`, …) `EnsureStarted()` threw
+
+```
+InvalidOperationException: <name> has not been started. Call Start() first.
+```
+
+because `ConnectableProducer.Process` requires `Start()` to flip the started
+flag and call `ConnectAsync` first. The cached producer was created but
+never started, so `SendAsync` was effectively broken for every connection-
+based transport — direct-vm-only scenarios masked the gap.
+
+`ProducerTemplate.SendAsync(IEndpoint, IMessage)`,
+`ProducerTemplate.SendAsync(IEndpoint, object)`,
+`ProducerTemplate.RequestBody(IEndpoint, object, ct)`, and
+`ProducerTemplate.RequestBody(IEndpoint, IMessage, ct)` now call
+`await producer.Start(ct).ConfigureAwait(false)` between
+`GetOrCreateProducer` and the first `Process` call. `ConnectableProducer.Start`
+short-circuits via `Interlocked.CompareExchange` on the started flag, so the
+extra call is a one-time setup per producer / process-lifetime and a no-op
+on every subsequent send.
+
+This is the seam that unblocked outbound HTTP webhook delivery in
+`redb.Identity` (W1 / outbound webhook subscriptions) — the identity events
+route hands the message to `ProducerTemplate.SendAsync(subscription.Url, …)`
+and the URL scheme (`https://…`, `kafka://…`, `amqp://…`) resolves to the
+right transport without the Identity codebase touching `IHttpClientFactory`
+or any transport-specific surface.
+
+#### `redb.Route.Controllers` — `HttpControllerDispatcher.WriteResult` clears `Out.Body` when the controller returns `null`
+
+When an HTTP controller returns `null` (intended: no response body → 204
+No Content), `HttpControllerDispatcher.WriteResult` initialised the
+response via:
+
+```csharp
+exchange.Out ??= exchange.In.Clone();
+var defaultCode = result is null ? 204 : 200;
+if (result is not null) { exchange.Out.Body = result; }
+```
+
+The `Out ??= In.Clone()` carried `In.Body` across. For HTTP DELETE / HEAD
+requests with `Content-Length: 0` `In.Body` is `Array.Empty<byte>()` —
+non-null `byte[]`. With `result is null` the if-branch was skipped and
+`Out.Body` stayed as that empty `byte[]`. Downstream the HTTP consumer
+matched `body is byte[]` and called `Response.Body.WriteAsync(...)`,
+which on Kestrel hard-throws for 204 per RFC 7230 §3.3.3 / RFC 9112 §6.1
+(*"Writing to the response body is invalid for responses with status
+code 204"* from `HttpProtocol.FirstWriteAsyncInternal` — fires even for
+zero-length writes). Earlier pipeline side-effects (database mutations,
+audit events) had already committed, so clients saw a torn TCP response
+instead of a clean 204.
+
+The dispatcher now explicitly nulls `exchange.Out.Body` in the `result is null`
+branch. The request body is input; it must not echo into the response.
+
+Symptom observed on SCIM `DELETE /Users/{id}` (RFC 7644 §3.6 mandates
+204) but the bug is generic to any controller that signals 204 by
+returning `null`.
+
+#### `redb.Route.Http` — `HttpConsumer.WriteResponse` skips body write for 204 / 304 / 1xx
+
+Defense-in-depth companion to the dispatcher fix above. RFC 7230 §3.3.3 /
+RFC 9112 §6.1 require that 1xx, 204, and 304 responses MUST NOT contain a
+message body, and Kestrel hard-throws on `Response.Body.WriteAsync` for
+those status codes — even on zero-length writes. `HttpConsumer.WriteResponse`
+called `WriteAsync` unconditionally when `body is byte[]` and tore the
+TCP response if any upstream layer set a body for those statuses.
+
+The consumer now resolves the response status code before reaching the
+body-write branches and short-circuits with an intentional no-op when
+the status is 204, 304, or any 1xx. The header copy above the body
+block still propagates `Location` / `ETag` / `Set-Cookie`, which is the
+only legitimate payload for these status families. Silently dropping a
+non-empty body for these codes is safer than letting Kestrel kill the
+response mid-flight — a producer with a bug to fix is a less acute
+symptom than a torn TCP connection visible to clients.
+
+#### `redb.Route` — parallel `Splitter` / `Multicast` branches isolate the ambient transaction per branch
+
+When a parallel `Splitter` (`.Split(...).Parallel()`) or `Multicast`
+(`MulticastProcessor`, **parallel by default**) runs inside a `.Transacted(...)`
+segment, every branch was dispatched with `Task.Run` — which flows the caller's
+`ExecutionContext`. Because the route's `TransactionScope` uses
+`TransactionScopeAsyncFlowOption.Enabled`, all branches observed and could
+concurrently enlist resources in the **same** `Transaction.Current`.
+`System.Transactions` forbids concurrent use of a single transaction across
+threads: a second concurrent enlistment of a resource that participates in the
+ambient transaction (SQL / ADO.NET / redb DB work) either promotes to MSDTC or
+throws *"transaction context in use by another thread"*.
+
+Each parallel branch now runs under its own
+`Transaction.Current.DependentClone(DependentCloneOption.BlockCommitUntilComplete)`
+(new internal `DependentTransactionBranch` helper): the dependent clone is a
+private ambient transaction for that branch's thread, and the parent's commit
+blocks until every branch signals completion, so a branch's writes are never
+committed half-finished. No-op when there is no ambient transaction (the common
+non-transacted path runs with zero overhead).
+
+Broker transports that defer via `Properties["TRANSACT_ACTION"]`
+(Kafka / RabbitMQ / Redis / Azure Service Bus / AMQP) were **never** affected:
+they do not enlist in `System.Transactions`, and each registers under a
+per-message-unique key (`kafka-send-{guid}`, `rabbitmq-ack-{deliveryTag}`,
+`asb-ack-{sequence}`, …), so concurrent fan-out branches to the same endpoint
+accumulate distinct entries in the thread-safe dictionary and commit/roll back
+atomically. The stale `TransactedProcessor` doc comment that claimed keys were
+"typically the endpoint URI" has been corrected.
+
+#### `redb.Route` — detached branches (WireTap, Debounce) no longer leak the caller's transaction/trace context
+
+`WireTapProcessor` (fire-and-forget `Task.Run`) and `DebounceProcessor`'s
+quiet-period flush (`Task.Delay(...).ContinueWith(...)`) both dispatch
+downstream work on a thread-pool continuation that, by default, **inherits
+the caller's `ExecutionContext`**. Two ambient values flowed across that
+boundary and were unsafe once the originating route call had unwound:
+
+- **`System.Transactions.Transaction.Current`** — routes wrap segments in a
+  `TransactionScope` created with `TransactionScopeAsyncFlowOption.Enabled`
+  (`TransactionPolicy.CreateScope`), so the ambient transaction flows. A
+  detached branch starting **after** the scope completed/disposed still saw
+  the leaked `Transaction.Current`; any producer/DB code that auto-enlists
+  threw *"the current TransactionScope is already complete"*. A WireTap or
+  Debounce nested inside a `.Transacted(...)` segment is the reproducer.
+- **`System.Diagnostics.Activity.Current`** — the originating span, likewise
+  already stopped, so telemetry the branch emitted was parented to an ended
+  span (a child whose start time post-dates its parent — a "tail" hanging
+  off a request that already returned).
+
+Both branches now route through a new internal `DetachedDispatch` helper.
+`Capture()` snapshots the trace context + transaction presence on the
+**originating** thread; `Enter()` runs at the top of the branch body and
+(a) opens a `TransactionScope(Suppress)` so the branch runs with **no**
+ambient transaction (only when one actually leaked — zero cost otherwise),
+and (b) re-roots telemetry as a **fresh root span linked** (`ActivityLink`)
+to the originating trace — correlation is preserved without the broken
+parent lifecycle. Non-transaction AsyncLocal state (user/auth context) is
+deliberately left flowing, since a detached audit branch usually needs it.
+
+Additionally, `WireTapProcessor` now strips the deferred-transport-action
+dictionary (`Properties["TRANSACT_ACTION"]`) from its clone: `Exchange.Clone()`
+copies `Properties` shallowly, so the tap clone previously shared the **same**
+`ConcurrentDictionary` that the owning `TransactedProcessor` commits/rolls
+back, and a tap mutating it could race the main commit. The tap runs with the
+transaction suppressed, so it has no part in that set.
+
+`ThrottleProcessor` / `KeyedThrottleProcessor` were audited and are **not**
+affected — their detached `ContinueWith` only releases a rate-limit semaphore
+slot; the downstream `Process` is awaited inline. The concurrent-enlistment
+behaviour of **parallel** `Splitter` / `Multicast` branches (all sharing one
+ambient transaction under `Task.WhenAll`) is a distinct concern tracked
+separately and intentionally out of scope here.
+
+#### `redb.Route.Http` — concrete route paths now out-rank catch-all on the same `(host, port)`
+
+`SharedHttpServerManager` matched routes in pure **registration order** and
+returned the first whose template matched. A catch-all (`/{**path}`)
+therefore swallowed every route registered after it on the same listener —
+a concrete path such as `/api/echo` could never win once a `{**path}`
+dispatcher was already registered (acute when the catch-all auto-starts at
+boot and the specific route registers later, e.g. an `AutoStart(false)`
+route started by hand). `ServerEntry.GetCompiled()` now orders the match
+table by **specificity** — literal-heavy templates first, route parameters
+before more parameters, catch-all (`{**…}`) last — with registration order
+kept as a stable tie-breaker so equal-specificity routes preserve their
+previous first-registered-wins behaviour. Both `MatchRoute` and the
+CORS-dispatch `MatchByPath` consume the ordered table, so a specific path
+and a `{**path}` fallback can coexist on one port, matching ASP.NET-style
+routing precedence.
+
 #### `redb.Route.Llm` — orphan `tool_use` recovery on conversation load
 
 `AgentEngine.RunAsync` now sanitises the loaded conversation path: if the
@@ -600,6 +827,40 @@ in-flight requests but kept reporting `Healthy`, so subsequent
 on a defunct stdin. The producer's `if (Status is Dead) throw` short
 circuit was unreachable. The fix makes process death immediately
 observable both at the registry level and at the producer level.
+
+#### `redb.Route` — `OnException` declared inside a nested scope is now hoisted to route level (Camel parity)
+
+`RouteDefinition.CreateProcessor` only scanned the **top-level** route
+outputs for inline `OnException` blocks. An `OnException` declared inside a
+nested scope — `Transacted()`, `Traced()`, `Metered()`, `Throttle()`,
+`Filter()`, … — was never hoisted. Worse, the orphaned definition was then
+compiled by the enclosing scope's pipeline builder via its silent
+`CreateProcessor` fallback, which emitted the **handler chain as an inline
+pipeline step**: the exception handler body executed on *every* exchange
+with `Exception == null`, corrupting healthy requests (e.g. overwriting the
+request body with an error response). `OnWhen` / `Handled` / redelivery
+settings were silently ignored.
+
+Two changes:
+
+- **Recursive hoisting.** The route compiler now collects `OnException`
+  definitions from the entire definition tree (depth-first, declaration
+  order) and wraps the full route body with the handler envelopes — Apache
+  Camel parity: `onException` is route-scoped regardless of where it appears
+  textually. Wrapping order is unchanged: last declared = outermost.
+- **Fail-fast instead of silent fallback.**
+  `OnExceptionDefinition.CreateProcessor` no longer compiles the handler
+  chain as a standalone pipeline. A hoisted definition compiles to a no-op
+  at its declaration site; a definition the compiler cannot hoist (e.g.
+  declared inside a `Catch`/`Finally` block or another exception-handler
+  pipeline) now throws `InvalidOperationException` at `Start()` with
+  placement guidance, instead of corrupting traffic at runtime.
+
+Found in redb.Identity: the `/connect/token` route wraps its body in
+`Transacted(...)`, so its `OnException<InvalidOperationException>` OAuth
+error mapper ran inline on every token request and replaced the form
+parameters with an `error` body before the OpenIddict extract step —
+`unsupported_grant_type`/HTTP 400 on perfectly valid requests.
 
 ---
 
@@ -1313,7 +1574,7 @@ First public NuGet release. The library has been production-tested since 1.0.0.
 - `redb.Route.SignalR` — Hub consumer (server), client producer (`HubConnection`), broadcast producer (`IHubContext`)
 
 **Integration & adapters**
-- `redb.Route.Core` — `RedbIdempotentRepository` backed by redb.Core EAV; `IRedbService` access from routes
+- `redb.Route.Core` — `RedbIdempotentRepository` backed by redb.Core props storage; `IRedbService` access from routes
 - `redb.Route.Controllers` — `RedbController`, attribute routing, parameter binding, 4 dispatchers (generic, HTTP, SignalR, gRPC)
 - `redb.Route.GenericFile` — shared base for File, FTP, SFTP (abstract consumer/producer, options, file-ops interfaces)
 - `redb.Route.Validation.Adapters` — `FluentValidationMessageValidator<T>`, `DataAnnotationsValidator`, DSL extensions

@@ -163,7 +163,8 @@ public static class InitRoute
             .AddRoutes(new ScopeDiagRoutes(logger))
             .AddRoutes(new DeepDslShowcaseRoutes(logger))
             .AddRoutes(new LlmDemoRoutes(logger))
-            .AddRoutes(new LlmHttpRoutes(logger));
+            .AddRoutes(new LlmHttpRoutes(logger))
+            .AddRoutes(new EchoRoutes(logger));
 
         return context;
     }

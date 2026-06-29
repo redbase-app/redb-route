@@ -10,6 +10,17 @@ namespace redb.Route.Processors;
 /// independent <see cref="SemaphoreSlim"/>-based throttle.
 /// Idle keys are lazily evicted after <c>2 × period</c> of inactivity.
 /// Thread-safe for concurrent pipeline usage.
+/// <para>
+/// Two overflow modes (selected via the <c>rejectOnOverflow</c> constructor flag):
+/// </para>
+/// <list type="bullet">
+///   <item><c>false</c> (default, legacy) — semaphore-wait until a slot frees; the calling
+///   exchange is blocked but eventually proceeds. Preserves backward compatibility.</item>
+///   <item><c>true</c> (RFC 6585) — reject overflow exchanges immediately with HTTP 429
+///   Too Many Requests and a <c>Retry-After</c> header (RFC 7231 §7.1.3) set to the
+///   current rate-limit period. Strongly recommended for any HTTP-facing endpoint so
+///   the client can back off explicitly instead of seeing what looks like a hung server.</item>
+/// </list>
 /// </summary>
 public sealed class KeyedThrottleProcessor : IProcessor, IDisposable
 {
@@ -17,6 +28,7 @@ public sealed class KeyedThrottleProcessor : IProcessor, IDisposable
     private readonly Func<IExchange, string> _keyExtractor;
     private readonly int _maxPerPeriod;
     private readonly TimeSpan _period;
+    private readonly bool _rejectOnOverflow;
     private readonly ConcurrentDictionary<string, KeyBucket> _buckets = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _disposeCts = new();
     private readonly ILogger? _logger;
@@ -27,12 +39,15 @@ public sealed class KeyedThrottleProcessor : IProcessor, IDisposable
     /// <param name="keyExtractor">Function extracting the throttle key from the exchange.</param>
     /// <param name="maxPerPeriod">Maximum exchanges per period per key.</param>
     /// <param name="period">Time period for the rate limit (default: 1 second).</param>
+    /// <param name="rejectOnOverflow">When <c>true</c>, exchanges that exceed the rate limit are
+    /// short-circuited with HTTP 429 + <c>Retry-After</c> instead of waiting.</param>
     /// <param name="logger">Optional logger.</param>
     public KeyedThrottleProcessor(
         IProcessor next,
         Func<IExchange, string> keyExtractor,
         int maxPerPeriod,
         TimeSpan? period = null,
+        bool rejectOnOverflow = false,
         ILogger? logger = null)
     {
         _next = next ?? throw new ArgumentNullException(nameof(next));
@@ -40,6 +55,7 @@ public sealed class KeyedThrottleProcessor : IProcessor, IDisposable
         if (maxPerPeriod <= 0) throw new ArgumentOutOfRangeException(nameof(maxPerPeriod), "Must be > 0.");
         _maxPerPeriod = maxPerPeriod;
         _period = period ?? TimeSpan.FromSeconds(1);
+        _rejectOnOverflow = rejectOnOverflow;
         _logger = logger;
     }
 
@@ -53,16 +69,31 @@ public sealed class KeyedThrottleProcessor : IProcessor, IDisposable
 
         bucket.Touch();
 
-        if (bucket.Semaphore.CurrentCount == 0)
+        // Non-blocking probe first so we can choose between rejection and waiting
+        // without holding a slot speculatively.
+        if (!bucket.Semaphore.Wait(0))
         {
             ProcessorMetrics.ThrottleDelayed.Add(1);
+            if (_rejectOnOverflow)
+            {
+                _logger?.LogDebug("KeyedThrottle: rejecting overflow for key '{Key}' with 429 (RFC 6585).", key);
+                ThrottleRejection.Apply(exchange, _period);
+                return;
+            }
             _logger?.LogDebug("KeyedThrottle: exchange delayed for key '{Key}' (all {Max} slots occupied).", key, _maxPerPeriod);
+            await bucket.Semaphore.WaitAsync(ct).ConfigureAwait(false);
         }
-
-        await bucket.Semaphore.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            // System.Console.WriteLine(
+            //     $"[Diag-TX-THROTTLE] PRE-INNER key='{key}' " +
+            //     $"ambient={(System.Transactions.Transaction.Current?.TransactionInformation.LocalIdentifier ?? "<null>")} " +
+            //     $"thread={System.Environment.CurrentManagedThreadId}");
             await _next.Process(exchange, ct).ConfigureAwait(false);
+            // System.Console.WriteLine(
+            //     $"[Diag-TX-THROTTLE] POST-INNER key='{key}' " +
+            //     $"ambient={(System.Transactions.Transaction.Current?.TransactionInformation.LocalIdentifier ?? "<null>")} " +
+            //     $"thread={System.Environment.CurrentManagedThreadId}");
         }
         finally
         {

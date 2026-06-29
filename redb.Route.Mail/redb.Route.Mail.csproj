@@ -12,7 +12,8 @@
     <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="MailKit" Version="4.15.1" />
+    <!-- MailKit bump 4.15.1 → 4.16.0 fixes NU1902 GHSA-9j88-vvj5-vhgr. -->
+    <PackageReference Include="MailKit" Version="4.16.0" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

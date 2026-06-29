@@ -225,15 +225,37 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
 
     // ── IProcessorDefinition ──────────────────────────────────────────────────
 
+    /// <summary>
+    /// Whether this definition was hoisted by <see cref="RouteDefinition.CreateProcessor"/>
+    /// to wrap the route body (Camel parity: OnException is route-scoped regardless of
+    /// where it is declared, including inside nested scopes).
+    /// </summary>
+    internal bool IsHoisted { get; private set; }
+
+    /// <summary>Marks this definition as hoisted by the route compiler.</summary>
+    internal void MarkHoisted() => IsHoisted = true;
+
     /// <inheritdoc />
     /// <remarks>
-    /// Standalone compilation returns a plain pipeline of the handler steps
-    /// (this OnException's <see cref="ProcessorDefinition.Outputs"/>). Wrapping the protected
-    /// body with retry/handler semantics happens in <see cref="RouteDefinition.CreateProcessor"/>
-    /// via the hoisting pass, which calls <see cref="WrapBody"/>.
+    /// OnException is compiled exclusively through the hoisting pass in
+    /// <see cref="RouteDefinition.CreateProcessor"/>, which calls <see cref="WrapBody"/>.
+    /// When hoisted, the declaration site compiles to a pass-through no-op.
+    /// When NOT hoisted (e.g., declared inside a Catch/Finally block or another
+    /// OnException handler pipeline — placements that the route compiler does not
+    /// hoist), this throws instead of silently emitting the handler chain as an
+    /// inline pipeline step, which would corrupt every passing exchange.
     /// </remarks>
     public override IProcessor CreateProcessor(IRouteContext context)
-        => TryCatchDefinition.BuildPipeline(Outputs, context);
+    {
+        if (IsHoisted)
+            return new DelegateProcessor(_ => { });
+
+        throw new InvalidOperationException(
+            "OnException is route-scoped and is compiled via RouteDefinition hoisting. " +
+            "This OnException block was declared at a location the route compiler cannot hoist " +
+            "(e.g., inside a Catch/Finally block or another exception handler pipeline). " +
+            "Declare OnException in the route body (any scope) or at the RouteBuilder level.");
+    }
 
     /// <summary>
     /// Wraps the supplied <paramref name="body"/> processor with an

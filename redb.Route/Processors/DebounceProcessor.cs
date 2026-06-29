@@ -73,10 +73,18 @@ internal sealed class DebounceProcessor : IProcessor, IAsyncDisposable, IDisposa
     private void ScheduleFlush(string key, DebounceEntry entry)
     {
         var cts = entry.Cts;
+        // Capture ambient trace + transaction state on the scheduling (originating) thread. The
+        // flush below runs detached after the quiet period — by then the originating route call,
+        // and any ambient TransactionScope it ran in, has unwound. See DetachedDispatch.
+        var origin = DetachedDispatch.Capture();
         _ = Task.Delay(_quietPeriod, cts.Token).ContinueWith(async _ =>
         {
             if (_entries.TryRemove(key, out var removed))
             {
+                // Suppress the leaked ambient transaction and re-root telemetry as a span linked
+                // to the originating trace, so the flushed forward does not enlist in an
+                // already-completed TransactionScope nor parent under an already-stopped span.
+                using var frame = DetachedDispatch.Enter(origin, "redb.route.debounce.flush");
                 try
                 {
                     await _next.Process(removed.Exchange, removed.UpstreamCt).ConfigureAwait(false);

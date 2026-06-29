@@ -482,18 +482,49 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
             if (_compiled is not null && _compiled.Length == Routes.Count)
                 return _compiled;
 
-            var result = new (TemplateMatcher, RouteRegistration, string[]?)[Routes.Count];
+            // Build, then order by specificity so a concrete path (e.g. "/api/echo") is matched
+            // BEFORE a catch-all ("/{**path}") registered on the same (host, port). Without this
+            // the table was pure registration order and a catch-all would swallow every later
+            // route. Specificity ranking (literal-heavy first, catch-all last) matches what
+            // callers intuitively expect from ASP.NET-style routing. Registration order is the
+            // stable tie-breaker, so equal-specificity routes keep their old first-wins behaviour.
+            var built = new (TemplateMatcher matcher, RouteRegistration reg, string[]? methods, int order, RouteSpecificity spec)[Routes.Count];
             for (var i = 0; i < Routes.Count; i++)
             {
                 var reg = Routes[i];
                 var template = TemplateParser.Parse(reg.PathTemplate.TrimStart('/'));
                 var matcher = new TemplateMatcher(template, new RouteValueDictionary());
                 var methods = ParseMethods(reg.Methods);
-                result[i] = (matcher, reg, methods);
+                built[i] = (matcher, reg, methods, i, Analyze(template));
             }
 
-            _compiled = result;
-            return result;
+            _compiled = built
+                .OrderBy(x => x.spec.HasCatchAll ? 1 : 0)      // concrete paths first, catch-all last
+                .ThenByDescending(x => x.spec.Literals)        // more literal segments = more specific
+                .ThenBy(x => x.spec.Parameters)                // fewer parameters = more specific
+                .ThenBy(x => x.order)                          // stable: preserve registration order on ties
+                .Select(x => (x.matcher, x.reg, x.methods))
+                .ToArray();
+            return _compiled;
+        }
+
+        /// <summary>Specificity facts about a parsed route template, used to rank match order.</summary>
+        private readonly record struct RouteSpecificity(bool HasCatchAll, int Literals, int Parameters);
+
+        private static RouteSpecificity Analyze(RouteTemplate template)
+        {
+            var hasCatchAll = false;
+            int literals = 0, parameters = 0;
+            foreach (var segment in template.Segments)
+            {
+                foreach (var part in segment.Parts)
+                {
+                    if (part.IsCatchAll) hasCatchAll = true;
+                    else if (part.IsParameter) parameters++;
+                    else if (part.IsLiteral) literals++;
+                }
+            }
+            return new RouteSpecificity(hasCatchAll, literals, parameters);
         }
 
         private static string[]? ParseMethods(string? methods)

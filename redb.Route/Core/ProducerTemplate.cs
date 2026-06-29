@@ -120,6 +120,9 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         try
         {
             var producer = GetOrCreateProducer(endpoint);
+            // ConnectableProducer-based transports demand Start() before Process();
+            // idempotent — the started flag short-circuits subsequent calls.
+            await producer.Start().ConfigureAwait(false);
             await producer.Process(exchange).ConfigureAwait(false);
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
@@ -144,6 +147,10 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         try
         {
             var producer = GetOrCreateProducer(endpoint);
+            // ConnectableProducer-based transports (http, kafka, amqp, …)
+            // demand Start() before Process(); idempotent — second Start is
+            // a no-op on the started flag.
+            await producer.Start().ConfigureAwait(false);
             await producer.Process(exchange).ConfigureAwait(false);
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
@@ -170,6 +177,8 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         {
             exchange.Pattern = ExchangePattern.InOut;
             var producer = GetOrCreateProducer(endpoint);
+            // ConnectableProducer-based transports demand Start() before Process().
+            await producer.Start(cancellationToken).ConfigureAwait(false);
             await producer.Process(exchange, cancellationToken).ConfigureAwait(false);
             return exchange.Out?.Body ?? exchange.In.Body;
         }
@@ -196,6 +205,8 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         {
             exchange.Pattern = ExchangePattern.InOut;
             var producer = GetOrCreateProducer(endpoint);
+            // ConnectableProducer-based transports demand Start() before Process().
+            await producer.Start(cancellationToken).ConfigureAwait(false);
             await producer.Process(exchange, cancellationToken).ConfigureAwait(false);
             return exchange.Out?.Body ?? exchange.In.Body;
         }

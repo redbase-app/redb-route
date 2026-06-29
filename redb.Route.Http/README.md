@@ -95,6 +95,21 @@ From("direct://proxy")
 
 Both `http` and `https` schemes are supported. Use `Https.Get(...)` / `Https.Post(...)` for TLS endpoints.
 
+## Routing precedence (shared server)
+
+Multiple consumers can register routes on the same `(host, port)` — they share one
+Kestrel server. When several routes match the same request path, the most **specific**
+path wins, not the first one registered:
+
+1. Concrete/literal paths (`/api/echo`) before route-parameter paths (`/api/{id}`).
+2. Fewer route parameters before more.
+3. Catch-all templates (`/{**path}`) are tried **last**.
+4. Registration order breaks ties (first-registered wins among equal specificity).
+
+This means a concrete path and a catch-all fallback can coexist on one port — e.g. a
+dispatcher mounted on `/{**path}` plus a dedicated `/api/echo` route — and `/api/echo`
+is routed to the specific handler. The same ordering drives per-route CORS dispatch.
+
 ## Part of
 
 [redb.Route](../../README.md) — ESB & EIP Framework for .NET

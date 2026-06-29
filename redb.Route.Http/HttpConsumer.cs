@@ -305,7 +305,26 @@ public class HttpConsumer : IConsumer
             }
 
             var body = responseMsg.Body;
-            if (body is byte[] bytes)
+            // RFC 7230 §3.3.3 / RFC 9112 §6.1: 1xx, 204 and 304 responses MUST NOT contain a
+            // message body, and Kestrel hard-throws on Body.WriteAsync for those status codes
+            // (Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http.HttpProtocol.FirstWriteAsyncInternal:
+            //  "Writing to the response body is invalid for responses with status code <N>").
+            // Skip the write entirely — the header copy above already propagated whatever
+            // Location/ETag/Set-Cookie the producer wanted to surface, which is the only
+            // legitimate payload for these status families. Silently dropping a non-empty
+            // body is safer than letting Kestrel kill the response mid-flight: a producer
+            // that sets a body for a 204 has a bug to fix, but their downstream client gets
+            // a clean RFC-shaped response instead of a torn TCP connection.
+            var statusForbidsBody =
+                statusCode == 204 ||
+                statusCode == 304 ||
+                (statusCode >= 100 && statusCode < 200);
+            if (statusForbidsBody)
+            {
+                // Intentional no-op — see note above. We don't even check body.Length: even a
+                // zero-length WriteAsync trips FirstWriteAsyncInternal's status guard.
+            }
+            else if (body is byte[] bytes)
             {
                 await httpContext.Response.Body.WriteAsync(bytes, httpContext.RequestAborted).ConfigureAwait(false);
             }

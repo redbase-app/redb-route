@@ -401,24 +401,24 @@ internal sealed class SqlProducer : IProducer
             // Priority 0: explicit param from .Param()
             if (explicitParams.TryGetValue(name, out var explicitVal))
             {
-                param.Value = ResolveParamValue(explicitVal, exchange);
+                param.Value = NormalizeForDb(ResolveParamValue(explicitVal, exchange));
             }
             // Priority 1: exchange headers
             else if (exchange.In.Headers.TryGetValue(name, out var headerVal))
             {
-                param.Value = headerVal ?? DBNull.Value;
+                param.Value = NormalizeForDb(headerVal);
             }
             // Priority 2: body as Dictionary
             else if (exchange.In.Body is Dictionary<string, object?> dict &&
                      dict.TryGetValue(name, out var bodyVal))
             {
-                param.Value = bodyVal ?? DBNull.Value;
+                param.Value = NormalizeForDb(bodyVal);
             }
             // Priority 3: body as IDictionary<string, object>
             else if (exchange.In.Body is IDictionary<string, object> dict2 &&
                      dict2.TryGetValue(name, out var bodyVal2))
             {
-                param.Value = bodyVal2 ?? DBNull.Value;
+                param.Value = NormalizeForDb(bodyVal2);
             }
             else
             {
@@ -428,6 +428,28 @@ internal sealed class SqlProducer : IProducer
             cmd.Parameters.Add(param);
         }
     }
+
+    /// <summary>
+    /// Normalises C# values for ADO.NET parameter binding:
+    /// <list type="bullet">
+    ///   <item><c>null</c> → <see cref="DBNull.Value"/>.</item>
+    ///   <item>Empty string (<c>""</c>) → <see cref="DBNull.Value"/>. A null upstream value
+    ///   (e.g. an OAuth <c>client_id</c> absent from a logout request) is sometimes
+    ///   serialised through string-typed plumbing (header, query-string, JSON DTO) as
+    ///   <see cref="string.Empty"/>; if we bind that literally, audit columns receive
+    ///   <c>""</c> instead of <c>NULL</c> and downstream <c>WHERE ... IS NULL</c>
+    ///   predicates miss the rows. Treating empty string as NULL at the parameter layer
+    ///   keeps schema invariants honest (NULL = "not specified") without forcing every
+    ///   caller to convert.</item>
+    ///   <item>Everything else passes through unchanged.</item>
+    /// </list>
+    /// </summary>
+    private static object NormalizeForDb(object? value) => value switch
+    {
+        null => DBNull.Value,
+        string s when s.Length == 0 => DBNull.Value,
+        _ => value
+    };
 
     internal static object ResolveParamValue(string value, IExchange? exchange)
     {

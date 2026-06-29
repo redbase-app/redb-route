@@ -10,16 +10,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Switch back to PackageReference Version="3.1.1" after publishing. -->
+    <!-- Switch back to PackageReference Version="3.2.0" after publishing. -->
     <PackageReference Include="redb.Route.csproj" />
-    <ProjectReference Include=".." Version="3.1.0" />
+    <ProjectReference Include=".." Version="3.2.0" />
     <PackageReference Include="redb.Route.Llm.csproj" />
-    <ProjectReference Include=".." Version="3.1.0" />
+    <ProjectReference Include=".." Version="3.2.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.0" />
     <!-- STEP 1 of 3 to enable REDB-backed audit storage: uncomment these two refs.
          (Steps 2 and 3 are in Program.cs — search for "REDB-BACKED AUDIT".)
-    <PackageReference Include="redb.Core" Version="3.0.0" />
-    <PackageReference Include="redb.Postgres" Version="3.0.0" />
+    <PackageReference Include="redb.Core" Version="3.2.0" />
+    <PackageReference Include="redb.Postgres" Version="3.2.0" />
     -->
   </ItemGroup>
 

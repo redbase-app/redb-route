@@ -1,5 +1,6 @@
 using redb.Route.Abstractions;
 using redb.Route.Telemetry;
+using redb.Route.Transactions;
 
 namespace redb.Route.Processors;
 
@@ -154,7 +155,9 @@ public class MulticastProcessor : IProcessor
 
                         try
                         {
-                            await _targets[idx].Process(clone, ct).ConfigureAwait(false);
+                            // Isolate this branch under a dependent clone of the ambient transaction so
+                            // concurrent branches never share one Transaction.Current (see DependentTransactionBranch).
+                            await DependentTransactionBranch.RunAsync(() => _targets[idx].Process(clone, ct)).ConfigureAwait(false);
                         }
                         catch (OperationCanceledException)
                         {
