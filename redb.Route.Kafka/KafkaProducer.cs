@@ -43,21 +43,15 @@ public sealed class KafkaProducer : ConnectableProducer
                 Logger?.LogError("Kafka producer error: {Reason} (Code: {Code})", e.Reason, e.Code))
             .Build();
 
-        try
-        {
-            if (_options.Transacted)
-            {
-                _producer.InitTransactions(TimeSpan.FromSeconds(30));
-                Logger?.LogInformation("Kafka transactional mode enabled: topic={Topic}", _endpoint.TopicName);
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger?.LogError(ex, "Kafka producer ConnectAsync failed for topic {Topic}", _endpoint.TopicName);
-            _producer?.Dispose();
-            _producer = null;
-            throw;
-        }
+        // NOTE: no InitTransactions here. `transacted=true` configures an idempotent producer whose
+        // Produce is deferred to the route's transaction boundary — it is NOT a Kafka EOS transaction.
+        // Calling InitTransactions (with a transactional.id) puts librdkafka into transactional mode,
+        // where every deferred Produce throws `Local: Erroneous state` unless wrapped in
+        // BeginTransaction/CommitTransaction — which this connector does not implement yet.
+        // See docs/KAFKA_TRANSACTIONS_TODO.md.
+        if (_options.Transacted)
+            Logger?.LogInformation(
+                "Kafka producer in idempotent + deferred-commit mode (not EOS): topic={Topic}", _endpoint.TopicName);
 
         return Task.CompletedTask;
     }

@@ -4,6 +4,11 @@
     <Description>RabbitMQ transport for redb.Route ESB framework.</Description>
     <PackageTags>esb;messaging;rabbitmq;redb</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- 3.2.1 targeted hotfix (double-BasicAck fix under .Transacted()). Only this package and
+         redb.Route.Kafka ship 3.2.1; the rest of redb.Route.* stays 3.2.0, so this depends on
+         redb.Route 3.2.0 (unchanged, already on NuGet). No mass-republish. -->
+    <Version>3.2.1</Version>
+    <PackageVersion>3.2.1</PackageVersion>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="redb.Route.Tests.RabbitMQ" />

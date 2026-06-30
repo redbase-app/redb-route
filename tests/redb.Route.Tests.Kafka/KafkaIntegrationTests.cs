@@ -251,6 +251,31 @@ public sealed class KafkaIntegrationTests
     }
 
     [Fact]
+    public async Task TransactedProducer_DeferredCommit_Delivers()
+    {
+        // Regression for the "Local: Erroneous state" bug: with transacted=true, committing the
+        // deferred KafkaSendAction (what a .Transacted() boundary does) must actually deliver the
+        // message. Before the fix this threw because transactional.id + InitTransactions put
+        // librdkafka into transactional mode, where Produce without BeginTransaction is rejected.
+        var topic = $"test-tx-deliver-{Guid.NewGuid():N}";
+        var ep = CreateEndpoint(topic, "transacted=true");
+        var producer = (KafkaProducer)ep.CreateProducer();
+        await producer.Start();
+
+        var exchange = new Exchange(new Message("tx-real-msg"));
+        await producer.Process(exchange);   // registers the deferred KafkaSendAction
+
+        var actions = (ConcurrentDictionary<string, ITransactedAction>)exchange.Properties["TRANSACT_ACTION"]!;
+        foreach (var a in actions.Values)
+            await a.Commit();                // ← the deferred ProduceAsync; must NOT throw
+
+        await producer.Stop();
+
+        var received = await ConsumeOneMessage(topic, $"verify-{Guid.NewGuid():N}");
+        received.Should().Be("tx-real-msg");
+    }
+
+    [Fact]
     public async Task TransactedProducer_RegistersDeferredAction()
     {
         var topic = $"test-transact-{Guid.NewGuid():N}";
@@ -383,5 +408,122 @@ public sealed class KafkaIntegrationTests
         await consumer.Stop();
 
         received.Count.Should().Be(20);
+    }
+
+    // ───── EnableAutoCommit (framework-level) ─────
+
+    /// <summary>
+    /// Reads the total committed offset for a group across all partitions of a topic via the
+    /// group coordinator. Uses a non-subscribing probe consumer (never joins the group → no
+    /// rebalance), so it can be called while another consumer in the same group is running.
+    /// </summary>
+    private long GetCommittedTotal(string topic, string groupId)
+    {
+        using var admin = new AdminClientBuilder(
+            new AdminClientConfig { BootstrapServers = BootstrapServers }).Build();
+        var meta = admin.GetMetadata(topic, TimeSpan.FromSeconds(10));
+        var tps = meta.Topics[0].Partitions
+            .Select(p => new TopicPartition(topic, new Partition(p.PartitionId)))
+            .ToList();
+
+        using var probe = new ConsumerBuilder<string, string>(new ConsumerConfig
+        {
+            BootstrapServers = BootstrapServers,
+            GroupId = groupId,
+            EnableAutoCommit = false
+        }).Build();
+
+        var committed = probe.Committed(tps, TimeSpan.FromSeconds(10));
+        return committed.Where(c => c.Offset != Offset.Unset).Sum(c => c.Offset.Value);
+    }
+
+    [Fact]
+    public async Task Consumer_AutoCommitDefault_CommitsOffsetInline_BeforeStop()
+    {
+        // Default EnableAutoCommit=true: the consumer must commit the offset inline right after a
+        // successful Process — i.e. BEFORE any graceful stop (the PartitionsRevokedHandler that
+        // commits on stop is intentionally not exercised here, so a committed offset can only come
+        // from the inline auto-commit path).
+        var topic = $"test-autocommit-on-{Guid.NewGuid():N}";
+        var groupId = $"ac-on-{Guid.NewGuid():N}";
+        const int n = 3;
+        for (int i = 0; i < n; i++) await ProduceMessage(topic, $"msg-{i}");
+
+        var ep = CreateEndpoint(topic, $"groupId={groupId}&autoOffsetReset=Earliest");
+        var received = new ConcurrentBag<string>();
+        var allReceived = new TaskCompletionSource();
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                received.Add(Encoding.UTF8.GetString((byte[])ci.Arg<IExchange>().In.Body!));
+                if (received.Count >= n) allReceived.TrySetResult();
+                return Task.CompletedTask;
+            });
+
+        var consumer = (KafkaConsumer)ep.CreateConsumer(processor);
+        await consumer.Start();
+        try
+        {
+            await Task.WhenAny(allReceived.Task, Task.Delay(30_000));
+            received.Count.Should().BeGreaterThanOrEqualTo(n);
+
+            // Poll the committed offset WHILE the consumer is still running (no stop → no revoke commit).
+            long committed = 0;
+            for (int i = 0; i < 20 && committed < n; i++)
+            {
+                await Task.Delay(500);
+                committed = GetCommittedTotal(topic, groupId);
+            }
+
+            committed.Should().BeGreaterThanOrEqualTo(n,
+                "EnableAutoCommit=true must commit the offset inline after Process, before any stop");
+        }
+        finally
+        {
+            await consumer.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task Consumer_AutoCommitDisabled_NoTransaction_DoesNotCommitInline()
+    {
+        // EnableAutoCommit=false and no transactional route: nothing commits the deferred
+        // KafkaCommitAction during processing, so the committed offset stays unset while the
+        // consumer is running (it would only advance on a graceful stop via the revoke handler,
+        // which we assert BEFORE stopping).
+        var topic = $"test-autocommit-off-{Guid.NewGuid():N}";
+        var groupId = $"ac-off-{Guid.NewGuid():N}";
+        const int n = 3;
+        for (int i = 0; i < n; i++) await ProduceMessage(topic, $"msg-{i}");
+
+        var ep = CreateEndpoint(topic, $"groupId={groupId}&autoOffsetReset=Earliest&enableAutoCommit=false");
+        var received = new ConcurrentBag<string>();
+        var allReceived = new TaskCompletionSource();
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                received.Add(Encoding.UTF8.GetString((byte[])ci.Arg<IExchange>().In.Body!));
+                if (received.Count >= n) allReceived.TrySetResult();
+                return Task.CompletedTask;
+            });
+
+        var consumer = (KafkaConsumer)ep.CreateConsumer(processor);
+        await consumer.Start();
+        try
+        {
+            await Task.WhenAny(allReceived.Task, Task.Delay(30_000));
+            received.Count.Should().BeGreaterThanOrEqualTo(n);
+
+            // Give any (unexpected) commit a chance to surface, then assert NOTHING was committed.
+            await Task.Delay(3_000);
+            GetCommittedTotal(topic, groupId).Should().Be(0,
+                "without auto-commit and without a transaction, the offset must not advance during processing");
+        }
+        finally
+        {
+            await consumer.Stop();
+        }
     }
 }

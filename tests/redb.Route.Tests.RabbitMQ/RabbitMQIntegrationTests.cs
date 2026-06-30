@@ -361,6 +361,62 @@ public sealed class RabbitMQIntegrationTests
         consumer.ProcessedCount.Should().BeGreaterThanOrEqualTo(1);
     }
 
+    /// <summary>
+    /// Simulates what a route-level <c>.Transacted()</c> does at its boundary: commit every deferred
+    /// <see cref="ITransactedAction"/> registered on the exchange (which includes the RabbitMQ ack)
+    /// — DURING Process, i.e. before the consumer's own post-process settle runs.
+    /// </summary>
+    private static async Task SimulateRouteTransactionAsync(
+        IExchange ex, ConcurrentBag<string> received, TaskCompletionSource tcs, int expected)
+    {
+        received.Add(Encoding.UTF8.GetString((byte[])ex.In.Body!));
+        if (ex.Properties.TryGetValue("TRANSACT_ACTION", out var o) &&
+            o is ConcurrentDictionary<string, ITransactedAction> acts)
+        {
+            foreach (var a in acts.Values)
+                await a.Commit();
+        }
+        if (received.Count >= expected) tcs.TrySetResult();
+    }
+
+    [Fact]
+    public async Task Consumer_RouteTransactionAcksDuringProcess_NoDoubleAck()
+    {
+        // Reproduces the double-BasicAck: a route-level .Transacted() commits the deferred ack
+        // (BasicAck #1) during Process, then the consumer's inline settle would BasicAck the SAME
+        // delivery tag again (BasicAck #2). The broker rejects the second with PRECONDITION_FAILED
+        // and tears down the whole channel, so the SECOND message never gets processed.
+        // With the Settled guard, the inline settle is skipped → channel survives → both processed.
+        var queue = $"test-double-ack-{Guid.NewGuid():N}";
+
+        var epProd = CreateEndpoint(queue);
+        var producer = (RabbitMQProducer)epProd.CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("msg-0")));
+        await producer.Process(new Exchange(new Message("msg-1")));
+        await producer.Stop();
+        await epProd.Stop();
+
+        var epCons = CreateEndpoint(queue);   // NOT a ?transacted=true endpoint
+        var received = new ConcurrentBag<string>();
+        var tcs = new TaskCompletionSource();
+
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(ci => SimulateRouteTransactionAsync(ci.Arg<IExchange>(), received, tcs, expected: 2));
+
+        var consumer = (RabbitMQConsumer)epCons.CreateConsumer(processor);
+        await consumer.Start();
+
+        await Task.WhenAny(tcs.Task, Task.Delay(15_000));
+        await consumer.Stop();
+        await epCons.Stop();
+
+        received.Should().Contain("msg-0");
+        received.Should().Contain("msg-1", "the channel must survive the first ack (no double-ack tear-down)");
+        consumer.ProcessedCount.Should().BeGreaterThanOrEqualTo(2);
+    }
+
     [Fact]
     public async Task Rpc_RequestReply_ReturnsResponse()
     {

@@ -50,6 +50,19 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     /// <summary>Where to start consuming when no committed offset exists.</summary>
     public string AutoOffsetReset { get; set; } = "Latest";
 
+    /// <summary>
+    /// Framework-level auto-commit: when <c>true</c> (default), the consumer commits the offset
+    /// inline right after a successful <c>Process</c> — at-least-once settle, mirroring the
+    /// RabbitMQ consumer's post-process ack. When a transactional route
+    /// (<c>.Transacted()</c> / <c>.CommitTransaction()</c>) already committed the offset via the
+    /// deferred <c>ITransactedAction</c>, the inline commit is skipped and the transaction owns
+    /// the commit — i.e. this flag is effectively ignored inside a transactional route.
+    /// Set <c>false</c> to never commit inline (commit only at a transaction boundary).
+    /// <para>Note: this is NOT librdkafka's <c>enable.auto.commit</c> (a background timer that can
+    /// commit un-processed offsets); the underlying client stays at manual commit always.</para>
+    /// </summary>
+    public bool EnableAutoCommit { get; set; } = true;
+
     /// <summary>Max messages per batch (0 = single-message mode).</summary>
     public int MaxPollRecords { get; set; }
 
@@ -202,9 +215,14 @@ public sealed class KafkaEndpointOptions : EndpointOptions
 
         if (Transacted)
         {
-            config.TransactionalId = $"{TransactionIdPrefix}-{Environment.MachineName}-{Environment.ProcessId}";
+            // Deliberately NOT setting TransactionalId here. With a transactional.id configured,
+            // librdkafka enters transactional mode and requires BeginTransaction before every
+            // Produce (closed by CommitTransaction / SendOffsetsToTransaction) — which this
+            // connector does not implement, so a deferred Produce throws `Local: Erroneous state`.
+            // `transacted=true` therefore means: an idempotent producer whose send is deferred to
+            // the route's transaction boundary — NOT Kafka EOS. See docs/KAFKA_TRANSACTIONS_TODO.md.
             config.EnableIdempotence = true;
-            config.Acks = Confluent.Kafka.Acks.All; // required for idempotent/transactional producer
+            config.Acks = Confluent.Kafka.Acks.All; // required for the idempotent producer
         }
 
         return config;

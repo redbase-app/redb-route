@@ -45,6 +45,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [3.2.1] — 2026-06-30
+
+> The code changes in this release land in
+> **`redb.Route.Kafka`** and **`redb.Route.RabbitMQ`** — and **only these two packages
+> are bumped to 3.2.1**. Every other `redb.Route.*` package stays at **3.2.0** (no changes);
+> a targeted hotfix, not a mass-republish. Kafka/RabbitMQ 3.2.1 depend on `redb.Route` 3.2.0.
+> Three items: (1) a
+> new framework-level **`EnableAutoCommit`** option on the Kafka consumer
+> (default `true`) that brings Kafka offset-settle into parity with the RabbitMQ
+> consumer's post-process ack; (2) a fix for a **double `BasicAck`** in the
+> RabbitMQ consumer when a route-level `.Transacted()` wraps a non-transacted
+> consumer; (3) a fix for the Kafka **transacted producer**, which threw
+> `Local: Erroneous state` on the deferred send.
+>
+> **Behaviour change to be aware of.** Before 3.2.1 a Kafka consumer route
+> committed its offset **only** at a transactional boundary (`.Transacted()` /
+> `.CommitTransaction()`); a plain `From("kafka:...")` processed messages but
+> never advanced the committed offset (the offset only moved on a graceful stop
+> via the partitions-revoked commit). With 3.2.1 the default
+> `EnableAutoCommit=true` commits the offset **inline after a successful turn**,
+> so a plain consumer settles at-least-once exactly like the RabbitMQ consumer
+> already did. Set `?enableAutoCommit=false` to restore the old "commit only at a
+> transaction boundary" behaviour. Inside a transactional route the option is
+> effectively ignored — the transaction owns the commit (see below).
+
+### Added
+
+#### `redb.Route.Kafka` — framework-level `EnableAutoCommit` consumer option
+
+The Kafka consumer gains a typed **`EnableAutoCommit`** option (default `true`),
+bound from the URI (`?enableAutoCommit=true|false`) like every other endpoint
+option, plus a matching fluent `KafkaBuilder.EnableAutoCommit(bool)` method.
+
+This is a **framework-level** setting, deliberately **not** librdkafka's own
+`enable.auto.commit`: the underlying client stays at manual commit
+(`EnableAutoCommit = false` in the built `ConsumerConfig`) **always**, so the
+library never commits un-processed offsets on a background timer. Instead the
+*redb.Route consumer* commits after it knows the turn succeeded:
+
+- After a successful `Processor.Process(...)`, the consumer commits the offset
+  **inline** (`IConsumer.Commit`) — mirroring the RabbitMQ consumer's
+  `BasicAck`-after-Process. Single-message mode commits that message's offset;
+  batch mode commits the **last** offset of the batch.
+- **A transactional route takes precedence.** `KafkaCommitAction` now carries a
+  `Committed` flag (idempotent `Interlocked` guard). When a `.Transacted()` /
+  `.CommitTransaction()` boundary commits the deferred `KafkaCommitAction`
+  *during* the turn, `Committed` is already set by the time `Process` returns, so
+  the consumer **skips** the inline commit. The transaction owns the offset and
+  `EnableAutoCommit` is effectively ignored — it only matters on non-transactional
+  routes.
+- On a failed turn (`Process` throws) the inline commit is skipped and the
+  message is re-delivered — at-least-once, unchanged.
+
+Net effect: Kafka and RabbitMQ consumers now share the same default mental model
+("settle after a successful turn"). The previous behaviour — where a plain Kafka
+consumer silently never advanced its committed offset — is opt-out via
+`?enableAutoCommit=false`.
+
+### Fixed
+
+#### `redb.Route.Kafka` — `transacted=true` producer threw `Local: Erroneous state` on the deferred send
+
+A Kafka producer with `transacted=true` set `config.TransactionalId` and called
+`_producer.InitTransactions(30s)` on connect. That puts librdkafka into
+**transactional mode**, where every `Produce` must be wrapped in
+`BeginTransaction` … `CommitTransaction`. The connector never calls
+`BeginTransaction` / `CommitTransaction` / `AbortTransaction` /
+`SendOffsetsToTransaction`, so the deferred `ProduceAsync` — run when a
+`.Transacted()` / `.CommitTransaction()` boundary commits the `KafkaSendAction` —
+threw:
+
+```
+Confluent.Kafka.ProduceException: Local: Erroneous state
+```
+
+Confirmed end-to-end against a live 3-node KRaft cluster. The earlier tests
+missed it because they only asserted the deferred action was *registered*, never
+*committed*.
+
+The fix drops `transactional.id` + `InitTransactions` from the transacted
+producer path, leaving `EnableIdempotence = true` + `Acks = All`. The deferred
+send is now a plain idempotent `Produce` deferred to the route boundary — which
+delivers, and matches the connector's documented intent ("idempotent producer +
+deferred commit, **not** EOS"). Real Kafka exactly-once
+(`BeginTransaction` / `SendOffsetsToTransaction` / `CommitTransaction`) is scoped
+in `docs/KAFKA_TRANSACTIONS_TODO.md`. A regression test
+(`TransactedProducer_DeferredCommit_Delivers`) commits the deferred action and
+asserts the message is actually delivered.
+
+#### `redb.Route.RabbitMQ` — double `BasicAck` when a route `.Transacted()` wraps a non-transacted consumer
+
+When a route-level `.Transacted()` segment wrapped a RabbitMQ consumer whose
+**endpoint** was *not* `?transacted=true`, the delivery was settled **twice**:
+
+1. The `TransactedProcessor` committed the deferred `RabbitMQAckAction` at the
+   `.Transacted()` boundary → `BasicAck` #1.
+2. The consumer's own post-process branch (`if (!_options.Transacted)`) then
+   issued `BasicAck` #2 on the **same delivery tag**.
+
+RabbitMQ rejects the duplicate settle with
+`PRECONDITION_FAILED — unknown delivery tag` and **tears down the whole
+channel**, so every subsequent message on that channel is silently dropped. The
+error path carried the symmetric double-`BasicNack` hazard.
+
+`RabbitMQAckAction` now carries a `Settled` flag (idempotent `Interlocked` guard
+on both `Commit` and `Rollback` — first settle wins). The consumer routes its
+inline ack/nack **through the same `RabbitMQAckAction`** and skips it when
+`Settled` is already set, so the broker sees exactly one settle per delivery. The
+guard covers the success path and both the inner and outer catch blocks.
+
+### Tests
+
+- `redb.Route.Tests.Kafka` — `Consumer_AutoCommitDefault_CommitsOffsetInline_BeforeStop`
+  and `Consumer_AutoCommitDisabled_NoTransaction_DoesNotCommitInline`. Both
+  inspect the **committed offset at the group coordinator** (via a non-subscribing
+  probe consumer, so it never joins the group / triggers a rebalance) **while the
+  consumer is still running** — i.e. before any graceful stop, so the
+  partitions-revoked commit cannot mask the result. The first asserts the offset
+  is committed inline with the default option; the second asserts it stays
+  uncommitted with `?enableAutoCommit=false` and no transaction.
+- `redb.Route.Tests.RabbitMQ` — `Consumer_RouteTransactionAcksDuringProcess_NoDoubleAck`.
+  A processor commits `TRANSACT_ACTION` mid-`Process` (simulating the
+  `.Transacted()` boundary), and the test asserts **both** published messages are
+  processed — proving the channel survived the first ack instead of being torn
+  down by a double settle.
+
 ## [3.2.0] — 2026-06-29
 
 > ⚠️ **Not yet published to NuGet.** All `redb.Route.*` packages are versioned

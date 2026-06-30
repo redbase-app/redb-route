@@ -4,6 +4,11 @@
     <Description>Apache Kafka transport for redb.Route ESB framework.</Description>
     <PackageTags>esb;messaging;kafka;redb</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- 3.2.1 targeted hotfix (EnableAutoCommit + transacted-producer fix). Only this package
+         and redb.Route.RabbitMQ ship 3.2.1; the rest of redb.Route.* stays 3.2.0, so this
+         depends on redb.Route 3.2.0 (unchanged, already on NuGet). No mass-republish. -->
+    <Version>3.2.1</Version>
+    <PackageVersion>3.2.1</PackageVersion>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="redb.Route.Tests.Kafka" />

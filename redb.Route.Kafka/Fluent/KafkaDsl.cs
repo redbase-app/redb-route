@@ -39,6 +39,7 @@ public sealed class KafkaBuilder
     // Consumer
     private string? _groupId;
     private string? _autoOffsetReset;
+    private string? _enableAutoCommit;
     private string? _maxPollRecords;
     private string? _pollTimeoutMs;
     private bool _breakOnFirstError;
@@ -103,6 +104,13 @@ public sealed class KafkaBuilder
 
     /// <summary>Auto offset reset: Latest, Earliest, Error.</summary>
     public KafkaBuilder AutoOffsetReset(string reset) { _autoOffsetReset = reset; return this; }
+
+    /// <summary>
+    /// Framework-level auto-commit (default <c>true</c>): commit the offset inline after a successful
+    /// Process. A transactional route (<c>.Transacted()</c>/<c>.CommitTransaction()</c>) takes
+    /// precedence and the inline commit is skipped. Set <c>false</c> to commit only at a transaction boundary.
+    /// </summary>
+    public KafkaBuilder EnableAutoCommit(bool enabled) { _enableAutoCommit = enabled ? "true" : "false"; return this; }
 
     /// <summary>Max records per poll.</summary>
     public KafkaBuilder MaxPollRecords(int max) { _maxPollRecords = max.ToString(); return this; }
@@ -227,6 +235,7 @@ public sealed class KafkaBuilder
         // Consumer
         AppendIf("groupId", _groupId);
         AppendIf("autoOffsetReset", _autoOffsetReset);
+        AppendIf("enableAutoCommit", _enableAutoCommit);
         AppendIf("maxPollRecords", _maxPollRecords);
         AppendIf("pollTimeoutMs", _pollTimeoutMs);
         AppendBool("breakOnFirstError", _breakOnFirstError);

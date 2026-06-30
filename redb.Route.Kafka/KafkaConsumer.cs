@@ -160,6 +160,12 @@ public sealed class KafkaConsumer : DrainableConsumer
 
             await Processor.Process(exchange, processingCt).ConfigureAwait(false);
             ProcessedCount++;
+
+            // Auto-commit: settle the offset inline after successful processing — UNLESS a
+            // transactional route already committed it (commitAction.Committed), in which case
+            // the transaction owns the commit and EnableAutoCommit is ignored.
+            if (_options.EnableAutoCommit && !commitAction.Committed)
+                await commitAction.Commit(processingCt).ConfigureAwait(false);
         }
         finally
         {
@@ -205,6 +211,11 @@ public sealed class KafkaConsumer : DrainableConsumer
 
             await Processor.Process(exchange, processingCt).ConfigureAwait(false);
             ProcessedCount += batch.Count;
+
+            // Auto-commit the last batch offset inline after success — unless a transactional
+            // route already committed it (see ProcessSingleMessage for the rationale).
+            if (_options.EnableAutoCommit && !commitAction.Committed)
+                await commitAction.Commit(processingCt).ConfigureAwait(false);
         }
         finally
         {
@@ -413,6 +424,7 @@ internal sealed class KafkaCommitAction : ITransactedAction
     private readonly IConsumer<string, byte[]> _consumer;
     private readonly ConsumeResult<string, byte[]> _result;
     private readonly ILogger? _logger;
+    private int _committed;
 
     public KafkaCommitAction(IConsumer<string, byte[]> consumer, ConsumeResult<string, byte[]> result, ILogger? logger)
     {
@@ -421,8 +433,17 @@ internal sealed class KafkaCommitAction : ITransactedAction
         _logger = logger;
     }
 
+    /// <summary>True once the offset has been committed (by a transactional route or inline auto-commit).</summary>
+    public bool Committed => Volatile.Read(ref _committed) == 1;
+
     public Task Commit(CancellationToken ct = default)
     {
+        // Idempotent: the transactional route and the inline auto-commit path may both reach here;
+        // only the first wins. (Kafka offset commit is itself idempotent, but the flag also lets the
+        // consumer skip the redundant inline call after a transactional commit.)
+        if (Interlocked.Exchange(ref _committed, 1) != 0)
+            return Task.CompletedTask;
+
         _consumer.Commit(_result);
         _logger?.LogDebug("Kafka offset committed: topic={Topic}, partition={Partition}, offset={Offset}",
             _result.Topic, _result.Partition.Value, _result.Offset.Value);

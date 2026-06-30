@@ -187,6 +187,7 @@ public sealed class RabbitMQConsumer : IConsumer
         _drain.Increment();
         Exchange? exchange = null;
         var channel = _channel;
+        RabbitMQAckAction? ackAction = null;
         // Tracks whether we've already settled this delivery (ack OR nack). Prevents
         // a "double nack" cascade across the inner/outer catch blocks, which the
         // RabbitMQ broker rejects with PRECONDITION_FAILED — unknown delivery tag,
@@ -207,7 +208,7 @@ public sealed class RabbitMQConsumer : IConsumer
                 return;
             }
 
-            var ackAction = new RabbitMQAckAction(channel, ea.DeliveryTag, _options.Transacted, _logger);
+            ackAction = new RabbitMQAckAction(channel, ea.DeliveryTag, _options.Transacted, _logger);
             RegisterTransactedAction(exchange, $"rabbitmq-ack-{ea.DeliveryTag}", ackAction);
 
             try
@@ -224,16 +225,13 @@ public sealed class RabbitMQConsumer : IConsumer
                         .ConfigureAwait(false);
                 }
 
-                // Non-transacted: explicit ack
-                if (!_options.Transacted)
-                {
-                    await channel.BasicAckAsync(ea.DeliveryTag, multiple: false).ConfigureAwait(false);
-                }
-                else
-                {
-                    await channel.TxCommitAsync().ConfigureAwait(false);
-                    await channel.BasicAckAsync(ea.DeliveryTag, multiple: false).ConfigureAwait(false);
-                }
+                // Settle the delivery via the ack action — UNLESS a route-level .Transacted()
+                // already committed it during Process (ackAction.Settled). Routing both the
+                // deferred and the inline path through RabbitMQAckAction.Commit keeps the ack
+                // logic in one place; the Settled guard prevents the double-BasicAck on the same
+                // tag that the broker rejects with PRECONDITION_FAILED (unknown delivery tag).
+                if (!ackAction.Settled)
+                    await ackAction.Commit().ConfigureAwait(false);
                 acked = true;
 
                 ProcessedCount++;
@@ -242,18 +240,14 @@ public sealed class RabbitMQConsumer : IConsumer
             {
                 _logger?.LogError(ex, "RabbitMQ message processing error: deliveryTag={DeliveryTag}", ea.DeliveryTag);
 
-                if (_options.Transacted)
-                {
-                    try { await channel.TxRollbackAsync().ConfigureAwait(false); }
-                    catch (Exception txEx) { _logger?.LogWarning(txEx, "Error rolling back RabbitMQ transaction"); }
-                }
-
-                // Nack with requeue — only if we haven't already settled this delivery
-                if (!acked)
+                // Nack (with TxRollback when the endpoint is transacted) via the ack action —
+                // only if we haven't already settled this delivery, and not if a route-level
+                // .Transacted() already rolled it back (otherwise the broker rejects the double-nack).
+                if (!acked && !(ackAction?.Settled ?? false))
                 {
                     try
                     {
-                        await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: true).ConfigureAwait(false);
+                        await ackAction!.Rollback().ConfigureAwait(false);
                         acked = true;
                     }
                     catch (Exception nackEx) { _logger?.LogWarning(nackEx, "Error nacking RabbitMQ message"); }
@@ -267,7 +261,7 @@ public sealed class RabbitMQConsumer : IConsumer
             // Last-resort nack — only if neither path above settled the delivery.
             // Avoids the "unknown delivery tag" cascade when the inner catch already
             // nacked or when we successfully acked but then threw later.
-            if (!acked && channel is { IsOpen: true })
+            if (!acked && !(ackAction?.Settled ?? false) && channel is { IsOpen: true })
             {
                 try
                 {
@@ -538,6 +532,7 @@ internal sealed class RabbitMQAckAction : ITransactedAction
     private readonly ulong _deliveryTag;
     private readonly bool _transacted;
     private readonly ILogger? _logger;
+    private int _settled;
 
     public RabbitMQAckAction(IChannel channel, ulong deliveryTag, bool transacted, ILogger? logger)
     {
@@ -547,8 +542,17 @@ internal sealed class RabbitMQAckAction : ITransactedAction
         _logger = logger;
     }
 
+    /// <summary>True once this delivery has been settled (ack via <see cref="Commit"/> OR nack via <see cref="Rollback"/>).</summary>
+    public bool Settled => Volatile.Read(ref _settled) == 1;
+
     public async Task Commit(CancellationToken ct = default)
     {
+        // First settle wins. Guards against the deferred (route-.Transacted()) commit and the
+        // consumer's inline settle both reaching the broker — a second BasicAck on the same
+        // delivery tag is rejected with PRECONDITION_FAILED and tears down the whole channel.
+        if (Interlocked.Exchange(ref _settled, 1) != 0)
+            return;
+
         if (_transacted)
         {
             await _channel.TxCommitAsync(ct).ConfigureAwait(false);
@@ -560,6 +564,9 @@ internal sealed class RabbitMQAckAction : ITransactedAction
 
     public async Task Rollback(CancellationToken ct = default)
     {
+        if (Interlocked.Exchange(ref _settled, 1) != 0)
+            return;
+
         if (_transacted)
         {
             await _channel.TxRollbackAsync(ct).ConfigureAwait(false);
