@@ -173,7 +173,7 @@ guard covers the success path and both the inner and outer catch blocks.
 
 ## [3.2.0] — 2026-06-29
 
-> ⚠️ **Not yet published to NuGet.** All `redb.Route.*` packages are versioned
+> All `redb.Route.*` packages are versioned
 > together at **3.2.0**; the code changes in this release land in **`redb.Route`,
 > `redb.Route.Llm`, `redb.Route.Llm.Tools`, `redb.Route.Llm.Mcp`,
 > `redb.Route.Http`, `redb.Route.WebSocket` and `redb.Route.Exec`** (the other
