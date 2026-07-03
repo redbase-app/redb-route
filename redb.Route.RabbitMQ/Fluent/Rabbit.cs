@@ -54,6 +54,7 @@ public sealed class RabbitBuilder
     // Consumer
     private string? _concurrentConsumers;
     private string? _prefetchCount;
+    private bool _autoAck;
     private bool _transacted;
     private bool? _mandatory;
     private bool _replyTo;
@@ -173,6 +174,13 @@ public sealed class RabbitBuilder
     public RabbitBuilder PrefetchCount(ushort count) { _prefetchCount = count.ToString(); return this; }
     /// <summary>Prefetch count from an expression.</summary>
     public RabbitBuilder PrefetchCount(IExpression count) { _prefetchCount = count.ToTemplateString(); return this; }
+
+    /// <summary>
+    /// Broker-side auto-acknowledge. When enabled the broker settles every delivery on hand-off
+    /// (at-most-once): no manual ack/nack and a failed turn does NOT requeue. Default off (at-least-once).
+    /// Cannot be combined with <see cref="Transacted"/>.
+    /// </summary>
+    public RabbitBuilder AutoAck(bool enabled = true) { _autoAck = enabled; return this; }
 
     /// <summary>Enable transacted channel.</summary>
     public RabbitBuilder Transacted() { _transacted = true; return this; }
@@ -323,6 +331,7 @@ public sealed class RabbitBuilder
         // Consumer
         AppendIf("concurrentConsumers", _concurrentConsumers);
         AppendIf("prefetchCount", _prefetchCount);
+        AppendBool("autoAck", _autoAck);
         AppendBool("transacted", _transacted);
         AppendBoolExplicit("mandatory", _mandatory);
         AppendBool("replyTo", _replyTo);

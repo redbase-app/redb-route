@@ -123,6 +123,20 @@ public class RabbitBuilderTests
         uri.Should().Contain("transacted=true");
     }
 
+    [Fact]
+    public void AutoAck_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").AutoAck().Build();
+        uri.Should().Contain("autoAck=true");
+    }
+
+    [Fact]
+    public void AutoAck_OmittedByDefault()
+    {
+        var uri = Rabbit.Queue("q").Build();
+        uri.Should().NotContain("autoAck");
+    }
+
     // ── Queue limits ────────────────────────────────────────────────
 
     [Fact]

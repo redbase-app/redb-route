@@ -75,8 +75,17 @@ public sealed class RabbitMQConsumer : IConsumer
         // (each BasicPublishAsync awaits a broker confirm). For RPC replies we explicitly
         // do not need delivery guarantees — the client either receives the reply within its
         // own timeout, or treats the call as failed.
+        // ConcurrentConsumers is the single knob for consumer-side parallelism: it sizes both the
+        // AMQP consumer-dispatch concurrency of THIS channel (how many deliveries the client hands us
+        // in parallel) and the _semaphore below (the app-level cap on concurrent Process calls).
+        // Without the explicit dispatch value the channel would pin to 1 (ctor default) and every
+        // message would be handled serially regardless of ConcurrentConsumers — the RabbitMQ.Client
+        // 7.x trap this fixes.
+        var dispatchConcurrency = (ushort)Math.Clamp(_options.ConcurrentConsumers, 1, ushort.MaxValue);
         _channel = await _endpoint.CreateChannelAsync(
-            publisherConfirms: false, ct: ct).ConfigureAwait(false);
+            publisherConfirms: false,
+            consumerDispatchConcurrency: dispatchConcurrency,
+            ct: ct).ConfigureAwait(false);
 
         try
         {
@@ -107,19 +116,21 @@ public sealed class RabbitMQConsumer : IConsumer
             _consumer = new AsyncEventingBasicConsumer(_channel);
             _consumer.ReceivedAsync += OnMessageReceivedAsync;
 
+            // autoAck:true settles every delivery at the broker on hand-off (at-most-once) — no manual
+            // BasicAck/BasicNack, and a throw in Process does NOT requeue. autoAck:false (default) keeps
+            // the post-process manual ack / nack-requeue path. AutoAck+Transacted is rejected in Validate().
             _consumerTag = await _channel.BasicConsumeAsync(
                 queue: _actualQueueName,
-                autoAck: false,
+                autoAck: _options.AutoAck,
                 consumer: _consumer,
                 cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            // Channel was created but subsequent setup failed — close it to prevent leak
+            // Channel was created but subsequent setup failed — release it (close + dispose + unregister
+            // from the endpoint's tracking list) to prevent a leak.
             _logger?.LogError(ex, "RabbitMQ consumer Start failed: queue={Queue}, exchange={Exchange}", _actualQueueName, _options.Exchange);
-            try { await _channel.CloseAsync(ct).ConfigureAwait(false); }
-            catch (Exception closeEx) { _logger?.LogWarning(closeEx, "RabbitMQ: error closing channel during Start cleanup"); }
-            _channel.Dispose();
+            await _endpoint.ReleaseChannelAsync(_channel, ct).ConfigureAwait(false);
             _channel = null;
             _drain.Dispose();
             throw;
@@ -153,8 +164,16 @@ public sealed class RabbitMQConsumer : IConsumer
         _consumer = null;
         _consumerTag = null;
 
-        // Close the dedicated reply channel (if it was ever opened). The main consume
-        // channel is closed by the endpoint's channel registry on RabbitMQEndpoint.Stop().
+        // Release the main consume channel. The consumer OWNS this channel, so the consumer must free
+        // it here — RabbitMQEndpoint.Stop() only runs on full context teardown, NOT on a per-route
+        // Stop/Start, so leaving the channel to the endpoint leaks one open (cancelled, idle) channel
+        // per Stop/Start cycle. ReleaseChannelAsync also unregisters it from the endpoint's list, so a
+        // later endpoint.Stop() won't touch it (and double-close is guarded anyway).
+        IChannel? consumeChannel = _channel;
+        _channel = null;
+        await _endpoint.ReleaseChannelAsync(consumeChannel, ct).ConfigureAwait(false);
+
+        // Close the dedicated reply channel (if it was ever opened).
         IChannel? replyChannel;
         await _replyChannelLock.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -208,8 +227,15 @@ public sealed class RabbitMQConsumer : IConsumer
                 return;
             }
 
-            ackAction = new RabbitMQAckAction(channel, ea.DeliveryTag, _options.Transacted, _logger);
-            RegisterTransactedAction(exchange, $"rabbitmq-ack-{ea.DeliveryTag}", ackAction);
+            // In autoAck mode the broker already settled this delivery on hand-off — there is nothing
+            // to ack/nack, so we skip the ack action entirely (it stays null and every settle below is
+            // guarded on it). Manual-ack mode (the default) registers the deferred ack action so a
+            // route-level .Transacted() can commit/rollback it, and so we can ack/nack after Process.
+            if (!_options.AutoAck)
+            {
+                ackAction = new RabbitMQAckAction(channel, ea.DeliveryTag, _options.Transacted, _logger);
+                RegisterTransactedAction(exchange, $"rabbitmq-ack-{ea.DeliveryTag}", ackAction);
+            }
 
             try
             {
@@ -230,7 +256,8 @@ public sealed class RabbitMQConsumer : IConsumer
                 // deferred and the inline path through RabbitMQAckAction.Commit keeps the ack
                 // logic in one place; the Settled guard prevents the double-BasicAck on the same
                 // tag that the broker rejects with PRECONDITION_FAILED (unknown delivery tag).
-                if (!ackAction.Settled)
+                // ackAction is null in autoAck mode (broker already settled) — skip the manual ack.
+                if (ackAction is not null && !ackAction.Settled)
                     await ackAction.Commit().ConfigureAwait(false);
                 acked = true;
 
@@ -243,11 +270,13 @@ public sealed class RabbitMQConsumer : IConsumer
                 // Nack (with TxRollback when the endpoint is transacted) via the ack action —
                 // only if we haven't already settled this delivery, and not if a route-level
                 // .Transacted() already rolled it back (otherwise the broker rejects the double-nack).
-                if (!acked && !(ackAction?.Settled ?? false))
+                // ackAction is null in autoAck mode — the broker already acked on hand-off, so the
+                // message cannot be requeued (at-most-once); the error above is the only signal.
+                if (ackAction is not null && !acked && !ackAction.Settled)
                 {
                     try
                     {
-                        await ackAction!.Rollback().ConfigureAwait(false);
+                        await ackAction.Rollback().ConfigureAwait(false);
                         acked = true;
                     }
                     catch (Exception nackEx) { _logger?.LogWarning(nackEx, "Error nacking RabbitMQ message"); }
@@ -260,8 +289,9 @@ public sealed class RabbitMQConsumer : IConsumer
 
             // Last-resort nack — only if neither path above settled the delivery.
             // Avoids the "unknown delivery tag" cascade when the inner catch already
-            // nacked or when we successfully acked but then threw later.
-            if (!acked && !(ackAction?.Settled ?? false) && channel is { IsOpen: true })
+            // nacked or when we successfully acked but then threw later. Skipped in autoAck
+            // mode (ackAction null): the broker already settled, there is no tag to nack.
+            if (ackAction is not null && !acked && !ackAction.Settled && channel is { IsOpen: true })
             {
                 try
                 {

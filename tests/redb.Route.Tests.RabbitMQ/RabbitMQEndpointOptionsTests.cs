@@ -75,6 +75,28 @@ public sealed class RabbitMQEndpointOptionsTests
         act.Should().NotThrow();
     }
 
+    [Fact]
+    public void Defaults_AutoAck_IsFalse()
+    {
+        new RabbitMQEndpointOptions().AutoAck.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Validate_AutoAckWithTransacted_Throws()
+    {
+        var opts = new RabbitMQEndpointOptions { AutoAck = true, Transacted = true };
+        var act = () => opts.Validate();
+        act.Should().Throw<ArgumentException>().WithMessage("*AutoAck*Transacted*");
+    }
+
+    [Fact]
+    public void Validate_AutoAckWithoutTransacted_DoesNotThrow()
+    {
+        var opts = new RabbitMQEndpointOptions { AutoAck = true };
+        var act = () => opts.Validate();
+        act.Should().NotThrow();
+    }
+
     [Theory]
     [InlineData("topic", false)]
     [InlineData("fanout", false)]

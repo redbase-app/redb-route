@@ -53,11 +53,23 @@ From("direct://outbound")
 | **Recovery** | `.AutomaticRecovery()`, `.TopologyRecoveryEnabled()`, `.RecoveryInterval()`, `.Heartbeat()`, `.ConnectionTimeout()` |
 | **Exchange** | `.Exchange(name, type?)`, `.ExchangeDurable()`, `.ExchangeAutoDelete()`, `.Declare()` |
 | **Queue** | `.Durable()`, `.AutoDelete()`, `.Exclusive()`, `.RoutingKey()`, `.MaxLength()`, `.MaxLengthBytes()`, `.Overflow()`, `.QueueType()`, `.MaxPriority()` |
-| **Consumer** | `.ConcurrentConsumers()`, `.PrefetchCount()`, `.Transacted()`, `.Mandatory()`, `.ReplyTo()`, `.Timeout()` |
+| **Consumer** | `.ConcurrentConsumers()`, `.PrefetchCount()`, `.AutoAck()`, `.Transacted()`, `.Mandatory()`, `.ReplyTo()`, `.Timeout()` |
 | **Message** | `.ContentType()`, `.MessageTtl()`, `.Expires()` |
 | **DLX** | `.DeadLetterExchange()`, `.DeadLetterRoutingKey()` |
 
 > Most builder methods accept both constant values and `IExpression` for runtime resolution via the expression engine.
+
+## Consumer concurrency & acknowledgement
+
+- **`.ConcurrentConsumers(N)`** is the single knob for consumer-side parallelism: it sets both the
+  channel's AMQP consumer-dispatch concurrency and the app-level concurrency semaphore, so up to
+  **N** messages from the queue are processed concurrently. Default `1` (strictly serial — message
+  order preserved). With `N > 1`, ordering is not preserved and your processor must be
+  thread-safe. Keep `.PrefetchCount()` ≥ `N` so the broker keeps the parallel slots fed.
+- **`.AutoAck()`** switches the consumer to broker-side auto-acknowledge (**at-most-once**): the
+  broker settles each delivery on hand-off, so a failed turn does **not** requeue. Default off
+  (**at-least-once**: ack after a successful turn, nack-requeue on failure). Cannot be combined
+  with `.Transacted()`.
 
 ## Part of
 

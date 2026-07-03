@@ -55,24 +55,43 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
     /// (RabbitMQ does not allow confirm + tx mode on the same channel).
     /// </summary>
     /// <param name="publisherConfirms">Enable publisher confirms (default true). Set to false for transacted channels.</param>
+    /// <param name="consumerDispatchConcurrency">
+    /// Per-channel consumer dispatch concurrency. When <c>null</c> the channel inherits the value from the
+    /// connection (<see cref="ConnectionFactory.ConsumerDispatchConcurrency"/>).
+    /// <para>
+    /// CRITICAL: the <see cref="CreateChannelOptions"/> constructor parameter defaults to
+    /// <see cref="Constants.DefaultConsumerDispatchConcurrency"/> (= 1), NOT <c>null</c> — so omitting it
+    /// pins every channel to serial dispatch and silently overrides the connection-level setting. We
+    /// therefore always pass this value explicitly (null = inherit, N = override).
+    /// </para>
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
-    internal async Task<IChannel> CreateChannelAsync(bool publisherConfirms = true, CancellationToken ct = default)
+    internal async Task<IChannel> CreateChannelAsync(
+        bool publisherConfirms = true,
+        ushort? consumerDispatchConcurrency = null,
+        CancellationToken ct = default)
     {
         var connection = await _component.GetOrCreateConnectionAsync(this, ct).ConfigureAwait(false);
 
         // For confirm-tracking channels we MUST supply an explicit ThrottlingRateLimiter sized
         // to MaxOutstandingConfirms. RabbitMQ.Client 7.x defaults to a tiny built-in limiter
         // that surfaces as "Could not acquire a lease from the rate limiter" under publish bursts.
+        //
+        // We ALSO pass consumerDispatchConcurrency explicitly (even null) because the ctor's 4th
+        // parameter defaults to 1, not null — omitting it clamps the channel to serial dispatch and
+        // clobbers whatever the connection/ConnectionFactory set. Passing null restores "inherit".
         var channelOpts = publisherConfirms
             ? new CreateChannelOptions(
                 publisherConfirmationsEnabled: true,
                 publisherConfirmationTrackingEnabled: true,
                 outstandingPublisherConfirmationsRateLimiter: new ThrottlingRateLimiter(
-                    Options.MaxOutstandingConfirms > 0 ? Options.MaxOutstandingConfirms : 2048))
+                    Options.MaxOutstandingConfirms > 0 ? Options.MaxOutstandingConfirms : 2048),
+                consumerDispatchConcurrency: consumerDispatchConcurrency)
             : new CreateChannelOptions(
                 publisherConfirmationsEnabled: false,
                 publisherConfirmationTrackingEnabled: false,
-                outstandingPublisherConfirmationsRateLimiter: null);
+                outstandingPublisherConfirmationsRateLimiter: null,
+                consumerDispatchConcurrency: consumerDispatchConcurrency);
 
         var channel = await connection.CreateChannelAsync(channelOpts, ct).ConfigureAwait(false);
 
@@ -82,6 +101,34 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
 
         Logger?.LogDebug("RabbitMQ channel created (confirms={Confirms})", publisherConfirms);
         return channel;
+    }
+
+    /// <summary>Number of channels currently tracked by this endpoint (open or not). For diagnostics and tests.</summary>
+    internal int TrackedChannelCount { get { lock (_channels) { return _channels.Count; } } }
+
+    /// <summary>
+    /// Unregisters a channel from the endpoint's tracking list and closes+disposes it.
+    /// <para>
+    /// The owner of a channel (a consumer or producer) must call this when it stops, so the channel is
+    /// released on a per-route Stop/Start cycle — <see cref="Stop"/> is only invoked on full context
+    /// teardown, so relying on it leaks one channel per Stop/Start of an individual route.
+    /// </para>
+    /// Safe to call more than once for the same channel: <see cref="Stop"/> guards on <see cref="IChannel.IsOpen"/>,
+    /// and removal from the list is idempotent.
+    /// </summary>
+    internal async Task ReleaseChannelAsync(IChannel? channel, CancellationToken ct = default)
+    {
+        if (channel is null) return;
+
+        lock (_channels) { _channels.Remove(channel); }
+
+        if (channel.IsOpen)
+        {
+            try { await channel.CloseAsync(ct).ConfigureAwait(false); }
+            catch (Exception ex) { Logger?.LogWarning(ex, "Error closing RabbitMQ channel"); }
+        }
+        try { channel.Dispose(); }
+        catch (Exception ex) { Logger?.LogDebug(ex, "Error disposing RabbitMQ channel"); }
     }
 
     /// <summary>

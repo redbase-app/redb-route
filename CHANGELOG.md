@@ -45,6 +45,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [3.2.2] — 2026-07-03
+
+> Targeted hotfix in **`redb.Route.RabbitMQ`** only — this package bumps to **3.2.2**;
+> every other `redb.Route.*` package is unchanged (`redb.Route.Kafka` stays at 3.2.1, the
+> rest at 3.2.0). RabbitMQ 3.2.2 still depends on `redb.Route` 3.2.0 (unchanged, already on
+> NuGet) — no core changes, no mass-republish.
+> Three items: (1) a fix for **consumer dispatch concurrency**, which was silently pinned to
+> **1** so `ConcurrentConsumers(N)` never actually parallelised a queue; (2) a fix for a
+> **channel leak** on per-route Stop/Start; (3) a new framework-level **`AutoAck`** consumer
+> option (broker-side auto-acknowledge / at-most-once), the RabbitMQ analogue of Kafka's
+> `EnableAutoCommit`.
+>
+> **Behaviour change to be aware of.** Before 3.2.2 *every* RabbitMQ consumer processed one
+> message at a time regardless of `ConcurrentConsumers` (the real gate — the AMQP consumer
+> dispatch concurrency — was stuck at 1). With 3.2.2 a route that sets
+> `ConcurrentConsumers(N > 1)` now genuinely processes up to **N** messages **concurrently**,
+> so per-queue message **ordering is no longer preserved** on such routes and their processors
+> must be thread/concurrency-safe. Routes that leave `ConcurrentConsumers` at its default of
+> **1** are unaffected — they stay strictly serial, exactly as before.
+
+### Added
+
+#### `redb.Route.RabbitMQ` — framework-level `AutoAck` consumer option
+
+The RabbitMQ consumer gains a typed **`AutoAck`** option (default `false`), bound from the URI
+(`?autoAck=true|false`) like every other endpoint option, plus a matching fluent
+`RabbitBuilder.AutoAck(bool)` method.
+
+When enabled, the consumer subscribes with `autoAck: true`, so the **broker settles every
+delivery on hand-off** (at-most-once): there is no manual `BasicAck`/`BasicNack`, and a failure
+in the processor does **not** requeue the message. This is the mirror of the manual-ack default
+(at-least-once: ack after a successful turn, nack-requeue on failure) and the RabbitMQ analogue
+of the Kafka `EnableAutoCommit` option shipped in 3.2.1 — it removes the need for a SEDA
+hand-off stage when a route wants fire-and-forget "ack on receive" semantics (e.g. WSO2-style
+`autoAck=true`).
+
+`AutoAck` cannot be combined with `Transacted` — an auto-acked delivery is settled by the
+broker on hand-off and cannot be transactionally committed or rolled back — so
+`RabbitMQEndpointOptions.Validate()` now rejects that combination.
+
+### Fixed
+
+#### `redb.Route.RabbitMQ` — consumer dispatch concurrency was pinned to 1 (`ConcurrentConsumers` had no effect)
+
+`RabbitMQEndpoint.CreateChannelAsync` built its channel with the three-argument
+`CreateChannelOptions(...)` constructor, leaving the fourth parameter
+(`consumerDispatchConcurrency`) at its **compile-time default**. In `RabbitMQ.Client` 7.2.1 that
+default is **`Constants.DefaultConsumerDispatchConcurrency` = 1**, *not* `null` — verified against
+the shipped assembly. A non-null per-channel value **overrides** the connection-level setting, so
+every channel the library created was clamped to **serial dispatch**, and the value set on the
+`ConnectionFactory` / URI (`consumerDispatchConcurrency=N`) was silently discarded — in both
+named-factory and inline-connection modes.
+
+The upshot: a single `AsyncEventingBasicConsumer` on a single channel received deliveries strictly
+one at a time (`inFlight = 1`), and `ConcurrentConsumers(N)` — which only ever sized an internal
+`SemaphoreSlim` — could not deliver any parallelism because the dispatcher never handed the
+consumer more than one message at once. On production this showed up as a consumer that never kept
+up: `unacked` climbed to the prefetch limit while messages were still processed serially.
+
+The fix makes **`ConcurrentConsumers` the single knob for consumer-side parallelism**:
+`CreateChannelAsync` now always passes `consumerDispatchConcurrency` explicitly, and the consumer
+opens its consume channel with the dispatch concurrency set to `ConcurrentConsumers` (which also
+sizes the semaphore). `ConcurrentConsumers(N)` therefore now processes up to N messages in
+parallel. `ConsumerDispatchConcurrency` remains available as the connection-level default for other
+channels and is no longer clobbered. A live-broker regression test
+(`Consumer_ConcurrentConsumers_ProcessesInParallel`) publishes 20 messages, runs with
+`ConcurrentConsumers(5)`, and asserts the observed maximum concurrency exceeds 1; a companion test
+asserts `ConcurrentConsumers(1)` stays strictly serial.
+
+#### `redb.Route.RabbitMQ` — AMQP channel leak on per-route Stop/Start
+
+`RabbitMQConsumer.Stop()` cancelled its subscription (`BasicCancelAsync`), drained in-flight work,
+and closed its dedicated RPC reply channel — but left its **main consume channel open** and still
+registered in the endpoint's channel list. Closing that list is done only by
+`RabbitMQEndpoint.Stop()`, which the engine invokes **only on full context teardown**, never on a
+per-route `StopRoute`. Since `StartRoute` reuses the same consumer instance and opens a fresh
+channel, **each Stop/Start cycle of an individual route leaked one channel** — a cancelled, idle
+channel (no deliveries, `unacked = 0`, but still open with the prefetch showing) that accumulated on
+the pooled connection until the whole context was disposed (tpkg hot-reload / container restart).
+
+The consumer now **owns and releases its channel**: `Stop()` closes, disposes, and unregisters the
+consume channel via a new `RabbitMQEndpoint.ReleaseChannelAsync`, and the Start-failure cleanup path
+uses the same method (so a partial start no longer leaves a stale handle in the list either). Double
+release is safe — `endpoint.Stop()` still guards on `IChannel.IsOpen`, and the list removal is
+idempotent. This is a RabbitMQ-package-local fix; the core `RouteContext.StopRoute` is unchanged.
+A regression test (`Consumer_StopStartCycles_DoNotLeakChannels`) runs five Stop/Start cycles on a
+live broker and asserts the endpoint's tracked-channel count returns to 0 after every Stop.
+
+### Tests
+
+- `redb.Route.Tests.RabbitMQ` — new live-broker suite `RabbitMQConcurrencyLeakAutoAckTests`:
+  `Consumer_ConcurrentConsumers_ProcessesInParallel` and
+  `Consumer_ConcurrentConsumersOne_ProcessesSerially` (dispatch concurrency),
+  `Consumer_StopStartCycles_DoNotLeakChannels` (channel leak), and
+  `AutoAck_DeliversMessage` / `AutoAck_ProcessorThrows_MessageNotRequeued` /
+  `ManualAck_ProcessorThrows_MessageRequeued` (AutoAck vs manual-ack requeue). Plus unit tests
+  for the `AutoAck` builder param, its default-off, and the `AutoAck`+`Transacted`
+  validation guard. Full package suite: **112 passing** against RabbitMQ 4.x.
+
 ## [3.2.1] — 2026-06-30
 
 > The code changes in this release land in

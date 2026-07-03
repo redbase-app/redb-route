@@ -71,11 +71,26 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
 
     // ── Consumer ──
 
-    /// <summary>Number of concurrent consumer threads (default: 1).</summary>
+    /// <summary>
+    /// Consumer parallelism. Sizes both the channel's AMQP consumer-dispatch concurrency (how many
+    /// deliveries the client hands to the processor in parallel) and the app-level concurrency
+    /// semaphore. This is the single knob for consumer-side parallelism: <c>ConcurrentConsumers(N)</c>
+    /// yields up to N messages processed concurrently on the queue. Default: 1 (serial).
+    /// </summary>
     public int ConcurrentConsumers { get; set; } = 1;
 
-    /// <summary>Prefetch count per consumer (default: 10).</summary>
+    /// <summary>Prefetch count per consumer (default: 10). Should be &gt;= <see cref="ConcurrentConsumers"/>
+    /// so the broker can keep the parallel slots fed.</summary>
     public ushort PrefetchCount { get; set; } = 10;
+
+    /// <summary>
+    /// Broker-side auto-acknowledge (default: false). When <c>true</c> the consumer subscribes with
+    /// <c>autoAck: true</c> — the broker settles every delivery on hand-off (at-most-once): there is no
+    /// manual ack/nack, and a failure in the processor does NOT requeue the message. When <c>false</c>
+    /// (default) the consumer acks after a successful turn and nack-requeues on failure (at-least-once).
+    /// Cannot be combined with <see cref="Transacted"/>.
+    /// </summary>
+    public bool AutoAck { get; set; }
 
     // ── Transactions ──
 
@@ -188,6 +203,10 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
 
         if (Timeout <= 0)
             throw new ArgumentOutOfRangeException(nameof(Timeout), "Timeout must be greater than 0.");
+
+        if (AutoAck && Transacted)
+            throw new ArgumentException(
+                "AutoAck cannot be combined with Transacted: an auto-acked delivery is settled by the broker on hand-off and cannot be transactionally committed or rolled back.");
     }
 
     /// <summary>
