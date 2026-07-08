@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>redb.Route.Validation.Adapters</PackageId>
+    <Description>Validation adapters for redb.Route: FluentValidation and DataAnnotations integrations exposed as IMessageValidator implementations.</Description>
+    <PackageTags>esb;routing;validation;fluentvalidation;dataannotations</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <PackageReference Include="FluentValidation" Version="11.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Validation.Adapters.Tests" />
+  </ItemGroup>
+
+</Project>

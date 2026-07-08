@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Amqp</PackageId>
+    <Description>AMQP 1.0 transport for redb.Route ESB framework. Supports ActiveMQ Artemis, ActiveMQ Classic, Azure Service Bus, Amazon MQ, Qpid, and any AMQP 1.0 compliant broker.</Description>
+    <PackageTags>esb;messaging;amqp;activemq;artemis;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- 3.2.1 targeted hotfix: ConcurrentConsumers now runs N real competing consumers (was a
+         dead semaphore on a serial receive loop). Only this package bumps; depends on redb.Route 3.2.0. -->
+    <Version>3.3.0</Version>
+    <PackageVersion>3.3.0</PackageVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Amqp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="AMQPNetLite.Core" Version="2.5.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

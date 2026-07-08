@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Llm</PackageId>
+    <Description>Industrial LLM connector for redb.Route ESB framework. Provider-agnostic agent engine, tool-loop with governance (budget, shadow, idempotency, approval), conversation persistence via redb-engine, native EIP integration. See doc/PLAN.md.</Description>
+    <PackageTags>esb;messaging;llm;ai;agents;tool-use;rag;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Llm" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.Core\redb.Route.Core.csproj" />
+    <ProjectReference Include="..\redb.Route.Llm.Abstractions\redb.Route.Llm.Abstractions.csproj" />
+    <PackageReference Include="redb.Core" Version="3.3.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>
+

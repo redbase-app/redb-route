@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Llm.Tools</PackageId>
+    <Description>Batteries-included LLM tools for redb.Route.Llm. Reference implementations of common agent tools (HttpFetch, ShellExec, Fs, Calc) built directly on .NET BCL APIs — no redb.Route connector dependencies. Each tool is a route + descriptor pair registered via the .AsLlmTool(...) DSL. Optional package — host applications opt in by referencing it.</Description>
+    <PackageTags>esb;messaging;llm;ai;tools;agents;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.Llm.Abstractions\redb.Route.Llm.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Mail</PackageId>
+    <Description>Email transport for redb.Route ESB framework. SMTP producer, IMAP/POP3 consumers with IDLE push, polling, attachments, TLS/SSL. Enterprise-grade email integration powered by MailKit.</Description>
+    <PackageTags>esb;messaging;email;smtp;imap;pop3;mailkit;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Mail" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- MailKit bump 4.15.1 → 4.16.0 fixes NU1902 GHSA-9j88-vvj5-vhgr. -->
+    <PackageReference Include="MailKit" Version="4.16.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

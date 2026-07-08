@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Exec</PackageId>
+    <Description>Process execution transport for redb.Route ESB framework. Provides a request/response producer that runs OS commands and a scheduled consumer that fires commands on a fixed interval. Allowlist, working directory, environment overrides, timeout and stdout/stderr byte caps are all enforced by the endpoint.</Description>
+    <PackageTags>esb;messaging;exec;process;shell;scheduled;llm;tools;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Exec" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Needed for OEM codepages (cp866, cp1251, …) when decoding cmd.exe stdout on Windows. -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="9.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

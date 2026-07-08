@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Ftp</PackageId>
+    <Description>FTP/FTPS transport for redb.Route ESB framework. Polling consumer and atomic producer with FluentFTP — passive/active mode, TLS, glob filtering, idempotency, temp-file upload, recursive directories.</Description>
+    <PackageTags>esb;messaging;ftp;ftps;file-transfer;polling;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Ftp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.GenericFile\redb.Route.GenericFile.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FluentFTP" Version="54.1.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

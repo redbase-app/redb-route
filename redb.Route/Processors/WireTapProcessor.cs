@@ -1,0 +1,104 @@
+using Microsoft.Extensions.Logging;
+using redb.Route.Abstractions;
+using redb.Route.Telemetry;
+using redb.Route.Transactions;
+
+namespace redb.Route.Processors;
+
+/// <summary>
+/// Sends a fire-and-forget clone of the exchange to a tap processor.
+/// The main exchange continues through the pipeline unchanged.
+/// Supports an optional onPrepare callback to modify the clone before tapping
+/// and an optional body replacement for the tapped exchange.
+/// Errors in the tap are logged (if logger available) but never propagated
+/// to the main pipeline — this is by-design for fire-and-forget semantics.
+/// </summary>
+public class WireTapProcessor : IProcessor
+{
+    private readonly IProcessor _tap;
+    private readonly Action<IExchange>? _onPrepare;
+    private readonly Func<IExchange, object?>? _newBodyFactory;
+    private readonly ILogger? _logger;
+
+    /// <summary>Creates a wire-tap that sends clones to the specified processor.</summary>
+    /// <param name="tap">The processor to receive exchange clones.</param>
+    /// <param name="onPrepare">Optional callback to modify the cloned exchange before tapping.</param>
+    /// <param name="newBodyFactory">Optional factory to replace the body on the tapped clone.</param>
+    /// <param name="logger">Optional logger for tap errors.</param>
+    public WireTapProcessor(
+        IProcessor tap,
+        Action<IExchange>? onPrepare = null,
+        Func<IExchange, object?>? newBodyFactory = null,
+        ILogger? logger = null)
+    {
+        _tap = tap ?? throw new ArgumentNullException(nameof(tap));
+        _onPrepare = onPrepare;
+        _newBodyFactory = newBodyFactory;
+        _logger = logger;
+    }
+
+    /// <inheritdoc />
+    public async Task Process(IExchange exchange, CancellationToken ct = default)
+    {
+        var clone = exchange.Clone();
+
+        // Ownership of the clone transfers to the tap task once it is dispatched; until then this
+        // method owns it. If preparation (user onPrepare / newBodyFactory) throws before dispatch,
+        // the finally below disposes the clone so its per-exchange DI scope / DB connection is
+        // released — otherwise a throwing callback would strand the clone's scope (a connection leak).
+        var dispatched = false;
+        try
+        {
+            if (_newBodyFactory != null)
+                clone.In.Body = _newBodyFactory(exchange);
+
+            _onPrepare?.Invoke(clone);
+
+            // The detached branch must NOT share the originating transaction's deferred transport
+            // actions. TransactedProcessor owns that dictionary (Properties["TRANSACT_ACTION"]) and
+            // commits/rolls it back; Exchange.Clone() copies Properties shallowly, so the tap clone
+            // would otherwise hold the SAME ConcurrentDictionary and could race the main commit. The
+            // tap runs with the ambient transaction suppressed (see DetachedDispatch.Enter), so it has
+            // no part in that set.
+            clone.Properties.Remove(TransactedProcessor.TransactActionPropertyKey);
+
+            // Capture ambient trace + transaction state on the ORIGINATING thread, before dispatch.
+            var origin = DetachedDispatch.Capture();
+
+            // Fire-and-forget: do not await, but catch and log errors.
+            // The tap branch must NOT inherit the caller's CancellationToken — otherwise
+            // cancelling the main pipeline (e.g. an HTTP request being aborted) would
+            // kill an in-flight audit/notification mid-write. WireTap semantics per EIP
+            // are "InOnly, detached": the side branch lives on its own lifecycle.
+            _ = Task.Run(async () =>
+            {
+                // Detached frame: suppress the leaked ambient transaction (which has very likely
+                // completed by now) and re-root telemetry as a span linked to the originating trace.
+                using var frame = DetachedDispatch.Enter(origin, "redb.route.wiretap");
+                try
+                {
+                    await _tap.Process(clone, CancellationToken.None).ConfigureAwait(false);
+                    ProcessorMetrics.WireTapDispatched.Add(1);
+                }
+                catch (OperationCanceledException) { /* expected on host shutdown */ }
+                catch (Exception ex)
+                {
+                    ProcessorMetrics.WireTapFailed.Add(1);
+                    _logger?.LogWarning(ex, "WireTap processor failed for route '{RouteId}'. Error is non-fatal and will not affect the main pipeline.",
+                        exchange.RouteId ?? "(no-route)");
+                }
+                finally
+                {
+                    if (clone is IAsyncDisposable d) await d.DisposeAsync().ConfigureAwait(false);
+                }
+            }, CancellationToken.None);
+
+            dispatched = true;
+        }
+        finally
+        {
+            if (!dispatched && clone is IAsyncDisposable d)
+                await d.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+}

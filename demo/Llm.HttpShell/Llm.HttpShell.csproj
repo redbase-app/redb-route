@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>redb.Route.Demos.LlmHttpShell</RootNamespace>
+    <AssemblyName>redb.Route.Demos.LlmHttpShell</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="redb.Route" Version="3.2.0" />
+    <PackageReference Include="redb.Route.Http" Version="3.2.0" />
+    <PackageReference Include="redb.Route.Llm" Version="3.2.0" />
+    <PackageReference Include="redb.Route.Llm.Abstractions" Version="3.2.0" />
+    <PackageReference Include="redb.Route.Exec" Version="3.2.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.0" />
+    <!-- STEP 1 of 3 to enable REDB-backed conversation memory: uncomment these two refs.
+         (Steps 2 and 3 are in Program.cs — search for "REDB-BACKED MEMORY".)
+    <PackageReference Include="redb.Core" Version="3.2.0" />
+    <PackageReference Include="redb.Postgres" Version="3.2.0" />
+    -->
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>redb.Route.Sqs</PackageId>
+    <Description>Amazon SQS + SNS transport for redb.Route ESB framework via the native AWS SDK for .NET. SQS queue consumer (long-poll, concurrent consumers, visibility, FIFO) + producer (send/batch), and SNS topic publisher with SNS-to-SQS fan-out. LocalStack/ElasticMQ compatible.</Description>
+    <PackageTags>esb;messaging;aws;sqs;sns;queue;pubsub;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Sqs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.SQS" Version="4.0.100.2" />
+    <PackageReference Include="AWSSDK.SimpleNotificationService" Version="4.0.100.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" Condition="Exists('README.md')" />
+  </ItemGroup>
+
+</Project>

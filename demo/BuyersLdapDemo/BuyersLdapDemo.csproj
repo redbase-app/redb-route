@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Console application (exe), single file Program.cs -->
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>BuyersLdapDemo</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Using pre-built redb NuGet packages; sources are for reference only.
+      Versions match the project: redb.Route = 3.3.0, redb.Core/redb.Postgres = 3.3.0.
+    -->
+    <PackageReference Include="redb.Route" Version="3.3.0" />
+    <PackageReference Include="redb.Route.Core" Version="3.3.0" />
+    <PackageReference Include="redb.Route.Http" Version="3.3.0" />
+    <PackageReference Include="redb.Route.Ldap" Version="3.3.0" />
+    <PackageReference Include="redb.Core" Version="3.3.0" />
+    <PackageReference Include="redb.Postgres" Version="3.3.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>

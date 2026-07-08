@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>redb.Route.Demos.LlmMcpShell</RootNamespace>
+    <AssemblyName>redb.Route.Demos.LlmMcpShell</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Switch back to PackageReference Version="3.2.0" after publishing. -->
+    <PackageReference Include="redb.Route.csproj" />
+    <ProjectReference Include=".." Version="3.3.0" />
+    <PackageReference Include="redb.Route.Llm.csproj" />
+    <ProjectReference Include=".." Version="3.3.0" />
+    <PackageReference Include="redb.Route.Llm.Mcp" Version="3.3.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>
+

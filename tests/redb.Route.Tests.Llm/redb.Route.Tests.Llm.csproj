@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm\redb.Route.Llm.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm.Abstractions\redb.Route.Llm.Abstractions.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Llm.Tools\redb.Route.Llm.Tools.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Exec\redb.Route.Exec.csproj" />
+    <PackageReference Include="redb.Core.Pro" Version="3.3.0" />
+    <PackageReference Include="redb.Postgres.Pro" Version="3.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="xunit.runner.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>
+

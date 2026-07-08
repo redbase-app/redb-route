@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>redb.Route.Telegram</PackageId>
+    <Description>Telegram Bot transport for redb.Route ESB framework. Long-polling consumer + webhook unpack, and message/document/photo/edit/delete/answer producer with 429 rate-limit handling, parseMode, inline keyboards and fluent DSL. Built on Telegram.Bot.</Description>
+    <PackageTags>esb;messaging;telegram;bot;chatops;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Telegram" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Telegram.Bot" Version="22.10.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" Condition="Exists('README.md')" />
+  </ItemGroup>
+
+</Project>
