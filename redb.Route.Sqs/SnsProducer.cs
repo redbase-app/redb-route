@@ -41,7 +41,7 @@ internal sealed class SnsProducer : ConnectableProducer
 
         if (_options.SubscribeSnsToSqs && !string.IsNullOrEmpty(_options.SubscribeQueueArn))
         {
-            await _client.SubscribeAsync(new SubscribeRequest
+            var subscription = await _client.SubscribeAsync(new SubscribeRequest
             {
                 TopicArn = _topicArn,
                 Protocol = "sqs",
@@ -49,6 +49,19 @@ internal sealed class SnsProducer : ConnectableProducer
                 ReturnSubscriptionArn = true,
             }, ct).ConfigureAwait(false);
             Logger?.LogInformation("SNS: subscribed SQS {QueueArn} to topic {Topic}", _options.SubscribeQueueArn, _topicArn);
+
+            // Raw delivery: the queue gets the bare payload (and SNS attributes become SQS attributes)
+            // instead of the default JSON notification envelope. Set it on the subscription we just made.
+            if (_options.RawMessageDelivery && !string.IsNullOrEmpty(subscription.SubscriptionArn))
+            {
+                await _client.SetSubscriptionAttributesAsync(new SetSubscriptionAttributesRequest
+                {
+                    SubscriptionArn = subscription.SubscriptionArn,
+                    AttributeName = "RawMessageDelivery",
+                    AttributeValue = "true",
+                }, ct).ConfigureAwait(false);
+                Logger?.LogInformation("SNS: enabled RawMessageDelivery on subscription {Sub}", subscription.SubscriptionArn);
+            }
         }
     }
 

@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [Unreleased]
+
+### Added
+- **`redb.Route.Sqs` — SNS raw message delivery on the SNS→SQS auto-subscription.** New
+  `rawMessageDelivery` option (`Sns.Topic(...).SubscribeSnsToSqs(arn).RawMessageDelivery()`, or
+  `rawMessageDelivery=true` in the URI). When the SNS publisher auto-subscribes an SQS queue
+  (`subscribeSnsToSqs=true`), it now also sets the subscription's `RawMessageDelivery=true`, so the
+  queue receives the **bare payload** — and SNS message attributes map to SQS message attributes,
+  restoring W3C trace continuity across the hop — instead of the default SNS JSON notification
+  envelope (`{"Type":"Notification","Message":...}`) which the subscriber would otherwise have to
+  unwrap. Default remains `false` (AWS-compatible envelope).
+
 ## [redb.Route 3.3.1] — 2026-07-10
 
 ### Fixed

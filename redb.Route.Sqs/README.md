@@ -39,7 +39,20 @@ To(Sns.Topic("events").Region("us-east-1"));
 
 // SNS → SQS fan-out: subscribe a queue, then consume it with sqs://
 To(Sns.Topic("events").SubscribeSnsToSqs("arn:aws:sqs:us-east-1:000000000000:events-q"));
+
+// Same, but raw delivery — the queue gets the bare payload (no SNS JSON envelope),
+// and SNS attributes arrive as SQS attributes (so trace context survives the hop):
+To(Sns.Topic("events")
+    .SubscribeSnsToSqs("arn:aws:sqs:us-east-1:000000000000:events-q")
+    .RawMessageDelivery());
 ```
+
+> **Envelope vs raw.** By default SNS wraps the payload in a JSON notification envelope
+> (`{"Type":"Notification","Message":"<payload>",...}`), so the subscribing queue receives the
+> *envelope*, not your payload — and SNS message attributes are buried inside it. Add
+> `.RawMessageDelivery()` (sets `RawMessageDelivery=true` on the auto-created subscription) to get the
+> **bare payload** and have SNS attributes map to SQS message attributes. It applies only to the
+> `subscribeSnsToSqs` auto-subscription; the default stays `false` (AWS-compatible envelope).
 
 Raw URIs work too: `sqs://orders?waitTimeSeconds=20&concurrentConsumers=4`,
 `sns://events?region=us-east-1`.
@@ -67,6 +80,7 @@ Raw URIs work too: `sqs://orders?waitTimeSeconds=20&concurrentConsumers=4`,
 | `delaySeconds`, `messageGroupId`, `messageDeduplicationId`, `enableBatch` | SQS producer | FIFO + batch send |
 | `autoCreateQueue` / `autoCreateTopic`, `topicArn`, `subject`, `messageStructure` | both | topology + SNS payload |
 | `subscribeSnsToSqs` + `subscribeQueueArn` | SNS | subscribe a queue to the topic on start |
+| `rawMessageDelivery` | SNS | on that auto-subscription, deliver the bare payload + map SNS attrs → SQS attrs (default `false` = JSON envelope) |
 
 ## Part of
 

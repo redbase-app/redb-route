@@ -277,6 +277,60 @@ public sealed class SqsIntegrationTests
         finally { await consumer.Stop(); }
     }
 
+    // ── SNS → SQS raw message delivery (bare payload + attribute passthrough) ──
+
+    [Fact]
+    public async Task SnsToSqs_RawDelivery_DeliversBarePayloadAndAttributes()
+    {
+        var queue = UniqueName("rawq");
+        var topic = UniqueName("rawevt");
+
+        // Create the queue up front and read its ARN for the subscription.
+        using var raw = RawSqs();
+        var queueUrl = (await raw.CreateQueueAsync(queue)).QueueUrl;
+        var arn = (await raw.GetQueueAttributesAsync(new GetQueueAttributesRequest
+        {
+            QueueUrl = queueUrl,
+            AttributeNames = ["QueueArn"],
+        })).Attributes["QueueArn"];
+
+        var received = new ConcurrentBag<IExchange>();
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var consumer = MakeEndpoint(Q(queue)).CreateConsumer(Recorder(ex =>
+        {
+            received.Add(ex);
+            done.TrySetResult();
+            return Task.CompletedTask;
+        }));
+        await consumer.Start();
+        try
+        {
+            // rawMessageDelivery: the subscription is set to RawMessageDelivery=true, so the queue gets
+            // the bare payload (not the JSON envelope) and SNS attributes arrive as SQS attributes.
+            var snsUri = SnsDsl.Topic(topic)
+                .ServiceUrl(ServiceUrl).Region(Region).Credentials("test", "test")
+                .AutoCreateTopic().SubscribeSnsToSqs(arn).RawMessageDelivery().Build();
+            var snsEndpoint = (SnsEndpoint)new SnsComponent().CreateEndpoint(EndpointUriParser.Parse(snsUri));
+            var producer = snsEndpoint.CreateProducer();
+            await producer.Start(); // subscribes the queue with RawMessageDelivery=true
+
+            var exchange = new Exchange(new Message("bare-payload"));
+            exchange.In.Headers["eventType"] = "created";
+            await producer.Process(exchange);
+
+            await Task.WhenAny(done.Task, Task.Delay(20_000));
+            received.Should().NotBeEmpty("the SNS message must fan out to the subscribed SQS queue");
+            var got = received.First();
+            // Raw delivery → the body is the exact payload, NOT a {"Type":"Notification",...} envelope.
+            got.In.Body!.ToString().Should().Be("bare-payload");
+            // SNS message attributes are delivered as SQS message attributes (the envelope mode hides them).
+            got.In.Headers[SqsHeaders.MessageAttributePrefix + "eventType"].Should().Be("created");
+            await producer.Stop();
+        }
+        finally { await consumer.Stop(); }
+    }
+
     // ── Transacted ack (SqsAckAction) ─────────────────────────────────
 
     [Fact]

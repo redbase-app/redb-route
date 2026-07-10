@@ -137,6 +137,11 @@ public sealed class SnsBuilder
     public SnsBuilder MessageDeduplicationId(string value) => Set("messageDeduplicationId", value);
     /// <summary>Subscribe the given SQS queue ARN to this topic at start.</summary>
     public SnsBuilder SubscribeSnsToSqs(string queueArn) => Set("subscribeSnsToSqs", "true").Set("subscribeQueueArn", queueArn);
+    /// <summary>
+    /// On the auto-created SNS→SQS subscription, enable raw message delivery — the queue receives the
+    /// bare payload (and SNS attributes map to SQS attributes) instead of the JSON notification envelope.
+    /// </summary>
+    public SnsBuilder RawMessageDelivery(bool value = true) => Set("rawMessageDelivery", value ? "true" : "false");
 
     /// <summary>Sets an arbitrary URI parameter not covered by a typed method.</summary>
     public SnsBuilder Param(string key, string value) => Set(key, value);

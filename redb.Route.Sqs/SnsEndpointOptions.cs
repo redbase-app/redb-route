@@ -33,6 +33,14 @@ public sealed class SnsEndpointOptions : AwsEndpointOptions
     /// <summary>ARN of the SQS queue to subscribe when <see cref="SubscribeSnsToSqs"/> is true.</summary>
     public string SubscribeQueueArn { get; set; } = "";
 
+    /// <summary>
+    /// When auto-subscribing via <see cref="SubscribeSnsToSqs"/>, also set the subscription's
+    /// <c>RawMessageDelivery=true</c> so the SQS queue receives the <b>bare payload</b> (and SNS message
+    /// attributes map to SQS message attributes — which restores W3C trace continuity across the hop)
+    /// instead of the default SNS JSON notification envelope. Default false (AWS-compatible envelope).
+    /// </summary>
+    public bool RawMessageDelivery { get; set; }
+
     /// <inheritdoc />
     public override void Validate()
     {
