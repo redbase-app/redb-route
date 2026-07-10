@@ -94,6 +94,8 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
 
             var data = ResolveBodyData(item);
             var msg = new ServiceBusMessage(data);
+            ApplyProperties(msg, exchange);
+            msg.MessageId = Guid.NewGuid().ToString(); // unique id per batched message
 
             if (!batch.TryAddMessage(msg))
                 break;
@@ -115,7 +117,16 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
             ?? throw new InvalidOperationException("Body is null; cannot send an empty message."));
 
         var msg = new ServiceBusMessage(data);
+        ApplyProperties(msg, exchange);
+        return msg;
+    }
 
+    /// <summary>
+    /// Maps native Service Bus properties and application properties from exchange headers/options.
+    /// Shared by single and batch send so batched messages carry the same metadata.
+    /// </summary>
+    private void ApplyProperties(ServiceBusMessage msg, IExchange exchange)
+    {
         // Identity
         msg.MessageId = ResolveHeader<string>(exchange, AzureServiceBusHeaders.MessageId)
             ?? _options.MessageId?.Resolve(exchange)
@@ -164,8 +175,6 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
             if (value is null) continue;
             msg.ApplicationProperties[key] = value;
         }
-
-        return msg;
     }
 
     private static BinaryData ResolveBodyData(object? body)

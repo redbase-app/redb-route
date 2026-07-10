@@ -1,6 +1,7 @@
 using System.Text;
 using System.Web;
 using redb.Route.Abstractions;
+using redb.Route.Expressions;
 
 namespace redb.Route.Http;
 
@@ -145,11 +146,17 @@ public sealed class HttpBuilder
         _authScheme = "Basic"; _username = username.ToTemplateString(); _password = password.ToTemplateString(); return this;
     }
 
+    /// <summary>Use HTTP Basic authentication (template strings, support <c>${...}</c>).</summary>
+    public HttpBuilder BasicAuth(string username, string password) => BasicAuth(new StringExpression(username), new StringExpression(password));
+
     /// <summary>Use Bearer token authentication. Token is resolved via AuthToken option at runtime.</summary>
     public HttpBuilder BearerAuth() { _authScheme = "Bearer"; return this; }
 
     /// <summary>Bearer/API-key token value or expression (e.g. <c>Property("jwt")</c>).</summary>
     public HttpBuilder AuthToken(IExpression token) { _authToken = token.ToTemplateString(); return this; }
+
+    /// <summary>Bearer/API-key token value (template string, supports <c>${...}</c>).</summary>
+    public HttpBuilder AuthToken(string token) => AuthToken(new StringExpression(token));
 
     /// <summary>Disable following HTTP redirects. Default is to follow.</summary>
     public HttpBuilder NoFollowRedirects() { _followRedirects = false; return this; }
@@ -174,6 +181,11 @@ public sealed class HttpBuilder
     /// Target host. Producer: part of request URL. Consumer: Kestrel bind address.
     /// </summary>
     public HttpBuilder Host(IExpression host) { _host = host.ToTemplateString(); return this; }
+
+    /// <summary>
+    /// Target host (template string, supports <c>${...}</c>). Producer: part of request URL. Consumer: Kestrel bind address.
+    /// </summary>
+    public HttpBuilder Host(string host) => Host(new StringExpression(host));
 
     /// <summary>
     /// Target port. Producer: part of request URL. Consumer: Kestrel bind port.
@@ -210,6 +222,10 @@ public sealed class HttpBuilder
     {
         _ssl = true; _sslCertPath = certPath.ToTemplateString(); _sslCertPassword = certPassword?.ToTemplateString(); return this;
     }
+
+    /// <summary>Enable SSL/TLS with the given certificate (template strings, support <c>${...}</c>).</summary>
+    public HttpBuilder SslCert(string certPath, string? certPassword = null)
+        => SslCert(new StringExpression(certPath), certPassword is null ? null : new StringExpression(certPassword));
 
     /// <summary>Default HTTP response status code. Default 200.</summary>
     public HttpBuilder ResponseCode(int code) { _responseCode = code.ToString(); return this; }

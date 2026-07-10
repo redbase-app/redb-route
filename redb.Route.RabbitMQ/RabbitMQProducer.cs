@@ -49,7 +49,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
     /// <summary>Known AMQP basic property names that should not be propagated as custom headers.</summary>
     private static readonly HashSet<string> BasicPropertyNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "ContentType", "ContentEncoding", "DeliveryMode", "Priority",
+        "ContentType", "ContentEncoding", "DeliveryMode", "Persistent", "Priority",
         "CorrelationId", "ReplyTo", "Expiration", "MessageId",
         "Timestamp", "Type", "UserId", "AppId", "ClusterId"
     };
@@ -528,13 +528,64 @@ public sealed class RabbitMQProducer : ConnectableProducer
         if (headers.Count > 0)
             properties.Headers = headers!;
 
-        // Forward CorrelationId from incoming headers if present
-        if (exchange.In.Headers.TryGetValue("CorrelationId", out var corrId) && corrId is string corrStr && !string.IsNullOrEmpty(corrStr))
+        // Forward AMQP basic properties from headers, mapped by name (the well-known bare names —
+        // "ReplyTo", "Priority", "MessageId", "Expiration"/TTL, "Type", "AppId", "UserId", …). Simple
+        // string/byte properties go through cached reflection; a `redbRmq.X` prefixed name is also
+        // accepted for the consume→produce round-trip. Header wins over any default.
+        foreach (var prop in _forwardableProps)
         {
-            properties.CorrelationId = corrStr;
+            if (!TryGetHeaderValue(exchange, RmqHeaders.Prefix + prop.Name, prop.Name, out var raw))
+                continue;
+            try
+            {
+                prop.SetValue(properties, System.Convert.ChangeType(raw, prop.PropertyType, System.Globalization.CultureInfo.InvariantCulture));
+            }
+            catch { /* malformed header value — ignore, keep default */ }
         }
 
+        // Explicit cases reflection/Convert.ChangeType can't handle:
+        // Timestamp is an AmqpTimestamp (not IConvertible), DeliveryMode/persistence is a flag.
+        if (TryGetHeaderValue(exchange, RmqHeaders.Prefix + "Timestamp", "Timestamp", out var tsRaw) && long.TryParse(tsRaw, out var ts))
+            properties.Timestamp = new global::RabbitMQ.Client.AmqpTimestamp(ts);
+
+        if (TryGetHeaderValue(exchange, RmqHeaders.Prefix + "Persistent", "Persistent", out var persRaw) && bool.TryParse(persRaw, out var pers))
+            properties.Persistent = pers;
+        else if (TryGetHeaderValue(exchange, RmqHeaders.Prefix + "DeliveryMode", "DeliveryMode", out var dmRaw) && byte.TryParse(dmRaw, out var dm))
+            properties.Persistent = dm == 2; // AMQP: 2 = persistent, 1 = transient
+
         return (properties, body);
+    }
+
+    /// <summary>
+    /// Settable string/byte <see cref="BasicProperties"/> mapped from same-named headers via cached
+    /// reflection. Excludes <c>Headers</c> (bulk-copied) and things needing special handling
+    /// (<c>ContentType</c> — from the message field above; <c>Timestamp</c>/<c>DeliveryMode</c> — explicit).
+    /// </summary>
+    private static readonly System.Reflection.PropertyInfo[] _forwardableProps = BuildForwardableProps();
+
+    private static System.Reflection.PropertyInfo[] BuildForwardableProps()
+    {
+        var list = new List<System.Reflection.PropertyInfo>();
+        foreach (var p in typeof(BasicProperties).GetProperties())
+        {
+            if (!p.CanWrite) continue;
+            if (p.Name is "Headers" or "ContentType" or "DeliveryMode") continue;
+            if (p.PropertyType == typeof(string) || p.PropertyType == typeof(byte))
+                list.Add(p);
+        }
+        return list.ToArray();
+    }
+
+    /// <summary>Reads a header by its prefixed (redbRmq.X) name first, then the bare name; true when found non-empty.</summary>
+    private static bool TryGetHeaderValue(IExchange exchange, string prefixedKey, string bareKey, out string value)
+    {
+        if ((exchange.In.Headers.TryGetValue(prefixedKey, out var v) || exchange.In.Headers.TryGetValue(bareKey, out v)) && v is not null)
+        {
+            value = v.ToString() ?? string.Empty;
+            return !string.IsNullOrEmpty(value);
+        }
+        value = string.Empty;
+        return false;
     }
 
     // ── Helpers ──

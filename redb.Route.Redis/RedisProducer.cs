@@ -603,8 +603,9 @@ public sealed class RedisProducer : ConnectableProducer
 
     private List<NameValueEntry> GetStreamFields(IExchange exchange)
     {
-        // Check for StreamFields header (Dictionary<string, object>)
-        if (exchange.In.Headers.TryGetValue("StreamFields", out var raw) && raw is Dictionary<string, object> dict)
+        // Check for StreamFields header (Dictionary<string, object>) — prefixed name, bare accepted for compat
+        if ((exchange.In.Headers.TryGetValue(RedisHeaders.StreamFields, out var raw) || exchange.In.Headers.TryGetValue("StreamFields", out raw))
+            && raw is Dictionary<string, object> dict)
         {
             return dict.Select(kv => new NameValueEntry(kv.Key, kv.Value?.ToString() ?? "")).ToList();
         }

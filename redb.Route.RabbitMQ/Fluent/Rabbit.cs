@@ -1,6 +1,7 @@
 using System.Text;
 using System.Web;
 using redb.Route.Abstractions;
+using redb.Route.Expressions;
 
 namespace redb.Route.RabbitMQ;
 
@@ -96,6 +97,8 @@ public sealed class RabbitBuilder
 
     /// <summary>Broker hostname. Default "localhost".</summary>
     public RabbitBuilder Host(IExpression host) { _host = host.ToTemplateString(); return this; }
+    /// <summary>Broker hostname (template string, supports <c>${...}</c>). Default "localhost".</summary>
+    public RabbitBuilder Host(string host) => Host(new StringExpression(host));
 
     /// <summary>Broker port. Default 5672.</summary>
     public RabbitBuilder Port(int port) { _port = port.ToString(); return this; }
@@ -104,18 +107,28 @@ public sealed class RabbitBuilder
 
     /// <summary>Username. Default "guest".</summary>
     public RabbitBuilder Username(IExpression username) { _username = username.ToTemplateString(); return this; }
+    /// <summary>Username (template string, supports <c>${...}</c>). Default "guest".</summary>
+    public RabbitBuilder Username(string username) => Username(new StringExpression(username));
 
     /// <summary>Password. Default "guest".</summary>
     public RabbitBuilder Password(IExpression password) { _password = password.ToTemplateString(); return this; }
+    /// <summary>Password (template string, supports <c>${...}</c>). Default "guest".</summary>
+    public RabbitBuilder Password(string password) => Password(new StringExpression(password));
 
     /// <summary>Virtual host. Default "/".</summary>
     public RabbitBuilder VirtualHost(IExpression vhost) { _virtualHost = vhost.ToTemplateString(); return this; }
+    /// <summary>Virtual host (template string, supports <c>${...}</c>). Default "/".</summary>
+    public RabbitBuilder VirtualHost(string vhost) => VirtualHost(new StringExpression(vhost));
 
     /// <summary>Use a named connection factory registered in DI.</summary>
     public RabbitBuilder ConnectionFactory(IExpression name) { _connectionFactory = name.ToTemplateString(); return this; }
+    /// <summary>Use a named connection factory registered in DI (template string, supports <c>${...}</c>).</summary>
+    public RabbitBuilder ConnectionFactory(string name) => ConnectionFactory(new StringExpression(name));
 
     /// <summary>Client connection name. Default "redb.Route".</summary>
     public RabbitBuilder ClientName(IExpression name) { _clientName = name.ToTemplateString(); return this; }
+    /// <summary>Client connection name (template string, supports <c>${...}</c>). Default "redb.Route".</summary>
+    public RabbitBuilder ClientName(string name) => ClientName(new StringExpression(name));
 
     // ── Exchange ──────────────────────────────────────────────────────
 
@@ -124,6 +137,8 @@ public sealed class RabbitBuilder
     {
         _exchange = name.ToTemplateString(); if (type != null) _exchangeType = type; return this;
     }
+    /// <summary>Exchange name (template string, supports <c>${...}</c>) and optionally type.</summary>
+    public RabbitBuilder Exchange(string name, string? type = null) => Exchange(new StringExpression(name), type);
 
     /// <summary>Exchange durability. Default true.</summary>
     public RabbitBuilder ExchangeDurable(bool durable = true) { _exchangeDurable = durable; return this; }
@@ -147,6 +162,8 @@ public sealed class RabbitBuilder
 
     /// <summary>Routing key for binding.</summary>
     public RabbitBuilder RoutingKey(IExpression key) { _routingKey = key.ToTemplateString(); return this; }
+    /// <summary>Routing key (template string, supports <c>${...}</c> for a per-message key).</summary>
+    public RabbitBuilder RoutingKey(string key) => RoutingKey(new StringExpression(key));
 
     // ── Message ───────────────────────────────────────────────────────
 
@@ -213,9 +230,13 @@ public sealed class RabbitBuilder
 
     /// <summary>Dead letter exchange name.</summary>
     public RabbitBuilder DeadLetterExchange(IExpression exchange) { _deadLetterExchange = exchange.ToTemplateString(); return this; }
+    /// <summary>Dead letter exchange name (template string, supports <c>${...}</c>).</summary>
+    public RabbitBuilder DeadLetterExchange(string exchange) => DeadLetterExchange(new StringExpression(exchange));
 
     /// <summary>Dead letter routing key.</summary>
     public RabbitBuilder DeadLetterRoutingKey(IExpression key) { _deadLetterRoutingKey = key.ToTemplateString(); return this; }
+    /// <summary>Dead letter routing key (template string, supports <c>${...}</c>).</summary>
+    public RabbitBuilder DeadLetterRoutingKey(string key) => DeadLetterRoutingKey(new StringExpression(key));
 
     /// <summary>Queue type: "classic", "quorum", "stream".</summary>
     public RabbitBuilder QueueType(string type) { _queueType = type; return this; }

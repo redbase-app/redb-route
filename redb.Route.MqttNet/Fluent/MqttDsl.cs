@@ -1,6 +1,7 @@
 using System.Text;
 using System.Web;
 using redb.Route.Abstractions;
+using redb.Route.Expressions;
 
 namespace redb.Route.MqttNet;
 
@@ -81,9 +82,13 @@ public sealed class MqttBuilder
 
     /// <summary>Use a named broker registered via <c>AddBroker()</c>.</summary>
     public MqttBuilder Broker(IExpression name) { _broker = name.ToTemplateString(); return this; }
+    /// <summary>Use a named broker registered via <c>AddBroker()</c> (template string, supports <c>${...}</c>).</summary>
+    public MqttBuilder Broker(string name) => Broker(new StringExpression(name));
 
     /// <summary>Connect directly to this server (hostname or IP).</summary>
     public MqttBuilder Server(IExpression server) { _server = server.ToTemplateString(); return this; }
+    /// <summary>Connect directly to this server, hostname or IP (template string, supports <c>${...}</c>).</summary>
+    public MqttBuilder Server(string server) => Server(new StringExpression(server));
 
     /// <summary>Server port. Default 1883.</summary>
     public MqttBuilder Port(int port) { _port = port.ToString(); return this; }
@@ -92,12 +97,18 @@ public sealed class MqttBuilder
 
     /// <summary>Username for broker authentication.</summary>
     public MqttBuilder Username(IExpression username) { _username = username.ToTemplateString(); return this; }
+    /// <summary>Username for broker authentication (template string, supports <c>${...}</c>).</summary>
+    public MqttBuilder Username(string username) => Username(new StringExpression(username));
 
     /// <summary>Password for broker authentication.</summary>
     public MqttBuilder Password(IExpression password) { _password = password.ToTemplateString(); return this; }
+    /// <summary>Password for broker authentication (template string, supports <c>${...}</c>).</summary>
+    public MqttBuilder Password(string password) => Password(new StringExpression(password));
 
     /// <summary>Client ID for the MQTT connection.</summary>
     public MqttBuilder ClientId(IExpression clientId) { _clientId = clientId.ToTemplateString(); return this; }
+    /// <summary>Client ID for the MQTT connection (template string, supports <c>${...}</c>).</summary>
+    public MqttBuilder ClientId(string clientId) => ClientId(new StringExpression(clientId));
 
     /// <summary>Enable TLS/SSL.</summary>
     public MqttBuilder UseTls() { _useTls = true; return this; }
@@ -121,6 +132,8 @@ public sealed class MqttBuilder
 
     /// <summary>MQTT 5.0 shared subscription group for load-balanced consuming.</summary>
     public MqttBuilder SharedSubscription(IExpression group) { _sharedSubscription = group.ToTemplateString(); return this; }
+    /// <summary>MQTT 5.0 shared subscription group for load-balanced consuming (template string, supports <c>${...}</c>).</summary>
+    public MqttBuilder SharedSubscription(string group) => SharedSubscription(new StringExpression(group));
 
     /// <summary>
     /// Number of concurrent processing workers for received messages (default 1 = serial).
@@ -147,6 +160,8 @@ public sealed class MqttBuilder
 
     /// <summary>Response topic for request/response pattern (MQTT 5.0).</summary>
     public MqttBuilder ResponseTopic(IExpression topic) { _responseTopic = topic.ToTemplateString(); return this; }
+    /// <summary>Response topic for request/response pattern, MQTT 5.0 (template string, supports <c>${...}</c>).</summary>
+    public MqttBuilder ResponseTopic(string topic) => ResponseTopic(new StringExpression(topic));
 
     // ── Build ─────────────────────────────────────────────────────────
 

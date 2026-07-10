@@ -1,6 +1,7 @@
 using System.Text;
 using System.Web;
 using redb.Route.Abstractions;
+using redb.Route.Expressions;
 
 namespace redb.Route.Redis;
 
@@ -159,6 +160,8 @@ public sealed class RedisBuilder
 
     /// <summary>Redis connection string. Default "localhost:6379".</summary>
     public RedisBuilder Connection(IExpression connectionString) { _connectionString = connectionString.ToTemplateString(); return this; }
+    /// <summary>Redis connection string (template string, supports ${...}). Default "localhost:6379".</summary>
+    public RedisBuilder Connection(string connectionString) => Connection(new StringExpression(connectionString));
 
     /// <summary>Database number. Default 0.</summary>
     public RedisBuilder Database(int db) { _database = db.ToString(); return this; }
@@ -167,9 +170,13 @@ public sealed class RedisBuilder
 
     /// <summary>Redis password.</summary>
     public RedisBuilder Password(IExpression password) { _password = password.ToTemplateString(); return this; }
+    /// <summary>Redis password (template string, supports ${...}).</summary>
+    public RedisBuilder Password(string password) => Password(new StringExpression(password));
 
     /// <summary>Use a named connection factory registered in DI.</summary>
     public RedisBuilder ConnectionFactory(IExpression name) { _connectionFactory = name.ToTemplateString(); return this; }
+    /// <summary>Use a named connection factory registered in DI (template string, supports ${...}).</summary>
+    public RedisBuilder ConnectionFactory(string name) => ConnectionFactory(new StringExpression(name));
 
     // ── Common ────────────────────────────────────────────────────────
 
@@ -213,6 +220,8 @@ public sealed class RedisBuilder
 
     /// <summary>Hash field name.</summary>
     public RedisBuilder Field(IExpression field) { _field = field.ToTemplateString(); return this; }
+    /// <summary>Hash field name (template string, supports ${...}).</summary>
+    public RedisBuilder Field(string field) => Field(new StringExpression(field));
 
     // ── Range ─────────────────────────────────────────────────────────
 
@@ -240,9 +249,13 @@ public sealed class RedisBuilder
 
     /// <summary>First member for geo distance.</summary>
     public RedisBuilder Member1(IExpression member) { _member1 = member.ToTemplateString(); return this; }
+    /// <summary>First member for geo distance (template string, supports ${...}).</summary>
+    public RedisBuilder Member1(string member) => Member1(new StringExpression(member));
 
     /// <summary>Second member for geo distance.</summary>
     public RedisBuilder Member2(IExpression member) { _member2 = member.ToTemplateString(); return this; }
+    /// <summary>Second member for geo distance (template string, supports ${...}).</summary>
+    public RedisBuilder Member2(string member) => Member2(new StringExpression(member));
 
     /// <summary>Geo distance unit: m, km, mi, ft. Default "m".</summary>
     public RedisBuilder GeoUnit(string unit) { _geoUnit = unit; return this; }
@@ -261,9 +274,13 @@ public sealed class RedisBuilder
 
     /// <summary>Consumer group name for stream operations.</summary>
     public RedisBuilder ConsumerGroup(IExpression group) { _consumerGroup = group.ToTemplateString(); return this; }
+    /// <summary>Consumer group name for stream operations (template string, supports ${...}).</summary>
+    public RedisBuilder ConsumerGroup(string group) => ConsumerGroup(new StringExpression(group));
 
     /// <summary>Consumer name within the group.</summary>
     public RedisBuilder ConsumerName(IExpression name) { _consumerName = name.ToTemplateString(); return this; }
+    /// <summary>Consumer name within the group (template string, supports ${...}).</summary>
+    public RedisBuilder ConsumerName(string name) => ConsumerName(new StringExpression(name));
 
     /// <summary>Max stream length (XADD with MAXLEN). Default 0 (unlimited).</summary>
     public RedisBuilder StreamMaxLength(int max) { _streamMaxLength = max.ToString(); return this; }

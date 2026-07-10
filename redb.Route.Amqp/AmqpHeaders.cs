@@ -6,49 +6,67 @@ namespace redb.Route.Amqp;
 /// </summary>
 public static class AmqpHeaders
 {
-    /// <summary>Common prefix for all AMQP component headers.</summary>
+    /// <summary>Common prefix for redb-specific AMQP envelope headers (transport metadata).</summary>
     public const string Prefix = "redbAmqp.";
 
-    // ── Headers set on the In message by the consumer ────────────────
+    // ── Standard AMQP 1.0 properties (well-known names → BARE, self-documenting) ──
+    // Sections `Properties` and `Header`. Bare names mean no docs needed and a
+    // consume→produce round-trip carries them through — same convention as the RabbitMQ
+    // component. Caveat: common-word names (Subject/Priority/…) can collide with a
+    // business header of the same name.
+
+    /// <summary>AMQP message-id property.</summary>
+    public const string MessageId = "MessageId";
+
+    /// <summary>AMQP correlation-id property.</summary>
+    public const string CorrelationId = "CorrelationId";
+
+    /// <summary>AMQP reply-to property.</summary>
+    public const string ReplyTo = "ReplyTo";
+
+    /// <summary>AMQP content-type property.</summary>
+    public const string ContentType = "ContentType";
+
+    /// <summary>AMQP content-encoding property.</summary>
+    public const string ContentEncoding = "ContentEncoding";
+
+    /// <summary>AMQP subject property.</summary>
+    public const string Subject = "Subject";
+
+    /// <summary>AMQP to property.</summary>
+    public const string To = "To";
+
+    /// <summary>AMQP user-id property (binary on the wire).</summary>
+    public const string UserId = "UserId";
+
+    /// <summary>AMQP group-id property.</summary>
+    public const string GroupId = "GroupId";
+
+    /// <summary>AMQP group-sequence property.</summary>
+    public const string GroupSequence = "GroupSequence";
+
+    /// <summary>AMQP reply-to-group-id property.</summary>
+    public const string ReplyToGroupId = "ReplyToGroupId";
+
+    /// <summary>AMQP creation-time property.</summary>
+    public const string CreationTime = "CreationTime";
+
+    /// <summary>AMQP absolute-expiry-time property.</summary>
+    public const string AbsoluteExpiryTime = "AbsoluteExpiryTime";
+
+    /// <summary>Whether the message is durable (header.durable).</summary>
+    public const string Durable = "Durable";
+
+    /// <summary>Message priority (header.priority).</summary>
+    public const string Priority = "Priority";
+
+    /// <summary>TTL in milliseconds (header.ttl).</summary>
+    public const string Ttl = "Ttl";
+
+    // ── Envelope / transport metadata (no standard property name → redb-prefixed, read-only) ──
 
     /// <summary>AMQP address the message was received from.</summary>
     public const string Address = "redbAmqp.Address";
-
-    /// <summary>AMQP message-id property.</summary>
-    public const string MessageId = "redbAmqp.MessageId";
-
-    /// <summary>AMQP correlation-id property.</summary>
-    public const string CorrelationId = "redbAmqp.CorrelationId";
-
-    /// <summary>AMQP reply-to property.</summary>
-    public const string ReplyTo = "redbAmqp.ReplyTo";
-
-    /// <summary>AMQP content-type property.</summary>
-    public const string ContentType = "redbAmqp.ContentType";
-
-    /// <summary>AMQP subject property.</summary>
-    public const string Subject = "redbAmqp.Subject";
-
-    /// <summary>AMQP group-id property.</summary>
-    public const string GroupId = "redbAmqp.GroupId";
-
-    /// <summary>AMQP group-sequence property.</summary>
-    public const string GroupSequence = "redbAmqp.GroupSequence";
-
-    /// <summary>AMQP creation-time property.</summary>
-    public const string CreationTime = "redbAmqp.CreationTime";
-
-    /// <summary>AMQP absolute-expiry-time property.</summary>
-    public const string AbsoluteExpiryTime = "redbAmqp.AbsoluteExpiryTime";
-
-    /// <summary>Whether the message is durable (header.durable).</summary>
-    public const string Durable = "redbAmqp.Durable";
-
-    /// <summary>Message priority (header.priority).</summary>
-    public const string Priority = "redbAmqp.Priority";
-
-    /// <summary>TTL in milliseconds (header.ttl).</summary>
-    public const string Ttl = "redbAmqp.Ttl";
 
     /// <summary>Delivery count (header.delivery-count).</summary>
     public const string DeliveryCount = "redbAmqp.DeliveryCount";

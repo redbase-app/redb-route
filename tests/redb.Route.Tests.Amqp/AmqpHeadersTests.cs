@@ -5,11 +5,18 @@ namespace redb.Route.Tests.Amqp;
 public sealed class AmqpHeadersTests
 {
     [Fact]
-    public void Prefix_IsCorrect()
+    public void Naming_StandardPropertiesAreBare_EnvelopeIsPrefixed()
     {
+        // Transport / envelope metadata (no standard AMQP name) → redbAmqp.* prefix.
         AmqpHeaders.Address.Should().StartWith("redbAmqp.");
-        AmqpHeaders.MessageId.Should().StartWith("redbAmqp.");
-        AmqpHeaders.CorrelationId.Should().StartWith("redbAmqp.");
+        AmqpHeaders.DeliveryCount.Should().StartWith("redbAmqp.");
+        AmqpHeaders.FirstAcquirer.Should().StartWith("redbAmqp.");
+
+        // Standard AMQP 1.0 properties → bare, well-known names (self-documenting, round-trip).
+        AmqpHeaders.MessageId.Should().Be("MessageId");
+        AmqpHeaders.CorrelationId.Should().Be("CorrelationId");
+        AmqpHeaders.ReplyTo.Should().Be("ReplyTo");
+        AmqpHeaders.Subject.Should().Be("Subject");
     }
 
     [Fact]

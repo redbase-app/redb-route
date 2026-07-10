@@ -1,6 +1,7 @@
 using System.Text;
 using System.Web;
 using redb.Route.Abstractions;
+using redb.Route.Expressions;
 
 namespace redb.Route.Ftp;
 
@@ -103,6 +104,9 @@ public sealed class FtpBuilder
     /// <summary>FTP server hostname.</summary>
     public FtpBuilder Host(IExpression host) { _host = host.ToTemplateString(); return this; }
 
+    /// <summary>FTP server hostname (template string, supports <c>${...}</c>).</summary>
+    public FtpBuilder Host(string host) => Host(new StringExpression(host));
+
     /// <summary>FTP server port. Default 21.</summary>
     public FtpBuilder Port(int port) { _port = port.ToString(); return this; }
 
@@ -112,8 +116,14 @@ public sealed class FtpBuilder
     /// <summary>Username for authentication.</summary>
     public FtpBuilder Username(IExpression username) { _username = username.ToTemplateString(); return this; }
 
+    /// <summary>Username for authentication (template string, supports <c>${...}</c>).</summary>
+    public FtpBuilder Username(string username) => Username(new StringExpression(username));
+
     /// <summary>Password for authentication.</summary>
     public FtpBuilder Password(IExpression password) { _password = password.ToTemplateString(); return this; }
+
+    /// <summary>Password for authentication (template string, supports <c>${...}</c>).</summary>
+    public FtpBuilder Password(string password) => Password(new StringExpression(password));
 
     /// <summary>Connection timeout in milliseconds. Default 30000.</summary>
     public FtpBuilder ConnectionTimeout(int ms) { _connectionTimeout = ms.ToString(); return this; }
@@ -204,22 +214,37 @@ public sealed class FtpBuilder
     /// <summary>Move processed file to this directory.</summary>
     public FtpBuilder MoveTo(IExpression directory) { _moveTo = directory.ToTemplateString(); return this; }
 
+    /// <summary>Move processed file to this directory (template string, supports <c>${...}</c>).</summary>
+    public FtpBuilder MoveTo(string directory) => MoveTo(new StringExpression(directory));
+
     /// <summary>Strategy when file exists in move target: Override, Append, Fail, Ignore, Move, TryRename.</summary>
     public FtpBuilder MoveExisting(string strategy) { _moveExisting = strategy; return this; }
 
     /// <summary>Pre-move directory (temporary move before processing).</summary>
     public FtpBuilder PreMove(IExpression directory) { _preMove = directory.ToTemplateString(); return this; }
 
+    /// <summary>Pre-move directory (temporary move before processing) (template string, supports <c>${...}</c>).</summary>
+    public FtpBuilder PreMove(string directory) => PreMove(new StringExpression(directory));
+
     /// <summary>Directory for files that failed processing.</summary>
     public FtpBuilder MoveFailed(IExpression directory) { _moveFailed = directory.ToTemplateString(); return this; }
+
+    /// <summary>Directory for files that failed processing (template string, supports <c>${...}</c>).</summary>
+    public FtpBuilder MoveFailed(string directory) => MoveFailed(new StringExpression(directory));
 
     // ── Idempotency ───────────────────────────────────────────────────
 
     /// <summary>Enable idempotent consumer with optional key expression.</summary>
     public FtpBuilder Idempotent(IExpression? key = null) { _idempotent = true; _idempotentKey = key?.ToTemplateString(); return this; }
 
+    /// <summary>Enable idempotent consumer with a key (template string, supports <c>${...}</c>).</summary>
+    public FtpBuilder Idempotent(string key) => Idempotent(new StringExpression(key));
+
     /// <summary>Done file name pattern.</summary>
     public FtpBuilder DoneFileName(IExpression name) { _doneFileName = name.ToTemplateString(); return this; }
+
+    /// <summary>Done file name pattern (template string, supports <c>${...}</c>).</summary>
+    public FtpBuilder DoneFileName(string name) => DoneFileName(new StringExpression(name));
 
     // ── Transfer ──────────────────────────────────────────────────────
 
@@ -246,6 +271,9 @@ public sealed class FtpBuilder
     /// <summary>Output file name or expression.</summary>
     public FtpBuilder FileName(IExpression name) { _fileName = name.ToTemplateString(); return this; }
 
+    /// <summary>Output file name (template string, supports <c>${...}</c>).</summary>
+    public FtpBuilder FileName(string name) => FileName(new StringExpression(name));
+
     /// <summary>Strategy when target file exists: Override, Append, Fail, Ignore, Move, TryRename.</summary>
     public FtpBuilder FileExist(string strategy) { _fileExist = strategy; return this; }
 
@@ -255,8 +283,14 @@ public sealed class FtpBuilder
     /// <summary>Temporary file prefix during write.</summary>
     public FtpBuilder TempPrefix(IExpression prefix) { _tempPrefix = prefix.ToTemplateString(); return this; }
 
+    /// <summary>Temporary file prefix during write (template string, supports <c>${...}</c>).</summary>
+    public FtpBuilder TempPrefix(string prefix) => TempPrefix(new StringExpression(prefix));
+
     /// <summary>Temporary file name during write.</summary>
     public FtpBuilder TempFileName(IExpression name) { _tempFileName = name.ToTemplateString(); return this; }
+
+    /// <summary>Temporary file name during write (template string, supports <c>${...}</c>).</summary>
+    public FtpBuilder TempFileName(string name) => TempFileName(new StringExpression(name));
 
     /// <summary>Auto-create target directory. Default true.</summary>
     public FtpBuilder AutoCreate(bool autoCreate = true) { _autoCreate = autoCreate; return this; }

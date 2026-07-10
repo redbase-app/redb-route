@@ -25,6 +25,14 @@ public sealed class AmqpProducer : ConnectableProducer
     private readonly AmqpEndpoint _endpoint;
     private readonly AmqpEndpointOptions _options;
 
+    /// <summary>Bare names of standard AMQP properties — excluded from the application-properties bulk copy.</summary>
+    private static readonly HashSet<string> StandardPropertyNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "MessageId", "CorrelationId", "ReplyTo", "ContentType", "ContentEncoding", "Subject", "To",
+        "UserId", "GroupId", "GroupSequence", "ReplyToGroupId", "CreationTime", "AbsoluteExpiryTime",
+        "Durable", "Priority", "Ttl"
+    };
+
     private SenderLink? _sender;
 
     // ── RPC infrastructure ──
@@ -362,7 +370,7 @@ public sealed class AmqpProducer : ConnectableProducer
         var appProps = new ApplicationProperties();
         foreach (var (key, value) in exchange.In.Headers)
         {
-            if (AmqpHeaders.IsRedbHeader(key)) continue;
+            if (AmqpHeaders.IsRedbHeader(key) || StandardPropertyNames.Contains(key)) continue;
             if (value is null) continue;
 
             appProps[key] = value switch
@@ -376,10 +384,67 @@ public sealed class AmqpProducer : ConnectableProducer
         if (appProps.Map.Count > 0)
             msg.ApplicationProperties = appProps;
 
-        if (exchange.In.Headers.TryGetValue("CorrelationId", out var corrId) && corrId is string corrStr && !string.IsNullOrEmpty(corrStr))
-            msg.Properties.CorrelationId = corrStr;
+        // ── Forward AMQP properties from headers ──────────────────────────────────
+        // Bare well-known names (MessageId/CorrelationId/ReplyTo/Subject/GroupId/To/…) — same
+        // convention as the RabbitMQ component; redbAmqp.* is also accepted for back-compat.
+        // Header wins over option/default. Typed values (DateTime/uint/bool) round-trip from the
+        // consumer as-is; string forms are parsed as a fallback.
+        if (TryHdr(exchange, AmqpHeaders.MessageId, out var midH))       msg.Properties.MessageId = midH;
+        if (TryHdr(exchange, AmqpHeaders.CorrelationId, out var cidH))   msg.Properties.CorrelationId = cidH;
+        if (TryHdr(exchange, AmqpHeaders.ReplyTo, out var rtoH))         msg.Properties.ReplyTo = rtoH;
+        if (TryHdr(exchange, AmqpHeaders.Subject, out var subjH))        msg.Properties.Subject = subjH;
+        if (TryHdr(exchange, AmqpHeaders.GroupId, out var gidH))         msg.Properties.GroupId = gidH;
+        if (TryHdr(exchange, AmqpHeaders.To, out var toH))              msg.Properties.To = toH;
+        if (TryHdr(exchange, AmqpHeaders.ContentEncoding, out var ceH))  msg.Properties.ContentEncoding = ceH;
+        if (TryHdr(exchange, AmqpHeaders.ReplyToGroupId, out var rtgH))  msg.Properties.ReplyToGroupId = rtgH;
+        if (TryHdr(exchange, AmqpHeaders.UserId, out var uidH))          msg.Properties.UserId = Encoding.UTF8.GetBytes(uidH);
+
+        if (TryRaw(exchange, AmqpHeaders.GroupSequence, out var gsRaw))
+        {
+            if (gsRaw is uint gsu) msg.Properties.GroupSequence = gsu;
+            else if (uint.TryParse(gsRaw.ToString(), out var gsp)) msg.Properties.GroupSequence = gsp;
+        }
+        if (TryRaw(exchange, AmqpHeaders.CreationTime, out var ctRaw))
+        {
+            if (ctRaw is DateTime ctd) msg.Properties.CreationTime = ctd;
+            else if (DateTime.TryParse(ctRaw.ToString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var ctp)) msg.Properties.CreationTime = ctp;
+        }
+        if (TryRaw(exchange, AmqpHeaders.AbsoluteExpiryTime, out var aeRaw))
+        {
+            if (aeRaw is DateTime aed) msg.Properties.AbsoluteExpiryTime = aed;
+            else if (DateTime.TryParse(aeRaw.ToString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var aep)) msg.Properties.AbsoluteExpiryTime = aep;
+        }
+        if (TryRaw(exchange, AmqpHeaders.Durable, out var durRaw))
+        {
+            if (durRaw is bool durb) msg.Header.Durable = durb;
+            else if (bool.TryParse(durRaw.ToString(), out var durp)) msg.Header.Durable = durp;
+        }
 
         return msg;
+    }
+
+    /// <summary>Reads a header by bare name, then <c>redbAmqp.&lt;name&gt;</c> for back-compat; true when found non-empty (as string).</summary>
+    private static bool TryHdr(IExchange exchange, string name, out string value)
+    {
+        if ((exchange.In.Headers.TryGetValue(name, out var v) || exchange.In.Headers.TryGetValue(AmqpHeaders.Prefix + name, out v)) && v is not null)
+        {
+            value = v.ToString() ?? string.Empty;
+            return !string.IsNullOrEmpty(value);
+        }
+        value = string.Empty;
+        return false;
+    }
+
+    /// <summary>Reads a header's raw value by bare name, then <c>redbAmqp.&lt;name&gt;</c> for back-compat.</summary>
+    private static bool TryRaw(IExchange exchange, string name, out object value)
+    {
+        if ((exchange.In.Headers.TryGetValue(name, out var v) || exchange.In.Headers.TryGetValue(AmqpHeaders.Prefix + name, out v)) && v is not null)
+        {
+            value = v;
+            return true;
+        }
+        value = null!;
+        return false;
     }
 
     // ── Trace context ──

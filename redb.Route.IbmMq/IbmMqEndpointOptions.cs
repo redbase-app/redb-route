@@ -214,7 +214,12 @@ public sealed class IbmMqEndpointOptions : EndpointOptions
     /// <summary>Coded Character Set ID for message body. (default: 1208 = UTF-8)</summary>
     public int CCSID { get; set; } = 1208;
 
-    /// <summary>Allow writing MQMD fields directly from exchange headers. (default: false)</summary>
+    /// <summary>
+    /// Allow writing the <b>advanced/raw</b> MQMD fields from exchange headers — message type, format,
+    /// group id, message sequence number. (default: false, mirrors IBM MQ JMS WMQ_MQMD_WRITE_ENABLED)
+    /// <para>The standard JMS-equivalent fields (correlation id, priority, expiry, persistence,
+    /// reply-to queue/manager) always forward from headers regardless of this flag.</para>
+    /// </summary>
     public bool MqmdWriteEnabled { get; set; }
 
     /// <summary>Populate all MQMD fields into exchange headers on receive. (default: true)</summary>

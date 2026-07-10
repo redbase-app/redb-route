@@ -300,7 +300,8 @@ public sealed class AmqpConsumer : IConsumer
 
         AmqpMessageHelper.CopyApplicationProperties(msg, routeMsg);
 
-        // AMQP metadata as redbAmqp.* headers
+        // Standard AMQP properties → bare header names (self-documenting, round-trip via the producer);
+        // transport metadata (Address/DeliveryCount/FirstAcquirer) → redbAmqp.* (no standard name).
         routeMsg.Headers[AmqpHeaders.Address] = _endpoint.Address;
 
         if (msg.Properties != null)
@@ -326,6 +327,14 @@ public sealed class AmqpConsumer : IConsumer
                 routeMsg.Headers[AmqpHeaders.CreationTime] = msg.Properties.CreationTime;
             if (msg.Properties.AbsoluteExpiryTime != default)
                 routeMsg.Headers[AmqpHeaders.AbsoluteExpiryTime] = msg.Properties.AbsoluteExpiryTime;
+            if (!string.IsNullOrEmpty(msg.Properties.ContentEncoding))
+                routeMsg.Headers[AmqpHeaders.ContentEncoding] = msg.Properties.ContentEncoding;
+            if (!string.IsNullOrEmpty(msg.Properties.To))
+                routeMsg.Headers[AmqpHeaders.To] = msg.Properties.To;
+            if (!string.IsNullOrEmpty(msg.Properties.ReplyToGroupId))
+                routeMsg.Headers[AmqpHeaders.ReplyToGroupId] = msg.Properties.ReplyToGroupId;
+            if (msg.Properties.UserId is { Length: > 0 } userId)
+                routeMsg.Headers[AmqpHeaders.UserId] = System.Text.Encoding.UTF8.GetString(userId);
         }
 
         if (msg.Header != null)

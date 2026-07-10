@@ -47,6 +47,9 @@ public static class RedisHeaders
     /// <summary>Hash fields dictionary for HSET/HMSET operations.</summary>
     public const string HashFields = "redbRedis.HashFields";
 
+    /// <summary>Explicit stream field map (Dictionary&lt;string,object&gt;) for XADD.</summary>
+    public const string StreamFields = "redbRedis.StreamFields";
+
     /// <summary>Field names array for HMGET operations.</summary>
     public const string FieldNames = "redbRedis.FieldNames";
 

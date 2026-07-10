@@ -47,6 +47,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [redb.Route 3.3.1] — 2026-07-10
+
+### Fixed
+- **RabbitMQ — full AMQP basic-property round-trip (regression fix).** The producer forwarded only
+  `CorrelationId` from headers — and by a bare name that didn't match what the consumer stamped —
+  silently dropping `ReplyTo`/`MessageId`/`Priority`/`Expiration`/`Type`/`AppId`/`UserId`/`Timestamp`/
+  `ContentEncoding`/`DeliveryMode` on a consume→produce hop. The producer now maps **every** settable
+  string/byte `BasicProperties` field from headers via cached reflection (plus explicit `Timestamp` —
+  an `AmqpTimestamp`, not `IConvertible` — and `Persistent`/`DeliveryMode`); the consumer stamps them
+  symmetrically. Standard properties now use their **bare well-known names** (`ReplyTo`, `Priority`, …)
+  so a round-trip carries them through with no docs needed; `redbRmq.*` is still accepted on the
+  producer for back-compat and remains the prefix for delivery metadata (`Exchange`/`RoutingKey`/
+  `DeliveryTag`/`Redelivered`/`ConsumerTag`).
+- **AMQP 1.0 — property forwarding + `CorrelationId` round-trip.** The producer now forwards
+  `MessageId`/`CorrelationId`/`ReplyTo`/`Subject`/`GroupId`/`To`/`ContentEncoding`/`ReplyToGroupId`/
+  `UserId`/`GroupSequence`/`CreationTime`/`AbsoluteExpiryTime`/`Durable` from headers (header wins over
+  option). `CorrelationId` was read by a bare name that didn't match the consumer's
+  `redbAmqp.CorrelationId`, breaking round-trip — now aligned. Standard AMQP 1.0 properties use bare
+  names (transport metadata stays `redbAmqp.*`); the consumer additionally stamps `ContentEncoding`/
+  `To`/`ReplyToGroupId`/`UserId`.
+- **Azure Service Bus — batch send now sets message properties.** `SendBatchAsync` created bare
+  `ServiceBusMessage`s with no native/application properties; it now applies the same property mapping
+  as single send (shared `ApplyProperties`), with a unique `MessageId` per batched message.
+- **Redis — stream-field header prefixed.** The XADD field map was read by a bare `"StreamFields"`
+  key, inconsistent with every other Redis header; now the prefixed `RedisHeaders.StreamFields`
+  constant (bare name still accepted for back-compat).
+
+### Changed
+- **IBM MQ — MQMD header forwarding split into two tiers.** The standard, JMS-equivalent MQMD fields
+  (`CorrelId`/`Priority`/`Expiry`/`Persistence`/`ReplyToQueue`+`ReplyToQueueManager`) now forward from
+  headers **by default** (header wins) — matching what a WMQ JMS client maps from `JMSCorrelationID`/
+  `JMSPriority`/`JMSExpiration`/`JMSDeliveryMode`/`JMSReplyTo`, so a naive consume→produce preserves
+  them. The advanced/raw fields (`MsgType`/`Format`/`GroupId`/`MsgSeqNumber`) remain gated behind
+  `MqmdWriteEnabled` (mirrors IBM MQ JMS `WMQ_MQMD_WRITE_ENABLED`) as they can alter message semantics.
+  `MqmdReadEnabled` stays `true`.
+
+### Added
+- **Fluent DSL — `string` overloads on expression-first connector builders.** Value methods that
+  accepted only `IExpression` (so a bare string literal wouldn't compile) now have additive `string`
+  overloads across RabbitMQ, Sftp, Ftp, File, MqttNet, Kafka, Redis and Http (Ldap already had them).
+  Each wraps the value in `StringExpression`, so `.Host("localhost")` works as a constant **and**
+  `.RoutingKey("order.${header.type}")` still interpolates — full parity with the URI form. Purely
+  additive; existing `IExpression` methods are unchanged.
+
 ## [redb.Route 3.3.0] — 2026-07-09
 
 ### Added

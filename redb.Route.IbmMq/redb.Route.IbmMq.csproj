@@ -4,10 +4,6 @@
     <Description>IBM MQ (WebSphere MQ) transport for redb.Route ESB framework. Native MQI access via IBMMQDotnetClient — queues, topics, transactions, RPC, message groups, SSL/TLS, and W3C telemetry.</Description>
     <PackageTags>esb;messaging;ibmmq;websphere;mq;redb</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <!-- 3.2.1 targeted hotfix: ConcurrentConsumers now runs N real competing consumers (was a
-         dead semaphore on a serial MQGET loop). Only this package bumps; depends on redb.Route 3.2.0. -->
-    <Version>3.3.0</Version>
-    <PackageVersion>3.3.0</PackageVersion>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="redb.Route.Tests.IbmMq" />

@@ -393,12 +393,27 @@ public sealed class RabbitMQConsumer : IConsumer
             message.Headers[RmqHeaders.ContentType] = ea.BasicProperties.ContentType;
             message.ContentType = ea.BasicProperties.ContentType;
         }
-        if (!string.IsNullOrEmpty(ea.BasicProperties.CorrelationId))
-            message.Headers[RmqHeaders.CorrelationId] = ea.BasicProperties.CorrelationId;
-        if (!string.IsNullOrEmpty(ea.BasicProperties.ReplyTo))
-            message.Headers[RmqHeaders.ReplyTo] = ea.BasicProperties.ReplyTo;
-        if (!string.IsNullOrEmpty(ea.BasicProperties.MessageId))
-            message.Headers[RmqHeaders.MessageId] = ea.BasicProperties.MessageId;
+
+        // Stamp AMQP basic properties into headers by name (the bare well-known names) via cached
+        // reflection — symmetric with the producer's forwarding, so a consume→produce round-trip
+        // carries them through. Simple string/byte properties go through the loop; Timestamp
+        // (AmqpTimestamp) and persistence (DeliveryMode) are explicit — reflection can't map them.
+        foreach (var prop in _stampableProps)
+        {
+            var val = prop.GetValue(ea.BasicProperties);
+            if (val is string s)
+            {
+                if (!string.IsNullOrEmpty(s)) message.Headers[prop.Name] = s;
+            }
+            else if (val is byte b)
+            {
+                if (b > 0) message.Headers[prop.Name] = b;
+            }
+        }
+
+        if (ea.BasicProperties.Timestamp.UnixTime != 0)
+            message.Headers[RmqHeaders.Timestamp] = ea.BasicProperties.Timestamp.UnixTime;
+        message.Headers["Persistent"] = ea.BasicProperties.Persistent;
 
         var pattern = string.IsNullOrEmpty(ea.BasicProperties.ReplyTo)
             ? ExchangePattern.InOnly
@@ -407,6 +422,26 @@ public sealed class RabbitMQConsumer : IConsumer
         var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         exchange.Pattern = pattern;
         return exchange;
+    }
+
+    /// <summary>
+    /// Readable string/byte <see cref="global::RabbitMQ.Client.IReadOnlyBasicProperties"/> stamped into
+    /// headers by name via cached reflection. Excludes Headers (bulk-copied), ContentType (explicit — also
+    /// sets Message.ContentType) and DeliveryMode (persistence handled explicitly as a bool).
+    /// </summary>
+    private static readonly System.Reflection.PropertyInfo[] _stampableProps = BuildStampableProps();
+
+    private static System.Reflection.PropertyInfo[] BuildStampableProps()
+    {
+        var list = new System.Collections.Generic.List<System.Reflection.PropertyInfo>();
+        foreach (var p in typeof(global::RabbitMQ.Client.IReadOnlyBasicProperties).GetProperties())
+        {
+            if (!p.CanRead) continue;
+            if (p.Name is "Headers" or "ContentType" or "DeliveryMode") continue;
+            if (p.PropertyType == typeof(string) || p.PropertyType == typeof(byte))
+                list.Add(p);
+        }
+        return list.ToArray();
     }
 
     // ── RPC reply ──

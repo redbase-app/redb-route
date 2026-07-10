@@ -1,6 +1,7 @@
 using System.Text;
 using System.Web;
 using redb.Route.Abstractions;
+using redb.Route.Expressions;
 
 namespace redb.Route.Kafka;
 
@@ -75,6 +76,8 @@ public sealed class KafkaBuilder
 
     /// <summary>Bootstrap servers (comma-separated host:port). e.g. "broker1:9092,broker2:9092".</summary>
     public KafkaBuilder Brokers(IExpression brokers) { _brokers = brokers.ToTemplateString(); return this; }
+    /// <summary>Bootstrap servers (template string, supports <c>${...}</c>). e.g. "broker1:9092,broker2:9092".</summary>
+    public KafkaBuilder Brokers(string brokers) => Brokers(new StringExpression(brokers));
 
     /// <summary>Security protocol: Plaintext, Ssl, SaslPlaintext, SaslSsl.</summary>
     public KafkaBuilder SecurityProtocol(string protocol) { _securityProtocol = protocol; return this; }
@@ -87,6 +90,8 @@ public sealed class KafkaBuilder
 
     /// <summary>Path to CA certificate file for SSL.</summary>
     public KafkaBuilder SslCa(IExpression path) { _sslCaLocation = path.ToTemplateString(); return this; }
+    /// <summary>Path to CA certificate file for SSL (template string, supports <c>${...}</c>).</summary>
+    public KafkaBuilder SslCa(string path) => SslCa(new StringExpression(path));
 
     /// <summary>Client certificate for mutual TLS.</summary>
     public KafkaBuilder SslCert(IExpression certPath, IExpression? keyPath = null, IExpression? keyPassword = null)
@@ -96,11 +101,15 @@ public sealed class KafkaBuilder
 
     /// <summary>Use a named connection factory registered in DI.</summary>
     public KafkaBuilder ConnectionFactory(IExpression name) { _connectionFactory = name.ToTemplateString(); return this; }
+    /// <summary>Use a named connection factory registered in DI (template string, supports <c>${...}</c>).</summary>
+    public KafkaBuilder ConnectionFactory(string name) => ConnectionFactory(new StringExpression(name));
 
     // ── Consumer ──────────────────────────────────────────────────────
 
     /// <summary>Consumer group ID.</summary>
     public KafkaBuilder GroupId(IExpression groupId) { _groupId = groupId.ToTemplateString(); return this; }
+    /// <summary>Consumer group ID (template string, supports <c>${...}</c>).</summary>
+    public KafkaBuilder GroupId(string groupId) => GroupId(new StringExpression(groupId));
 
     /// <summary>Auto offset reset: Latest, Earliest, Error.</summary>
     public KafkaBuilder AutoOffsetReset(string reset) { _autoOffsetReset = reset; return this; }
@@ -133,6 +142,8 @@ public sealed class KafkaBuilder
 
     /// <summary>Static group instance ID for cooperative rebalancing.</summary>
     public KafkaBuilder GroupInstanceId(IExpression id) { _groupInstanceId = id.ToTemplateString(); return this; }
+    /// <summary>Static group instance ID for cooperative rebalancing (template string, supports <c>${...}</c>).</summary>
+    public KafkaBuilder GroupInstanceId(string id) => GroupInstanceId(new StringExpression(id));
 
     /// <summary>Session timeout in milliseconds.</summary>
     public KafkaBuilder SessionTimeout(int ms) { _sessionTimeoutMs = ms.ToString(); return this; }
@@ -170,6 +181,8 @@ public sealed class KafkaBuilder
 
     /// <summary>Message key for partitioning.</summary>
     public KafkaBuilder Key(IExpression key) { _key = key.ToTemplateString(); return this; }
+    /// <summary>Message key for partitioning (template string, supports <c>${...}</c>).</summary>
+    public KafkaBuilder Key(string key) => Key(new StringExpression(key));
 
     /// <summary>Explicit partition number.</summary>
     public KafkaBuilder Partition(int number) { _partitionNumber = number.ToString(); return this; }
@@ -181,6 +194,8 @@ public sealed class KafkaBuilder
     {
         _transacted = true; _transactionIdPrefix = idPrefix?.ToTemplateString(); return this;
     }
+    /// <summary>Enable transactional producer with an ID prefix (template string, supports <c>${...}</c>).</summary>
+    public KafkaBuilder Transacted(string idPrefix) => Transacted(new StringExpression(idPrefix));
 
     /// <summary>Linger time in milliseconds (batch delay).</summary>
     public KafkaBuilder Linger(int ms) { _lingerMs = ms.ToString(); return this; }

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Web;
 using redb.Route.Abstractions;
+using redb.Route.Expressions;
 
 namespace redb.Route.File;
 
@@ -120,17 +121,23 @@ public sealed class FileBuilder
 
     /// <summary>Move processed file to this directory.</summary>
     public FileBuilder MoveTo(IExpression directory) { _moveTo = directory.ToTemplateString(); return this; }
+    /// <summary>Move processed file to this directory (template string, supports ${...}).</summary>
+    public FileBuilder MoveTo(string directory) => MoveTo(new StringExpression(directory));
 
     /// <summary>Strategy when file exists in move target: Override, Append, Fail, Ignore, Move, TryRename.</summary>
     public FileBuilder MoveExisting(string strategy) { _moveExisting = strategy; return this; }
 
     /// <summary>Pre-move directory (temporary move before processing).</summary>
     public FileBuilder PreMove(IExpression directory) { _preMove = directory.ToTemplateString(); return this; }
+    /// <summary>Pre-move directory (template string, supports ${...}).</summary>
+    public FileBuilder PreMove(string directory) => PreMove(new StringExpression(directory));
 
     // ── Idempotency ───────────────────────────────────────────────────
 
     /// <summary>Enable idempotent consumer with an optional key expression.</summary>
     public FileBuilder Idempotent(IExpression? key = null) { _idempotent = true; _idempotentKey = key?.ToTemplateString(); return this; }
+    /// <summary>Enable idempotent consumer with a key (template string, supports ${...}).</summary>
+    public FileBuilder Idempotent(string key) => Idempotent(new StringExpression(key));
 
     // ── Read locking ──────────────────────────────────────────────────
 
@@ -159,6 +166,8 @@ public sealed class FileBuilder
 
     /// <summary>Done file name pattern. If set, only files with a matching done file are processed.</summary>
     public FileBuilder DoneFileName(IExpression name) { _doneFileName = name.ToTemplateString(); return this; }
+    /// <summary>Done file name pattern (template string, supports ${...}).</summary>
+    public FileBuilder DoneFileName(string name) => DoneFileName(new StringExpression(name));
 
     /// <summary>Set exchange body to a FileStream instead of byte[]. Stream is closed by Exchange.DisposeAsync.</summary>
     public FileBuilder StreamBody() { _streamBody = true; return this; }
@@ -167,15 +176,21 @@ public sealed class FileBuilder
 
     /// <summary>Output file name or expression (e.g. <c>Header("CamelFileName")</c>).</summary>
     public FileBuilder FileName(IExpression name) { _fileName = name.ToTemplateString(); return this; }
+    /// <summary>Output file name (template string, supports ${...}).</summary>
+    public FileBuilder FileName(string name) => FileName(new StringExpression(name));
 
     /// <summary>Strategy when target file exists: Override, Append, Fail, Ignore, Move, TryRename.</summary>
     public FileBuilder FileExist(string strategy) { _fileExist = strategy; return this; }
 
     /// <summary>Temporary file prefix during write.</summary>
     public FileBuilder TempPrefix(IExpression prefix) { _tempPrefix = prefix.ToTemplateString(); return this; }
+    /// <summary>Temporary file prefix during write (template string, supports ${...}).</summary>
+    public FileBuilder TempPrefix(string prefix) => TempPrefix(new StringExpression(prefix));
 
     /// <summary>Temporary file name during write.</summary>
     public FileBuilder TempFileName(IExpression name) { _tempFileName = name.ToTemplateString(); return this; }
+    /// <summary>Temporary file name during write (template string, supports ${...}).</summary>
+    public FileBuilder TempFileName(string name) => TempFileName(new StringExpression(name));
 
     /// <summary>Character encoding. Default "utf-8".</summary>
     public FileBuilder Charset(string charset) { _charset = charset; return this; }

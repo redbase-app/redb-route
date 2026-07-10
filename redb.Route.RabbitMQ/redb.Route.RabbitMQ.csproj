@@ -4,12 +4,6 @@
     <Description>RabbitMQ transport for redb.Route ESB framework.</Description>
     <PackageTags>esb;messaging;rabbitmq;redb</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <!-- 3.2.2 targeted hotfix: consumer dispatch concurrency (was pinned to 1) + per-route channel
-         leak, plus a new AutoAck consumer option. Only this package ships 3.2.2; the rest of
-         redb.Route.* stays 3.2.0 (Kafka at 3.2.1), so this depends on redb.Route 3.2.0 (unchanged,
-         already on NuGet). No mass-republish. -->
-    <Version>3.3.0</Version>
-    <PackageVersion>3.3.0</PackageVersion>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="redb.Route.Tests.RabbitMQ" />

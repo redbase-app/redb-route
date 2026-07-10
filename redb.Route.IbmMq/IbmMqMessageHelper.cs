@@ -231,17 +231,24 @@ public static class IbmMqMessageHelper
             msg.SetStringProperty(IbmMqHeaders.HeaderKeys, json);
         }
 
-        // Allow direct MQMD writes from headers (if enabled)
+        // Standard, JMS-equivalent MQMD fields forward from headers BY DEFAULT (header wins over
+        // option/expression) — mirrors what a WMQ JMS client maps from JMSCorrelationID/JMSPriority/
+        // JMSExpiration/JMSDeliveryMode/JMSReplyTo, so a naive consume→produce round-trip preserves them.
+        ApplyStandardMqmdFromHeaders(msg, exchange);
+
+        // Advanced / raw MQMD fields (message type, format, grouping) only when explicitly enabled —
+        // mirrors IBM MQ JMS's WMQ_MQMD_WRITE_ENABLED, since these can alter message semantics.
         if (options.MqmdWriteEnabled)
-            ApplyMqmdFromHeaders(msg, exchange);
+            ApplyAdvancedMqmdFromHeaders(msg, exchange);
 
         return msg;
     }
 
     /// <summary>
-    /// Overwrites MQMD fields from exchange headers when MqmdWriteEnabled is true.
+    /// Applies the standard, JMS-equivalent MQMD fields from exchange headers (header wins).
+    /// Always active: these are the fields a WMQ JMS client forwards by default.
     /// </summary>
-    private static void ApplyMqmdFromHeaders(MQMessage msg, IExchange exchange)
+    private static void ApplyStandardMqmdFromHeaders(MQMessage msg, IExchange exchange)
     {
         var headers = exchange.In.Headers;
 
@@ -262,6 +269,15 @@ public static class IbmMqMessageHelper
 
         if (headers.TryGetValue(IbmMqHeaders.ReplyToQueueManager, out var rtqm) && rtqm is string rtqmStr)
             msg.ReplyToQueueManagerName = rtqmStr;
+    }
+
+    /// <summary>
+    /// Applies the advanced / raw MQMD fields from exchange headers — gated behind MqmdWriteEnabled
+    /// (mirrors IBM MQ JMS's WMQ_MQMD_WRITE_ENABLED) as these can change message semantics.
+    /// </summary>
+    private static void ApplyAdvancedMqmdFromHeaders(MQMessage msg, IExchange exchange)
+    {
+        var headers = exchange.In.Headers;
 
         if (headers.TryGetValue(IbmMqHeaders.MsgType, out var mt) && mt is int mtInt)
             msg.MessageType = mtInt;

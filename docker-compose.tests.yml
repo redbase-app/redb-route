@@ -48,12 +48,14 @@ services:
       ARTEMIS_PASSWORD: admin
       ARTEMIS_MIN_MEMORY: 512M
       ARTEMIS_MAX_MEMORY: 1024M
+    # Publish only the low host ports the tests actually use. OpenWire (61616) and STOMP (61613)
+    # fall inside the Windows dynamic/reserved TCP range (49152-65535) that WinNAT grabs on restart,
+    # which makes Docker fail to bind them ("forbidden by access permissions") and the whole container
+    # ends up publishing nothing. The Amqp tests need only 5673; console/MQTT are low ports and safe.
     ports:
-      - "8161:8161"     # Web console
-      - "61616:61616"   # OpenWire
-      - "5673:5672"     # AMQP 1.0 (5672 taken by RabbitMQ)
-      - "1883:1883"     # MQTT
-      - "61613:61613"   # STOMP
+      - "5673:5672"     # AMQP 1.0 (5672 taken by RabbitMQ) — the only port the Amqp tests use
+      - "8161:8161"     # Web console (optional, low port)
+      - "1883:1883"     # MQTT (optional, low port)
     volumes:
       - activemq-data:/var/lib/artemis-instance/data
       - activemq-tmp:/var/lib/artemis-instance/tmp
