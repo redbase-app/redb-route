@@ -284,12 +284,27 @@ internal sealed class SqlProducer : IProducer
         return exchange;
     }
 
-    private static async Task ExecuteSelectList(DbCommand cmd, IExchange exchange, CancellationToken ct)
+    private async Task ExecuteSelectList(DbCommand cmd, IExchange exchange, CancellationToken ct)
     {
+        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+
+        if (poco != null)
+        {
+            // outputClass is set → accumulate into a typed List<T>, not List<Dictionary>.
+            var typedRows = poco.CreateList();
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                typedRows.Add(poco.Map(reader));
+
+            exchange.In.Headers[SqlHeaders.RowCount] = typedRows.Count;
+            SetResult(exchange, typedRows);
+            return;
+        }
+
         var mapper = new DictionaryRowMapper();
         var rows = new List<Dictionary<string, object?>>();
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
             rows.Add(mapper.Map(reader));
 
@@ -297,14 +312,15 @@ internal sealed class SqlProducer : IProducer
         SetResult(exchange, rows);
     }
 
-    private static async Task ExecuteSelectOne(DbCommand cmd, IExchange exchange, CancellationToken ct)
+    private async Task ExecuteSelectOne(DbCommand cmd, IExchange exchange, CancellationToken ct)
     {
+        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
         var mapper = new DictionaryRowMapper();
 
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
-            var row = mapper.Map(reader);
+            var row = poco != null ? poco.Map(reader) : mapper.Map(reader);
             exchange.In.Headers[SqlHeaders.RowCount] = 1;
             SetResult(exchange, row);
         }
@@ -315,7 +331,7 @@ internal sealed class SqlProducer : IProducer
         }
     }
 
-    private static async Task ExecuteScalar(DbCommand cmd, IExchange exchange, CancellationToken ct)
+    private async Task ExecuteScalar(DbCommand cmd, IExchange exchange, CancellationToken ct)
     {
         var result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
         if (result == DBNull.Value) result = null;
@@ -324,17 +340,56 @@ internal sealed class SqlProducer : IProducer
         SetResult(exchange, result);
     }
 
-    private static async Task ExecuteStreamList(DbCommand cmd, IExchange exchange, DbConnection connection, DbTransaction? tx, CancellationToken ct)
+    private async Task ExecuteStreamList(DbCommand cmd, IExchange exchange, DbConnection connection, DbTransaction? tx, CancellationToken ct)
     {
         // StreamList differs from SelectList: rows are streamed lazily as IAsyncEnumerable.
         // The connection, command, and reader must stay alive until the stream is consumed.
         // We transfer ownership of these resources to the async enumerable.
-        var mapper = new DictionaryRowMapper();
         var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
 
-        var enumerable = StreamRows(reader, mapper, cmd, connection, tx, ct);
-        exchange.In.Body = enumerable;
+        object enumerable = poco != null
+            // The element type is only known at runtime, so the generic streaming method
+            // has to be closed reflectively to yield IAsyncEnumerable<T> rather than <object>.
+            ? _streamRowsTypedMethod
+                .MakeGenericMethod(poco.ElementType)
+                .Invoke(null, [reader, poco.Map, cmd, connection, tx, ct])!
+            : StreamRows(reader, new DictionaryRowMapper(), cmd, connection, tx, ct);
+
+        SetResult(exchange, enumerable);
         exchange.In.Headers[SqlHeaders.RowCount] = -1; // unknown until fully iterated
+    }
+
+    private static readonly System.Reflection.MethodInfo _streamRowsTypedMethod =
+        typeof(SqlProducer).GetMethod(nameof(StreamRowsTyped),
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+    private static async IAsyncEnumerable<T> StreamRowsTyped<T>(
+        DbDataReader reader,
+        Func<DbDataReader, object> map,
+        DbCommand cmd,
+        DbConnection connection,
+        DbTransaction? tx,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        await using (reader)
+        await using (cmd)
+        await using (connection)
+        {
+            try
+            {
+                while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                    yield return (T)map(reader);
+
+                if (tx != null)
+                    await tx.CommitAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (tx != null)
+                    await tx.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     private static async IAsyncEnumerable<Dictionary<string, object?>> StreamRows(
@@ -371,10 +426,18 @@ internal sealed class SqlProducer : IProducer
         exchange.In.Headers[SqlHeaders.UpdateCount] = affected;
     }
 
-    private static void SetResult(IExchange exchange, object? value)
+    /// <summary>
+    /// Delivers the query result. With <c>outputHeader</c> set, the result goes to that header
+    /// and the body is left untouched — which is what makes it possible to enrich a message
+    /// with a lookup without destroying the payload the route is already carrying.
+    /// Without it, the result replaces the body.
+    /// </summary>
+    private void SetResult(IExchange exchange, object? value)
     {
-        // Check if result should go to header or body
-        exchange.In.Body = value;
+        if (!string.IsNullOrEmpty(_options.OutputHeader))
+            exchange.In.Headers[_options.OutputHeader] = value;
+        else
+            exchange.In.Body = value;
     }
 
     private void SetCommonHeaders(IExchange exchange, string sql, long executionMs)

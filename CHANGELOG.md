@@ -49,7 +49,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [redb.Route.Sql 3.3.2, redb.Route.Sqs 3.3.2] — 2026-07-14
+
+> **Partial release.** Only these two connector packages are published at 3.3.2; the rest of the
+> family — including `redb.Route` itself — stays at **3.3.1** and is unchanged. Both packages depend
+> on `redb.Route >= 3.3.1`, so they drop into an existing 3.3.1 install without touching anything else.
+
+### Fixed
+- **`redb.Route.Sql` — `mode=Procedure` never took the procedure name from the URI path, which made
+  the fluent `Sql.Procedure(...)` builder unusable.** `SqlBuilder.Build()` only ever emits the name
+  into the URI path, while `SqlEndpointOptions.Validate()` demanded a separate `procedureName=`
+  parameter — so **every** `Sql.Procedure("sp_x")` route threw
+  `ArgumentException: ProcedureName is required for Procedure mode.` at endpoint creation, and the
+  string-URI form had to repeat the name twice (`sql:sp_x?mode=Procedure&procedureName=sp_x`).
+  `SqlComponent.CreateEndpoint` now falls back to the URI path when `procedureName=` is absent,
+  which is what the `SqlEndpoint` xml-doc already promised ("The path part of the URI is the SQL
+  query or stored procedure name"). An explicit `procedureName=` still wins, so nothing that works
+  today changes behaviour. The bug survived because `Sql.Procedure` appeared in the docs but in no
+  test and no route; an end-to-end test through the real `EndpointUriParser` now covers it.
+
 ### Added
+- **`redb.Route.Sql` — `outputClass` now actually maps rows to a POCO.** The option was bound from
+  the URI and silently ignored: `PocoRowMapper<T>` existed but was never instantiated, and every
+  result came back as `Dictionary<string, object?>`. The new `SqlRowMapperFactory` resolves the type
+  name (assembly-qualified, full, or short against loaded assemblies), verifies a public parameterless
+  constructor, and caches the mapper. Producer: `SelectList` → a typed `List<T>`, `SelectOne` → `T`,
+  `StreamList` → `IAsyncEnumerable<T>`. Poll consumer: the message body becomes the mapped POCO.
+  The consumer still maps the raw row dictionary alongside the POCO, because header population and
+  the `@name` auto-bind in `onSuccess`/`onFailure` run off the raw columns — a POCO would silently
+  drop any column it has no property for. An unresolvable type name now fails loudly instead of
+  being ignored. Unset (the default) → dictionaries, exactly as before.
+- **`redb.Route.Sql` — `outputHeader` now delivers the result to a header instead of the body.**
+  Also previously bound and ignored (`SqlProducer.SetResult` carried a "Check if result should go to
+  header or body" comment and unconditionally wrote to the body). With `outputHeader=name` set, the
+  query result lands in that header and the **incoming body is left intact** — which is what makes a
+  SQL lookup usable as an enrichment step rather than a payload-destroying one. Supported for
+  `SelectList`, `SelectOne`, `Scalar`, `StreamList`, and for `mode=Procedure&asFunction=true`.
+  Unset → result replaces the body, exactly as before.
 - **`redb.Route.Sqs` — SNS raw message delivery on the SNS→SQS auto-subscription.** New
   `rawMessageDelivery` option (`Sns.Topic(...).SubscribeSnsToSqs(arn).RawMessageDelivery()`, or
   `rawMessageDelivery=true` in the URI). When the SNS publisher auto-subscribes an SQS queue
@@ -58,6 +96,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restoring W3C trace continuity across the hop — instead of the default SNS JSON notification
   envelope (`{"Type":"Notification","Message":...}`) which the subscriber would otherwise have to
   unwrap. Default remains `false` (AWS-compatible envelope).
+
+### Changed
+- **`redb.Route.Sql` — README rewritten URI-first, and corrected where it contradicted the parser.**
+  It documented SQL placeholders as `:id` / `:body`, but `SqlParameterParser` only ever recognised
+  `@name`, and there is no implicit `@body` — a scalar body never binds itself into a parameter
+  (use `param.msg=${body}`), and an unmatched placeholder silently becomes `DBNull`. The single URI
+  example also omitted the mandatory `mode=Poll` for a consumer. The README now leads with string
+  URIs for all three modes, documents the parameter-binding priority, and flags what remains
+  unimplemented. See `docs/SQL_PROCEDURE_MODE_REGRESSION.md` for the full audit, including the
+  options left alone on purpose (`transacted` is a no-op on producers, which always open a local
+  transaction; `batchSize` is an on/off flag, not a chunk size; `SqlHeaders.GeneratedKeys` is never
+  set but is kept because removing a public constant would break consumers).
 
 ## [redb.Route 3.3.1] — 2026-07-10
 

@@ -32,6 +32,14 @@ public class SqlComponent : ComponentBase
 
         var options = new SqlEndpointOptions();
         options.BindFromUri(uri.RawParameters);
+
+        // In Procedure mode the URI path IS the procedure name (same as the query text is in the
+        // other modes). Without this, every procedure URI had to repeat the name in procedureName=,
+        // and the fluent builder — which only ever emits the path — produced a URI that failed
+        // validation. An explicit procedureName= still wins.
+        if (options.Mode == SqlMode.Procedure && string.IsNullOrEmpty(options.ProcedureName))
+            options.ProcedureName = uri.Path;
+
         options.Validate();
 
         return new SqlEndpoint(uri, this, options);

@@ -105,7 +105,13 @@ internal sealed class SqlProcedureProducer : IProducer
             {
                 var result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
                 if (result == DBNull.Value) result = null;
-                exchange.In.Body = result;
+
+                // outputHeader keeps the incoming body intact and parks the function result
+                // in a header instead — the same contract as in SqlProducer.
+                if (!string.IsNullOrEmpty(_options.OutputHeader))
+                    exchange.In.Headers[_options.OutputHeader] = result;
+                else
+                    exchange.In.Body = result;
             }
             else
             {

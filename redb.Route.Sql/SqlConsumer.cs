@@ -160,7 +160,9 @@ internal sealed class SqlConsumer : DrainableConsumer
         string sql, long executionMs, CancellationToken ct)
     {
         var rows = new List<Dictionary<string, object?>>();
+        var bodies = new List<object?>();
         var mapper = new DictionaryRowMapper();
+        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
 
         await using (var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
         {
@@ -168,13 +170,19 @@ internal sealed class SqlConsumer : DrainableConsumer
             {
                 if (_options.MaxMessagesPerPoll >= 0 && rows.Count >= _options.MaxMessagesPerPoll)
                     break;
+
+                // The dictionary is mapped even when outputClass is set: headers and the
+                // OnSuccess/OnFailure parameter auto-bind are driven off the raw columns,
+                // and a POCO would silently drop any column it has no property for.
                 rows.Add(mapper.Map(reader));
+                bodies.Add(poco?.Map(reader));
             }
         }
 
-        foreach (var row in rows)
+        for (var i = 0; i < rows.Count; i++)
         {
-            var exchange = CreateExchange(row, sql, rows.Count, executionMs);
+            var row = rows[i];
+            var exchange = CreateExchange(bodies[i] ?? row, row, sql, rows.Count, executionMs);
             IncrementInflight();
             try
             {
@@ -214,6 +222,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         string sql, long executionMs, CancellationToken ct)
     {
         var mapper = new DictionaryRowMapper();
+        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
         var rowCount = 0;
 
         await using (var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
@@ -224,9 +233,10 @@ internal sealed class SqlConsumer : DrainableConsumer
                     break;
 
                 var row = mapper.Map(reader);
+                var body = poco?.Map(reader) ?? row;
                 rowCount++;
 
-                var exchange = CreateExchange(row, sql, -1, executionMs);
+                var exchange = CreateExchange(body, row, sql, -1, executionMs);
                 IncrementInflight();
                 try
                 {
@@ -270,7 +280,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         }
         else
         {
-            var exchange = CreateExchange(result, sql, 1, executionMs);
+            var exchange = CreateExchange(result, null, sql, 1, executionMs);
             IncrementInflight();
             try
             {
@@ -300,12 +310,17 @@ internal sealed class SqlConsumer : DrainableConsumer
         string sql, long executionMs, CancellationToken ct)
     {
         var mapper = new DictionaryRowMapper();
+        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
         Dictionary<string, object?>? row = null;
+        object? body = null;
 
         await using (var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
         {
             if (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
                 row = mapper.Map(reader);
+                body = poco?.Map(reader) ?? row;
+            }
         }
 
         if (row == null)
@@ -314,7 +329,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         }
         else
         {
-            var exchange = CreateExchange(row, sql, 1, executionMs);
+            var exchange = CreateExchange(body, row, sql, 1, executionMs);
             IncrementInflight();
             try
             {
@@ -343,7 +358,8 @@ internal sealed class SqlConsumer : DrainableConsumer
     {
         if (_options.RouteEmptyResultSet)
         {
-            var emptyExchange = CreateExchange(new Dictionary<string, object?>(), sql, 0, executionMs);
+            var empty = new Dictionary<string, object?>();
+            var emptyExchange = CreateExchange(empty, empty, sql, 0, executionMs);
             try { await Processor.Process(emptyExchange, ct).ConfigureAwait(false); }
             finally { await emptyExchange.DisposeAsync().ConfigureAwait(false); }
         }
@@ -385,7 +401,22 @@ internal sealed class SqlConsumer : DrainableConsumer
 
     // ── Exchange creation ───────────────────────────────────────────
 
-    private Exchange CreateExchange(object? body, string sql, int rowCount, long executionTimeMs)
+    /// <summary>
+    /// Creates the exchange for one polled row.
+    /// </summary>
+    /// <param name="body">
+    /// What the route sees as the message body — the raw row dictionary, or the mapped POCO
+    /// when <c>outputClass</c> is set, or a scalar in Scalar mode.
+    /// </param>
+    /// <param name="row">
+    /// The raw columns of the row, independent of <paramref name="body"/>. Used for the header
+    /// copy that OnSuccess/OnFailure parameter binding relies on. Null when there is no row
+    /// (Scalar mode).
+    /// </param>
+    /// <param name="sql">The resolved poll query, echoed into the <c>redbSql.query</c> header.</param>
+    /// <param name="rowCount">Rows in this poll cycle; -1 when streaming (not known upfront).</param>
+    /// <param name="executionTimeMs">Query execution time in milliseconds.</param>
+    private Exchange CreateExchange(object? body, Dictionary<string, object?>? row, string sql, int rowCount, long executionTimeMs)
     {
         var exchange = Exchange.Create(new Message(body), _endpoint.ScopeFactory);
         exchange.In.Headers[SqlHeaders.Query] = sql;
@@ -397,7 +428,7 @@ internal sealed class SqlConsumer : DrainableConsumer
             exchange.In.Headers[SqlHeaders.DataSource] = _options.DataSource;
 
         // Copy row fields to headers for auto-bind in OnSuccess/OnFailure
-        if (body is Dictionary<string, object?> row)
+        if (row != null)
         {
             foreach (var (key, value) in row)
                 exchange.In.Headers[key] = value;

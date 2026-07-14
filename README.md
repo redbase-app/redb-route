@@ -319,7 +319,7 @@ builder.Services.Configure<RouteEngineOptions>(o =>
 | EIP patterns | 80+ | Saga, R/R, Outbox | Saga, R/R | Saga, R/R, Outbox | **30+** |
 | Expression engine | Simple Language (interpreted) | None | None | None | **Compiled (Linq.Expressions)** |
 | Configuration | XML or Java DSL | C# fluent | C# fluent | C# fluent | **C# fluent only** |
-| Saga persistence | Yes | **Yes (DB-backed)** | **Yes (DB-backed)** | **Yes (Marten)** | Compensating steps + persistent `IdempotentConsumer` (redb-EAV / SQL) for dedup; no built-in state machine |
+| Saga persistence | Yes | **Yes (DB-backed)** | **Yes (DB-backed)** | **Yes (Marten)** | Compensating steps + persistent `IdempotentConsumer` (redb RTTI storage / SQL) for dedup; no built-in state machine |
 | Outbox | Plugin | **Yes** | **Yes** | **Yes** | Polling outbox via `Sql.Poll(...).OnSuccess(...).Transacted()` + persistent `IdempotentConsumer` |
 | Publisher confirms / EOS | Yes | Yes | Yes | Yes | **Yes** — RabbitMQ publisher confirms (`MaxOutstandingConfirms`), Kafka transactional producer + `Acks=All` |
 
@@ -385,7 +385,7 @@ A 200-line Camel `RouteBuilder.configure()` typically becomes a 200-line C# `Rou
 | Routing model | Consumer classes | Route pipelines (`From → Process → To`) |
 | EIP patterns | Saga, Request/Response, Outbox | 30+ EIP patterns |
 | Transports | 5 (RabbitMQ, Kafka, SQS, Azure SB, gRPC) | 22 (+ File, SFTP, SQL, MQTT, TCP, HTTP, FTP, LDAP, IBM MQ, S3, …) |
-| Saga | State machine + **persistent state** (DB-backed) | Compensating steps (forward + reverse) with persistent dedup via `IdempotentConsumer` (redb-EAV / SQL backends, two-phase commit) — no built-in state machine |
+| Saga | State machine + **persistent state** (DB-backed) | Compensating steps (forward + reverse) with persistent dedup via `IdempotentConsumer` (redb RTTI storage / SQL backends, two-phase commit) — no built-in state machine |
 | Outbox | Yes (transactional outbox pattern) | Polling outbox via `Sql.Poll(...).OnSuccess(...).Transacted()` + persistent `IdempotentConsumer` (de-facto outbox) |
 | Publisher reliability | Yes (RabbitMQ confirms, Kafka EOS) | **Yes** — RabbitMQ publisher confirms, mandatory flag, transacted channels, automatic recovery; Kafka transactional producer + `Acks=All` + `IsolationLevel=ReadCommitted` |
 | Expressions | None | Compiled engine: 9 types, 17 predicates, `${header.x++}`, arithmetic |
@@ -801,7 +801,7 @@ Header("required").isNotNull()
 .IdempotentConsumer(e => e.Message.GetHeader<string>("messageId"), repository)
 //   InMemoryIdempotentRepository       — process-local, default
 //   SqlIdempotentRepository            — ADO.NET, two-phase commit, survives restarts
-//   RedbIdempotentRepository           — redb.Core EAV, two-phase commit, cluster-wide
+//   RedbIdempotentRepository           — redb.Core RTTI storage, two-phase commit, cluster-wide
 
 // Loop — fixed count or conditional
 .Loop(3, sub => sub.Process(e => Retry(e)))
@@ -968,7 +968,7 @@ Three backends ship today:
 |---------|---------|:--:|
 | `InMemoryIdempotentRepository` | Process memory | \u2014 |
 | `SqlIdempotentRepository` | ADO.NET (any provider) \u2014 DDL ships with the package | \u2705 (`Confirmed` column) |
-| `RedbIdempotentRepository` | redb.Core EAV (cluster-wide via redb backend) | \u2705 (`Confirmed` flag) |
+| `RedbIdempotentRepository` | redb.Core RTTI storage (cluster-wide via redb backend) | \u2705 (`Confirmed` flag) |
 
 Two-phase commit means the key is **claimed** before processing and **confirmed** after. A crash mid-processing leaves the key unconfirmed; on retry the consumer re-acquires and re-processes. Same semantic as a transactional outbox.
 
@@ -1523,7 +1523,7 @@ flowchart TB
     end
 
     subgraph Storage["Persistent state"]
-        Redb[(redb EAV\nPostgres / MSSql)]
+        Redb[(redb\nPostgres / MSSql)]
     end
 
     Modules --> Worker
@@ -1581,7 +1581,7 @@ Tsak distinguishes **two** load locations and they are not interchangeable:
 
 ### Cluster mode (PRO)
 
-Enabled by `Tsak:Cluster:Enabled=true`. State is persisted in redb EAV — no extra coordination service (no ZooKeeper, no etcd, no Consul). The cluster forms a tree-based topology:
+Enabled by `Tsak:Cluster:Enabled=true`. State is persisted in redb — no extra coordination service (no ZooKeeper, no etcd, no Consul). The cluster forms a tree-based topology:
 
 ```
 cluster:default            (_tsak_clusters)
@@ -1591,7 +1591,7 @@ cluster:default            (_tsak_clusters)
 
 | Component | Role |
 |-----------|------|
-| `RedbLeaderElection` | Distributed lock via redb EAV with TTL expiry + **epoch fencing** (split-brain prevention) |
+| `RedbLeaderElection` | Distributed lock via redb with TTL expiry + **epoch fencing** (split-brain prevention) |
 | `RedbNodeRegistry` | Heartbeat tracking, dead node cleanup |
 | `ClusterCoordinator` | Background loop: heartbeat → leader election → (if leader) detect dead nodes + rebalance assignments |
 | `AssignmentManager` | Distributes contexts / modules across nodes |
@@ -1722,7 +1722,7 @@ Chart.js for metrics, table components, periodic refresh (SignalR-ready for push
 - **Roles** — comma-separated, enforced by `AuthorizeProcessor`.
 - **Expiry + revocation** — keys can have `ExpiresAt`; revoke is immediate, cache (5-min TTL) is invalidated.
 - **User linkage** — if `IUserProvider` is registered, keys link to Users and inherit `Disabled` flag.
-- **Storage** — `ConfigApiKeyStore` (appsettings, dev) or `RedbApiKeyStore` (EAV, cluster-replicated).
+- **Storage** — `ConfigApiKeyStore` (appsettings, dev) or `RedbApiKeyStore` (RTTI storage, cluster-replicated).
 - **Audit** — every create / revoke / validate event is logged (`LogAdminAuditService`); `[AuditAdminAction]` attribute marks audit-worthy endpoints.
 
 ### Observability
@@ -1769,7 +1769,7 @@ When `Tsak:Metrics:Prometheus:Enabled=true`, Tsak calls `.AddOpenTelemetry().Wit
 | Mode | State store | Quartz | API keys | Cluster |
 |------|-------------|--------|----------|---------|
 | **Standalone** | `InMemoryTsakStateStore` | `RAMJobStore` | `ConfigApiKeyStore` (appsettings) | off |
-| **Single-node + redb** | `RedbTsakStateStore` (Postgres / MSSql) | `AdoJobStore` | `RedbApiKeyStore` (EAV) | off |
+| **Single-node + redb** | `RedbTsakStateStore` (Postgres / MSSql) | `AdoJobStore` | `RedbApiKeyStore` (RTTI storage) | off |
 | **Cluster** | `RedbTsakStateStore` shared | `AdoJobStore` shared | `RedbApiKeyStore` shared | `RedbLeaderElection` + `RedbNodeRegistry` |
 
 Minimal config:
@@ -1868,7 +1868,7 @@ Set `Tsak:Metrics:Prometheus:Enabled=true` to activate the OTel Prometheus expor
 
 #### Pluggable cluster backends
 
-All cluster coordination is behind **abstract interfaces** (`ILeaderElection`, `IDistributedLock`, `INodeRegistry`, `IClusterCoordinator`, `IClusterBootstrap`, `IAssignmentManager`) in `redb.Tsak.Core.Pro`. The current implementations use redb EAV (Postgres / MSSql). The design allows dropping in a Kubernetes Lease API implementation (`KubernetesLeaderElection`, `KubernetesNodeRegistry`) without changing any other code — simply register the alternative implementations before calling `AddTsakCluster()`.
+All cluster coordination is behind **abstract interfaces** (`ILeaderElection`, `IDistributedLock`, `INodeRegistry`, `IClusterCoordinator`, `IClusterBootstrap`, `IAssignmentManager`) in `redb.Tsak.Core.Pro`. The current implementations use redb (Postgres / MSSql). The design allows dropping in a Kubernetes Lease API implementation (`KubernetesLeaderElection`, `KubernetesNodeRegistry`) without changing any other code — simply register the alternative implementations before calling `AddTsakCluster()`.
 
 ### Why redb.Tsak (vs Apache Karaf / Camel K)
 
