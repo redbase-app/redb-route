@@ -23,7 +23,7 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 
 ## Highlights
 
-- **25 external transports + 5 built-in components** (Direct, SEDA, Timer, Mock, Log). The 24th — `llm:` — is a first-class LLM connector with a universal OpenAI-compatible provider (14 APIs) and a native Anthropic Messages API provider, plus `.AsLlmTool()` to expose any of the other 24 transports as an LLM-callable tool with zero connector changes. Token-by-token streaming runs end-to-end: `?stream=true` on an `llm://` step lands on the wire as Server-Sent Events through `redb.Route.Http` (with an `event: done` summary trailer) or as one `Text` frame per token through `redb.Route.WebSocket`.
+- **27 external transports + 5 built-in components** (Direct, SEDA, Timer, Mock, Log). One of them — `llm:` — is a first-class LLM connector with a universal OpenAI-compatible provider (14 APIs) and a native Anthropic Messages API provider, plus `.AsLlmTool()` to expose any of the other 26 transports as an LLM-callable tool with zero connector changes. Token-by-token streaming runs end-to-end: `?stream=true` on an `llm://` step lands on the wire as Server-Sent Events through `redb.Route.Http` (with an `event: done` summary trailer) or as one `Text` frame per token through `redb.Route.WebSocket`.
 - **MCP client connector — `mcp:` URI.** `redb.Route.Llm.Mcp` spawns external **Model Context Protocol** servers (stdio or HTTP+SSE), runs `initialize` + `tools/list` on startup and registers every remote tool into `IToolDescriptorRegistry` as a first-class `ILlmToolDescriptor`. The agent picks them up like any native tool — full audit (`ToolSetHash`), governance (`Safety`), observability and approval flow inherited automatically. Cancellation is threaded all the way through: an aborted agent iteration emits a JSON-RPC `notifications/cancelled` and the in-flight `tools/call` unwinds. One package = the entire community MCP ecosystem (Serena, filesystem, git, fetch, github, sqlite, …) becomes callable from a redb agent.
 - **30+ EIP patterns** — Splitter, Aggregator, CBR, WireTap, Saga, Circuit Breaker, Idempotent Consumer, Claim Check, Throttle, Resequencer, Scatter-Gather, and more.
 - **Compiled expression engine** — `${header.x}`, `${header.x++}`, arithmetic, JSONPath, XPath compile to `Func<IExchange, T>` via `System.Linq.Expressions`. No interpreter overhead.
@@ -143,7 +143,7 @@ builder.Services.AddRedbRoute(route => route.AddRouteBuilder<OrderRoutes>());
 
 Four things you do not get together in any other .NET integration framework:
 
-- **26 transports out of the box, including a full LLM connector.** Kafka, RabbitMQ, Redis, SQL, HTTP, gRPC, SFTP, MQTT, S3, Amazon SQS + SNS, IBM MQ, AMQP 1.0, Azure Service Bus, Elasticsearch, Firebase, LDAP, Mail, TCP, WebSocket, SignalR, Telegram, FTP, Quartz, File, **Exec** (local-process execution), and **`llm:`** (OpenAI-compatible universal provider for 14 vendors + native Anthropic Messages API) — **plus `.AsLlmTool()` that turns any of the other 25 transports into an LLM tool with zero connector changes**. MassTransit ships 5, Wolverine 4, NServiceBus 7. The competitors expect you to use only message brokers; redb.Route treats files, mailboxes, FTP servers, SQL polling, local processes and LLM endpoints as first-class transports — and any of them can become an LLM-callable tool.
+- **27 transports out of the box, including a full LLM connector.** Kafka, RabbitMQ, Redis, SQL, HTTP, gRPC, SFTP, MQTT, S3, Amazon SQS + SNS, IBM MQ, AMQP 1.0, Azure Service Bus, Elasticsearch, Firebase, LDAP, Mail, TCP, WebSocket, SignalR, Telegram, FTP, Quartz, File, **Exec** (local-process execution), **`llm:`** (OpenAI-compatible universal provider for 14 vendors + native Anthropic Messages API), and **`mcp:`** (Model Context Protocol client — the whole community MCP ecosystem as callable tools) — **plus `.AsLlmTool()` that turns any of the other 26 transports into an LLM tool with zero connector changes**. MassTransit ships 5, Wolverine 4, NServiceBus 7. The competitors expect you to use only message brokers; redb.Route treats files, mailboxes, FTP servers, SQL polling, local processes and LLM endpoints as first-class transports — and any of them can become an LLM-callable tool.
 - **Compiled expression engine.** `${header.x}`, `${header.x++}`, arithmetic, JSONPath, XPath are translated to `Func<IExchange, T>` via `System.Linq.Expressions` at route-build time. No interpreter, no per-message parsing, results cached per route. Apache Camel's Simple Language is interpreted; MassTransit / Wolverine / NServiceBus have no expression engine at all.
 - **30+ EIP patterns as first-class DSL.** Filter, Choice, Splitter, Aggregator, Multicast, WireTap, Recipient List, Dynamic Router, Resequencer, Scatter-Gather, Claim Check, Idempotent Consumer, Saga, Circuit Breaker, Throttle, Retry, Dead Letter, Loop, Delay, Debounce, Enrich, Timeout, TryCatch, Transacted, Process, Validate. The .NET competitors give you Saga + Request/Response + Outbox; everything else you write yourself.
 - **Apache 2.0 licensed, no per-endpoint pricing.** NServiceBus is commercial after 2 endpoints. redb.Route is unrestricted for any use, any scale.
@@ -337,7 +337,7 @@ If you know Camel, you know redb.Route — same EIP patterns, same `from → pro
 | Message object | `Exchange` + `Message` | `IExchange` + `IMessage` |
 | Expression language | Simple Language (interpreted) | StringExpression (compiled) |
 | EIP patterns | 80+ | 30+ (Filter, Choice, Splitter, Aggregator, Multicast, WireTap, Recipient List, Dynamic Router, Resequencer, Scatter-Gather, Claim Check, Idempotent Consumer, Saga, Circuit Breaker, Throttle, Retry, Dead Letter, Loop, Delay, Debounce, Enrich, Timeout, TryCatch, Transacted, …) |
-| Components | 300+ | 25 transports + 5 built-in |
+| Components | 300+ | 27 transports + 5 built-in |
 | Configuration | XML DSL or Java DSL | C# fluent DSL only |
 | Runtime / orchestration | Camel K / JBoss Fuse | [redb.Tsak](#running-routes-in-production--redbtsak) |
 | Platform | JVM | .NET 8 / 9 / 10 |
@@ -381,7 +381,7 @@ A 200-line Camel `RouteBuilder.configure()` typically becomes a 200-line C# `Rou
 
 | Aspect | MassTransit | redb.Route |
 |--------|-------------|------------|
-| Focus | Reliable message bus + Saga | Enterprise Service Bus — 25 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
+| Focus | Reliable message bus + Saga | Enterprise Service Bus — 27 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
 | Routing model | Consumer classes | Route pipelines (`From → Process → To`) |
 | EIP patterns | Saga, Request/Response, Outbox | 30+ EIP patterns |
 | Transports | 5 (RabbitMQ, Kafka, SQS, Azure SB, gRPC) | 22 (+ File, SFTP, SQL, MQTT, TCP, HTTP, FTP, LDAP, IBM MQ, S3, …) |
@@ -392,13 +392,13 @@ A 200-line Camel `RouteBuilder.configure()` typically becomes a 200-line C# `Rou
 | Transactional routes | No | Yes — `.Transacted()` via `TransactionScope` |
 | License | Apache 2.0 | Apache 2.0 |
 
-Use MassTransit for **state-machine sagas with DB persistence** and a built-in transactional outbox table per consumer. Use redb.Route for enterprise integration end-to-end: 30+ EIP patterns, 25 transports, transactional pipelines (`ITransactedAction`), protocol bridging, file processing, and multi-transport pipelines — reliability primitives (publisher confirms, EOS, persistent dedup, polling outbox) composed from DSL building blocks.
+Use MassTransit for **state-machine sagas with DB persistence** and a built-in transactional outbox table per consumer. Use redb.Route for enterprise integration end-to-end: 30+ EIP patterns, 27 transports, transactional pipelines (`ITransactedAction`), protocol bridging, file processing, and multi-transport pipelines — reliability primitives (publisher confirms, EOS, persistent dedup, polling outbox) composed from DSL building blocks.
 
 ### vs NServiceBus
 
 | Aspect | NServiceBus | redb.Route |
 |--------|-------------|------------|
-| Focus | Message bus (reliable delivery + Saga) | Enterprise Service Bus — 25 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
+| Focus | Message bus (reliable delivery + Saga) | Enterprise Service Bus — 27 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
 | Routing model | Message handler classes | Route pipelines |
 | EIP patterns | Saga (persistent), Request/Response | 30+ EIP patterns |
 | Transports | 7 (RabbitMQ, Kafka, SQS, Azure SB, SQL, MSMQ, Learning) | 22 (+ File, SFTP, MQTT, TCP, HTTP, gRPC, FTP, LDAP, IBM MQ, S3, …) |
@@ -407,13 +407,13 @@ Use MassTransit for **state-machine sagas with DB persistence** and a built-in t
 | Monitoring | ServicePulse / ServiceInsight (commercial) | OpenTelemetry + redb.Tsak Web UI |
 | License | **Commercial** (free up to 2 endpoints/app) | Apache 2.0 |
 
-NServiceBus is mature and focused on guaranteed delivery and durable saga. redb.Route is Apache-2.0–licensed and covers enterprise integration end-to-end: 30+ EIP patterns, 25 transports, transactional pipelines (`ITransactedAction`), and a full runtime (redb.Tsak) with clustering, hot-reload, and OTel.
+NServiceBus is mature and focused on guaranteed delivery and durable saga. redb.Route is Apache-2.0–licensed and covers enterprise integration end-to-end: 30+ EIP patterns, 27 transports, transactional pipelines (`ITransactedAction`), and a full runtime (redb.Tsak) with clustering, hot-reload, and OTel.
 
 ### vs Wolverine
 
 | Aspect | Wolverine | redb.Route |
 |--------|-----------|------------|
-| Focus | Mediator + message bus + Saga | Enterprise Service Bus — 25 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
+| Focus | Mediator + message bus + Saga | Enterprise Service Bus — 27 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
 | Routing model | Handler discovery + middleware | Route pipelines (`From → Process → To`) |
 | EIP patterns | Saga, Outbox, Request/Response | 30+ EIP patterns |
 | Transports | 4 (RabbitMQ, Kafka, Azure SB, SQS) | 22 (+ File, SFTP, SQL, MQTT, HTTP, gRPC, FTP, LDAP, IBM MQ, S3, …) |
@@ -422,7 +422,7 @@ NServiceBus is mature and focused on guaranteed delivery and durable saga. redb.
 | Transactional routes | Outbox-based | `.Transacted()` via `TransactionScope` |
 | License | MIT | Apache 2.0 |
 
-Wolverine is excellent at handler-style messaging with Marten-backed sagas. redb.Route covers enterprise integration end-to-end: 30+ EIP patterns, 25 transports, in-process mediator (`RedbController`), pub/sub (SEDA), transactional pipelines, and a full production runtime (redb.Tsak).
+Wolverine is excellent at handler-style messaging with Marten-backed sagas. redb.Route covers enterprise integration end-to-end: 30+ EIP patterns, 27 transports, in-process mediator (`RedbController`), pub/sub (SEDA), transactional pipelines, and a full production runtime (redb.Tsak).
 
 ---
 
@@ -1267,7 +1267,7 @@ flowchart TB
         Tx[TransactionScope]
     end
 
-    subgraph Transports["redb.Route.* — 25 transports"]
+    subgraph Transports["redb.Route.* — 27 transports"]
         Msg["Messaging\nKafka · RabbitMQ · Redis · AzureSB · IbmMq · Amqp"]
         Data["Data stores\nSql · Elasticsearch · Firebase · S3 · Ldap"]
         Net["Network\nHttp · Grpc · WebSocket · SignalR · Tcp"]
@@ -1496,7 +1496,7 @@ For transports that support transactions, combine with `.Transacted()` to wrap p
 | `redb.Route.Controllers` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Controllers?label=)](https://www.nuget.org/packages/redb.Route.Controllers) | Controller dispatch — attribute routing, DI, InOut |
 | `redb.Route.Validation.Adapters` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Validation.Adapters?label=)](https://www.nuget.org/packages/redb.Route.Validation.Adapters) | Validation adapters — FluentValidation + DataAnnotations |
 
-32 packages total: core engine + 25 transports (incl. `llm:`) + 3 LLM support libraries (Abstractions, Tools, Mcp) + 4 support libraries (Core, Controllers, GenericFile, Validation.Adapters).
+34 packages total: core engine + 27 transports (incl. `llm:` and `mcp:`) + 6 support libraries (Core, Controllers, GenericFile, Validation.Adapters, Llm.Abstractions, Llm.Tools).
 
 ---
 

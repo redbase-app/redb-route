@@ -20,6 +20,10 @@ appsettings.Development.json
 # Demo tpkg output
 demo/**/output/
 
+# Internal — must never be mirrored (also stripped in step 7b, and never copied by step 2)
+docs/
+publish/
+
 # OS
 .DS_Store
 Thumbs.db
