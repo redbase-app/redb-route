@@ -4,8 +4,7 @@
     <Description>SQL database transport for redb.Route ESB framework. Pure ADO.NET polling consumer, query/batch producer, stored procedure support. Provider-agnostic via System.Data.Common.</Description>
     <PackageTags>esb;messaging;sql;database;adonet;polling;redb</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Version>3.3.2</Version>
-    <PackageVersion>3.3.2</PackageVersion>
+    <!-- Version comes from redb.Route/Directory.Build.props — the whole ecosystem ships one number. -->
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="redb.Route.Tests.Sql" />

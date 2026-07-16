@@ -11,7 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
     <ProjectReference Include="..\redb.Route.Controllers\redb.Route.Controllers.csproj" />
-    <PackageReference Include="redb.Core" Version="3.3.0" />
+    <PackageReference Include="redb.Core" Version="3.3.3" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

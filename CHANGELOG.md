@@ -51,6 +51,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet._
 
+## [3.3.3] — 2026-07-15
+
+> **Why the bump.** **No functional changes to redb.Route** — this is an ecosystem sync release, and
+> the whole family is published at 3.3.3 (all 34 packages).
+>
+> Two reasons:
+> 1. **The family had drifted apart.** Base sat at 3.3.1 while `Sql` and `Sqs` were at 3.3.2 from the
+>    partial release below — so a shared-layer install mixed `3.3.1` and `3.3.2` archives side by side,
+>    and "which versions go together" needed a table. From 3.3.3 every package in the ecosystem —
+>    redb core, redb.Route, redb.Tsak — ships **one number**.
+> 2. **It picks up `redb.Core` 3.3.3.** Not every package depends on redb storage — `redb.Route` itself
+>    and the transports (Kafka, RabbitMQ, …) do not. But **`redb.Route.Core` and `redb.Route.Llm` do**,
+>    and at 3.3.1 both pinned **`redb.Core` 3.3.0**, whose embedded `redb_init.sql` failed schema
+>    initialization under a non-superuser database owner (see the redb core changelog). Since
+>    `redb.Route.Core` is the package a redb-backed route worker is built on, that broken init reached
+>    any deployment on a least-privilege database. All packages are rebuilt against `redb.Core` 3.3.3.
+>
+> The `Sql` / `Sqs` features listed under 3.3.2 below are **not** re-announced here — they shipped in
+> 3.3.2 and are unchanged; those packages only change number.
+>
+> Also from this release, the shared assembly layer is distributed as **one archive per OS**
+> (`redb-route-shared-3.3.3-<rid>.zip`, all 32 connectors inside) instead of one archive per connector.
+> See `publish/ARCHITECTURE.md`.
+
 ## [redb.Route.Sql 3.3.2, redb.Route.Sqs 3.3.2] — 2026-07-14
 
 > **Partial release.** Only these two connector packages are published at 3.3.2; the rest of the

@@ -4,8 +4,7 @@
     <Description>Amazon SQS + SNS transport for redb.Route ESB framework via the native AWS SDK for .NET. SQS queue consumer (long-poll, concurrent consumers, visibility, FIFO) + producer (send/batch), and SNS topic publisher with SNS-to-SQS fan-out. LocalStack/ElasticMQ compatible.</Description>
     <PackageTags>esb;messaging;aws;sqs;sns;queue;pubsub;redb</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Version>3.3.2</Version>
-    <PackageVersion>3.3.2</PackageVersion>
+    <!-- Version comes from redb.Route/Directory.Build.props — the whole ecosystem ships one number. -->
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="redb.Route.Tests.Sqs" />
