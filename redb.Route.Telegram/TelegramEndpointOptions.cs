@@ -21,7 +21,14 @@ public sealed class TelegramEndpointOptions : EndpointOptions
     /// Bot token from @BotFather.
     /// Supports ${...} expressions: token=${env:TELEGRAM_TOKEN}
     /// </summary>
+    [Sensitive]
     public string Token { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Named <see cref="TelegramConnectionFactory"/> from the route registry. Lets the bot token
+    /// live in the registry instead of the endpoint URI, so it never reaches logs or dashboards.
+    /// </summary>
+    public string? ConnectionFactory { get; set; }
 
     // ── Producer ──────────────────────────────────────────────────────────────
 
@@ -63,6 +70,29 @@ public sealed class TelegramEndpointOptions : EndpointOptions
     public bool BodyIsFileId { get; set; }
 
     /// <summary>
+    /// Message to reply to. Supports expressions, resolved per message:
+    /// <c>replyToMessageId=${header.telegram.messageId}</c> replies to the incoming
+    /// message (the fluent sugar <c>.ReplyToIncoming()</c> emits exactly that).
+    /// An explicit <c>telegram.replyToMessageId</c> header wins over this option.
+    /// Applies to <c>send</c> / <c>document</c> / <c>photo</c> modes. Default: no reply.
+    /// </summary>
+    public string? ReplyToMessageId { get; set; }
+
+    /// <summary>
+    /// Message to edit / delete. Supports expressions, resolved per message:
+    /// <c>messageId=${header.telegram.sentMessageId}</c> targets the message just sent
+    /// by an upstream producer step. An explicit <c>telegram.messageId</c> header wins.
+    /// Applies to <c>edit</c> / <c>delete</c> modes. Default: header required.
+    /// </summary>
+    public string? MessageId { get; set; }
+
+    /// <summary>
+    /// In <c>answer</c> mode, show the text as a modal alert instead of a toast
+    /// at the top of the chat. Default <c>false</c>.
+    /// </summary>
+    public bool ShowAlert { get; set; }
+
+    /// <summary>
     /// Per-send timeout in seconds for producer calls (send / document / photo / edit / delete / answer).
     /// Default 120. Range 1–600. Independent from the long-polling HTTP ceiling so large uploads over
     /// a slow link are not capped by the consumer's poll timeout.
@@ -92,6 +122,20 @@ public sealed class TelegramEndpointOptions : EndpointOptions
             throw new ArgumentException(
                 $"Invalid parseMode '{ParseMode}'. Expected 'HTML', 'Markdown', 'MarkdownV2' or empty.",
                 nameof(ParseMode));
+
+        // A constant message-id option must be a message id; expressions are resolved per message.
+        ValidateMessageIdOption(ReplyToMessageId, "replyToMessageId", nameof(ReplyToMessageId));
+        ValidateMessageIdOption(MessageId, "messageId", nameof(MessageId));
+    }
+
+    private static void ValidateMessageIdOption(string? value, string uriName, string paramName)
+    {
+        if (!string.IsNullOrWhiteSpace(value)
+            && !value.Contains("${", StringComparison.Ordinal)
+            && !long.TryParse(value, out _))
+            throw new ArgumentException(
+                $"Invalid {uriName} '{value}'. Expected a message id or a ${{...}} expression.",
+                paramName);
     }
 
     /// <summary>

@@ -72,6 +72,14 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
     }
 
     /// <inheritdoc />
+    public void Send(string endpointUri, IExchange exchange)
+    {
+        EnsureStarted();
+        var endpoint = Context.GetEndpoint(endpointUri);
+        Send(endpoint, exchange);
+    }
+
+    /// <inheritdoc />
     public void Send(IEndpoint endpoint, IMessage message)
     {
         EnsureStarted();
@@ -162,6 +170,55 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         EnsureStarted();
         var endpoint = Context.GetEndpoint(endpointUri);
         await SendAsync(endpoint, message).ConfigureAwait(false);
+    }
+
+    // ── Async Send / Request of a pre-built exchange (caller-owned) ──
+
+    /// <inheritdoc />
+    public async Task SendAsync(IEndpoint endpoint, IExchange exchange, CancellationToken cancellationToken = default)
+    {
+        EnsureStarted();
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(exchange);
+
+        // Caller-owned exchange: unlike the body/message overloads we do NOT create, clone or
+        // dispose it, and we attach no DI scope — whatever scope the exchange carries (or lacks)
+        // is the caller's responsibility. A snapshot cloned from a completed exchange may reference
+        // a disposed scope; the caller must give it a live scope before replay if it needs one.
+        var producer = GetOrCreateProducer(endpoint);
+        await producer.Start(cancellationToken).ConfigureAwait(false);
+        await producer.Process(exchange, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task SendAsync(string endpointUri, IExchange exchange, CancellationToken cancellationToken = default)
+    {
+        EnsureStarted();
+        var endpoint = Context.GetEndpoint(endpointUri);
+        await SendAsync(endpoint, exchange, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<IExchange> RequestAsync(IEndpoint endpoint, IExchange exchange, CancellationToken cancellationToken = default)
+    {
+        EnsureStarted();
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(exchange);
+
+        // Caller-owned (see SendAsync(IExchange) above): not cloned or disposed here.
+        exchange.Pattern = ExchangePattern.InOut;
+        var producer = GetOrCreateProducer(endpoint);
+        await producer.Start(cancellationToken).ConfigureAwait(false);
+        await producer.Process(exchange, cancellationToken).ConfigureAwait(false);
+        return exchange;
+    }
+
+    /// <inheritdoc />
+    public async Task<IExchange> RequestAsync(string endpointUri, IExchange exchange, CancellationToken cancellationToken = default)
+    {
+        EnsureStarted();
+        var endpoint = Context.GetEndpoint(endpointUri);
+        return await RequestAsync(endpoint, exchange, cancellationToken).ConfigureAwait(false);
     }
 
     // ── Request/Reply ──

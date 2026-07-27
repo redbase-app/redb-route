@@ -23,6 +23,7 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     public string? SaslUsername { get; set; }
 
     /// <summary>SASL password.</summary>
+    [Sensitive]
     public string? SaslPassword { get; set; }
 
     // ── SSL/TLS ──
@@ -37,6 +38,7 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     public string? SslKeyLocation { get; set; }
 
     /// <summary>Client private key passphrase.</summary>
+    [Sensitive]
     public string? SslKeyPassword { get; set; }
 
     /// <summary>Name of <see cref="KafkaConnectionFactory"/> in the route registry.</summary>

@@ -38,6 +38,7 @@ public sealed class GrpcBuilder
     private bool? _ssl;
     private string? _sslCertPath;
     private string? _sslCertPassword;
+    private string? _connectionFactory;
     private bool? _inOut;
 
     internal GrpcBuilder(string hostPort)
@@ -82,6 +83,9 @@ public sealed class GrpcBuilder
     /// <summary>SSL certificate password.</summary>
     public GrpcBuilder SslCertPassword(string password) { _sslCertPassword = password; return this; }
 
+    /// <summary>References a named <see cref="GrpcConnectionFactory"/> from the route registry instead of putting the certificate password in the URI.</summary>
+    public GrpcBuilder ConnectionFactory(string name) { _connectionFactory = name; return this; }
+
     /// <summary>Max request message size for consumer.</summary>
     public GrpcBuilder MaxRequestMessageSize(int bytes) { _maxRequestMessageSize = bytes; return this; }
 
@@ -119,6 +123,7 @@ public sealed class GrpcBuilder
         AppendBool("ssl", _ssl);
         AppendStr("sslCertPath", _sslCertPath);
         AppendStr("sslCertPassword", _sslCertPassword);
+        AppendStr("connectionFactory", _connectionFactory);
         AppendInt("maxRequestMessageSize", _maxRequestMessageSize);
         AppendBool("inOut", _inOut);
 

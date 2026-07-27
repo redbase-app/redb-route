@@ -29,7 +29,12 @@ public sealed class CompiledRoute
     /// <summary>Route identifier.</summary>
     public string RouteId { get; }
 
-    /// <summary>Source endpoint URI.</summary>
+    /// <summary>
+    /// Source endpoint URI, with secrets redacted (passwords, tokens, keys, and userinfo
+    /// passwords masked to <c>****</c>). Safe to log, expose via health checks, and render
+    /// in dashboards. This is a display value — it is NOT byte-identical to the original URI
+    /// and must not be re-parsed to recover connection credentials.
+    /// </summary>
     public string FromUri { get; }
 
     /// <summary>Original route definition (v2 tree).</summary>

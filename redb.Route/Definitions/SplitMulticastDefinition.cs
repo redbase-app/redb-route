@@ -11,7 +11,7 @@ namespace redb.Route.Definitions;
 /// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
 /// close with <see cref="EndSplit"/>.
 /// </summary>
-public class SplitDefinition : RouteDefinitionBase<SplitDefinition>, IRouteScope
+public class SplitDefinition : RouteDefinitionBase<SplitDefinition>, IRouteScope, ICompositeScope
 {
     private readonly Func<IExchange, IEnumerable<object?>>? _splitter;
     private readonly Func<IExchange, IAsyncEnumerable<object?>>? _asyncSplitter;
@@ -127,7 +127,7 @@ public class SplitDefinition : RouteDefinitionBase<SplitDefinition>, IRouteScope
 /// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
 /// close with <see cref="EndMulticast"/>.
 /// </summary>
-public class MulticastDefinition : RouteDefinitionBase<MulticastDefinition>, IRouteScope
+public class MulticastDefinition : RouteDefinitionBase<MulticastDefinition>, IRouteScope, ICompositeScope
 {
     private bool _parallel = true;
     private bool _stopOnException;

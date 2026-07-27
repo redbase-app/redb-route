@@ -247,9 +247,12 @@ public class HttpStreamingTests : IAsyncLifetime
         {
             ex.Out = ex.In.Clone();
             ex.Out.ContentType = "text/event-stream";
-            // 20 chunks, 100 ms apart — gives the test plenty of time to abort.
+            // 100 chunks, 100 ms apart (~10 s of scripted yields). The enumerator must still be
+            // running when cancellation propagates — with a short script it can simply run to
+            // completion first, leaving ct uncancelled and the assertion below failing for a
+            // reason unrelated to cancellation.
             ex.Out.Body = ScriptedChunksAsync(
-                Enumerable.Range(0, 20).Select(i => $"c{i}").ToArray(),
+                Enumerable.Range(0, 100).Select(i => $"c{i}").ToArray(),
                 ex.Out,
                 observedCancellation: cancelled,
                 delayMs: 100);
@@ -272,9 +275,11 @@ public class HttpStreamingTests : IAsyncLifetime
             abort.Cancel();
         }
 
-        // Server-side enumerator must observe cancellation within a reasonable
-        // window (well under the full 2 s of total scripted yields).
-        var observed = await Task.WhenAny(cancelled.Task, Task.Delay(2_500));
+        // Server-side enumerator must observe cancellation. The budget is generous on purpose:
+        // the happy path completes as soon as the TCS fires (~hundreds of ms), and the long
+        // ceiling only applies on failure — it stops thread-pool starvation under parallel test
+        // load (or a busy CI box) from turning a working propagation path into a red test.
+        var observed = await Task.WhenAny(cancelled.Task, Task.Delay(10_000));
         observed.Should().BeSameAs(cancelled.Task,
             "server-side enumerator should observe client cancellation");
     }

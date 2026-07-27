@@ -32,13 +32,21 @@ public class MailEndpointOptions : EndpointOptions
 
     // ── Authentication ────────────────────────────────────────────────
 
+    /// <summary>
+    /// Named <see cref="MailConnectionFactory"/> from the route registry. Lets mailbox credentials
+    /// live in the registry instead of the endpoint URI, so they never reach logs or dashboards.
+    /// </summary>
+    public string? ConnectionFactory { get; set; }
+
     /// <summary>Username for authentication.</summary>
     public string Username { get; set; } = "";
 
     /// <summary>Password for authentication.</summary>
+    [Sensitive]
     public string Password { get; set; } = "";
 
     /// <summary>OAuth2 access token (for XOAUTH2/OAUTHBEARER).</summary>
+    [Sensitive]
     public string AccessToken { get; set; } = "";
 
     /// <summary>Authentication mechanism to use.</summary>
@@ -53,6 +61,7 @@ public class MailEndpointOptions : EndpointOptions
     public string ClientCertPath { get; set; } = "";
 
     /// <summary>Client certificate password.</summary>
+    [Sensitive]
     public string ClientCertPassword { get; set; } = "";
 
     // ── SMTP Producer options ─────────────────────────────────────────

@@ -1,6 +1,6 @@
 # redb.Route
 
-Core ESB engine — async-first message routing with fluent C# DSL, 24 EIP processors, unified expression engine with 17 predicates, OpenTelemetry telemetry, and built-in components (Direct, SEDA, Timer, Mock, Log).
+Core ESB engine — async-first message routing with fluent C# DSL, 30+ EIP processors, unified expression engine with 17 predicates, OpenTelemetry telemetry, and built-in components (Direct, SEDA, Timer, Mock, Log).
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
@@ -188,7 +188,7 @@ AST-based compiled expression language with caching (used in `Log`, `Filter(stri
 | `Transform` | — | `Transform(e => ...)` | `Transform(JPath("$.data"))` | — |
 | `Process` | — | `Process(e => ...)` | `Process(myProcessor)` | — |
 
-## Processors (24 EIP Patterns)
+## Processors (30+ EIP Patterns)
 
 | Processor | DSL | Pattern |
 |-----------|-----|---------|
@@ -216,6 +216,26 @@ AST-based compiled expression language with caching (used in `Log`, `Filter(stri
 | `OnExceptionProcessor` | `.OnException<T>()` | Exception Handler |
 | `TryCatchProcessor` | `.DoTry()` | Try-Catch |
 | `IdempotentConsumerProcessor` | `.IdempotentConsumer(...)` | Idempotent Consumer |
+| `SagaProcessor` | `.Saga()` | Saga (compensating steps) |
+| `ScatterGatherProcessor` | `.ScatterGather(...)` | Scatter-Gather |
+| `ClaimCheckProcessor` | claim-check definition | Claim Check |
+| `ThreadsProcessor` | `.Threads(n)` | Threads (async handoff) |
+| `DebounceProcessor` | `.Debounce(...)` | Debounce |
+| `KeyedThrottleProcessor` | keyed throttle definition | Throttler (per key) |
+| `LoadBalancerProcessor` | `.LoadBalance(...)` | Load Balancer |
+| `ChoiceProcessor` (composed) | `.Normalize(...)` | Normalizer |
+| `PollEnrichProcessor` | `.PollEnrich(...)` | Polling Consumer / Enricher |
+| `SamplingProcessor` | `.Sample(...)` | Sampling |
+| `TimeoutProcessor` | `.ProcessingTimeout(...)` | Processing timeout |
+| `ToDynamicProcessor` | `.ToD(...)` | Dynamic Endpoint (Routing Slip) |
+| `CheckpointProcessor` | `.Replayable(...)` | Replay checkpoint |
+| `RoutePolicyProcessor` | `.RoutePolicy(...)` | Route Policy |
+| `StreamCachingProcessor` | `.StreamCaching()` | Stream Caching |
+| `StreamingSplitterProcessor` | `.Split(...)` (streaming) | Splitter (streaming) |
+
+> Counts in this file are derived from `Processors/` and `IRouteDefinition` — 37 `*Processor`
+> implementations behind 30+ named EIPs. Keep them in step with the repository README and the
+> package description when adding a pattern.
 
 ## Error Handling
 

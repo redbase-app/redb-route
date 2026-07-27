@@ -42,6 +42,21 @@ public sealed class TelegramComponent : ComponentBase
 
         var options = new TelegramEndpointOptions();
         options.BindFromUri(uri.RawParameters);
+
+        // Resolve the named ConnectionFactory BEFORE Validate(): the factory may be the only
+        // source of the bot token, and Validate() requires one. This is what lets a route
+        // reference `connectionFactory=my-bot` and keep the token out of the URI entirely.
+        if (!string.IsNullOrEmpty(options.ConnectionFactory) && Context is not null)
+        {
+            var factory = Context.GetFromRegistry<TelegramConnectionFactory>(options.ConnectionFactory);
+            if (factory is not null)
+                factory.ApplyTo(options, uri);
+            else
+                Logger?.LogWarning(
+                    "Telegram: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
+                    options.ConnectionFactory);
+        }
+
         options.Validate();
 
         return new TelegramEndpoint(uri, this, options);

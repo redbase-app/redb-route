@@ -32,11 +32,38 @@ public sealed class LdapEndpoint : EndpointBase<LdapEndpointOptions>, IDisposabl
     /// <summary>Typed options (exposed for producer/consumer).</summary>
     internal LdapEndpointOptions EndpointOptions => Options;
 
+    /// <summary>Resolved connection factory from the registry (null if not configured).</summary>
+    internal LdapConnectionFactory? ResolvedFactory { get; }
+
     /// <summary>Creates an LDAP endpoint.</summary>
     public LdapEndpoint(EndpointUri uri, LdapComponent component, LdapEndpointOptions options)
         : base(uri, component, options)
     {
         Logger = component.Logger;
+
+        // Resolve the named ConnectionFactory from the registry and fill in every option the
+        // URI did not set. This is what lets a route reference `connectionFactory=my-ldap`
+        // and keep the service-account credentials out of the URI entirely — so they can
+        // never surface in logs, telemetry, or the dashboard.
+        if (!string.IsNullOrEmpty(options.ConnectionFactory) && component.Context is not null)
+        {
+            ResolvedFactory = component.Context.GetFromRegistry<LdapConnectionFactory>(options.ConnectionFactory);
+            if (ResolvedFactory is not null)
+            {
+                ResolvedFactory.ApplyTo(options, uri);
+                // Re-validate: the merged values come from the factory, not the URI.
+                options.Validate();
+                Logger?.LogDebug("LDAP: using ConnectionFactory '{Name}' from registry",
+                    options.ConnectionFactory);
+            }
+            else
+            {
+                Logger?.LogWarning(
+                    "LDAP: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
+                    options.ConnectionFactory);
+            }
+        }
+
         _semaphore = new SemaphoreSlim(options.MaxConnections, options.MaxConnections);
         (OperationType, BaseDn) = ParsePath(uri.Path);
     }

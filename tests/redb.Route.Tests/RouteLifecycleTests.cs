@@ -205,6 +205,25 @@ public class RouteLifecycleTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task UnnamedRoute_WithSecretInUri_DoesNotLeakSecretInRouteIdOrFromUri()
+    {
+        // No explicit RouteId(): the id falls back to the endpoint key, which must be
+        // sanitized so a URI secret never surfaces in {RouteId}/{FromUri} logs or dashboards.
+        _context.AddRoutes(r =>
+        {
+            r.From("direct://svc?password=topsecret").Process(_ => { });
+        });
+
+        await _context.Start();
+
+        var route = _context.Routes.Single();
+        route.RouteId.Should().NotContain("topsecret");
+        route.RouteId.Should().Contain("****");
+        route.FromUri.Should().NotContain("topsecret");
+        route.FromUri.Should().Contain("****");
+    }
+
+    [Fact]
     public void RouteStatus_HasCorrectValues()
     {
         RouteStatus.Stopped.Should().Be((RouteStatus)0);

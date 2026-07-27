@@ -6,9 +6,11 @@ using redb.Route.Telegram;
 using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
+using Telegram.Bot.Requests;
 using Telegram.Bot.Requests.Abstractions;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
 using Message = redb.Route.Core.Message;
 using TgMessage = Telegram.Bot.Types.Message;
 
@@ -317,6 +319,183 @@ public sealed class TelegramIntegrationTests
         {
             await producer.Process(new Exchange(new Message("hi")));
             sentTo.Should().Be(111L, "with no header the URI chatId option is used");
+        }
+        finally { await producer.Stop(); }
+    }
+
+    // ── Producer: replyToMessageId option (expression) — reply to the incoming message ──
+
+    private const string ReplyToIncomingUri = "&chatId=555&replyToMessageId=${header.telegram.messageId}";
+
+    [Fact]
+    public async Task Producer_ReplyToIncoming_UsesIncomingMessageId()
+    {
+        var mock = Substitute.For<ITelegramBotClient>();
+        int? repliedTo = null;
+        mock.SendRequest(Arg.Any<IRequest<TgMessage>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var req = (SendMessageRequest)ci.Arg<IRequest<TgMessage>>();
+                repliedTo = req.ReplyParameters?.MessageId;
+                return Task.FromResult(SentMessage());
+            });
+
+        var producer = (TelegramProducer)Endpoint("send", ReplyToIncomingUri).CreateProducer();
+        producer.UseTestClient(mock);
+        await producer.Start();
+        try
+        {
+            var exchange = new Exchange(new Message("hi"));
+            exchange.In.Headers[TelegramHeaders.MessageId] = 42; // set by the consumer
+            await producer.Process(exchange);
+
+            repliedTo.Should().Be(42, "the replyToMessageId expression resolves to the incoming telegram.messageId");
+        }
+        finally { await producer.Stop(); }
+    }
+
+    [Fact]
+    public async Task Producer_ReplyToIncoming_ExplicitHeaderWins()
+    {
+        var mock = Substitute.For<ITelegramBotClient>();
+        int? repliedTo = null;
+        mock.SendRequest(Arg.Any<IRequest<TgMessage>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var req = (SendMessageRequest)ci.Arg<IRequest<TgMessage>>();
+                repliedTo = req.ReplyParameters?.MessageId;
+                return Task.FromResult(SentMessage());
+            });
+
+        var producer = (TelegramProducer)Endpoint("send", ReplyToIncomingUri).CreateProducer();
+        producer.UseTestClient(mock);
+        await producer.Start();
+        try
+        {
+            var exchange = new Exchange(new Message("hi"));
+            exchange.In.Headers[TelegramHeaders.MessageId] = 42;
+            exchange.In.Headers[TelegramHeaders.ReplyToMessageId] = 7; // explicit target
+            await producer.Process(exchange);
+
+            repliedTo.Should().Be(7, "an explicit telegram.replyToMessageId header wins over the option");
+        }
+        finally { await producer.Stop(); }
+    }
+
+    [Fact]
+    public async Task Producer_ReplyToIncoming_NoIncomingMessageId_SendsUnthreaded()
+    {
+        var mock = Substitute.For<ITelegramBotClient>();
+        var captured = false;
+        int? repliedTo = null;
+        mock.SendRequest(Arg.Any<IRequest<TgMessage>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var req = (SendMessageRequest)ci.Arg<IRequest<TgMessage>>();
+                captured = true;
+                repliedTo = req.ReplyParameters?.MessageId;
+                return Task.FromResult(SentMessage());
+            });
+
+        var producer = (TelegramProducer)Endpoint("send", ReplyToIncomingUri).CreateProducer();
+        producer.UseTestClient(mock);
+        await producer.Start();
+        try
+        {
+            await producer.Process(new Exchange(new Message("hi"))); // no telegram.messageId header
+
+            captured.Should().BeTrue();
+            repliedTo.Should().BeNull("an empty expression resolution sends the message unthreaded, not fail");
+        }
+        finally { await producer.Stop(); }
+    }
+
+    // ── Producer: edit targets the message from the messageId option expression ──
+
+    [Fact]
+    public async Task Producer_Edit_MessageIdOptionExpression_TargetsSentMessage()
+    {
+        var mock = Substitute.For<ITelegramBotClient>();
+        int? edited = null;
+        mock.SendRequest(Arg.Any<IRequest<TgMessage>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var req = (EditMessageTextRequest)ci.Arg<IRequest<TgMessage>>();
+                edited = req.MessageId;
+                return Task.FromResult(SentMessage());
+            });
+
+        var producer = (TelegramProducer)Endpoint(
+            "edit", "&chatId=555&messageId=${header.telegram.sentMessageId}").CreateProducer();
+        producer.UseTestClient(mock);
+        await producer.Start();
+        try
+        {
+            var exchange = new Exchange(new Message("updated"));
+            exchange.In.Headers[TelegramHeaders.SentMessageId] = 100; // written by an upstream send
+            await producer.Process(exchange);
+
+            edited.Should().Be(100, "the messageId expression resolves to telegram.sentMessageId");
+        }
+        finally { await producer.Stop(); }
+    }
+
+    // ── Producer: document carries the reply markup header ────────────
+
+    [Fact]
+    public async Task Producer_Document_PassesReplyMarkup()
+    {
+        var mock = Substitute.For<ITelegramBotClient>();
+        ReplyMarkup? markup = null;
+        mock.SendRequest(Arg.Any<IRequest<TgMessage>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var req = (SendDocumentRequest)ci.Arg<IRequest<TgMessage>>();
+                markup = req.ReplyMarkup;
+                return Task.FromResult(SentMessage());
+            });
+
+        var producer = (TelegramProducer)Endpoint("document", "&chatId=555").CreateProducer();
+        producer.UseTestClient(mock);
+        await producer.Start();
+        try
+        {
+            var exchange = new Exchange(new Message(new byte[] { 1, 2, 3 }));
+            exchange.In.Headers[TelegramHeaders.FileName] = "report.pdf";
+            exchange.In.Headers[TelegramHeaders.ReplyMarkup] =
+                new InlineKeyboardMarkup(InlineKeyboardButton.WithCallbackData("Open", "act:open"));
+            await producer.Process(exchange);
+
+            markup.Should().NotBeNull("document mode must honour telegram.replyMarkup");
+        }
+        finally { await producer.Stop(); }
+    }
+
+    // ── Producer: answer with showAlert ───────────────────────────────
+
+    [Fact]
+    public async Task Producer_Answer_ShowAlert_PassesFlag()
+    {
+        var mock = Substitute.For<ITelegramBotClient>();
+        bool? shown = null;
+        mock.SendRequest(Arg.Any<IRequest<bool>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var req = (AnswerCallbackQueryRequest)ci.Arg<IRequest<bool>>();
+                shown = req.ShowAlert;
+                return Task.FromResult(true);
+            });
+
+        var producer = (TelegramProducer)Endpoint("answer", "&showAlert=true").CreateProducer();
+        producer.UseTestClient(mock);
+        await producer.Start();
+        try
+        {
+            var exchange = new Exchange(new Message("Are you sure?"));
+            exchange.In.Headers[TelegramHeaders.CallbackQueryId] = "cbq-1";
+            await producer.Process(exchange);
+
+            shown.Should().BeTrue("showAlert=true must reach the Bot API call");
         }
         finally { await producer.Stop(); }
     }

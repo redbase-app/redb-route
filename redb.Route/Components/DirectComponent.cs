@@ -102,14 +102,14 @@ public class DirectProducer : IProducer
     /// <inheritdoc />
     public Task Start(CancellationToken ct = default)
     {
-        _logger?.LogInformation("Direct producer started: {Name}", _endpoint.Uri.NormalizedKey);
+        _logger?.LogInformation("Direct producer started: {Name}", EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey));
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
     public Task Stop(CancellationToken ct = default)
     {
-        _logger?.LogInformation("Direct producer stopped: {Name}", _endpoint.Uri.NormalizedKey);
+        _logger?.LogInformation("Direct producer stopped: {Name}", EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey));
         return Task.CompletedTask;
     }
 }
@@ -138,7 +138,7 @@ public class DirectConsumer : IConsumer
     {
         _endpoint.RegisterConsumerProcessor(_processor);
         _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
-        _logger?.LogInformation("Direct consumer started: {Name}", _endpoint.Uri.NormalizedKey);
+        _logger?.LogInformation("Direct consumer started: {Name}", EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey));
         return Task.CompletedTask;
     }
 
@@ -147,7 +147,7 @@ public class DirectConsumer : IConsumer
     {
         _endpoint.UnregisterConsumerProcessor();
         _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
-        _logger?.LogInformation("Direct consumer stopped: {Name}", _endpoint.Uri.NormalizedKey);
+        _logger?.LogInformation("Direct consumer stopped: {Name}", EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey));
         return Task.CompletedTask;
     }
 }

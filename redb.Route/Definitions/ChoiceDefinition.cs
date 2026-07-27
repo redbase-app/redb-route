@@ -14,7 +14,7 @@ namespace redb.Route.Definitions;
 /// standard EIP shape — use <c>When</c> / <c>Otherwise</c> branches instead.
 /// </para>
 /// </summary>
-public class ChoiceDefinition : RouteDefinitionBase<ChoiceDefinition>, IRouteScope
+public class ChoiceDefinition : RouteDefinitionBase<ChoiceDefinition>, IRouteScope, ICompositeScope, IBranchingDefinition
 {
     private readonly List<WhenDefinition> _whens = [];
     private OtherwiseDefinition? _otherwise;
@@ -24,6 +24,19 @@ public class ChoiceDefinition : RouteDefinitionBase<ChoiceDefinition>, IRouteSco
 
     /// <summary>The Otherwise branch (null if not declared).</summary>
     public OtherwiseDefinition? OtherwiseBranch => _otherwise;
+
+    /// <summary>
+    /// The When/Otherwise branches — logical children that live outside <see cref="Outputs"/>, so a
+    /// generic tree-walk (validation) can reach steps nested inside a branch.
+    /// </summary>
+    public IEnumerable<IProcessorDefinition> Branches
+    {
+        get
+        {
+            foreach (var when in _whens) yield return when;
+            if (_otherwise is not null) yield return _otherwise;
+        }
+    }
 
     // ── Branch builders ───────────────────────────────────────────────────────
 
@@ -131,7 +144,7 @@ public class ChoiceDefinition : RouteDefinitionBase<ChoiceDefinition>, IRouteSco
 /// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>; close with
 /// <see cref="EndWhen"/>, <see cref="Otherwise"/>, or <see cref="EndChoice"/>.
 /// </summary>
-public class WhenDefinition : RouteDefinitionBase<WhenDefinition>, IRouteScope
+public class WhenDefinition : RouteDefinitionBase<WhenDefinition>, IRouteScope, ICompositeScope
 {
     internal readonly Func<IExchange, bool> Predicate;
     private readonly ChoiceDefinition _choice;
@@ -182,7 +195,7 @@ public class WhenDefinition : RouteDefinitionBase<WhenDefinition>, IRouteScope
 /// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>; close with
 /// <see cref="EndOtherwise"/> or <see cref="EndChoice"/>.
 /// </summary>
-public class OtherwiseDefinition : RouteDefinitionBase<OtherwiseDefinition>, IRouteScope
+public class OtherwiseDefinition : RouteDefinitionBase<OtherwiseDefinition>, IRouteScope, ICompositeScope
 {
     private readonly ChoiceDefinition _choice;
 

@@ -29,6 +29,7 @@ public sealed class AmqpEndpointOptions : EndpointOptions
     public string? User { get; set; }
 
     /// <summary>SASL password.</summary>
+    [Sensitive]
     public string? Password { get; set; }
 
     /// <summary>Container ID for this connection.</summary>

@@ -94,11 +94,20 @@ public class SignalREndpointOptions : EndpointOptions
     public string? SslCertPath { get; set; }
 
     /// <summary>Password for the PFX certificate.</summary>
+    [Sensitive]
     public string? SslCertPassword { get; set; }
+
+    /// <summary>
+    /// Named <see cref="SignalRConnectionFactory"/> from the route registry. Lets the access token
+    /// and TLS certificate password live in the registry instead of the endpoint URI, so they
+    /// never reach logs or dashboards.
+    /// </summary>
+    public string? ConnectionFactory { get; set; }
 
     // ── Auth ────────────────────────────────────────────
 
     /// <summary>Access token for client authentication (JWT). Used by producer in client mode.</summary>
+    [Sensitive]
     public string? AccessToken { get; set; }
 
     /// <inheritdoc />

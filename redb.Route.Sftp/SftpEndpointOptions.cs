@@ -1,3 +1,4 @@
+using redb.Route.Core;
 using redb.Route.GenericFile;
 
 namespace redb.Route.Sftp;
@@ -37,6 +38,7 @@ public class SftpEndpointOptions : RemoteFileEndpointOptions
     public string PrivateKeyPath { get; set; } = "";
 
     /// <summary>Passphrase for the encrypted private key (if applicable).</summary>
+    [Sensitive]
     public string PrivateKeyPassphrase { get; set; } = "";
 
     /// <summary>
@@ -96,6 +98,7 @@ public class SftpEndpointOptions : RemoteFileEndpointOptions
     public string ProxyUsername { get; set; } = "";
 
     /// <summary>Proxy password.</summary>
+    [Sensitive]
     public string ProxyPassword { get; set; } = "";
 
     // ═══════════════════════════════════════════════════════════════════

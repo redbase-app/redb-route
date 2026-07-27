@@ -37,12 +37,15 @@ public class S3EndpointOptions : EndpointOptions
     public string Region { get; set; } = "us-east-1";
 
     /// <summary>AWS access key ID. Required unless using default credentials provider.</summary>
+    [Sensitive]
     public string AccessKey { get; set; } = "";
 
     /// <summary>AWS secret access key. Required unless using default credentials provider.</summary>
+    [Sensitive]
     public string SecretKey { get; set; } = "";
 
     /// <summary>AWS session token for temporary credentials (STS AssumeRole).</summary>
+    [Sensitive]
     public string SessionToken { get; set; } = "";
 
     /// <summary>AWS named profile for credentials (from ~/.aws/credentials).</summary>

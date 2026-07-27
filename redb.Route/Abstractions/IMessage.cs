@@ -31,8 +31,22 @@ public interface IMessage
     /// <returns>Converted value or default if not found.</returns>
     T? GetHeader<T>(string key);
 
-    /// <summary>Deep copy of the message including Body and Headers.</summary>
+    /// <summary>
+    /// Structural copy of the message. Headers get a new dictionary, but the <see cref="Body"/>
+    /// reference and header values are <b>shared</b> (shallow) — this is intentional and relied upon
+    /// (e.g. a Splitter branch cloning into a shared aggregation list). For an isolated deep copy of
+    /// the body use <see cref="Snapshot"/>.
+    /// </summary>
     IMessage Clone();
+
+    /// <summary>
+    /// Deep, isolated copy for checkpoint/replay: like <see cref="Clone"/> but the <see cref="Body"/>
+    /// is <b>deep-copied</b> so the captured payload is frozen and immune to later in-place mutation.
+    /// Header values follow <see cref="Clone"/> (shared) as they carry immutable metadata.
+    /// Throws <see cref="System.NotSupportedException"/> if the body cannot be safely deep-copied
+    /// (it must be immutable, a <c>byte[]</c>, or implement <see cref="System.ICloneable"/>).
+    /// </summary>
+    IMessage Snapshot();
 
     // ── Java-style API (kept forever, default interface methods) ──
 

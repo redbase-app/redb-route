@@ -60,6 +60,7 @@ public sealed class MailBuilder
     private int? _timeout;
     private string? _username;
     private string? _password;
+    private string? _connectionFactory;
     private string? _accessToken;
     private string? _authMechanism;
     private bool _skipCertificateValidation;
@@ -129,6 +130,12 @@ public sealed class MailBuilder
 
     /// <summary>Password for authentication.</summary>
     public MailBuilder Password(string password) { _password = password; return this; }
+
+    /// <summary>
+    /// References a named <see cref="MailConnectionFactory"/> from the route registry instead of
+    /// putting mailbox credentials in the URI.
+    /// </summary>
+    public MailBuilder ConnectionFactory(string name) { _connectionFactory = name; return this; }
 
     /// <summary>OAuth2/Bearer access token.</summary>
     public MailBuilder AccessToken(string token) { _accessToken = token; return this; }
@@ -296,6 +303,7 @@ public sealed class MailBuilder
         AppendInt("timeout", _timeout);
         AppendIf("username", _username);
         AppendIf("password", _password);
+        AppendIf("connectionFactory", _connectionFactory);
         AppendIf("accessToken", _accessToken);
         AppendIf("authMechanism", _authMechanism);
         AppendBool("skipCertificateValidation", _skipCertificateValidation);

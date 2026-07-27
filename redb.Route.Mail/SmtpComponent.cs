@@ -28,6 +28,7 @@ public class SmtpComponent : ComponentBase
         if (!string.IsNullOrEmpty(uri.Path) && uri.Path != "/")
             options.Host = uri.Path.TrimStart('/');
         options.BindFromUri(uri.RawParameters);
+        MailConnectionFactory.TryApply(Context, options, uri, Logger, "SMTP");
         options.Validate();
 
         return new SmtpEndpoint(uri, this, options);

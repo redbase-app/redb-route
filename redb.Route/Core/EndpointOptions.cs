@@ -14,6 +14,37 @@ public abstract class EndpointOptions
 {
     private Dictionary<string, string>? _unmapped;
 
+    // Options types whose [Sensitive] properties have already been registered. Reflection runs
+    // once per type, not per endpoint.
+    private static readonly ConcurrentDictionary<Type, byte> _sensitiveScanned = new();
+
+    /// <summary>
+    /// Feeds every <see cref="SensitiveAttribute"/>-marked property name of <paramref name="type"/>
+    /// into <see cref="EndpointUri.AddSensitiveKeys"/>, so the URI renderer redacts those parameters
+    /// by declaration instead of by name-guessing. Runs once per options type.
+    /// <para>
+    /// This is the .NET equivalent of the Camel build plugin that generates
+    /// <c>SensitiveUtils.SENSITIVE_KEYS</c> from <c>@UriParam(secret = true)</c>: the keyword set is
+    /// derived from the declarations, never hand-written. Note the harvest is lazy — it happens when
+    /// an options type is first bound — so the name-keyword backstop in
+    /// <see cref="EndpointUri.IsSensitiveKey"/> still matters for a URI rendered before any endpoint
+    /// of that scheme exists.
+    /// </para>
+    /// </summary>
+    private static void RegisterSensitiveKeys(Type type)
+    {
+        if (!_sensitiveScanned.TryAdd(type, 0)) return;
+
+        var names = type
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.IsDefined(typeof(SensitiveAttribute), inherit: true))
+            .Select(p => p.Name)
+            .ToArray();
+
+        if (names.Length > 0)
+            EndpointUri.AddSensitiveKeys(names);
+    }
+
     /// <summary>Parameters from URI that were not mapped to typed properties.</summary>
     public IReadOnlyDictionary<string, string> UnmappedParameters =>
         _unmapped ?? (IReadOnlyDictionary<string, string>)new Dictionary<string, string>(0);
@@ -28,6 +59,10 @@ public abstract class EndpointOptions
     /// <param name="parameters">Raw string parameters from EndpointUriParser.</param>
     public void BindFromUri(IReadOnlyDictionary<string, string> parameters)
     {
+        // Harvest [Sensitive] declarations before anything else, so the set is populated even for
+        // an endpoint whose URI carries no parameters at all.
+        RegisterSensitiveKeys(GetType());
+
         if (parameters.Count == 0) return;
 
         _unmapped = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

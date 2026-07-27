@@ -538,6 +538,43 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         return def;
     }
 
+    // ── Replay checkpoints ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Opens a replay checkpoint (save-point). The steps that follow become the marker's <b>body</b>
+    /// (the tail re-run on replay). On each pass the exchange is snapshotted into
+    /// <c>route.checkpoint</c>. At the very start of a route no <see cref="ReplayableDefinition.End"/>
+    /// is needed (the body is the whole pipeline); in the middle or with several markers, close with
+    /// <see cref="ReplayableDefinition.EndReplayable"/> or use the lambda-body overload.
+    /// </summary>
+    /// <param name="name">Save-point name, unique within the route.</param>
+    /// <param name="exposed">
+    /// When <c>true</c>, the marker is also an addressable public entry (<c>.To(...)</c> / tests);
+    /// default <c>false</c> = internal replay only via <see cref="IRouteContext.ReplayAsync"/>.
+    /// </param>
+    public ReplayableDefinition Replayable(string name, bool exposed = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        var def = new ReplayableDefinition(name, exposed);
+        AddOutput(def);
+        return def;   // opener returns the child — subsequent steps fall into its body
+    }
+
+    /// <summary>
+    /// Lambda-body form of <see cref="Replayable(string, bool)"/> — unambiguous at any nesting level.
+    /// The <paramref name="body"/> configures the marker's tail; the chain stays on the current
+    /// definition (no explicit <c>End</c>).
+    /// </summary>
+    public TSelf Replayable(string name, Action<ReplayableDefinition> body, bool exposed = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(body);
+        var def = new ReplayableDefinition(name, exposed);
+        AddOutput(def);
+        body(def);
+        return Self;
+    }
+
     // ── Telemetry ────────────────────────────────────────────────────────────
 
     /// <inheritdoc />

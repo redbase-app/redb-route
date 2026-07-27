@@ -25,10 +25,17 @@ public sealed class MqttEndpointOptions : EndpointOptions
     public string? Username { get; set; }
 
     /// <summary>Password for broker authentication.</summary>
+    [Sensitive]
     public string? Password { get; set; }
 
     /// <summary>Client ID. Auto-generated if not set.</summary>
     public string? ClientId { get; set; }
+
+    /// <summary>
+    /// Named <see cref="MqttConnectionFactory"/> from the route registry. Lets broker credentials
+    /// live in the registry instead of the endpoint URI, so they never reach logs or dashboards.
+    /// </summary>
+    public string? ConnectionFactory { get; set; }
 
     /// <summary>Enable TLS/SSL.</summary>
     public bool UseTls { get; set; }

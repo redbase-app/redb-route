@@ -34,7 +34,8 @@ public class TelegramUnitTests
     public void Options_BindsAllProducerParams()
     {
         var o = Bind($"token={Token}&chatId=987654&parseMode=HTML&caption=hi"
-            + "&fileName=report.pdf&bodyIsFileId=true&disableNotification=true&sendTimeoutSeconds=45");
+            + "&fileName=report.pdf&bodyIsFileId=true&disableNotification=true"
+            + "&replyToMessageId=77&messageId=12&showAlert=true&sendTimeoutSeconds=45");
 
         o.Token.Should().Be(Token);
         o.ChatId.Should().Be("987654");
@@ -43,6 +44,9 @@ public class TelegramUnitTests
         o.FileName.Should().Be("report.pdf");
         o.BodyIsFileId.Should().BeTrue();
         o.DisableNotification.Should().BeTrue();
+        o.ReplyToMessageId.Should().Be("77");
+        o.MessageId.Should().Be("12");
+        o.ShowAlert.Should().BeTrue();
         o.SendTimeoutSeconds.Should().Be(45);
     }
 
@@ -54,6 +58,9 @@ public class TelegramUnitTests
         o.ParseMode.Should().BeNull();
         o.BodyIsFileId.Should().BeFalse();
         o.DisableNotification.Should().BeFalse();
+        o.ReplyToMessageId.Should().BeNull();
+        o.MessageId.Should().BeNull();
+        o.ShowAlert.Should().BeFalse();
         o.SendTimeoutSeconds.Should().Be(120);
     }
 
@@ -93,6 +100,8 @@ public class TelegramUnitTests
     [InlineData("token=t&parseMode=Markdwn")]             // typo in parseMode
     [InlineData("token=t&sendTimeoutSeconds=0")]          // out of range (low)
     [InlineData("token=t&sendTimeoutSeconds=601")]        // out of range (high)
+    [InlineData("token=t&replyToMessageId=abc")]          // constant that is not a message id
+    [InlineData("token=t&messageId=abc")]                 // constant that is not a message id
     public void Validate_RejectsBadConfig(string query)
     {
         var act = () => Bind(query).Validate();
@@ -138,6 +147,7 @@ public class TelegramUnitTests
             .ChatId(987654)
             .ParseMode("HTML")
             .DisableNotification()
+            .ReplyToIncoming()
             .Timeout(30)
             .BodyIsFileId();
 
@@ -149,6 +159,8 @@ public class TelegramUnitTests
         o.ChatId.Should().Be("987654");
         o.ParseMode.Should().Be("HTML");
         o.DisableNotification.Should().BeTrue();
+        o.ReplyToMessageId.Should().Be("${header.telegram.messageId}",
+            ".ReplyToIncoming() is sugar for the incoming-message-id expression");
         // Previously lost by the builder — these two are the point of the test.
         o.SendTimeoutSeconds.Should().Be(30);
         o.BodyIsFileId.Should().BeTrue();
@@ -161,6 +173,26 @@ public class TelegramUnitTests
         uri.Should().StartWith("telegram://document?");
         uri.Should().Contain("fileName=report.pdf");
         uri.Should().Contain("caption=Daily");
+    }
+
+    [Fact]
+    public void Dsl_Edit_MessageId_RoundTripsThroughOptions()
+    {
+        string uri = TgDsl.Edit(Token).ChatId(1).MessageId(12);
+
+        var parsed = EndpointUriParser.Parse(uri);
+        var o = new TelegramEndpointOptions();
+        o.BindFromUri(parsed.RawParameters);
+
+        o.MessageId.Should().Be("12");
+    }
+
+    [Fact]
+    public void Dsl_Answer_ShowAlert_EmitsExpectedUri()
+    {
+        string uri = TgDsl.Answer(Token).ShowAlert();
+        uri.Should().StartWith("telegram://answer?");
+        uri.Should().Contain("showAlert=true");
     }
 
     // ── Header helpers ────────────────────────────────────────────────
@@ -267,6 +299,49 @@ public class TelegramUnitTests
         m.Headers[TelegramHeaders.CallbackData].Should().Be("action:approve");
         m.Headers[TelegramHeaders.UserId].Should().Be(9L);
         m.Headers[TelegramHeaders.ChatId].Should().Be(77L);
+    }
+
+    [Fact]
+    public void MapMessage_WebAppData_PopulatesBodyAndHeaders()
+    {
+        var msg = new TgMessage
+        {
+            Id = 43,
+            Chat = new Chat { Id = 123, Type = ChatType.Private },
+            From = new User { Id = 7, FirstName = "Ann" },
+            WebAppData = new WebAppData { Data = """{"city":"Moscow"}""", ButtonText = "Собрать" }
+        };
+        var m = new Message();
+
+        TelegramUpdateMapper.MapMessage(msg, UpdateType.Message, m);
+
+        // No Text on a web_app_data message — the payload becomes the body.
+        m.Body.Should().Be("""{"city":"Moscow"}""");
+        m.Headers[TelegramHeaders.WebAppData].Should().Be("""{"city":"Moscow"}""");
+        m.Headers[TelegramHeaders.WebAppButtonText].Should().Be("Собрать");
+        m.Headers.Should().NotContainKey(TelegramHeaders.Text);
+        m.Headers[TelegramHeaders.ChatId].Should().Be(123L);
+    }
+
+    [Fact]
+    public void MapUpdate_TextMessage_HasNoWebAppHeaders()
+    {
+        var update = new Update
+        {
+            Id = 4,
+            Message = new TgMessage
+            {
+                Id = 13,
+                Text = "plain",
+                Chat = new Chat { Id = 5, Type = ChatType.Private }
+            }
+        };
+        var m = new Message();
+
+        TelegramUpdateMapper.MapUpdate(update, m).Should().BeTrue();
+        m.Body.Should().Be("plain");
+        m.Headers.Should().NotContainKey(TelegramHeaders.WebAppData);
+        m.Headers.Should().NotContainKey(TelegramHeaders.WebAppButtonText);
     }
 
     [Fact]

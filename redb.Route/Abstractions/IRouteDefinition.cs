@@ -252,6 +252,19 @@ public interface IRouteDefinition : IProcessorDefinition
     /// </summary>
     Definitions.TransactionDefinition Transaction(TransactionPolicy? policy = null);
 
+    // ── Replay checkpoints ──
+
+    /// <summary>
+    /// Opens a replay checkpoint (save-point). The steps that follow are the marker's body (the tail
+    /// re-run on replay); the exchange is snapshotted into <c>route.checkpoint</c> on each pass. At
+    /// the start of a route no <c>End</c> is needed; otherwise close with
+    /// <see cref="Definitions.ReplayableDefinition.EndReplayable"/> or use the lambda-body overload.
+    /// </summary>
+    Definitions.ReplayableDefinition Replayable(string name, bool exposed = false);
+
+    /// <summary>Lambda-body form of <see cref="Replayable(string, bool)"/>; the chain stays on the current definition.</summary>
+    IRouteDefinition Replayable(string name, Action<Definitions.ReplayableDefinition> body, bool exposed = false);
+
     // ── Telemetry ──
 
     /// <summary>

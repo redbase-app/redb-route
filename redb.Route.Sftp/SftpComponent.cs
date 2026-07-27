@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 
@@ -28,6 +29,20 @@ public sealed class SftpComponent : ComponentBase
 
         var options = new SftpEndpointOptions();
         options.BindFromUri(uri.RawParameters);
+
+        // Named ConnectionFactory keeps the password / key passphrase / proxy password
+        // out of the route URI.
+        if (!string.IsNullOrEmpty(options.ConnectionFactory) && Context is not null)
+        {
+            var factory = Context.GetFromRegistry<SftpConnectionFactory>(options.ConnectionFactory);
+            if (factory is not null)
+                factory.ApplyTo(options, uri);
+            else
+                Logger?.LogWarning(
+                    "SFTP: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
+                    options.ConnectionFactory);
+        }
+
         options.Validate();
 
         return new SftpEndpoint(uri, this, options);

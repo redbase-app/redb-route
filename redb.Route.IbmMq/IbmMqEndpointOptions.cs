@@ -100,6 +100,7 @@ public sealed class IbmMqEndpointOptions : EndpointOptions
     public string? User { get; set; }
 
     /// <summary>Authentication password.</summary>
+    [Sensitive]
     public string? Password { get; set; }
 
     /// <summary>Client identifier for connection tracking.</summary>

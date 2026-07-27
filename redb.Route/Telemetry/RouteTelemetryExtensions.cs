@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using redb.Route.Abstractions;
 
 namespace redb.Route.Telemetry;
 
@@ -40,7 +41,7 @@ public static class RouteTelemetryExtensions
         if (activity is { IsAllDataRequested: true })
         {
             activity.SetTag(systemAttribute, systemValue);
-            activity.SetTag("redb.route.endpoint", endpointUri);
+            activity.SetTag("redb.route.endpoint", EndpointUri.Sanitize(endpointUri));
             if (!string.IsNullOrEmpty(destination))
                 activity.SetTag("messaging.destination.name", destination);
             if (!string.IsNullOrEmpty(operation))

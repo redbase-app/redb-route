@@ -32,6 +32,7 @@ public sealed class FtpBuilder
     private string? _port;
     private string? _username;
     private string? _password;
+    private string? _connectionFactory;
     private string? _connectionTimeout;
     private string? _operationTimeout;
     private bool _passiveMode = true;
@@ -124,6 +125,12 @@ public sealed class FtpBuilder
 
     /// <summary>Password for authentication (template string, supports <c>${...}</c>).</summary>
     public FtpBuilder Password(string password) => Password(new StringExpression(password));
+
+    /// <summary>
+    /// References a named <see cref="FtpConnectionFactory"/> from the route registry instead of
+    /// putting server credentials in the URI.
+    /// </summary>
+    public FtpBuilder ConnectionFactory(string name) { _connectionFactory = name; return this; }
 
     /// <summary>Connection timeout in milliseconds. Default 30000.</summary>
     public FtpBuilder ConnectionTimeout(int ms) { _connectionTimeout = ms.ToString(); return this; }
@@ -339,6 +346,7 @@ public sealed class FtpBuilder
         AppendIf("port", _port);
         AppendIf("username", _username);
         AppendIf("password", _password);
+        AppendIf("connectionFactory", _connectionFactory);
         AppendIf("connectionTimeout", _connectionTimeout);
         AppendIf("operationTimeout", _operationTimeout);
         if (_passiveModeExplicit) Append("passiveMode", _passiveMode.ToString().ToLowerInvariant());

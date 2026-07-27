@@ -28,6 +28,7 @@ public class Pop3Component : ComponentBase
         if (!string.IsNullOrEmpty(uri.Path) && uri.Path != "/")
             options.Host = uri.Path.TrimStart('/');
         options.BindFromUri(uri.RawParameters);
+        MailConnectionFactory.TryApply(Context, options, uri, Logger, "POP3");
         options.Validate();
 
         return new Pop3Endpoint(uri, this, options);

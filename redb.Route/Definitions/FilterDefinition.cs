@@ -16,7 +16,7 @@ namespace redb.Route.Definitions;
 /// <see cref="FilterDefinition"/> directly without locally-redeclared overloads.
 /// </para>
 /// </summary>
-public class FilterDefinition : RouteDefinitionBase<FilterDefinition>, IRouteScope
+public class FilterDefinition : RouteDefinitionBase<FilterDefinition>, IRouteScope, ICompositeScope
 {
     private readonly Func<IExchange, bool> _predicate;
 

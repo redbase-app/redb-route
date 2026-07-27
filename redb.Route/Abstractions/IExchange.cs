@@ -55,8 +55,28 @@ public interface IExchange : IAsyncDisposable
     /// <summary>Stops further processing of this exchange in the pipeline.</summary>
     void Stop();
 
-    /// <summary>Deep copy of the exchange including In, Out, Properties.</summary>
+    /// <summary>
+    /// Structural copy of the exchange (In, Out, Properties containers + a fresh DI scope). The
+    /// message <b>body reference and property/header values are shared</b> (shallow) — intentional
+    /// and relied upon across the framework (e.g. Splitter aggregation). For an isolated deep copy
+    /// use <see cref="Snapshot"/>.
+    /// </summary>
     IExchange Clone();
+
+    /// <summary>
+    /// Deep, isolated snapshot for checkpoint/replay. Unlike <see cref="Clone"/> it <b>deep-copies
+    /// the message body</b> (In and Out) so the captured state is frozen and immune to later
+    /// in-place mutation of the payload. Properties/headers follow <see cref="Clone"/> (values
+    /// shared) as they carry immutable route metadata.
+    /// <para>
+    /// <b>No DI scope</b> is created at capture: a snapshot is dormant data taken on every marker
+    /// pass and usually never replayed, so minting a scope here would leak one per message. A
+    /// snapshot that is never replayed owns nothing to dispose; a replay mints (and disposes) a
+    /// scope on demand.
+    /// </para>
+    /// Throws <see cref="System.NotSupportedException"/> if a body cannot be safely deep-copied.
+    /// </summary>
+    IExchange Snapshot();
 
     // ── DI Scope ──
 

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 
@@ -30,6 +31,19 @@ public class WsComponent : ComponentBase
         var options = new WsEndpointOptions();
         ParseHostPort(uri.Path, options);
         options.BindFromUri(uri.RawParameters);
+
+        // Named ConnectionFactory keeps the TLS certificate password out of the route URI.
+        // Applied before the wss override so the scheme still wins on TLS.
+        if (!string.IsNullOrEmpty(options.ConnectionFactory) && Context is not null)
+        {
+            var factory = Context.GetFromRegistry<WsConnectionFactory>(options.ConnectionFactory);
+            if (factory is not null)
+                factory.ApplyTo(options, uri);
+            else
+                Logger?.LogWarning(
+                    "WebSocket: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
+                    options.ConnectionFactory);
+        }
 
         // wss implies SSL
         if (_scheme == "wss")

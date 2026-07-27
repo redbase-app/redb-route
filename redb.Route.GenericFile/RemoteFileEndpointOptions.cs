@@ -1,3 +1,5 @@
+using redb.Route.Core;
+
 namespace redb.Route.GenericFile;
 
 /// <summary>
@@ -17,10 +19,18 @@ public abstract class RemoteFileEndpointOptions : GenericFileEndpointOptions
     /// <summary>Remote server port. Subclass should set the protocol-specific default.</summary>
     public virtual int Port { get; set; }
 
+    /// <summary>
+    /// Named <see cref="RemoteFileConnectionFactory"/> from the route registry. Lets server
+    /// credentials live in the registry instead of the endpoint URI, so they never reach logs
+    /// or dashboards.
+    /// </summary>
+    public string? ConnectionFactory { get; set; }
+
     /// <summary>Username for authentication.</summary>
     public string Username { get; set; } = "";
 
     /// <summary>Password for authentication.</summary>
+    [Sensitive]
     public string Password { get; set; } = "";
 
     /// <summary>TCP connection timeout in milliseconds. (default: 30000 = 30 s)</summary>

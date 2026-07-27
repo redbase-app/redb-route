@@ -16,7 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="..\EchoModule\EchoModule.csproj" />
     <!-- UseSqlite is tier-agnostic: AddRedb -> Free (what Tsak uses by default). -->
-    <PackageReference Include="redb.SQLite.Pro" Version="3.2.1" />
+    <PackageReference Include="redb.SQLite.Pro" Version="3.4.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.3" />
   </ItemGroup>
 

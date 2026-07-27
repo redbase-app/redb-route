@@ -383,4 +383,84 @@ public class ProducerTemplateTests : IDisposable
         var consumer = endpoint.CreateConsumer(processor);
         await consumer.Start();
     }
+
+    // ── Pre-built exchange overloads (caller-owned) ──
+
+    [Fact]
+    public async Task Send_Exchange_ByUri_DeliversSameInstance()
+    {
+        await SetupConsumer("direct:ex-uri");
+        _template.Start();
+
+        var exchange = new Exchange(new Message("prebuilt"));
+        exchange.Properties["carried"] = "yes";
+        _template.Send("direct:ex-uri", exchange);
+
+        _receivedExchanges.Should().ContainSingle();
+        _receivedExchanges[0].Should().BeSameAs(exchange);          // direct passes by reference
+        _receivedExchanges[0].Properties["carried"].Should().Be("yes");
+    }
+
+    [Fact]
+    public async Task SendAsync_Exchange_ByEndpoint_DeliversSameInstance()
+    {
+        await SetupConsumer("direct:ex-async");
+        _template.Start();
+
+        var exchange = new Exchange(new Message("prebuilt-async"));
+        var endpoint = _ctx.GetEndpoint("direct:ex-async");
+        await _template.SendAsync(endpoint, exchange);
+
+        _receivedExchanges.Should().ContainSingle();
+        _receivedExchanges[0].Should().BeSameAs(exchange);
+    }
+
+    [Fact]
+    public async Task SendAsync_Exchange_ByUri_Delivers()
+    {
+        await SetupConsumer("direct:ex-async-uri");
+        _template.Start();
+
+        var exchange = new Exchange(new Message("x"));
+        await _template.SendAsync("direct:ex-async-uri", exchange);
+
+        _receivedExchanges.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task SendAsync_Exchange_DoesNotDisposeCallerOwnedExchange()
+    {
+        // The caller owns a pre-built exchange (e.g. a checkpoint snapshot): the template must
+        // NOT dispose it, so the caller can reuse/inspect it after the send.
+        await SetupConsumer("direct:ex-nodispose");
+        _template.Start();
+
+        var exchange = new Exchange(new Message("keep-alive"));
+        await _template.SendAsync("direct:ex-nodispose", exchange);
+
+        // Still usable after send — a disposed exchange would throw here.
+        exchange.Properties["after"] = "still-alive";
+        exchange.In.Body.Should().Be("keep-alive");
+    }
+
+    [Fact]
+    public async Task RequestAsync_Exchange_SetsInOut_AndReturnsSameInstanceWithReply()
+    {
+        await SetupConsumer("direct:ex-req", ex => ex.Out = new Message("reply"));
+        _template.Start();
+
+        var exchange = new Exchange(new Message("ask"));
+        var result = await _template.RequestAsync("direct:ex-req", exchange);
+
+        result.Should().BeSameAs(exchange);
+        result.Pattern.Should().Be(ExchangePattern.InOut);
+        result.Out!.Body.Should().Be("reply");
+    }
+
+    [Fact]
+    public void Send_Exchange_ByUri_BeforeStart_Throws()
+    {
+        var act = () => _template.Send("direct:whatever", new Exchange(new Message("x")));
+        act.Should().Throw<InvalidOperationException>().WithMessage("*not started*");
+    }
 }

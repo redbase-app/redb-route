@@ -32,6 +32,7 @@ public sealed class SftpBuilder
     private string? _port;
     private string? _username;
     private string? _password;
+    private string? _connectionFactory;
     private string? _privateKeyPath;
     private string? _privateKeyPassphrase;
     private bool _useKeyboardInteractive;
@@ -137,6 +138,12 @@ public sealed class SftpBuilder
     public SftpBuilder Password(IExpression password) { _password = password.ToTemplateString(); return this; }
     /// <summary>Password for authentication (template string, supports <c>${...}</c>).</summary>
     public SftpBuilder Password(string password) => Password(new StringExpression(password));
+
+    /// <summary>
+    /// References a named <see cref="SftpConnectionFactory"/> from the route registry instead of
+    /// putting the password / key passphrase / proxy password in the URI.
+    /// </summary>
+    public SftpBuilder ConnectionFactory(string name) { _connectionFactory = name; return this; }
 
     /// <summary>Path to private key file.</summary>
     public SftpBuilder PrivateKey(IExpression path, IExpression? passphrase = null)
@@ -408,6 +415,7 @@ public sealed class SftpBuilder
         AppendIf("port", _port);
         AppendIf("username", _username);
         AppendIf("password", _password);
+        AppendIf("connectionFactory", _connectionFactory);
         AppendIf("privateKeyPath", _privateKeyPath);
         AppendIf("privateKeyPassphrase", _privateKeyPassphrase);
         AppendBool("useKeyboardInteractive", _useKeyboardInteractive);

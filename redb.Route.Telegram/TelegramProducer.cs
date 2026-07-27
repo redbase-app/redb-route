@@ -233,12 +233,18 @@ public sealed class TelegramProducer : ConnectableProducer
         var caption   = ResolveCaption(exchange);
         var parseMode = ResolveParseMode(exchange);
         var disableNotification = ResolveDisableNotification(exchange);
+        var replyToId = ResolveReplyToMessageId(exchange);
+        var replyParams = replyToId.HasValue
+            ? new ReplyParameters { MessageId = replyToId.Value }
+            : null;
 
         var result = await WithRateLimitRetryAsync(c => bot.SendDocument(
             chatId,
             inputFile,
             caption: caption,
             parseMode: parseMode,
+            replyParameters: replyParams,
+            replyMarkup: ResolveReplyMarkup(exchange),
             disableNotification: disableNotification,
             cancellationToken: c
         ), ct).ConfigureAwait(false);
@@ -257,12 +263,18 @@ public sealed class TelegramProducer : ConnectableProducer
         var caption   = ResolveCaption(exchange);
         var parseMode = ResolveParseMode(exchange);
         var disableNotification = ResolveDisableNotification(exchange);
+        var replyToId = ResolveReplyToMessageId(exchange);
+        var replyParams = replyToId.HasValue
+            ? new ReplyParameters { MessageId = replyToId.Value }
+            : null;
 
         var result = await WithRateLimitRetryAsync(c => bot.SendPhoto(
             chatId,
             inputFile,
             caption: caption,
             parseMode: parseMode,
+            replyParameters: replyParams,
+            replyMarkup: ResolveReplyMarkup(exchange),
             disableNotification: disableNotification,
             cancellationToken: c
         ), ct).ConfigureAwait(false);
@@ -295,7 +307,8 @@ public sealed class TelegramProducer : ConnectableProducer
         activity?.SetTag("messaging.telegram.callback_query.id", callbackQueryId);
 
         await WithRateLimitRetryAsync(
-            c => bot.AnswerCallbackQuery(callbackQueryId, text, cancellationToken: c), ct)
+            c => bot.AnswerCallbackQuery(callbackQueryId, text,
+                showAlert: ResolveShowAlert(exchange), cancellationToken: c), ct)
             .ConfigureAwait(false);
 
         Logger?.LogDebug("Telegram: answered callback query {CallbackQueryId}", callbackQueryId);
@@ -451,9 +464,26 @@ public sealed class TelegramProducer : ConnectableProducer
 
     private string? ResolveCaption(IExchange exchange)
     {
+        // Header takes precedence over options for per-message overrides.
+        if (exchange.In.Headers.TryGetValue(TelegramHeaders.Caption, out var h) && h is string s)
+            return s;
         if (!string.IsNullOrWhiteSpace(_options.Caption))
             return _options.ResolveOption(_options.Caption, exchange);
         return null;
+    }
+
+    private bool ResolveShowAlert(IExchange exchange)
+    {
+        if (exchange.In.Headers.TryGetValue(TelegramHeaders.ShowAlert, out var v) && v is not null)
+        {
+            return v switch
+            {
+                bool b => b,
+                string s when bool.TryParse(s, out var parsed) => parsed,
+                _ => _options.ShowAlert
+            };
+        }
+        return _options.ShowAlert;
     }
 
     private InputFile ResolveInputFile(IExchange exchange)
@@ -523,32 +553,58 @@ public sealed class TelegramProducer : ConnectableProducer
             $"(InlineKeyboardMarkup / ReplyKeyboardMarkup / ...), but was '{v.GetType().Name}'.");
     }
 
-    private static int? ResolveReplyToMessageId(IExchange exchange)
+    private int? ResolveReplyToMessageId(IExchange exchange)
     {
-        if (!exchange.In.Headers.TryGetValue(TelegramHeaders.ReplyToMessageId, out var v) || v is null)
-            return null;
-        return v switch
+        // Explicit header always wins (per-message override, same as chatId).
+        if (exchange.In.Headers.TryGetValue(TelegramHeaders.ReplyToMessageId, out var v) && v is not null)
+            return ToMessageId(v);
+
+        if (!string.IsNullOrWhiteSpace(_options.ReplyToMessageId))
         {
-            int i    => i,
-            long l   => (int)l,
-            string s when int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) => id,
-            _        => null
-        };
+            var resolved = _options.ResolveOption(_options.ReplyToMessageId, exchange);
+            // Empty resolution: the referenced header is absent on this update type
+            // (e.g. .ReplyToIncoming() on an update without telegram.messageId) —
+            // send unthreaded rather than fail the exchange.
+            if (string.IsNullOrWhiteSpace(resolved))
+                return null;
+            if (int.TryParse(resolved, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+                return id;
+            throw new InvalidOperationException(
+                $"Telegram {_endpoint.Mode}: replyToMessageId resolved to '{resolved}', " +
+                "which is not a valid message id.");
+        }
+
+        return null;
     }
 
-    private static int ResolveMessageId(IExchange exchange)
+    private static int? ToMessageId(object v) => v switch
     {
-        if (!exchange.In.Headers.TryGetValue(TelegramHeaders.MessageId, out var v) || v is null)
-            throw new InvalidOperationException(
-                "Telegram producer: header 'telegram.messageId' is required for edit/delete modes.");
-        return v switch
+        int i    => i,
+        long l   => (int)l,
+        string s when int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) => id,
+        _        => null
+    };
+
+    private int ResolveMessageId(IExchange exchange)
+    {
+        // Explicit header always wins (per-message override, same as chatId).
+        if (exchange.In.Headers.TryGetValue(TelegramHeaders.MessageId, out var v) && v is not null)
+            return ToMessageId(v) ?? throw new InvalidOperationException(
+                $"Telegram producer: cannot convert 'telegram.messageId' value '{v}' to int.");
+
+        if (!string.IsNullOrWhiteSpace(_options.MessageId))
         {
-            int i    => i,
-            long l   => (int)l,
-            string s when int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) => id,
-            _        => throw new InvalidOperationException(
-                $"Telegram producer: cannot convert 'telegram.messageId' value '{v}' to int.")
-        };
+            var resolved = _options.ResolveOption(_options.MessageId, exchange);
+            if (int.TryParse(resolved, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+                return id;
+            throw new InvalidOperationException(
+                $"Telegram {_endpoint.Mode}: messageId resolved to '{resolved}', " +
+                "which is not a valid message id.");
+        }
+
+        throw new InvalidOperationException(
+            "Telegram producer: no message id for edit/delete. Set header 'telegram.messageId' " +
+            "or use .MessageId(...) in the fluent builder.");
     }
 
     private static void SetSentMessageId(IExchange exchange, TgMessage? result)

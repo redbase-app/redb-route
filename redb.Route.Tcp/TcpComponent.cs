@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 
@@ -25,6 +26,19 @@ public class TcpComponent : ComponentBase
         ParseHostPort(uri.Path, options);
 
         options.BindFromUri(uri.RawParameters);
+
+        // Named ConnectionFactory keeps the TLS certificate password out of the route URI.
+        if (!string.IsNullOrEmpty(options.ConnectionFactory) && Context is not null)
+        {
+            var factory = Context.GetFromRegistry<TcpConnectionFactory>(options.ConnectionFactory);
+            if (factory is not null)
+                factory.ApplyTo(options, uri);
+            else
+                Logger?.LogWarning(
+                    "TCP: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
+                    options.ConnectionFactory);
+        }
+
         options.Validate();
 
         return new TcpEndpoint(uri, this, options);

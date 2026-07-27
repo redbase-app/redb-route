@@ -32,6 +32,16 @@ public static class TelegramUpdateMapper
         message.Headers[TelegramHeaders.MessageId]   = msg.MessageId;
         AddIfNotNull(message.Headers, TelegramHeaders.Text, msg.Text);
 
+        // Mini app payload (WebApp.sendData). Such a message has no Text, so the
+        // data doubles as the exchange body — matching the "body = what the user sent"
+        // contract of text messages and callback queries.
+        if (msg.WebAppData is { } webApp)
+        {
+            message.Body = webApp.Data;
+            message.Headers[TelegramHeaders.WebAppData] = webApp.Data;
+            AddIfNotNull(message.Headers, TelegramHeaders.WebAppButtonText, webApp.ButtonText);
+        }
+
         message.Headers[TelegramHeaders.ChatId]   = msg.Chat.Id;
         message.Headers[TelegramHeaders.ChatType] = msg.Chat.Type.ToString();
 

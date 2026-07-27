@@ -97,8 +97,11 @@ public sealed class ElasticsearchEndpoint : EndpointBase<ElasticsearchEndpointOp
 
             _client = BuildClient();
 
+            // Nodes may be a comma-separated list of URLs and can carry userinfo
+            // credentials (http://user:pass@host); sanitize each before logging.
+            var sanitizedNodes = string.Join(",", Options.Nodes.Split(',').Select(EndpointUri.Sanitize));
             Logger?.LogInformation("Elasticsearch client created: Nodes={Nodes}, Index={Index}",
-                Options.Nodes, IndexName);
+                sanitizedNodes, IndexName);
 
             return _client;
         }

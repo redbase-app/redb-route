@@ -55,6 +55,15 @@ public class RouteContext : IRouteContext, IAsyncDisposable
 
     private readonly SemaphoreSlim _routeLock = new(1, 1);
 
+    // Replay checkpoints: compiled marker body per (routeId, markerName). Populated at compile time
+    // so ReplayAsync can re-run the tail directly (no synthetic endpoint) and Tsak can list markers
+    // before any traffic. See docs/REPLAY_CHECKPOINTS_PLAN.md.
+    private readonly Dictionary<(string RouteId, string Marker), (IProcessor Body, bool Exposed)> _checkpoints
+        = new();
+    // Route currently being compiled — set around definition.CreateProcessor so a nested
+    // ReplayableDefinition can register itself against the right routeId.
+    private string? _compilingRouteId;
+
     private volatile bool _started;
 
     /// <summary>
@@ -179,6 +188,74 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         _registry[key] = value;
         return this;
     }
+
+    // ── Replay checkpoints ──
+
+    /// <summary>
+    /// Registers a compiled <c>.Replayable</c> marker body for the route currently being compiled.
+    /// Called by <see cref="Definitions.ReplayableDefinition.CreateProcessor"/>; keyed on the
+    /// route being compiled (<see cref="_compilingRouteId"/>) plus the marker name.
+    /// </summary>
+    internal void RegisterCheckpoint(string markerName, IProcessor body, bool exposed)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(markerName);
+        ArgumentNullException.ThrowIfNull(body);
+        var routeId = _compilingRouteId
+            ?? throw new InvalidOperationException(
+                "RegisterCheckpoint called outside route compilation — no route id in scope.");
+        if (!_checkpoints.TryAdd((routeId, markerName), (body, exposed)))
+            throw new InvalidOperationException(
+                $"Duplicate replay marker '{markerName}' on route '{routeId}'. Marker names must be unique within a route.");
+
+        // exposed:true → make the marker addressable as a direct: endpoint so other routes can
+        // .To(...) it (and ProducerTemplate can Send to it). Internal (default) markers register no
+        // endpoint — they are reachable only via ReplayAsync. Wired at compile time so the body is
+        // ready before any producer sends at runtime.
+        if (exposed)
+        {
+            var uri = RouteCheckpoint.EndpointUri(routeId, markerName);
+            if (GetEndpoint(uri) is Components.DirectEndpoint endpoint)
+                endpoint.RegisterConsumerProcessor(body);
+            else
+                throw new InvalidOperationException(
+                    $"Could not register exposed replay endpoint '{uri}' — direct component missing?");
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task ReplayAsync(string routeId, string markerName, IExchange snapshot, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(routeId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(markerName);
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        if (!_checkpoints.TryGetValue((routeId, markerName), out var entry))
+            throw new InvalidOperationException(
+                $"No replay checkpoint '{markerName}' on route '{routeId}'. " +
+                $"Ensure the route declares .Replayable(\"{markerName}\") and has been compiled.");
+
+        // The tail creates its OWN scoped SQL/redb services lazily from the context provider (fresh
+        // connections — old ones from the failed run are dead/rolled-back, so re-creating is correct):
+        // nothing to pre-mint or "capture" here. But because we invoke the body directly, bypassing
+        // the normal consumer→dispose lifecycle, WE must dispose whatever scopes the tail cached on
+        // the snapshot — else every replay leaks a connection. Exchange.ReleaseScopes does exactly that.
+        (snapshot as Exchange)?.PrepareForReplay();
+        try
+        {
+            // Run the marker's tail directly from the frozen snapshot — same compiled body as inline
+            // execution (processors are re-entrant). No synthetic endpoint.
+            await entry.Body.Process(snapshot, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (snapshot is Exchange ex)
+                await ex.ReleaseScopes().ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyCollection<(string RouteId, string MarkerName)> GetReplayMarkers()
+        => _checkpoints.Keys.Select(k => (k.RouteId, k.Marker)).ToArray();
 
     /// <inheritdoc />
     public T? GetFromRegistry<T>(string key)
@@ -662,7 +739,10 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                         $"Route '{definition.GetRouteId() ?? "(unnamed)"}' has no From() endpoint.");
 
                 var normalizedFrom = EndpointUriParser.Parse(fromUri).NormalizedKey;
-                var routeId = definition.GetRouteId() ?? normalizedFrom;
+                // Unnamed routes fall back to the endpoint key as their id; sanitize it so a
+                // secret in the URI does not leak through every {RouteId} log line. Endpoint
+                // dedup below still keys on the raw normalizedFrom, so identity is unaffected.
+                var routeId = definition.GetRouteId() ?? EndpointUri.Sanitize(normalizedFrom);
 
                 if (!usedRouteIds.Add(routeId))
                     throw new InvalidOperationException(
@@ -670,7 +750,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
 
                 if (usedFromUris.TryGetValue(normalizedFrom, out var existingRouteId))
                     throw new InvalidOperationException(
-                        $"Route '{routeId}' has the same From URI '{fromUri}' as route '{existingRouteId}'. " +
+                        $"Route '{routeId}' has the same From URI '{EndpointUri.Sanitize(fromUri)}' as route '{existingRouteId}'. " +
                         $"Two consumers on the same endpoint within one context is not allowed.");
                 usedFromUris[normalizedFrom] = routeId;
             }
@@ -699,20 +779,27 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         {
             foreach (var definition in builder.Definitions)
             {
-                Validation.RouteDefinitionValidator.Validate(definition);
+                var warnings = Validation.RouteDefinitionValidator.Validate(definition);
+                foreach (var warning in warnings)
+                    logger?.LogWarning("Route '{RouteId}': {Warning}", definition.GetRouteId() ?? "<unnamed>", warning);
             }
         }
 
         // 5. Compile each route definition
+        _checkpoints.Clear();   // rebuilt from scratch on every (re)compile
         foreach (var builder in _builders)
         {
             foreach (var definition in builder.Definitions)
             {
                 var fromUri = definition.GetFromUri()!;
+                // Unnamed routes fall back to the (sanitized) endpoint key as their id so a
+                // URI secret never leaks through {RouteId}. Kept in sync with the validation
+                // loop above; endpoint identity/dedup still keys on the raw normalizedFrom.
                 var routeId = definition.GetRouteId()
-                    ?? EndpointUriParser.Parse(fromUri).NormalizedKey;
+                    ?? EndpointUri.Sanitize(EndpointUriParser.Parse(fromUri).NormalizedKey);
 
                 PipelineProcessor pipeline;
+                _compilingRouteId = routeId;   // so nested ReplayableDefinition registers under this route
                 try
                 {
                     var inner = definition.CreateProcessor(this);
@@ -724,6 +811,10 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 {
                     logger?.LogError(ex, "Failed to compile route '{RouteId}'. Skipping.", routeId);
                     continue;
+                }
+                finally
+                {
+                    _compilingRouteId = null;
                 }
 
                 // Wrap with routeId stamp
@@ -800,7 +891,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 if (_options.EnableMetrics)
                 {
                     var endpointScheme = EndpointUriParser.Parse(fromUri).Scheme;
-                    finalProcessor = new MeteredProcessor(finalProcessor, routeId, fromUri, endpointScheme);
+                    finalProcessor = new MeteredProcessor(finalProcessor, routeId, EndpointUri.Sanitize(fromUri), endpointScheme);
                 }
 
                 // Wrap with builder-level exception handlers (outermost layer)
@@ -830,19 +921,19 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 finalProcessor = new StatisticsProcessor(finalProcessor, endpoint);
 
                 // Outermost wrapper: inflight tracking
-                finalProcessor = new InflightTrackingProcessor(finalProcessor, _inflightRepository, routeId, fromUri);
+                finalProcessor = new InflightTrackingProcessor(finalProcessor, _inflightRepository, routeId, EndpointUri.Sanitize(fromUri));
 
                 var consumer = endpoint.CreateConsumer(finalProcessor);
                 AddConsumer(consumer);
 
-                compiledRoutes.Add(new CompiledRoute(routeId, fromUri, definition, wrappedPipeline, consumer, endpoint)
+                compiledRoutes.Add(new CompiledRoute(routeId, EndpointUri.Sanitize(fromUri), definition, wrappedPipeline, consumer, endpoint)
                 {
                     AutoStart = definition.GetAutoStart(),
                     Policy = routePolicy,
                     PolicyDescriptor = descriptor
                 });
 
-                logger?.LogInformation("Compiled route '{RouteId}': {FromUri}", routeId, fromUri);
+                logger?.LogInformation("Compiled route '{RouteId}': {FromUri}", routeId, EndpointUri.Sanitize(fromUri));
             }
         }
 
@@ -889,12 +980,12 @@ public class RouteContext : IRouteContext, IAsyncDisposable
             {
                 await endpoint.Start(ct).ConfigureAwait(false);
                 startedCount++;
-                logger?.LogInformation("Endpoint {Uri} started successfully", key);
+                logger?.LogInformation("Endpoint {Uri} started successfully", EndpointUri.Sanitize(key));
             }
             catch (Exception ex)
             {
                 failedEndpoints.Add((key, ex));
-                logger?.LogError(ex, "Failed to start endpoint {Uri}. Context will continue with remaining endpoints.", key);
+                logger?.LogError(ex, "Failed to start endpoint {Uri}. Context will continue with remaining endpoints.", EndpointUri.Sanitize(key));
             }
         }
 
@@ -973,7 +1064,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
 
         if (failedEndpoints.Count > 0)
         {
-            var failedUris = string.Join(", ", failedEndpoints.Select(f => f.Uri));
+            var failedUris = string.Join(", ", failedEndpoints.Select(f => EndpointUri.Sanitize(f.Uri)));
             logger?.LogError(
                 "Context '{ContextId}' started in DEGRADED mode: success={SuccessCount}, FAILED={FailedCount}. " +
                 "Non-operational endpoints: {FailedEndpoints}. IMMEDIATE ATTENTION REQUIRED!",

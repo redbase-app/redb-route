@@ -81,6 +81,9 @@ telegram://send?token=${env:TELEGRAM_TOKEN}&chatId=${header.telegram.chatId}&par
 | `caption` | string | Caption for document/photo |
 | `fileName` | string | File name when body is `Stream` |
 | `disableNotification` | bool | Send silently (default `false`) |
+| `replyToMessageId` | string | Message to reply to (`send`/`document`/`photo`). Constant id or a `${...}` expression resolved per message; `.ReplyToIncoming()` emits `${header.telegram.messageId}` |
+| `messageId` | string | Message to `edit`/`delete`. Constant id or a `${...}` expression, e.g. `${header.telegram.sentMessageId}` |
+| `showAlert` | bool | `answer` mode: show the text as a modal alert instead of a toast (default `false`) |
 | `bodyIsFileId` | bool | Treat string body as an existing Telegram `file_id` in `document`/`photo` mode (default `false`) |
 | `sendTimeoutSeconds` | int | Per-send timeout, 1–600 (default `120`). Linked with the pipeline cancellation token. |
 
@@ -175,7 +178,19 @@ After receiving an update, the consumer populates these headers on the exchange:
 | `telegram.firstName` | `string` | User first name |
 | `telegram.username` | `string?` | User `@username` (omitted if not set) |
 
-Exchange body = message text (or callback data for CallbackQuery).
+### Mini App data (`messageType` = WebAppData)
+
+| Header | Type | Description |
+|---|---|---|
+| `telegram.webAppData` | `string` | Payload passed to `WebApp.sendData(...)` inside the mini app |
+| `telegram.webAppButtonText` | `string?` | Text of the reply-keyboard button that opened the mini app |
+
+Delivered as a regular message update, so all message headers above
+(`telegram.chatId`, `telegram.userId`, …) are present too — except
+`telegram.text`, which such a message does not carry.
+
+Exchange body = message text (or callback data for CallbackQuery, or the mini app
+payload for WebAppData).
 
 ---
 
@@ -190,7 +205,9 @@ Set these on the exchange before `.To(Tg.Send/...)` to control per-message behav
 | `telegram.disableNotification` | `bool` | Per-message silent send override |
 | `telegram.replyToMessageId` | `int` | Send the message as a reply |
 | `telegram.replyMarkup` | `InlineKeyboardMarkup` / `ReplyKeyboardMarkup` / `ReplyKeyboardRemove` | Inline / reply keyboard attached to the message |
-| `telegram.messageId` | `int` | Required for `edit` / `delete` modes |
+| `telegram.messageId` | `int` | Target for `edit` / `delete` modes. Wins over the `messageId` option |
+| `telegram.caption` | `string` | Per-message caption override for `document` / `photo` |
+| `telegram.showAlert` | `bool` | Per-message override for `showAlert` in `answer` mode |
 | `telegram.fileId` | `string` | Reuse an existing Telegram file in `document` / `photo` mode instead of uploading |
 | `telegram.fileName` | `string` | File name when body is `Stream` / `byte[]` |
 | `telegram.callbackQueryId` | `string` | Required for `answer` mode (set by consumer on `CallbackQuery`) |
@@ -240,6 +257,9 @@ From(Tg.Receive(token))
 // Tighter per-send timeout (default 120s)
 .To(Tg.Send(token).ChatId(chatId).Timeout(30))
 
+// Reply to the incoming message (sugar for replyToMessageId=${header.telegram.messageId})
+.To(Tg.Send(token).ChatId(chatId).ReplyToIncoming())
+
 // Expressions are supported everywhere
 Tg.Send("${env:TELEGRAM_TOKEN}").ChatId(Header("telegram.chatId"))
 ```
@@ -248,13 +268,24 @@ Tg.Send("${env:TELEGRAM_TOKEN}").ChatId(Header("telegram.chatId"))
 
 ## Reply to a message
 
-Set `telegram.replyToMessageId` before sending:
+To reply to the message that triggered the exchange, use `.ReplyToIncoming()` —
+sugar for `replyToMessageId=${header.telegram.messageId}`, the id the consumer put
+on the exchange:
 
 ```csharp
-.Process(e => e.In.Headers[TelegramHeaders.ReplyToMessageId] =
-                  e.In.GetHeader<int>(TelegramHeaders.MessageId))
-.To(Tg.Send(token).ChatId(Header(TelegramHeaders.ChatId)))
+From(Tg.Receive(token))
+    .To(Tg.Send(token).ChatId(Header(TelegramHeaders.ChatId)).ReplyToIncoming())
 ```
+
+`ReplyTo(...)` targets any message — a constant id or an expression resolved per
+message. The `telegram.replyToMessageId` header, when set, wins over the option:
+
+```csharp
+.To(Tg.Send(token).ChatId(chatId).ReplyTo(Header("myApp.threadRootId")))
+```
+
+If the expression resolves to nothing (e.g. `.ReplyToIncoming()` on an update
+without `telegram.messageId`), the message is sent unthreaded rather than failing.
 
 ---
 
@@ -273,12 +304,15 @@ From(Tg.Receive(token))
 ```
 
 `Answer` reads `telegram.callbackQueryId` from headers (set automatically by the consumer).
+`.ShowAlert()` turns the toast into a modal alert.
 
 ---
 
 ## Edit a message
 
-Body = new text. Requires `telegram.messageId` and `telegram.chatId` headers.
+Body = new text. The target comes from the `telegram.messageId` header or the
+`messageId=` option — e.g. `.MessageId(Header(TelegramHeaders.SentMessageId))`
+to edit the message just sent by an upstream step.
 
 ```csharp
 .SetBody("Updated text")
@@ -295,7 +329,7 @@ Body = new text. Requires `telegram.messageId` and `telegram.chatId` headers.
 
 ## Delete a message
 
-Requires `telegram.messageId` and `telegram.chatId` headers.
+Target: `telegram.messageId` header or the `messageId=` option.
 
 ```csharp
 .To(Tg.Delete(token).ChatId(Header(TelegramHeaders.ChatId)))
@@ -377,6 +411,38 @@ From(Tg.Receive(token))
 Reply row buttons: `Button(text)`, `ContactButton(text)`, `LocationButton(text)`,
 `WebAppButton(text, url)`. Keyboard options: `Resize()`, `OneTime()`, `Persistent()`,
 `Selective()`, `Placeholder(text)`.
+
+### Mini Apps (Web Apps)
+
+A web app button opens your HTTPS page inside the Telegram client:
+
+```csharp
+// inline — opens the mini app, cannot send data back to the bot
+.WithInlineKeyboard(k => k.Row(r => r.WebApp("🌟 Open", "https://app.example/")))
+
+// reply keyboard — the mini app may call WebApp.sendData(...)
+.WithReplyKeyboard(k => k.Row(r => r.WebAppButton("🌟 Open", "https://app.example/")))
+```
+
+`sendData` closes the mini app and delivers a message update with
+`telegram.messageType = "WebAppData"`; the payload lands in the body and in
+`telegram.webAppData`:
+
+```csharp
+From(Tg.Receive(token))
+    .Filter(Header(TelegramHeaders.MessageType).isEqualTo("WebAppData"))
+    .Process((e, ct) =>
+    {
+        var payload = e.In.GetHeader<string>(TelegramHeaders.WebAppData);
+        // ... deserialise and handle
+        return Task.CompletedTask;
+    })
+    .SetBody("✅ Получено")
+    .To(Tg.Send(token).ChatId(Header(TelegramHeaders.ChatId)));
+```
+
+`sendData` is one-way and limited to 4096 bytes — the mini app gets no response
+back. That is a Bot API property, not a connector limitation.
 
 ### Remove keyboard
 

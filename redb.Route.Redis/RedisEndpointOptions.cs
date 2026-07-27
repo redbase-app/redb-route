@@ -10,12 +10,14 @@ public sealed class RedisEndpointOptions : EndpointOptions
     // ── Connection ──
 
     /// <summary>Redis connection string (default: localhost:6379).</summary>
+    [Sensitive]
     public string ConnectionString { get; set; } = "localhost:6379";
 
     /// <summary>Redis database index (default: 0).</summary>
     public int Database { get; set; }
 
     /// <summary>Redis password (optional).</summary>
+    [Sensitive]
     public string? Password { get; set; }
 
     /// <summary>Name of <see cref="RedisConnectionFactory"/> in the route registry.</summary>

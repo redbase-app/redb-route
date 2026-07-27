@@ -24,6 +24,7 @@ public sealed class SqlEndpointOptions : EndpointOptions
     public string? DataSource { get; set; }
 
     /// <summary>Direct connection string (used if <see cref="DataSource"/> is not set).</summary>
+    [Sensitive]
     public string? ConnectionString { get; set; }
 
     /// <summary>ADO.NET provider name (e.g. "Microsoft.Data.SqlClient", "Npgsql").</summary>

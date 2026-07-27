@@ -54,6 +54,7 @@ public sealed class TcpBuilder
     private bool _ssl;
     private string? _sslCertPath;
     private string? _sslCertPassword;
+    private string? _connectionFactory;
     private string? _sslTargetHost;
 
     internal TcpBuilder(string hostPort)
@@ -120,6 +121,9 @@ public sealed class TcpBuilder
     /// <summary>SSL certificate password.</summary>
     public TcpBuilder SslCertPassword(string password) { _sslCertPassword = password; return this; }
 
+    /// <summary>References a named <see cref="TcpConnectionFactory"/> from the route registry instead of putting the certificate password in the URI.</summary>
+    public TcpBuilder ConnectionFactory(string name) { _connectionFactory = name; return this; }
+
     /// <summary>Target host name for SSL validation.</summary>
     public TcpBuilder SslTargetHost(string host) { _sslTargetHost = host; return this; }
 
@@ -156,6 +160,7 @@ public sealed class TcpBuilder
         AppendBool("ssl", _ssl);
         AppendStr("sslCertPath", _sslCertPath);
         AppendStr("sslCertPassword", _sslCertPassword);
+        AppendStr("connectionFactory", _connectionFactory);
         AppendStr("sslTargetHost", _sslTargetHost);
 
         return sb.ToString();

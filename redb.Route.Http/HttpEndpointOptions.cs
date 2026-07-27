@@ -34,10 +34,19 @@ public class HttpEndpointOptions : EndpointOptions
     public string? Username { get; set; }
 
     /// <summary>Password for Basic auth.</summary>
+    [Sensitive]
     public string? Password { get; set; }
 
     /// <summary>Bearer token value (or expression) for Bearer auth.</summary>
+    [Sensitive]
     public DynamicValue<string>? AuthToken { get; set; }
+
+    /// <summary>
+    /// Named <see cref="HttpConnectionFactory"/> from the route registry. Lets Basic/Bearer
+    /// credentials and the TLS certificate password live in the registry instead of the endpoint
+    /// URI, so they never reach logs or dashboards.
+    /// </summary>
+    public string? ConnectionFactory { get; set; }
 
     /// <summary>Follow HTTP redirects. Default: true.</summary>
     public bool FollowRedirects { get; set; } = true;
@@ -117,6 +126,7 @@ public class HttpEndpointOptions : EndpointOptions
     public string? SslCertPath { get; set; }
 
     /// <summary>Password for the PFX certificate.</summary>
+    [Sensitive]
     public string? SslCertPassword { get; set; }
 
     /// <summary>

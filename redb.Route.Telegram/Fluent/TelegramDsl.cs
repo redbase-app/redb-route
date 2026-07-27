@@ -63,6 +63,30 @@ public static class Tg
 
     /// <summary>Deletes a message using an expression token.</summary>
     public static TgBuilder Delete(IExpression token) => new TgBuilder("delete", token.ToTemplateString());
+
+    // ── Token-less overloads: the bot token comes from a registered
+    //    TelegramConnectionFactory via .ConnectionFactory("name") ──────────────
+
+    /// <summary>Long-polling consumer; token supplied by <c>.ConnectionFactory(name)</c>.</summary>
+    public static TgBuilder Receive() => new TgBuilder("receive", string.Empty);
+
+    /// <summary>Text message producer; token supplied by <c>.ConnectionFactory(name)</c>.</summary>
+    public static TgBuilder Send() => new TgBuilder("send", string.Empty);
+
+    /// <summary>Document producer; token supplied by <c>.ConnectionFactory(name)</c>.</summary>
+    public static TgBuilder Document() => new TgBuilder("document", string.Empty);
+
+    /// <summary>Photo producer; token supplied by <c>.ConnectionFactory(name)</c>.</summary>
+    public static TgBuilder Photo() => new TgBuilder("photo", string.Empty);
+
+    /// <summary>Callback-answer producer; token supplied by <c>.ConnectionFactory(name)</c>.</summary>
+    public static TgBuilder Answer() => new TgBuilder("answer", string.Empty);
+
+    /// <summary>Edit-message producer; token supplied by <c>.ConnectionFactory(name)</c>.</summary>
+    public static TgBuilder Edit() => new TgBuilder("edit", string.Empty);
+
+    /// <summary>Delete-message producer; token supplied by <c>.ConnectionFactory(name)</c>.</summary>
+    public static TgBuilder Delete() => new TgBuilder("delete", string.Empty);
 }
 
 /// <summary>
@@ -80,13 +104,25 @@ public sealed class TgBuilder
     private string? _fileName;
     private bool    _disableNotification;
     private bool    _bodyIsFileId;
+    private string? _replyToMessageId;
+    private string? _messageId;
+    private bool    _showAlert;
     private int?    _sendTimeoutSeconds;
+
+    private string? _connectionFactory;
 
     internal TgBuilder(string mode, string token)
     {
         _mode  = mode;
         _token = token;
     }
+
+    /// <summary>
+    /// References a named <see cref="TelegramConnectionFactory"/> from the route registry instead of
+    /// putting the bot token in the URI. Use with the token-less mode overloads, e.g.
+    /// <c>Tg.Receive().ConnectionFactory("support-bot")</c>.
+    /// </summary>
+    public TgBuilder ConnectionFactory(string name) { _connectionFactory = name; return this; }
 
     // ── Common ─────────────────────────────────────────────────────────────────
 
@@ -101,6 +137,34 @@ public sealed class TgBuilder
 
     /// <summary>Send silently (no sound notification). Default false.</summary>
     public TgBuilder DisableNotification(bool value = true) { _disableNotification = value; return this; }
+
+    /// <summary>Reply to a specific message id (send/document/photo).</summary>
+    public TgBuilder ReplyTo(long messageId) { _replyToMessageId = messageId.ToString(); return this; }
+
+    /// <summary>Reply target from an expression, resolved per message
+    /// (e.g. <c>Header("myApp.threadRootId")</c>).</summary>
+    public TgBuilder ReplyTo(IExpression expr) { _replyToMessageId = expr.ToTemplateString(); return this; }
+
+    /// <summary>
+    /// Replies to the incoming message. Sugar for <see cref="ReplyTo(IExpression)"/> with the
+    /// <c>${header.telegram.messageId}</c> expression — the id the consumer put on the exchange.
+    /// An explicit <c>telegram.replyToMessageId</c> header wins over this option.
+    /// <example><code>
+    /// From(Tg.Receive(token))
+    ///     .To(Tg.Send(token).ChatId(Header(TelegramHeaders.ChatId)).ReplyToIncoming());
+    /// </code></example>
+    /// </summary>
+    public TgBuilder ReplyToIncoming() { _replyToMessageId = "${header." + TelegramHeaders.MessageId + "}"; return this; }
+
+    /// <summary>Message to edit / delete, by id.</summary>
+    public TgBuilder MessageId(long id) { _messageId = id.ToString(); return this; }
+
+    /// <summary>Message to edit / delete, from an expression resolved per message
+    /// (e.g. <c>Header(TelegramHeaders.SentMessageId)</c> to target the message just sent).</summary>
+    public TgBuilder MessageId(IExpression expr) { _messageId = expr.ToTemplateString(); return this; }
+
+    /// <summary>In <c>answer</c> mode, show the text as a modal alert instead of a toast. Default false.</summary>
+    public TgBuilder ShowAlert(bool value = true) { _showAlert = value; return this; }
 
     // ── Document / photo ──────────────────────────────────────────────────────
 
@@ -144,17 +208,24 @@ public sealed class TgBuilder
 
         void AppendIf(string key, string? value) { if (value != null) Append(key, value); }
 
-        Append("token", _token);
+        // A token-less builder relies on connectionFactory= supplying the credential.
+        if (!string.IsNullOrEmpty(_token)) Append("token", _token);
+        AppendIf("connectionFactory", _connectionFactory);
         AppendIf("chatId", _chatId);
         AppendIf("parseMode", _parseMode);
         AppendIf("caption", _caption);
         AppendIf("fileName", _fileName);
+        AppendIf("replyToMessageId", _replyToMessageId);
+        AppendIf("messageId", _messageId);
 
         if (_disableNotification)
             Append("disableNotification", "true");
 
         if (_bodyIsFileId)
             Append("bodyIsFileId", "true");
+
+        if (_showAlert)
+            Append("showAlert", "true");
 
         if (_sendTimeoutSeconds.HasValue)
             Append("sendTimeoutSeconds", _sendTimeoutSeconds.Value.ToString());

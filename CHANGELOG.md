@@ -47,9 +47,187 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
-## [Unreleased]
+## [3.4.0] — 2026-07-27
 
-_Nothing yet._
+> **Why a minor bump (3.3 → 3.4).** This release adds public API surface, not just fixes: replay
+> checkpoints (`.Replayable`, `IExchange.Snapshot`, `IRouteContext.ReplayAsync`/`GetReplayMarkers`),
+> the reusable scope-nesting validation primitives (`ICompositeScope`/`IDurableScope`/
+> `IScopeNestingRule`/`IBranchingDefinition`), named `ConnectionFactory` on every connector, and
+> `ProducerTemplate` exchange-typed overloads — alongside the endpoint-URI secret-redaction security
+> hardening. The whole ecosystem ships at **3.4.0**. Backward-compatible: existing routes are unchanged.
+
+### Security
+- **Endpoint-URI secrets no longer leak into logs, telemetry, health checks, or the Tsak
+  dashboard.** Credentials carried in an endpoint URI — a query-parameter (`?password=`,
+  `?bindPassword=`, `?sessionToken=`, `?saslPassword=`, `?connectionString=`, …) or a userinfo
+  password (`amqp://user:pass@host`) — were being written in cleartext at route-build and
+  endpoint-start (`Compiled route …`, `Endpoint … started`), in the OpenTelemetry
+  `redb.route.endpoint` span tag and metric label, in the inflight-exchange and health-check
+  metadata, and in the `CompiledRoute.FromUri` DTO that the Tsak CLI/dashboard render. The
+  masking that did exist was bypassed by these raw-string paths and, where it ran, (a) disclosed
+  the first two characters of every secret and (b) used an exact-match deny-list of eight names —
+  so `bindPassword`, `sessionToken`, `sslKeyPassword`, `authToken`, `clientSecret`,
+  `privateKeyPassphrase`, `sharedAccessKey`, and userinfo passwords all slipped through. Fixes:
+  - **Full redaction to a constant `****`** — no more first-two-character disclosure.
+  - **Substring-based secret detection** replacing the exact-match list (covers the names above and
+    any `*password*` / `*token*` / `*secret*` / `*apikey*` / `*credential*` variant); benign params
+    like `routingKey` / `partitionKey` / `clientId` / `username` are deliberately never masked.
+  - **Userinfo passwords are masked** (`user:pass@host` → `user:****@host`) — previously outside the
+    masker entirely.
+  - **Every core log / telemetry / metric / health-check / DTO boundary is routed through a new
+    format-preserving `EndpointUri.Sanitize(string)`** (keeps scheme, `://`, path, param order, and
+    non-secret values byte-for-byte). Unnamed routes now derive a **sanitized** route id, so a secret
+    can no longer surface through `{RouteId}` log lines.
+  - **`redb.Route.Elasticsearch`** — the `Nodes=` startup log now sanitizes each node URL (userinfo).
+  - **`redb.Route.Exec`** — the debug `exec →` line logs the executable and argument **count** only;
+    argument values (which routinely carry secrets on the command line) are no longer emitted.
+  - **Producer/consumer start-stop lines that printed the raw endpoint key are sanitized** —
+    `GenericFileProducer` (the base for **FTP/SFTP**, whose credentials live in query parameters,
+    so `?password=` was reaching the log verbatim) plus the in-process Direct / SEDA / Mock / Log
+    components.
+  - New public API on `EndpointUri`: `Sanitize(string)`, `IsSensitiveKey(string)`, and
+    `AddSensitiveKeys(params string[])` for connectors to register non-standard secret parameter
+    names (analogous to Camel's `addSanitizeKeywords`).
+  - **`[Sensitive]` on an endpoint option is now the source of truth for what gets redacted.**
+    Guessing a secret from its parameter name fails open — that is exactly how `bindPassword`,
+    `sessionToken` and `sslKeyPassword` leaked: they were credentials nobody had put on the list.
+    An option marked `[Sensitive]` is redacted because it was *declared* one:
+    ```csharp
+    public string Server { get; set; } = "localhost";   // printed in logs
+    [Sensitive] public string? BindPassword { get; set; }  // always ****
+    ```
+    `EndpointOptions.BindFromUri` harvests those declarations by reflection (once per options type)
+    and feeds them into `EndpointUri.AddSensitiveKeys`, so the keyword set is **derived from the
+    code, never hand-maintained** and a newly added credential option cannot be forgotten. This
+    mirrors Apache Camel, where `@UriParam(secret = true)` is the declaration and the runtime list
+    (`SensitiveUtils.SENSITIVE_KEYS`) is generated from those annotations by a build plugin; the
+    .NET version needs no build step, only reflection. All 37 credential options across 22
+    connectors are annotated. The name-keyword heuristic remains as a backstop for a URI rendered
+    before any endpoint of that scheme has been created.
+  - Display-only change: routing identity, endpoint cache keys (`NormalizedKey` / `BaseKey`), and
+    message flow are unaffected. `CompiledRoute.FromUri` is now a redacted display value and must not
+    be re-parsed to recover credentials.
+- **`redb.Route.Ldap` — `connectionFactory` is now actually resolved: new `LdapConnectionFactory`.**
+  `LdapBuilder.ConnectionFactory()` and `LdapEndpointOptions.ConnectionFactory` existed since 3.3.x
+  but nothing ever read them — `LdapEndpoint` took `BindDn` / `BindPassword` straight off the URI, so
+  a service-account password had to be written into the route and from there reached logs and the
+  dashboard. `LdapEndpoint` now resolves the named `LdapConnectionFactory` from the route registry
+  and fills in every connection/credential option the URI did not set (an explicit URI value still
+  wins, so existing routes are unchanged; a missing factory logs a warning and falls back to URI
+  parameters). A route can now carry no credentials at all:
+  ```csharp
+  context.AddToRegistry("honest-ldap", new LdapConnectionFactory {
+      Server = "ldap.corp.local", Port = 636, Ssl = true,
+      BindDn = "cn=svc-reader,dc=corp,dc=local",
+      BindPassword = Environment.GetEnvironmentVariable("LDAP_BIND_PASSWORD") });
+
+  r.From("ldap://SEARCH:dc=corp,dc=local?connectionFactory=honest-ldap&filter=(objectClass=user)")
+  ```
+- **Secrets embedded in exception messages are redacted before logging.** `OnExceptionProcessor`
+  logs `ex.Message` on redelivery and retries-exhausted; a driver exception can carry a connection
+  string (`...;Password=…;…`). Those two sites now run the message through the new
+  `EndpointUri.RedactSecrets(string)`, which masks `key=value` secret assignments inside arbitrary
+  text while preserving everything else. Note: when `LogStackTrace` is enabled the exception object
+  itself is handed to the logger and cannot be scrubbed in-process — use `RedactSecrets` in a
+  logging-sink filter for that path.
+
+### Added
+- **Replay checkpoints — `.Replayable("name")` save-points.** A named point in a route that snapshots
+  the exchange as it passes, so the *tail* of the route (everything after the marker) can be re-run
+  later from that frozen state — e.g. the platform replaying a failed exchange from the last
+  successful step instead of from the mangled current state. The captured `RouteCheckpoint` lands in
+  `exchange.Properties["route.checkpoint"]` (last marker wins) and replay is a typed in-process call
+  `IRouteContext.ReplayAsync(routeId, markerName, snapshot)`. Full developer guide (incl. the
+  Tsak-integration contract): `docs/REPLAY_CHECKPOINTS_GUIDE.md`.
+  ```csharp
+  From("timer://poll?period=5000")
+      .Process(chargeCard)
+      .Replayable("after-charge")     // save-point: card already charged
+          .Process(sendReceipt)
+          .To("http://receipts")
+      .EndReplayable();
+  ```
+  - **`IExchange.Snapshot()` / `IMessage.Snapshot()`** — a deep, isolated copy distinct from
+    `Clone()`: the body is deep-copied so the captured state is frozen against later in-place
+    mutation (whereas `Clone()` intentionally shares the body — relied upon by e.g. Splitter
+    aggregation). v1 handles immutable / `byte[]` / `ICloneable` bodies and throws loudly otherwise
+    (never a silent shallow share). A snapshot carries no DI scope (dormant data — no per-message
+    leak). Also corrected the misleading "Deep copy" doc on `Clone()`.
+  - **`exposed: true`** additionally publishes the marker as `direct:__replay:{routeId}:{name}` so
+    other routes can `.To(...)` it; the default (`exposed: false`) is reachable only via `ReplayAsync`.
+  - **`IRouteContext.ReplayAsync` / `GetReplayMarkers`** and `ProducerTemplate` exchange-typed
+    overloads (`Send`/`SendAsync`/`RequestAsync(..., IExchange, ct)`, caller-owned) round out the API.
+  - A non-snapshot-able body degrades gracefully (warn, no capture) — checkpoints never break the
+    happy path. Routing identity, cache keys, and existing `Clone()` behaviour are unchanged.
+- **Reusable scope-nesting validation.** A general mechanism (not an ad-hoc per-type check) for
+  expressing where a definition may/may not nest: `ICompositeScope` / `IDurableScope` scope-category
+  markers, `IScopeNestingRule` (a node declares `Allowed`/`Warn`/`Forbid` against an ancestor
+  category), and `IBranchingDefinition` (definitions whose children live outside `Outputs` — Choice
+  When/Otherwise, TryCatch catch/finally — expose them for a generic tree-walk). The validator
+  applies the rules generically: `Forbid` → build error, `Warn` → log. First use: a replay checkpoint
+  may not cross a branching composite (build error) and warns inside a durable transaction (replay
+  runs outside it). New structural constraints ship on the definition, never in the validator.
+- **Named `ConnectionFactory` for connectors that previously had no way to keep credentials out of
+  the endpoint URI.** Registered in the route registry and referenced by name
+  (`?connectionFactory=my-bot`), so the secret never enters the URI at all — nothing to mask in
+  logs, telemetry, or the dashboard. Each factory fills only the options the URI did not set
+  explicitly, so **an inline URI value always wins and existing routes are unchanged**; a name that
+  is not in the registry logs a warning and falls back to URI parameters.
+  Rolled out to all ten connectors that previously had no such mechanism: **Telegram** (`TelegramConnectionFactory` — bot token; token-less DSL
+  overloads `Tg.Receive().ConnectionFactory("bot")`), **MqttNet** (`MqttConnectionFactory` — broker
+  address + username/password/TLS), **Http** (`HttpConnectionFactory` — Basic/Bearer credentials,
+  TLS certificate password, timeout; `AuthToken` supports `${...}` expressions exactly like the URI
+  form; the request address deliberately stays in the URI path so a factory can never silently
+  redirect a route), **Mail** (`MailConnectionFactory` — one factory shared by SMTP / IMAP / POP3:
+  mailbox username/password, OAuth2 access token, auth mechanism, transport security and client
+  certificate; a host taken from the URI path is never overridden by the factory),
+  **Ftp** / **Sftp** (`FtpConnectionFactory` / `SftpConnectionFactory` over a shared
+  `RemoteFileConnectionFactory` base in `redb.Route.GenericFile` — host/port/username/password and
+  timeouts in the base, FTPS settings for FTP, private-key path + passphrase, host-key checking and
+  proxy credentials for SFTP), **SignalR** (`SignalRConnectionFactory` — hub access token, transport
+  and TLS material), and **Grpc** / **Tcp** / **WebSocket** (`GrpcConnectionFactory` /
+  `TcpConnectionFactory` / `WsConnectionFactory` — TLS certificate password and connect timeouts).
+  For the connectors whose address lives in the endpoint path (Http, Mail, SignalR, Grpc, Tcp,
+  WebSocket) the factory deliberately carries **no** host/port, so it can never silently redirect a
+  route; the `wss` scheme likewise still forces TLS on regardless of the factory.
+  A fluent `.ConnectionFactory("name")` was added to every builder that has one (Telegram also gains
+  token-less mode overloads); SignalR and WebSocket are URI-only and unchanged in that respect.
+  ```csharp
+  context.AddToRegistry("support-bot", new TelegramConnectionFactory {
+      Token = Environment.GetEnvironmentVariable("TELEGRAM_TOKEN")! });
+
+  r.From("telegram://receive?connectionFactory=support-bot")   // no token in the route
+  ```
+- **`redb.Route.Telegram` — reply target as a first-class producer option: `replyToMessageId`
+  (expression-capable) with fluent `ReplyTo(long)` / `ReplyTo(IExpression)` / `.ReplyToIncoming()`.**
+  Replying to the message that triggered the exchange previously required a manual `.Process` step
+  copying `telegram.messageId` into `telegram.replyToMessageId`. The option accepts a constant id or
+  a `${...}` expression resolved per message; `.ReplyToIncoming()` is sugar for
+  `replyToMessageId=${header.telegram.messageId}`. An explicit `telegram.replyToMessageId` header
+  still wins; an expression that resolves to nothing sends the message unthreaded. A constant that
+  is not a message id fails validation at endpoint start. Applies to `send` / `document` / `photo`.
+- **`redb.Route.Telegram` — edit/delete target as an option: `messageId` (expression-capable) with
+  fluent `MessageId(long)` / `MessageId(IExpression)`.** Chaining send → edit previously required a
+  manual copy of `telegram.sentMessageId` into `telegram.messageId`; now
+  `Tg.Edit(token).MessageId(Header(TelegramHeaders.SentMessageId))` does it. The header still wins.
+- **`redb.Route.Telegram` — `answer` mode supports `showAlert`** (URI option, `.ShowAlert()` fluent,
+  per-message `telegram.showAlert` header): the callback answer is shown as a modal alert instead of
+  a toast.
+- **`redb.Route.Telegram` — per-message `telegram.caption` header** for `document`/`photo`, wins
+  over the `caption` option (consistent with `parseMode`/`fileName`).
+- **`redb.Route.Telegram` — Mini App payloads (`WebApp.sendData`) are now surfaced: headers
+  `telegram.webAppData` / `telegram.webAppButtonText`.** A `web_app_data` message carries no text,
+  so the consumer previously handed such an update to the route with an empty body and no way to
+  reach the payload short of parsing the raw `Update`. The data now becomes the exchange body — same
+  contract as text messages and callback queries — and is also exposed as a header. Applies to both
+  the long-polling and webhook paths (shared `TelegramUpdateMapper`); `telegram.messageType` is
+  `"WebAppData"` for filtering.
+
+### Fixed
+- **`redb.Route.Telegram` — `document` / `photo` modes silently ignored `telegram.replyToMessageId`
+  and `telegram.replyMarkup`.** Both headers were documented in the producer-headers table but only
+  wired into `send`, so a photo with inline buttons or a document sent as a reply lost its markup /
+  reply target. Both modes now pass them to the Bot API.
 
 ## [3.3.3] — 2026-07-15
 

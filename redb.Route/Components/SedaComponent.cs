@@ -134,14 +134,14 @@ public class SedaProducer : IProducer
     /// <inheritdoc />
     public Task Start(CancellationToken ct = default)
     {
-        _logger?.LogInformation("SEDA producer started: {Name}", _endpoint.Uri.NormalizedKey);
+        _logger?.LogInformation("SEDA producer started: {Name}", EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey));
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
     public Task Stop(CancellationToken ct = default)
     {
-        _logger?.LogInformation("SEDA producer stopped: {Name}", _endpoint.Uri.NormalizedKey);
+        _logger?.LogInformation("SEDA producer stopped: {Name}", EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey));
         return Task.CompletedTask;
     }
 }

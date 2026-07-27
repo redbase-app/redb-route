@@ -198,7 +198,8 @@ public class OnExceptionProcessor : IProcessor
                     {
                         _logger?.Log(handler.RetryAttemptedLogLevel,
                             "Redelivery attempt {Attempt}/{Max} for {ExceptionType}: {Message}",
-                            attempt, handler.MaxRedeliveries, ex.GetType().Name, ex.Message);
+                            attempt, handler.MaxRedeliveries, ex.GetType().Name,
+                            EndpointUri.RedactSecrets(ex.Message));
                     }
 
                     // Apply redelivery delay
@@ -237,7 +238,7 @@ public class OnExceptionProcessor : IProcessor
                     {
                         _logger?.Log(handler.RetriesExhaustedLogLevel,
                             "Retries exhausted for {ExceptionType} after {Attempts} attempts: {Message}",
-                            ex.GetType().Name, attempt, ex.Message);
+                            ex.GetType().Name, attempt, EndpointUri.RedactSecrets(ex.Message));
                     }
                 }
 

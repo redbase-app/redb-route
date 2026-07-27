@@ -54,6 +54,7 @@ public sealed class MqttBuilder
     private string? _port;
     private string? _username;
     private string? _password;
+    private string? _connectionFactory;
     private string? _clientId;
     private bool _useTls;
     private string? _keepAlive;
@@ -104,6 +105,12 @@ public sealed class MqttBuilder
     public MqttBuilder Password(IExpression password) { _password = password.ToTemplateString(); return this; }
     /// <summary>Password for broker authentication (template string, supports <c>${...}</c>).</summary>
     public MqttBuilder Password(string password) => Password(new StringExpression(password));
+
+    /// <summary>
+    /// References a named <see cref="MqttConnectionFactory"/> from the route registry instead of
+    /// putting broker credentials in the URI.
+    /// </summary>
+    public MqttBuilder ConnectionFactory(string name) { _connectionFactory = name; return this; }
 
     /// <summary>Client ID for the MQTT connection.</summary>
     public MqttBuilder ClientId(IExpression clientId) { _clientId = clientId.ToTemplateString(); return this; }
@@ -204,6 +211,7 @@ public sealed class MqttBuilder
         AppendIf("port", _port);
         AppendIf("username", _username);
         AppendIf("password", _password);
+        AppendIf("connectionFactory", _connectionFactory);
         AppendIf("clientId", _clientId);
         AppendBool("useTls", _useTls);
         AppendIf("keepAlive", _keepAlive);

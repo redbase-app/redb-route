@@ -93,7 +93,15 @@ public class TcpEndpointOptions : EndpointOptions
     public string? SslCertPath { get; set; }
 
     /// <summary>Password for the PFX certificate.</summary>
+    [Sensitive]
     public string? SslCertPassword { get; set; }
+
+    /// <summary>
+    /// Named <see cref="TcpConnectionFactory"/> from the route registry. Lets the TLS certificate
+    /// password live in the registry instead of the endpoint URI, so it never reaches logs
+    /// or dashboards.
+    /// </summary>
+    public string? ConnectionFactory { get; set; }
 
     /// <summary>
     /// Target host name for TLS server certificate validation (producer).

@@ -88,6 +88,7 @@ public sealed class HttpBuilder
     private string? _authToken;
     private string? _username;
     private string? _password;
+    private string? _connectionFactory;
     private bool? _followRedirects;
     private string? _maxRedirects;
     private bool? _copyResponseHeaders;
@@ -151,6 +152,12 @@ public sealed class HttpBuilder
 
     /// <summary>Use Bearer token authentication. Token is resolved via AuthToken option at runtime.</summary>
     public HttpBuilder BearerAuth() { _authScheme = "Bearer"; return this; }
+
+    /// <summary>
+    /// References a named <see cref="HttpConnectionFactory"/> from the route registry instead of
+    /// putting Basic/Bearer credentials or the TLS certificate password in the URI.
+    /// </summary>
+    public HttpBuilder ConnectionFactory(string name) { _connectionFactory = name; return this; }
 
     /// <summary>Bearer/API-key token value or expression (e.g. <c>Property("jwt")</c>).</summary>
     public HttpBuilder AuthToken(IExpression token) { _authToken = token.ToTemplateString(); return this; }
@@ -320,6 +327,7 @@ public sealed class HttpBuilder
         AppendIf("authToken", _authToken);
         AppendIf("username", _username);
         AppendIf("password", _password);
+        AppendIf("connectionFactory", _connectionFactory);
         AppendBoolFalse("followRedirects", _followRedirects);
         AppendIf("maxRedirects", _maxRedirects);
         AppendBoolFalse("copyResponseHeaders", _copyResponseHeaders);

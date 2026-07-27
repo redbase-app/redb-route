@@ -71,7 +71,9 @@ public sealed class ExecProducer : ConnectableProducer
         EnsureAllowed(command);
 
         var psi = BuildStartInfo(command, args);
-        Logger?.LogDebug("exec → {Command} {Args}", psi.FileName, psi.Arguments);
+        // Do NOT log argument values — they routinely carry secrets (tokens, passwords
+        // passed as CLI flags). Emit the executable and the argument count only.
+        Logger?.LogDebug("exec → {Command} ({ArgCount} args)", psi.FileName, args.Count);
 
         var result = await RunAsync(psi, ct).ConfigureAwait(false);
 

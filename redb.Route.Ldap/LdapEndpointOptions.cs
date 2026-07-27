@@ -36,6 +36,7 @@ public sealed class LdapEndpointOptions : EndpointOptions
     public string? BindDn { get; set; }
 
     /// <summary>Password for service account authentication.</summary>
+    [Sensitive]
     public string? BindPassword { get; set; }
 
     // ── Search ──
@@ -100,6 +101,7 @@ public sealed class LdapEndpointOptions : EndpointOptions
     public string? ClientCertPath { get; set; }
 
     /// <summary>Password for client certificate.</summary>
+    [Sensitive]
     public string? ClientCertPassword { get; set; }
 
     /// <inheritdoc />

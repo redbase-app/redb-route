@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using redb.Route.Abstractions;
 using redb.Route.Core;
@@ -26,6 +27,19 @@ public class SignalRComponent : ComponentBase
         var options = new SignalREndpointOptions();
         ParseHostPort(uri.Path, options);
         options.BindFromUri(uri.RawParameters);
+
+        // Named ConnectionFactory keeps the access token / cert password out of the route URI.
+        if (!string.IsNullOrEmpty(options.ConnectionFactory) && Context is not null)
+        {
+            var factory = Context.GetFromRegistry<SignalRConnectionFactory>(options.ConnectionFactory);
+            if (factory is not null)
+                factory.ApplyTo(options, uri);
+            else
+                Logger?.LogWarning(
+                    "SignalR: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
+                    options.ConnectionFactory);
+        }
+
         options.Validate();
 
         return new SignalREndpoint(uri, this, options);

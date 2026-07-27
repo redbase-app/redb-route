@@ -105,6 +105,12 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.CommitTransaction() => CommitTransaction();
     IRouteDefinition IRouteDefinition.RollbackTransaction() => RollbackTransaction();
 
+    // ── Replay checkpoints ──
+    // The non-lambda Replayable returns ReplayableDefinition (matches the interface exactly, no
+    // explicit impl needed); the lambda overload returns TSelf and needs this bridge.
+    IRouteDefinition IRouteDefinition.Replayable(string name, Action<ReplayableDefinition> body, bool exposed)
+        => Replayable(name, body, exposed);
+
     // ── Telemetry (inline overloads) ──
     IRouteDefinition IRouteDefinition.Traced(string operationName, Action<IExchange> action) => Traced(operationName, action);
     IRouteDefinition IRouteDefinition.Traced(string operationName, Func<IExchange, CancellationToken, Task> action) => Traced(operationName, action);

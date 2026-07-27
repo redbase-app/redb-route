@@ -19,12 +19,15 @@ public abstract class AwsEndpointOptions : EndpointOptions
     public string Region { get; set; } = "us-east-1";
 
     /// <summary>AWS access key ID. Required unless <see cref="UseDefaultCredentialsProvider"/> or <see cref="ProfileName"/> is used.</summary>
+    [Sensitive]
     public string AccessKey { get; set; } = "";
 
     /// <summary>AWS secret access key.</summary>
+    [Sensitive]
     public string SecretKey { get; set; } = "";
 
     /// <summary>AWS session token for temporary (STS) credentials.</summary>
+    [Sensitive]
     public string SessionToken { get; set; } = "";
 
     /// <summary>Named AWS profile from the shared credentials file. Overrides access/secret keys when set.</summary>

@@ -11,10 +11,23 @@ namespace redb.Route.Definitions;
 /// optionally add a finally block with <see cref="Finally"/>, close the scope with
 /// <see cref="EndTryCatch"/>.
 /// </summary>
-public class TryCatchDefinition : RouteDefinitionBase<TryCatchDefinition>, IRouteScope
+public class TryCatchDefinition : RouteDefinitionBase<TryCatchDefinition>, IRouteScope, IBranchingDefinition
 {
     internal readonly List<CatchDefinition> Catches = [];
     internal FinallyDefinition? FinallyBlock;
+
+    /// <summary>
+    /// The catch/finally handler bodies — logical children outside <see cref="Outputs"/> (which
+    /// holds the try body), so a generic tree-walk (validation) reaches steps nested in a handler.
+    /// </summary>
+    public IEnumerable<IProcessorDefinition> Branches
+    {
+        get
+        {
+            foreach (var c in Catches) yield return c;
+            if (FinallyBlock is not null) yield return FinallyBlock;
+        }
+    }
 
     internal TryCatchDefinition() { }
 

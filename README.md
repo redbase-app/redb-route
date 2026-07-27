@@ -40,7 +40,7 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 - [Quick Start](#quick-start)
 - [Why redb.Route](#why-redbroute) — [Differentiators](#what-sets-redbroute-apart) · [vs other .NET options](#vs-other-net-options-quick-guide) · [Manual code comparison](#manual-code-comparison)
 - [Use Cases](#use-cases)
-- [Configuration](#configuration) — appsettings, IOptions, DI parameterization
+- [Configuration](#configuration) — appsettings, IOptions, DI parameterization, [credentials & secret redaction](#credentials--secret-redaction)
 - [How It Compares](#how-it-compares) — vs Apache Camel, MassTransit, NServiceBus, Wolverine; [Migrating from Camel](#migrating-from-apache-camel)
 - [Routing Patterns](#routing-patterns) — From, To, Filter, Choice, Split, Recipient List, Dynamic Router
 - [Error Handling](#error-handling) — [Retry](#retry-per-step) · [Dead Letter Channel](#dead-letter-channel) · [TryCatch](#trycatch-scoped) · [OnException scope](#onexception--scope-form-chain) · [OnException configure](#onexception--configure-form-action) · [Redelivery options](#redelivery-configuration) · [Combined example](#combined-example)
@@ -292,6 +292,56 @@ From(Sql.Poll("SELECT * FROM Orders WHERE Status = 'New'")
            .Transacted());
 ```
 
+### Credentials & secret redaction
+
+Two independent mechanisms keep passwords out of logs, OpenTelemetry tags, metric labels, health
+checks and the Tsak dashboard.
+
+**1. Keep the secret out of the URI — named `ConnectionFactory`.** Every connector that takes
+credentials accepts `connectionFactory=<name>`, resolved from the route registry. The route then
+carries no secret at all, so there is nothing to mask on the happy path:
+
+```csharp
+context.AddToRegistry("honest-ldap", new LdapConnectionFactory
+{
+    Server = "ldap.corp.local",
+    Port = 636,
+    Ssl = true,
+    BindDn = "cn=svc-reader,dc=corp,dc=local",
+    BindPassword = Environment.GetEnvironmentVariable("LDAP_BIND_PASSWORD")
+});
+
+From("ldap://SEARCH:dc=corp,dc=local?connectionFactory=honest-ldap&filter=(objectClass=user)")
+```
+
+A value written inline in the URI always wins over the factory, so existing routes keep working; a
+factory name that is not registered logs a warning and falls back to the URI parameters. For
+connectors whose address lives in the endpoint path (Http, Mail, SignalR, gRPC, Tcp, WebSocket) the
+factory deliberately carries no host/port — it can never silently redirect a route.
+
+**2. Redact whatever still ends up in a URI — `[Sensitive]`.** Guessing a secret from its parameter
+name fails open, so the option itself declares it:
+
+```csharp
+public sealed class LdapEndpointOptions : EndpointOptions
+{
+    public string Server { get; set; } = "localhost";        // printed in logs
+
+    [Sensitive]
+    public string? BindPassword { get; set; }                // always rendered as ****
+}
+```
+
+`BindFromUri` harvests those declarations by reflection (once per options type), so the set of
+redacted parameter names is derived from the code and never hand-maintained — the same design as
+Apache Camel's `@UriParam(secret = true)`, which its build plugin turns into
+`SensitiveUtils.SENSITIVE_KEYS`. A name-keyword heuristic (`*password*`, `*token*`, `*secret*`, …)
+stays on as a backstop, `userinfo` passwords in `scheme://user:pass@host` are masked too, and
+secrets are replaced with a constant `****` — never a partial prefix.
+
+To register a credential parameter that is not an annotated option, call
+`EndpointUri.AddSensitiveKeys("myCustomToken")` at startup.
+
 ### Engine options
 
 ```csharp
@@ -384,7 +434,7 @@ A 200-line Camel `RouteBuilder.configure()` typically becomes a 200-line C# `Rou
 | Focus | Reliable message bus + Saga | Enterprise Service Bus — 27 transports, 30+ EIP (Enterprise Integration Patterns), transactional pipelines |
 | Routing model | Consumer classes | Route pipelines (`From → Process → To`) |
 | EIP patterns | Saga, Request/Response, Outbox | 30+ EIP patterns |
-| Transports | 5 (RabbitMQ, Kafka, SQS, Azure SB, gRPC) | 22 (+ File, SFTP, SQL, MQTT, TCP, HTTP, FTP, LDAP, IBM MQ, S3, …) |
+| Transports | 5 (RabbitMQ, Kafka, SQS, Azure SB, gRPC) | 27 (+ File, SFTP, SQL, MQTT, TCP, HTTP, FTP, LDAP, IBM MQ, S3, `llm:`, `mcp:`, …) |
 | Saga | State machine + **persistent state** (DB-backed) | Compensating steps (forward + reverse) with persistent dedup via `IdempotentConsumer` (redb RTTI storage / SQL backends, two-phase commit) — no built-in state machine |
 | Outbox | Yes (transactional outbox pattern) | Polling outbox via `Sql.Poll(...).OnSuccess(...).Transacted()` + persistent `IdempotentConsumer` (de-facto outbox) |
 | Publisher reliability | Yes (RabbitMQ confirms, Kafka EOS) | **Yes** — RabbitMQ publisher confirms, mandatory flag, transacted channels, automatic recovery; Kafka transactional producer + `Acks=All` + `IsolationLevel=ReadCommitted` |
@@ -1883,7 +1933,9 @@ All cluster coordination is behind **abstract interfaces** (`ILeaderElection`, `
 - **Hot-reload with rollback.** Atomic `.tpkg` packages, version retention, automatic rollback on failure.
 - **Deterministic shutdown ordering.** Hooks fire in reverse order; per-context drain isolated by `CancellationToken.None` so one slow context cannot abort the rest.
 
-For a deeper feature reference and deployment recipes, see [redb.Tsak/STATUS.md](../redb.Tsak/STATUS.md).
+For a deeper feature reference and deployment recipes, see the
+[redb.Tsak repository](https://github.com/redbase-app/redb-tsak) — its `README.md`, `API_GUIDE.md`
+and `DEPLOYMENT.md` cover the runtime container end to end.
 
 ---
 

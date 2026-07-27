@@ -133,6 +133,29 @@ public interface IRouteContext : IDisposable
     /// <param name="ct">Cancellation token.</param>
     Task HandleException(IExchange exchange, Exception exception, CancellationToken ct = default);
 
+    // ── Replay checkpoints ──
+
+    /// <summary>
+    /// Re-runs the tail of a route from a captured checkpoint snapshot. Runs the compiled body of
+    /// the <c>.Replayable(markerName)</c> marker directly (no synthetic endpoint) with the supplied
+    /// snapshot as the exchange. Intended for the platform (Tsak) to replay a failed exchange from a
+    /// save-point. The snapshot is caller-owned (typically a <see cref="RouteCheckpoint.Snapshot"/>
+    /// read from a failed exchange's <see cref="RouteCheckpoint.PropertyKey"/> property, or a
+    /// rehydrated one from durable storage).
+    /// </summary>
+    /// <param name="routeId">Route the marker belongs to.</param>
+    /// <param name="markerName">Name of the <c>.Replayable</c> marker to replay into.</param>
+    /// <param name="snapshot">The exchange snapshot to run the tail with.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <exception cref="InvalidOperationException">No such marker on the route.</exception>
+    Task ReplayAsync(string routeId, string markerName, IExchange snapshot, CancellationToken ct = default);
+
+    /// <summary>
+    /// Lists every compiled replay marker as <c>(routeId, markerName)</c>. Lets the platform show
+    /// which routes are replayable and into which save-points, before any traffic has flowed.
+    /// </summary>
+    IReadOnlyCollection<(string RouteId, string MarkerName)> GetReplayMarkers();
+
     /// <summary>Registers a global exception handler for a specific exception type.</summary>
     /// <typeparam name="TException">Exception type to handle.</typeparam>
     /// <param name="processor">Processor to invoke when this exception type is caught.</param>

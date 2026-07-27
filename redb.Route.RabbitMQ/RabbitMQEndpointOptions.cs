@@ -19,6 +19,7 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
     public string Username { get; set; } = "guest";
 
     /// <summary>RabbitMQ password (default: guest).</summary>
+    [Sensitive]
     public string Password { get; set; } = "guest";
 
     /// <summary>Virtual host (default: /).</summary>
@@ -190,6 +191,7 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
     public string? SslCertPath { get; set; }
 
     /// <summary>Client certificate passphrase.</summary>
+    [Sensitive]
     public string? SslCertPassphrase { get; set; }
 
     /// <inheritdoc />

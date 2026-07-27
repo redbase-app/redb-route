@@ -42,7 +42,15 @@ public class GrpcEndpointOptions : EndpointOptions
     public string? SslCertPath { get; set; }
 
     /// <summary>Password for the PFX certificate.</summary>
+    [Sensitive]
     public string? SslCertPassword { get; set; }
+
+    /// <summary>
+    /// Named <see cref="GrpcConnectionFactory"/> from the route registry. Lets the TLS certificate
+    /// password live in the registry instead of the endpoint URI, so it never reaches logs
+    /// or dashboards.
+    /// </summary>
+    public string? ConnectionFactory { get; set; }
 
     /// <summary>Max request message size in bytes for the server. Default: 4 MB. 0 = unlimited.</summary>
     public int MaxRequestMessageSize { get; set; } = 4 * 1024 * 1024;

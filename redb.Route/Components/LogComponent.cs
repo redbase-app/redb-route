@@ -150,14 +150,14 @@ public class LogProducer : IProducer
     /// <inheritdoc />
     public Task Start(CancellationToken ct = default)
     {
-        _logger?.LogInformation("Log producer started: {Name}", _endpoint.Uri.NormalizedKey);
+        _logger?.LogInformation("Log producer started: {Name}", EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey));
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
     public Task Stop(CancellationToken ct = default)
     {
-        _logger?.LogInformation("Log producer stopped: {Name}", _endpoint.Uri.NormalizedKey);
+        _logger?.LogInformation("Log producer stopped: {Name}", EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey));
         return Task.CompletedTask;
     }
 }

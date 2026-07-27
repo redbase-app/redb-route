@@ -56,22 +56,50 @@ public static class TelegramHeaders
     /// <summary>Callback data string set on the InlineKeyboardButton.</summary>
     public const string CallbackData = "telegram.callbackData";
 
+    // ── Web App (mini app) ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Payload sent from a Telegram Mini App via <c>WebApp.sendData(...)</c>.
+    /// Present only on messages whose <see cref="MessageType"/> is <c>"WebAppData"</c>,
+    /// which Telegram delivers only for web app buttons opened from a reply keyboard
+    /// (<c>KeyboardButton.WithWebApp</c>) — inline web app buttons cannot send data back.
+    /// Also written to the exchange body, since such a message carries no text.
+    /// </summary>
+    public const string WebAppData = "telegram.webAppData";
+
+    /// <summary>Text of the reply-keyboard button that opened the mini app (nullable).</summary>
+    public const string WebAppButtonText = "telegram.webAppButtonText";
+
     // ── Producer controls ─────────────────────────────────────────────────────
 
     /// <summary>
     /// Reply markup to attach to a sent message.
     /// Set to an <c>InlineKeyboardMarkup</c> or <c>ReplyKeyboardMarkup</c> instance
     /// from the <c>Telegram.Bot.Types.ReplyMarkups</c> namespace.
-    /// Only used by the <c>send</c> producer mode.
+    /// Used by <c>send</c> / <c>document</c> / <c>photo</c> / <c>edit</c> (inline only) modes.
     /// </summary>
     public const string ReplyMarkup = "telegram.replyMarkup";
 
     /// <summary>
-    /// Message ID to reply to in <c>send</c> mode.
+    /// Message ID to reply to in <c>send</c> / <c>document</c> / <c>photo</c> modes.
     /// Set to an <c>int</c> (or parseable string). When present, the sent message
     /// will appear as a reply to the referenced message in the chat.
+    /// Wins over the <c>replyToMessageId</c> option.
     /// </summary>
     public const string ReplyToMessageId = "telegram.replyToMessageId";
+
+    /// <summary>
+    /// Per-message override for <see cref="TelegramEndpointOptions.Caption"/>
+    /// in <c>document</c>/<c>photo</c> modes.
+    /// </summary>
+    public const string Caption = "telegram.caption";
+
+    /// <summary>
+    /// Per-message override for <see cref="TelegramEndpointOptions.ShowAlert"/> in
+    /// <c>answer</c> mode: show the text as a modal alert instead of a toast.
+    /// Accepts <c>bool</c> or string parseable as bool.
+    /// </summary>
+    public const string ShowAlert = "telegram.showAlert";
 
     /// <summary>
     /// Per-message override for <see cref="TelegramEndpointOptions.ParseMode"/>.

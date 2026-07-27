@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 
@@ -24,6 +25,18 @@ public class GrpcComponent : ComponentBase
 
         // Extract host[:port] from URI path (e.g. "0.0.0.0:50051")
         ParseHostPort(uri.Path, options, uri.RawParameters);
+
+        // Named ConnectionFactory keeps the TLS certificate password out of the route URI.
+        if (!string.IsNullOrEmpty(options.ConnectionFactory) && Context is not null)
+        {
+            var factory = Context.GetFromRegistry<GrpcConnectionFactory>(options.ConnectionFactory);
+            if (factory is not null)
+                factory.ApplyTo(options, uri);
+            else
+                Logger?.LogWarning(
+                    "gRPC: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
+                    options.ConnectionFactory);
+        }
 
         options.Validate();
 

@@ -25,6 +25,7 @@ public sealed class FcmEndpointOptions : EndpointOptions
     public FcmMessageType MessageType { get; set; } = FcmMessageType.Token;
 
     /// <summary>Device registration token. Supports <c>${...}</c> expressions.</summary>
+    [Sensitive]
     public DynamicValue<string>? Token { get; set; }
 
     /// <summary>Topic name for topic-based targeting. Supports <c>${...}</c> expressions.</summary>

@@ -18,7 +18,7 @@ namespace redb.Route.Definitions;
 /// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>;
 /// close with <see cref="EndTransaction"/> or the universal <see cref="End"/>.
 /// </summary>
-public class TransactionDefinition : RouteDefinitionBase<TransactionDefinition>, IRouteScope
+public class TransactionDefinition : RouteDefinitionBase<TransactionDefinition>, IRouteScope, IDurableScope
 {
     private readonly TransactionPolicy? _policy;
     private int _retryAttempts;

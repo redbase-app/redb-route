@@ -188,14 +188,14 @@ public abstract class GenericFileProducer<TOptions> : IProducer
     public virtual Task Start(CancellationToken ct = default)
     {
         _logger ??= (ProducerEndpoint.Component as ComponentBase)?.Logger;
-        Logger?.LogInformation("{Producer} started", ProducerEndpoint.Uri.NormalizedKey);
+        Logger?.LogInformation("{Producer} started", EndpointUri.Sanitize(ProducerEndpoint.Uri.NormalizedKey));
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
     public virtual Task Stop(CancellationToken ct = default)
     {
-        Logger?.LogInformation("{Producer} stopped", ProducerEndpoint.Uri.NormalizedKey);
+        Logger?.LogInformation("{Producer} stopped", EndpointUri.Sanitize(ProducerEndpoint.Uri.NormalizedKey));
         return Task.CompletedTask;
     }
 

@@ -45,7 +45,7 @@ This project is designed to be **deployed into [redb.Tsak](../redb.Tsak/README.m
 | Timer (`timer:`) | Heartbeat — fires every 10 seconds |
 | Cron (`cron:`) | Scheduled job — runs at configured expression |
 | SMTP / SFTP | Referenced in `InitRoute` component registration |
-| redb.Core (`IRedbService`) | Named-instance CRUD — `DemoItemProps` saved via EAV |
+| redb.Core (`IRedbService`) | Named-instance CRUD — `DemoItemProps` saved as redb props |
 
 ---
 
@@ -56,7 +56,7 @@ redb.Route.Demo/
 ├── InitRoute.cs                    ← Tsak module entry point (discovered by convention)
 ├── DemoRouteBuilder.cs             ← All 39 routes in 9 sections
 ├── DemoLifecycle.cs                ← IRouteLifecycleListener implementation
-├── DemoItemProps.cs                ← redb.Core EAV model ([RedbScheme])
+├── DemoItemProps.cs                ← redb.Core props model ([RedbScheme])
 ├── manifest.json                   ← Tsak module manifest
 ├── redb.Route.Demo.config.json     ← Module config (loaded by Tsak 5-layer pipeline)
 └── output/                         ← File WireTap writes JSON snapshots here

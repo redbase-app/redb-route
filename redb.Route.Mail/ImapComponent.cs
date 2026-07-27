@@ -31,6 +31,7 @@ public class ImapComponent : ComponentBase
         if (!string.IsNullOrEmpty(uri.Path) && uri.Path != "/")
             options.Host = uri.Path.TrimStart('/');
         options.BindFromUri(uri.RawParameters);
+        MailConnectionFactory.TryApply(Context, options, uri, Logger, "IMAP");
         options.Validate();
 
         return new ImapEndpoint(uri, this, options);

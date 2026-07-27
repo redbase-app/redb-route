@@ -11,6 +11,7 @@ public sealed class AzureServiceBusEndpointOptions : EndpointOptions
     // ── Connection ──
 
     /// <summary>Azure Service Bus connection string.</summary>
+    [Sensitive]
     public string ConnectionString { get; set; } = "";
 
     /// <summary>Named connection factory from route context registry.</summary>

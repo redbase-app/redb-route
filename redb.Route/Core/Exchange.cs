@@ -131,6 +131,53 @@ public class Exchange : IExchange
         return clone;
     }
 
+    /// <summary>
+    /// Re-arms <see cref="ReleaseScopes"/> so it runs again on a snapshot that is about to be
+    /// replayed. A replay runs the tail directly (bypassing the normal consumer→dispose lifecycle),
+    /// and the tail resolves its own scoped SQL/redb services — fresh connections cached in
+    /// <c>__redb_scope:*</c> properties — from the context provider. Those must be released after the
+    /// tail, or each replay leaks a connection; this lets <see cref="ReleaseScopes"/> do it even if
+    /// this exchange instance was released before.
+    /// </summary>
+    internal void PrepareForReplay() => Interlocked.Exchange(ref _scopesReleased, 0);
+
+    /// <inheritdoc />
+    public IExchange Snapshot()
+    {
+        // Same shape as Clone but the message body is deep-copied (In.Snapshot / Out.Snapshot),
+        // so the captured state is frozen against later in-place mutation of the payload.
+        var snapshot = new Exchange((Message)In.Snapshot())
+        {
+            Pattern = Pattern,
+            RouteId = RouteId,
+            Exception = Exception,
+            ExceptionHandled = ExceptionHandled
+        };
+        snapshot.ExchangeId = ExchangeId;
+
+        if (Out != null)
+            snapshot.Out = Out.Snapshot();
+
+        foreach (var kvp in _properties)
+        {
+            // Named redb scopes are per-exchange; the snapshot creates its own on first access.
+            if (kvp.Key.StartsWith("__redb_scope:", StringComparison.Ordinal))
+                continue;
+            // Property values are shared (route metadata, not payload) — see Snapshot doc.
+            snapshot._properties[kvp.Key] = kvp.Value;
+        }
+
+        // NO DI scope is created here. A checkpoint snapshot is dormant data captured on every
+        // marker pass and usually never replayed — minting a scope per capture would leak one per
+        // message (the exact class of leak the 3.3.4 connection-leak work closed). The factory
+        // reference is kept so a replay can mint (and dispose) a scope on demand; a snapshot that is
+        // never replayed owns no scope and leaks nothing.
+        snapshot._scopeFactory = _scopeFactory;
+        snapshot._ownsScope = false;   // _scope stays null
+
+        return snapshot;
+    }
+
     /// <inheritdoc />
     public IExchange CreateChild(IMessage message)
     {
