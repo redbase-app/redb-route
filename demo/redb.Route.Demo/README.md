@@ -1,6 +1,8 @@
 # redb.Route.Demo
 
-Full-featured showcase of the redb.Route ESB framework — **18 transports, 50+ EIP patterns, observability, transactions, and lifecycle events** wired into a single runnable module.
+Full-featured showcase of the redb.Route ESB framework — **18 of its 27 transports, the EIP
+patterns listed below, observability, transactions, and lifecycle events** wired into a single
+runnable module of 39 routes.
 
 This project is designed to be **deployed into redb.Tsak** (the redb.Route runtime container), but can also be studied as the definitive reference implementation for every feature of the framework.
 
@@ -238,7 +240,9 @@ Edit `redb.Route.Demo.config.json` to adjust connection strings and feature flag
 }
 ```
 
-When deployed via Tsak, secrets should be injected via environment variables — see DEPLOYMENT_SECRETS.md.
+When deployed via Tsak, secrets should be injected via environment variables rather than written
+into `context.json` or an endpoint URI — the worker maps every config key to an env var by
+replacing `:` with `__`, so nothing sensitive has to live in a file that ships with the module.
 
 ---
 
