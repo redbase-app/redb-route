@@ -1,8 +1,8 @@
 # redb.Route.Demo
 
-Full-featured showcase of the [redb.Route](../redb.Route/README.md) ESB framework — **18 transports, 50+ EIP patterns, observability, transactions, and lifecycle events** wired into a single runnable module.
+Full-featured showcase of the redb.Route ESB framework — **18 transports, 50+ EIP patterns, observability, transactions, and lifecycle events** wired into a single runnable module.
 
-This project is designed to be **deployed into [redb.Tsak](../redb.Tsak/README.md)** (the redb.Route runtime container), but can also be studied as the definitive reference implementation for every feature of the framework.
+This project is designed to be **deployed into redb.Tsak** (the redb.Route runtime container), but can also be studied as the definitive reference implementation for every feature of the framework.
 
 ---
 
@@ -238,11 +238,11 @@ Edit `redb.Route.Demo.config.json` to adjust connection strings and feature flag
 }
 ```
 
-When deployed via Tsak, secrets should be injected via environment variables — see [DEPLOYMENT_SECRETS.md](../redb.Route/DEPLOYMENT_SECRETS.md).
+When deployed via Tsak, secrets should be injected via environment variables — see DEPLOYMENT_SECRETS.md.
 
 ---
 
 ## Part of
 
-[redb.Route](../redb.Route/README.md) — ESB & EIP Framework for .NET  
-[redb.Tsak](../redb.Tsak/STATUS.md) — Runtime container for redb.Route modules
+redb.Route — ESB & EIP Framework for .NET  
+redb.Tsak — Runtime container for redb.Route modules

@@ -50,7 +50,7 @@ From(Kafka.Topic("orders")
     .To("direct://process");
 ```
 
-See [DEPLOYMENT_SECRETS.md](DEPLOYMENT_SECRETS.md) for a full guide on secret management across all transports.
+See DEPLOYMENT_SECRETS.md for a full guide on secret management across all transports.
 
 ### TLS / certificate validation
 

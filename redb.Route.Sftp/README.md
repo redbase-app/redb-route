@@ -65,4 +65,4 @@ From(Sftp.Directory("/data")
 
 ## Part of
 
-[redb.Route](../../README.md) — ESB & EIP Framework for .NET
+[redb.Route](../README.md) — ESB & EIP Framework for .NET

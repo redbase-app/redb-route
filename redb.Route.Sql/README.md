@@ -144,7 +144,7 @@ Names are the property names of `SqlEndpointOptions`, case-insensitive.
 
 > `outputClass` and `outputHeader` are accepted by the option binder but **not implemented** —
 > the result always goes to the body via `DictionaryRowMapper`. See
-> [docs/SQL_PROCEDURE_MODE_REGRESSION.md](../../docs/SQL_PROCEDURE_MODE_REGRESSION.md).
+> docs/SQL_PROCEDURE_MODE_REGRESSION.md.
 
 ## Headers written back
 
@@ -208,11 +208,11 @@ From(Sql.Poll("SELECT * FROM orders WHERE processed = 0")
 
 > **`Sql.Procedure(...)` is currently broken:** `SqlBuilder.Build()` does not emit `procedureName`,
 > so the resulting URI fails validation. Use the string URI form shown above until this is fixed —
-> see [docs/SQL_PROCEDURE_MODE_REGRESSION.md](../../docs/SQL_PROCEDURE_MODE_REGRESSION.md).
+> see docs/SQL_PROCEDURE_MODE_REGRESSION.md.
 
 Most builder methods (`DataSource`, `CommandTimeout`, `Delay`, `InitialDelay`, `RepeatCount`,
 `MaxMessagesPerPoll`, `Batch`, `Param`) accept both constants and `IExpression` for runtime resolution.
 
 ## Part of
 
-[redb.Route](../../README.md) — ESB & EIP Framework for .NET
+[redb.Route](../README.md) — ESB & EIP Framework for .NET

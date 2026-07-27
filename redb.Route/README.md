@@ -348,4 +348,4 @@ Built-in OpenTelemetry — distributed tracing + metrics per route and step:
 
 ## Part of
 
-[redb.Route](../../README.md) — ESB & EIP Framework for .NET
+[redb.Route](../README.md) — ESB & EIP Framework for .NET

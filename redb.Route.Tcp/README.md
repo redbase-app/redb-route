@@ -120,4 +120,4 @@ From("tcp://0.0.0.0:9443?textLine=true&ssl=true&sslCertPath=/certs/server.pfx&ss
 
 ## Part of
 
-[redb.Route](../../README.md) — ESB & EIP Framework for .NET
+[redb.Route](../README.md) — ESB & EIP Framework for .NET

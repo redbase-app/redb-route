@@ -57,4 +57,4 @@ Both schemes are consumer-only — they generate messages on schedule.
 
 ## Part of
 
-[redb.Route](../../README.md) — ESB & EIP Framework for .NET
+[redb.Route](../README.md) — ESB & EIP Framework for .NET

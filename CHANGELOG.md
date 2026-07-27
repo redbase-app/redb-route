@@ -1161,7 +1161,7 @@ DTOs and every public method keeps its existing signature):
   load. `Dictionary<string,string>` materialises through the framework's
   native dict serialiser; no custom JSON path on either side.
 
-Demo: see [`demos/Llm.AuditShell/`](demos/Llm.AuditShell/) — single-file
+Demo: see `demos/Llm.AuditShell/` — single-file
 HTTP shell that exposes both option-side defaults and header-side overrides,
 plus the swap comment for `RedbConversationStore` and the LINQ-by-AuditTags
 query above.
@@ -2020,7 +2020,7 @@ Camel-readable round-trip:
   release; the change is non-trivial because the loop becomes
   callback-driven (different cancellation, back-pressure and lifecycle
   model than the current poll loop). See the in-source `KNOWN ISSUE` block
-  in [`IbmMqConsumer.cs`](src/redb.Route.IbmMq/IbmMqConsumer.cs) for
+  in `IbmMqConsumer.cs` for
   details.
 
   **Field diagnosis recipe.** Enable `Debug` on

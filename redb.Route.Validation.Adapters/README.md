@@ -1,6 +1,6 @@
 # redb.Route.Validation.Adapters
 
-Validation adapters for [redb.Route](../../README.md): bridges **FluentValidation** and **System.ComponentModel.DataAnnotations** to the `IMessageValidator` contract used in route pipelines.
+Validation adapters for [redb.Route](../README.md): bridges **FluentValidation** and **System.ComponentModel.DataAnnotations** to the `IMessageValidator` contract used in route pipelines.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Validation.Adapters?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Validation.Adapters)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
@@ -92,4 +92,4 @@ From("direct://input")
 
 ## Part of
 
-[redb.Route](../../README.md) — ESB & EIP Framework for .NET
+[redb.Route](../README.md) — ESB & EIP Framework for .NET

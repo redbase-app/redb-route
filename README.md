@@ -1552,7 +1552,7 @@ For transports that support transactions, combine with `.Transacted()` to wrap p
 
 ## Running Routes in Production — redb.Tsak
 
-Writing routes is one thing; running them in production is another. **[redb.Tsak](../redb.Tsak)** is the runtime container for redb.Route — a .NET equivalent of [Apache Karaf](https://karaf.apache.org/) / [Camel K](https://camel.apache.org/camel-k/). It hosts route contexts, manages their lifecycle, distributes them across a cluster, schedules jobs, captures metrics and logs, and exposes the lot through a REST API, a CLI and a Blazor dashboard.
+Writing routes is one thing; running them in production is another. **redb.Tsak** is the runtime container for redb.Route — a .NET equivalent of [Apache Karaf](https://karaf.apache.org/) / [Camel K](https://camel.apache.org/camel-k/). It hosts route contexts, manages their lifecycle, distributes them across a cluster, schedules jobs, captures metrics and logs, and exposes the lot through a REST API, a CLI and a Blazor dashboard.
 
 ```mermaid
 flowchart TB

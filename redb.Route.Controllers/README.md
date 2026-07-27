@@ -1,6 +1,6 @@
 # redb.Route.Controllers
 
-Transport-agnostic controller dispatch for the [redb.Route](../../README.md) ESB framework.  
+Transport-agnostic controller dispatch for the [redb.Route](../README.md) ESB framework.  
 Provides a `RedbController` base class, attribute-based routing, parameter binding, and four dispatcher implementations for **generic**, **HTTP**, **SignalR**, and **gRPC** transports with 13 DSL extension methods. Controllers are transport-unaware — the same controller class works behind any InOut endpoint.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Controllers?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Controllers)

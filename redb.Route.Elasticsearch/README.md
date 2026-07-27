@@ -1,6 +1,6 @@
 # redb.Route.Elasticsearch
 
-Elasticsearch connector for the [redb.Route](../../README.md) ESB framework.  
+Elasticsearch connector for the [redb.Route](../README.md) ESB framework.  
 Provides a full-featured **producer** (9 operations) and a **polling consumer** with deep pagination, source filtering, and delete-after-read. Compatible with **Elasticsearch 8.x**.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Elasticsearch?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Elasticsearch)

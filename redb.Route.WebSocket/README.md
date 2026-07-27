@@ -65,4 +65,4 @@ Both `ws` and `wss` schemes are supported for plain and TLS connections.
 
 ## Part of
 
-[redb.Route](../../README.md) — ESB & EIP Framework for .NET
+[redb.Route](../README.md) — ESB & EIP Framework for .NET

@@ -64,4 +64,4 @@ Kafka headers are automatically mapped to/from redb.Route message headers.
 
 ## Part of
 
-[redb.Route](../../README.md) — ESB & EIP Framework for .NET
+[redb.Route](../README.md) — ESB & EIP Framework for .NET

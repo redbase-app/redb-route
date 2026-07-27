@@ -1,7 +1,7 @@
 # SqsRpcDemo
 
 A minimal, single-file example of **RPC over Amazon SQS** with **concurrent
-(multi-threaded) workers**, using the [`redb.Route.Sqs`](../../src/redb.Route.Sqs)
+(multi-threaded) workers**, using the `redb.Route.Sqs`
 connector against **LocalStack**.
 
 It demonstrates, end to end, the three things people ask about the SQS connector:

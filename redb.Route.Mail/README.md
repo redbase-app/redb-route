@@ -73,4 +73,4 @@ From(Pop3.Read("pop3.example.com")
 
 ## Part of
 
-[redb.Route](../../README.md) — ESB & EIP Framework for .NET
+[redb.Route](../README.md) — ESB & EIP Framework for .NET

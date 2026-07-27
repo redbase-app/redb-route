@@ -137,7 +137,7 @@ From(Tg.Receive(token))
     .Process(...);
 ```
 
-See [CONCURRENCY.md](../../CONCURRENCY.md) for the full model.
+See [CONCURRENCY.md](../CONCURRENCY.md) for the full model.
 
 ---
 

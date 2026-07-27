@@ -457,4 +457,4 @@ All builders support `implicit operator string` — pass directly to `.From()` /
 
 ## Part of
 
-[redb.Route](../../README.md) — ESB & EIP Framework for .NET
+[redb.Route](../README.md) — ESB & EIP Framework for .NET

@@ -6,7 +6,7 @@
 > agent calls or as **context injected** into the system prompt. Everything is a
 > redb.Route primitive.
 
-Added incrementally in **3.3.0** — see [CHANGELOG](../../../CHANGELOG.md).
+Added incrementally in **3.3.0** — see [CHANGELOG](../../CHANGELOG.md).
 
 ---
 
