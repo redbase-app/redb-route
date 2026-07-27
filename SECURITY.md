@@ -50,7 +50,10 @@ From(Kafka.Topic("orders")
     .To("direct://process");
 ```
 
-See DEPLOYMENT_SECRETS.md for a full guide on secret management across all transports.
+The same rule holds for every transport: keep credentials in configuration or a secret store and
+pass them through the typed builder — never inline them into an endpoint URI. Since 3.4.0 a
+credential that does reach a URI is redacted everywhere it would otherwise surface (logs,
+telemetry tags, health metadata, the Tsak dashboard) — see the Security section of `CHANGELOG.md`.
 
 ### TLS / certificate validation
 
