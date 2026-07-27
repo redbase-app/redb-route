@@ -1,35 +1,35 @@
 <Solution>
-  <Folder Name="/src/">
-    <Project Path="src/redb.Route.File/redb.Route.File.csproj" />
-    <Project Path="src/redb.Route.Ftp/redb.Route.Ftp.csproj" />
-    <Project Path="src/redb.Route.GenericFile/redb.Route.GenericFile.csproj" />
-    <Project Path="src/redb.Route.Grpc/redb.Route.Grpc.csproj" />
-    <Project Path="src/redb.Route.Http/redb.Route.Http.csproj" />
-    <Project Path="src/redb.Route.Kafka/redb.Route.Kafka.csproj" />
-    <Project Path="src/redb.Route.Tcp/redb.Route.Tcp.csproj" />
-    <Project Path="src/redb.Route.WebSocket/redb.Route.WebSocket.csproj" />
-    <Project Path="src/redb.Route.Quartz/redb.Route.Quartz.csproj" />
-    <Project Path="src/redb.Route.Amqp/redb.Route.Amqp.csproj" />
-    <Project Path="src/redb.Route.Mail/redb.Route.Mail.csproj" />
-    <Project Path="src/redb.Route.Sftp/redb.Route.Sftp.csproj" />
-    <Project Path="src/redb.Route.RabbitMQ/redb.Route.RabbitMQ.csproj" />
-    <Project Path="src/redb.Route.Redis/redb.Route.Redis.csproj" />
-    <Project Path="src/redb.Route.Core/redb.Route.Core.csproj" />
-    <Project Path="src/redb.Route.Controllers/redb.Route.Controllers.csproj" />
-    <Project Path="src/redb.Route.Sql/redb.Route.Sql.csproj" />
-    <Project Path="src/redb.Route.MqttNet/redb.Route.MqttNet.csproj" />
-    <Project Path="src/redb.Route.SignalR/redb.Route.SignalR.csproj" />
-    <Project Path="src/redb.Route.IbmMq/redb.Route.IbmMq.csproj" />
-    <Project Path="src/redb.Route.AzureServiceBus/redb.Route.AzureServiceBus.csproj" />
-    <Project Path="src/redb.Route.Sqs/redb.Route.Sqs.csproj" />
-    <Project Path="src/redb.Route.Telegram/redb.Route.Telegram.csproj" />
-    <Project Path="src/redb.Route/redb.Route.csproj" />
-    <Project Path="src/redb.Route.Firebase/redb.Route.Firebase.csproj" />
-    <Project Path="src/redb.Route.Llm.Abstractions/redb.Route.Llm.Abstractions.csproj" />
-    <Project Path="src/redb.Route.Llm/redb.Route.Llm.csproj" />
-    <Project Path="src/redb.Route.Llm.Tools/redb.Route.Llm.Tools.csproj" />
-    <Project Path="src/redb.Route.Llm.Mcp/redb.Route.Llm.Mcp.csproj" />
-    <Project Path="src/redb.Route.Exec/redb.Route.Exec.csproj" />
+  <Folder Name="/connectors/">
+    <Project Path="redb.Route.File/redb.Route.File.csproj" />
+    <Project Path="redb.Route.Ftp/redb.Route.Ftp.csproj" />
+    <Project Path="redb.Route.GenericFile/redb.Route.GenericFile.csproj" />
+    <Project Path="redb.Route.Grpc/redb.Route.Grpc.csproj" />
+    <Project Path="redb.Route.Http/redb.Route.Http.csproj" />
+    <Project Path="redb.Route.Kafka/redb.Route.Kafka.csproj" />
+    <Project Path="redb.Route.Tcp/redb.Route.Tcp.csproj" />
+    <Project Path="redb.Route.WebSocket/redb.Route.WebSocket.csproj" />
+    <Project Path="redb.Route.Quartz/redb.Route.Quartz.csproj" />
+    <Project Path="redb.Route.Amqp/redb.Route.Amqp.csproj" />
+    <Project Path="redb.Route.Mail/redb.Route.Mail.csproj" />
+    <Project Path="redb.Route.Sftp/redb.Route.Sftp.csproj" />
+    <Project Path="redb.Route.RabbitMQ/redb.Route.RabbitMQ.csproj" />
+    <Project Path="redb.Route.Redis/redb.Route.Redis.csproj" />
+    <Project Path="redb.Route.Core/redb.Route.Core.csproj" />
+    <Project Path="redb.Route.Controllers/redb.Route.Controllers.csproj" />
+    <Project Path="redb.Route.Sql/redb.Route.Sql.csproj" />
+    <Project Path="redb.Route.MqttNet/redb.Route.MqttNet.csproj" />
+    <Project Path="redb.Route.SignalR/redb.Route.SignalR.csproj" />
+    <Project Path="redb.Route.IbmMq/redb.Route.IbmMq.csproj" />
+    <Project Path="redb.Route.AzureServiceBus/redb.Route.AzureServiceBus.csproj" />
+    <Project Path="redb.Route.Sqs/redb.Route.Sqs.csproj" />
+    <Project Path="redb.Route.Telegram/redb.Route.Telegram.csproj" />
+    <Project Path="redb.Route/redb.Route.csproj" />
+    <Project Path="redb.Route.Firebase/redb.Route.Firebase.csproj" />
+    <Project Path="redb.Route.Llm.Abstractions/redb.Route.Llm.Abstractions.csproj" />
+    <Project Path="redb.Route.Llm/redb.Route.Llm.csproj" />
+    <Project Path="redb.Route.Llm.Tools/redb.Route.Llm.Tools.csproj" />
+    <Project Path="redb.Route.Llm.Mcp/redb.Route.Llm.Mcp.csproj" />
+    <Project Path="redb.Route.Exec/redb.Route.Exec.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/redb.Route.Tests.File/redb.Route.Tests.File.csproj" />
@@ -65,3 +65,4 @@
     <Project Path="tests/redb.Route.Validation.Adapters.Tests/redb.Route.Validation.Adapters.Tests.csproj" />
   </Folder>
 </Solution>
+
