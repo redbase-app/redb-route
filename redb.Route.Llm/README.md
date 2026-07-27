@@ -1,7 +1,7 @@
 # redb.Route.Llm
 
 > Internal package README. The NuGet description is separate.
-> Long-form docs live under doc/.
+> Long-form docs live under [doc/](doc/).
 
 ## What this is
 
@@ -443,11 +443,11 @@ Design choices worth knowing:
 `AddRedbLlmStorage()` also wires `IPromptTemplateRegistry`, `IToolCacheStore`,
 `IEvalRunStore`, `IBatchStore` and `IKnowledgeStore` to their redb-backed stores —
 all ten storage surfaces move to redb in one call. (RAG on `IKnowledgeStore` is
-covered in doc/RAG.md.)
+covered in [doc/RAG.md](doc/RAG.md).)
 
 > **For the long form** — concrete DSL recipes for each store (multi-turn chat,
 > approvals, budgets, idempotent retries, audit replay, branching, scheduled
-> agents) and a tour of all 9 schemas — see `doc/STORAGE.md`.
+> agents) and a tour of all 9 schemas — see [`doc/STORAGE.md`](doc/STORAGE.md).
 > That guide shows *why* each surface matters and how a `.From("kafka://…").To("llm://…")`
 > route lights up persistence with a single header.
 
@@ -499,7 +499,7 @@ analogue to what `redb.Route.Llm` does, so the comparison is worth pinning down.
 | Conversation memory | LangChain4j `ChatMemoryStore` family | header / property conversation id; full persistence via `AddRedbLlmStorage()` |
 | Provider matrix | 25+ via LangChain4j (Anthropic, Bedrock, Vertex, Azure OpenAI, OpenAI, Mistral, Ollama, …) | 14 OpenAI-compatible behind one `OpenAiProvider` (incl. Anthropic Claude via the official OpenAI-compat endpoint, live-tested with Haiku 4.5 + Sonnet 4.6) + stub; native Anthropic Messages API on deck |
 | Embeddings / vector store | yes — `langchain4j-embeddings` + LangChain4j vector stores | **`IEmbeddingProvider` + `OpenAiEmbeddingProvider`** (OpenAI-compat) + **`embed://` scheme** (embed as a route step) + `RedbKnowledgeStore.SearchAsync` cosine; ANN index (pgvector/Qdrant) wraps `IKnowledgeStore` |
-| RAG primitives (ingest, retrieval, injection) | yes — via LangChain4j family | **`knowledge://` ingest + `knowledge_search` tool + `.Knowledge()` DSL** (keyword + semantic) — see doc/RAG.md; document loaders BYO |
+| RAG primitives (ingest, retrieval, injection) | yes — via LangChain4j family | **`knowledge://` ingest + `knowledge_search` tool + `.Knowledge()` DSL** (keyword + semantic) — see [doc/RAG.md](doc/RAG.md); document loaders BYO |
 | Endpoint statistics | standard Camel JMX / Micrometer | `IEndpointStatistics` per LLM endpoint, surfaces in tsak.web with no setup |
 | Versioned prompt registry | not built in | `IPromptTemplateRegistry` + `#name` resolver |
 | Governance hooks (budget / approval / shadow / redaction) | not built in | hook interfaces inside the agent loop (Noop today, scaffolding ready) |
@@ -585,7 +585,7 @@ analogue to what `redb.Route.Llm` does, so the comparison is worth pinning down.
 - **Document loaders & ANN vector index** — LangChain4j ships PDF/DOCX loaders and
   pluggable ANN vector stores. We ship the RAG *loop* (`knowledge://` ingest,
   `IEmbeddingProvider`, keyword + cosine search, `knowledge_search` tool,
-  `.Knowledge()` injection, `embed://` scheme — doc/RAG.md) but chunk
+  `.Knowledge()` injection, `embed://` scheme — [doc/RAG.md](doc/RAG.md)) but chunk
   plain text and cosine-scan in-process; an ANN index (pgvector/Qdrant) wraps
   `IKnowledgeStore.SearchAsync` for scale.
 - **Memory shapes** — windowed / token-windowed sliding-window memory comes
@@ -725,10 +725,10 @@ LlmConsumer.cs          PeriodicTimer scheduler, fires AgentEngine on each tick
 - [x] **RAG loop** — `knowledge://` ingest (`KnowledgeComponent`), `embed://` scheme,
       `IEmbeddingProvider`/`OpenAiEmbeddingProvider`, keyword `SearchTextAsync`
       + cosine `SearchAsync`, `KnowledgeSearchTool` (`knowledge_search`),
-      `.Knowledge(coll, k)` retrieval DSL. Full guide: doc/RAG.md.
+      `.Knowledge(coll, k)` retrieval DSL. Full guide: [doc/RAG.md](doc/RAG.md).
 - [ ] More first-party tools (SQL / file / redb scheme).
 
-See doc/USER-GUIDE.md — the full long-form guide
+See [doc/USER-GUIDE.md](doc/USER-GUIDE.md) — the full long-form guide
 covering every DSL shape, the `#`-registry pattern, all 14 providers, the
 Claude live-test suite, the testing strategy, the Camel comparison and a FAQ.
 For phase planning: doc/PLAN.md,
