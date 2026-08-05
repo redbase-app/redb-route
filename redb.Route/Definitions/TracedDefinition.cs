@@ -44,20 +44,5 @@ public class TracedDefinition : RouteDefinitionBase<TracedDefinition>, IRouteSco
     }
 
     private static IProcessor BuildPipeline(IList<IProcessorDefinition> outputs, IRouteContext context)
-    {
-        return outputs.Count switch
-        {
-            0 => new DelegateProcessor(_ => { }),
-            1 => outputs[0].CreateProcessor(context),
-            _ => BuildMulti(outputs, context)
-        };
-    }
-
-    private static PipelineProcessor BuildMulti(IList<IProcessorDefinition> outputs, IRouteContext context)
-    {
-        var pipeline = new PipelineProcessor();
-        foreach (var o in outputs)
-            pipeline.Add(o.CreateProcessor(context));
-        return pipeline;
-    }
+        => NodePipeline.Body(context, outputs);
 }

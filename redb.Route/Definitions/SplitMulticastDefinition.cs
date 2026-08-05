@@ -91,12 +91,7 @@ public class SplitDefinition : RouteDefinitionBase<SplitDefinition>, IRouteScope
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
     {
-        IProcessor body = Outputs.Count switch
-        {
-            0 => new DelegateProcessor(_ => { }),
-            1 => Outputs[0].CreateProcessor(context),
-            _ => BuildPipeline(context)
-        };
+        IProcessor body = NodePipeline.Body(context, Outputs);
 
         if (_asyncSplitter is not null)
             return new StreamingSplitterProcessor(_asyncSplitter, body, _stopOnException);
@@ -111,13 +106,6 @@ public class SplitDefinition : RouteDefinitionBase<SplitDefinition>, IRouteScope
             timeout: _timeout);
     }
 
-    private PipelineProcessor BuildPipeline(IRouteContext context)
-    {
-        var pipeline = new PipelineProcessor();
-        foreach (var output in Outputs)
-            pipeline.Add(output.CreateProcessor(context));
-        return pipeline;
-    }
 }
 
 /// <summary>
@@ -187,7 +175,7 @@ public class MulticastDefinition : RouteDefinitionBase<MulticastDefinition>, IRo
             maxDegreeOfParallelism: _maxDegreeOfParallelism);
 
         foreach (var output in Outputs)
-            multicast.AddTarget(output.CreateProcessor(context));
+            multicast.AddTarget(NodePipeline.Node(context, output));
 
         return multicast;
     }

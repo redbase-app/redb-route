@@ -30,12 +30,12 @@ public class RouteDefinition : RouteDefinitionBase<RouteDefinition>
         if (onExceptions.Count == 0)
         {
             if (Outputs.Count == 1)
-                return Outputs[0].CreateProcessor(context);
+                return NodePipeline.Node(context, Outputs[0]);
 
             var pipeline = new PipelineProcessor();
             foreach (var output in Outputs)
             {
-                var p = output.CreateProcessor(context);
+                var p = NodePipeline.Node(context, output);
                 if (p != null)
                     pipeline.Add(p);
             }
@@ -47,7 +47,7 @@ public class RouteDefinition : RouteDefinitionBase<RouteDefinition>
         {
             if (output is OnExceptionDefinition)
                 continue;
-            var p = output.CreateProcessor(context);
+            var p = NodePipeline.Node(context, output);
             if (p != null) bodySteps.Add(p);
         }
 

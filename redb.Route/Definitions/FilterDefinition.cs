@@ -38,21 +38,8 @@ public class FilterDefinition : RouteDefinitionBase<FilterDefinition>, IRouteSco
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
     {
-        IProcessor body = Outputs.Count switch
-        {
-            0 => new DelegateProcessor(_ => { }),
-            1 => Outputs[0].CreateProcessor(context),
-            _ => BuildPipeline(context)
-        };
+        IProcessor body = NodePipeline.Body(context, Outputs);
         return new FilterProcessor(_predicate, body);
-    }
-
-    private PipelineProcessor BuildPipeline(IRouteContext context)
-    {
-        var pipeline = new PipelineProcessor();
-        foreach (var output in Outputs)
-            pipeline.Add(output.CreateProcessor(context));
-        return pipeline;
     }
 
     /// <summary>Closes this filter scope and returns the parent route definition.</summary>

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using redb.Route.Definitions;
 using redb.Route.Transactions;
 using redb.Route.Validation;
+using redb.Route.Xslt;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Schema;
@@ -203,6 +204,14 @@ public interface IRouteDefinition : IProcessorDefinition
     /// <summary>Validates the exchange body against a pre-built <see cref="XmlSchemaSet"/>.</summary>
     IRouteDefinition ValidateXsd(XmlSchemaSet schemaSet, bool throwOnFailure = true);
 
+    // ── XSLT ──
+
+    /// <summary>Apache Camel <c>xslt:</c> parity: transform the body through an XSLT stylesheet file.</summary>
+    IRouteDefinition Xslt(string stylesheetPath, XsltOutput output = XsltOutput.String, bool failOnNullBody = true, bool allowTemplateFromHeader = false);
+
+    /// <summary>Transform the body through an inline XSLT stylesheet document.</summary>
+    IRouteDefinition XsltContent(string stylesheetXml, XsltOutput output = XsltOutput.String, bool failOnNullBody = true, bool allowTemplateFromHeader = false);
+
     // ── Serialization ──
 
     /// <summary>Marshals (serializes) the exchange body using the specified serializer type.</summary>
@@ -364,6 +373,16 @@ public interface IRouteDefinition : IProcessorDefinition
 
     /// <summary>Apache Camel parity: iteratively route to URIs returned by a routing function.</summary>
     IRouteDefinition DynamicRouter(Func<IExchange, string?> routingFunction);
+
+    /// <summary>Apache Camel parity: Routing Slip — pipe the exchange through a list of endpoints
+    /// computed once up front (Out→In between hops).</summary>
+    IRouteDefinition RoutingSlip(Func<IExchange, IEnumerable<string>> slipFactory, bool ignoreInvalidEndpoints = false);
+
+    /// <summary>Apache Camel parity: Routing Slip from an expression yielding a delimited URI string.</summary>
+    IRouteDefinition RoutingSlip(IExpression slip, string uriDelimiter = ",", bool ignoreInvalidEndpoints = false);
+
+    /// <summary>Apache Camel parity: Routing Slip from a <c>${...}</c> template resolving to a delimited URI string.</summary>
+    IRouteDefinition RoutingSlip(string slipTemplate, string uriDelimiter = ",", bool ignoreInvalidEndpoints = false);
 
     /// <summary>Apache Camel parity: open a Resequencer scope. Child outputs receive exchanges
     /// in the order determined by <paramref name="keySelector"/>.</summary>
@@ -592,6 +611,13 @@ public interface IRouteDefinition : IProcessorDefinition
 
     /// <summary>Gets whether this route participates in cluster-aware routing.</summary>
     bool GetCluster();
+
+    /// <summary>Apache Camel parity: enable/disable per-node message history for this route, overriding
+    /// the global <c>RouteEngineOptions.EnableMessageHistory</c>.</summary>
+    IRouteDefinition MessageHistory(bool value = true);
+
+    /// <summary>Gets the route-level message-history override (<c>null</c> = inherit the global setting).</summary>
+    bool? GetMessageHistory();
 
     /// <summary>Sets an explicit route policy, overriding any factory-resolved policy.</summary>
     IRouteDefinition RoutePolicy(IRoutePolicy policy);

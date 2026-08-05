@@ -22,6 +22,14 @@ public sealed class RouteEngineOptions
     public bool EnableMetrics { get; set; } = true;
 
     /// <summary>
+    /// Whether to record per-node message history on every exchange (Apache Camel Message History EIP):
+    /// each node is timed and appended to <c>exchange.Properties["CamelMessageHistory"]</c>, and the
+    /// trail is dumped on failure. A route may override this with <c>.MessageHistory(bool)</c>.
+    /// Default: <c>false</c> (matches Camel — slight overhead, opt-in).
+    /// </summary>
+    public bool EnableMessageHistory { get; set; }
+
+    /// <summary>
     /// Graceful shutdown timeout when stopping routes.
     /// Default: 30 seconds.
     /// </summary>

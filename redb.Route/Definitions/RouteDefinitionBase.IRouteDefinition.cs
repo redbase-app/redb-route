@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Transactions;
 using redb.Route.Validation;
+using redb.Route.Xslt;
 
 namespace redb.Route.Definitions;
 
@@ -89,6 +90,8 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.ValidateXsd(string xsdContent, bool throwOnFailure) => ValidateXsd(xsdContent, throwOnFailure);
     IRouteDefinition IRouteDefinition.ValidateXsd(string? targetNamespace, string xsdContent, bool throwOnFailure) => ValidateXsd(targetNamespace, xsdContent, throwOnFailure);
     IRouteDefinition IRouteDefinition.ValidateXsd(System.Xml.Schema.XmlSchemaSet schemaSet, bool throwOnFailure) => ValidateXsd(schemaSet, throwOnFailure);
+    IRouteDefinition IRouteDefinition.Xslt(string stylesheetPath, XsltOutput output, bool failOnNullBody, bool allowTemplateFromHeader) => Xslt(stylesheetPath, output, failOnNullBody, allowTemplateFromHeader);
+    IRouteDefinition IRouteDefinition.XsltContent(string stylesheetXml, XsltOutput output, bool failOnNullBody, bool allowTemplateFromHeader) => XsltContent(stylesheetXml, output, failOnNullBody, allowTemplateFromHeader);
 
     // ── Serialization ──
     IRouteDefinition IRouteDefinition.Marshal(Type serializerType) => Marshal(serializerType);
@@ -134,6 +137,9 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.PollEnrich(Func<IExchange, string> uriFactory, Func<IExchange, IExchange?, IExchange> mergeStrategy, TimeSpan? timeout) => PollEnrich(uriFactory, mergeStrategy, timeout);
     IRouteDefinition IRouteDefinition.RecipientList(Func<IExchange, IEnumerable<string>> recipientListFactory, bool parallelProcessing, bool stopOnException, Func<IExchange, IExchange, IExchange>? aggregationStrategy) => RecipientList(recipientListFactory, parallelProcessing, stopOnException, aggregationStrategy);
     IRouteDefinition IRouteDefinition.DynamicRouter(Func<IExchange, string?> routingFunction) => DynamicRouter(routingFunction);
+    IRouteDefinition IRouteDefinition.RoutingSlip(Func<IExchange, IEnumerable<string>> slipFactory, bool ignoreInvalidEndpoints) => RoutingSlip(slipFactory, ignoreInvalidEndpoints);
+    IRouteDefinition IRouteDefinition.RoutingSlip(IExpression slip, string uriDelimiter, bool ignoreInvalidEndpoints) => RoutingSlip(slip, uriDelimiter, ignoreInvalidEndpoints);
+    IRouteDefinition IRouteDefinition.RoutingSlip(string slipTemplate, string uriDelimiter, bool ignoreInvalidEndpoints) => RoutingSlip(slipTemplate, uriDelimiter, ignoreInvalidEndpoints);
 
     // ── Bean / Service Activator ──
     IRouteDefinition IRouteDefinition.Bean<TService>(Func<TService, IExchange, CancellationToken, Task> method) => Bean(method);
@@ -160,5 +166,6 @@ public abstract partial class RouteDefinitionBase<TSelf>
 
     // ── Route-level policy ──
     IRouteDefinition IRouteDefinition.Cluster(bool value) => Cluster(value);
+    IRouteDefinition IRouteDefinition.MessageHistory(bool value) => MessageHistory(value);
     IRouteDefinition IRouteDefinition.RoutePolicy(IRoutePolicy policy) => RoutePolicy(policy);
 }

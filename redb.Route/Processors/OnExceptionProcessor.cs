@@ -240,6 +240,11 @@ public class OnExceptionProcessor : IProcessor
                             "Retries exhausted for {ExceptionType} after {Attempts} attempts: {Message}",
                             ex.GetType().Name, attempt, EndpointUri.RedactSecrets(ex.Message));
                     }
+
+                    // Dump the message-history trail (when recorded) so the failing step is visible.
+                    var history = Core.MessageHistory.Format(exchange);
+                    if (!string.IsNullOrEmpty(history))
+                        _logger?.Log(handler.RetriesExhaustedLogLevel, "{MessageHistory}", history);
                 }
 
                 // B6: Restore original message/body before handler

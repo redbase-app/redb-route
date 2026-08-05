@@ -1,7 +1,7 @@
 # redb.Route.IbmMq
 
 IBM MQ (WebSphere MQ) transport for **redb.Route** ESB framework.
-Native MQI access via `IBMMQDotnetClient` — queues, topics, transactions, RPC, message groups, SSL/TLS, and W3C telemetry.
+Native MQI access via `IBMXMSDotnetClient` (IBM.WMQ + IBM.XMS) — queues, topics, transactions, RPC, message groups, SSL/TLS, and W3C telemetry. Consumers can poll (default) or receive **event-driven** via an XMS `MessageListener` (`receiveMode=listener`, sub-50&#160;ms latency).
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.IbmMq?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.IbmMq)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
@@ -83,6 +83,43 @@ From(Wmq.Queue("SECURE.QUEUE")
     .SslKeyRepository("/var/mqm/ssl/key"))
 ```
 
+## Event-Driven Receive (XMS Listener)
+
+By default the consumer **polls** with a blocking `MQGET`-`WAIT`. The IBM.WMQ managed .NET client carries
+an internal ~500 ms tick, so on an idle/low-traffic queue messages arrive ~250–500 ms after they were put.
+Setting `receiveMode=listener` switches to an **event-driven** receive built on **XMS .NET** (`IBM.XMS`),
+where the broker pushes messages into a `MessageListener` the instant they arrive — dropping delivery
+latency to **single-digit milliseconds**. (IBM.WMQ exposes no public async-consume API, so XMS is the only
+supported event-driven path on the managed .NET client.)
+
+```csharp
+// URI
+From("wmq:ORDERS?host=mq-host&queueManager=QM1&channel=DEV.APP.SVRCONN&receiveMode=listener")
+
+// Fluent
+From(Wmq.Queue("ORDERS").Host("mq-host").QueueManager("QM1").Listener())
+```
+
+It is **opt-in** — `Poll` remains the default, so existing routes are unchanged. The listener path honours
+the same consumer semantics as the poll path:
+
+- **Transacted** (`transacted=true`) — a `SESSION_TRANSACTED` session; commit on success, rollback (redeliver)
+  on error, on the delivering session. A route-level `.Transaction()` block settles it as part of the route
+  unit-of-work; without one the engine settles it directly.
+- **`concurrentConsumers=N`** — N XMS sessions on the shared connection (competing consumers, one in-flight
+  per session for back-pressure). A topic clamps to a single subscriber.
+- **RPC reply**, **backout threshold**, and **W3C trace-context propagation** all work as on the poll path.
+- **Headers** — the same `redbIbmMq.*` MQMD metadata and application (user) headers as the poll path.
+  User headers travel in the JMS `usr` folder, so they interoperate across IBM.WMQ, IBM.XMS and any JMS client.
+- **RPC client leg** — a producer doing request-reply (`replyTo=true`) with `receiveMode=listener` also
+  receives the response event-driven (XMS listener on the reply queue), so the whole round-trip is fast
+  (~16 ms warm vs the ~250–500 ms poll floor). The request is still sent over IBM.WMQ; only reply
+  reception moves to XMS. A dynamic reply queue uses an XMS temporary queue.
+
+> The listener runs each route synchronously on the XMS dispatch thread (one in-flight message per session),
+> which is what provides natural back-pressure. Reverting to the poll path is a matter of flipping the option
+> back to `Poll` (or omitting it).
+
 ## Options Reference
 
 ### Connection
@@ -108,8 +145,9 @@ From(Wmq.Queue("SECURE.QUEUE")
 
 | Option | Default | Description |
 |---|---|---|
+| `receiveMode` | `Poll` | `Poll` (MQGET-WAIT) or `Listener` (event-driven XMS, <50 ms) |
 | `concurrentConsumers` | `1` | Parallel consumers |
-| `waitInterval` | `5000` | MQGET wait (ms) |
+| `waitInterval` | `5000` | MQGET wait (ms), poll mode only |
 | `batchSize` | `0` | Batch size (0 = single) |
 | `backoutThreshold` | `0` | Poison message threshold |
 | `backoutQueue` | — | Backout queue name |

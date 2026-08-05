@@ -27,7 +27,7 @@ public class OfTypeDefinition<T> : RouteDefinitionBase<OfTypeDefinition<T>>
             pipeline.Add(new ConvertBodyProcessor(typeof(T), context.GetService<IDataFormatRegistry>()));
 
         foreach (var output in Outputs)
-            pipeline.Add(output.CreateProcessor(context));
+            pipeline.Add(NodePipeline.Node(context, output));
 
         return pipeline;
     }

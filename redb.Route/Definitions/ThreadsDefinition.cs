@@ -74,24 +74,11 @@ public class ThreadsDefinition : RouteDefinitionBase<ThreadsDefinition>, IRouteS
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
     {
-        IProcessor body = Outputs.Count switch
-        {
-            0 => new DelegateProcessor(_ => { }),
-            1 => Outputs[0].CreateProcessor(context),
-            _ => BuildPipeline(context)
-        };
+        IProcessor body = NodePipeline.Body(context, Outputs);
 
         return new ThreadsProcessor(body, _poolSize, _maxQueueSize, context)
         {
             EnqueueTimeout = _enqueueTimeout
         };
-    }
-
-    private PipelineProcessor BuildPipeline(IRouteContext context)
-    {
-        var pipeline = new PipelineProcessor();
-        foreach (var output in Outputs)
-            pipeline.Add(output.CreateProcessor(context));
-        return pipeline;
     }
 }

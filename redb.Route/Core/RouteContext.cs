@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
@@ -63,6 +64,9 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     // Route currently being compiled — set around definition.CreateProcessor so a nested
     // ReplayableDefinition can register itself against the right routeId.
     private string? _compilingRouteId;
+    // Message-history state for the route currently being compiled (set alongside _compilingRouteId).
+    private bool _compilingMessageHistory;
+    private int _compilingNodeCounter;
 
     private volatile bool _started;
 
@@ -119,6 +123,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         _components["log"] = SetComponentContext(new LogComponent(loggerFactory));
         _components["direct-vm"] = SetComponentContext(new DirectVmComponent());
         _components["vm"] = SetComponentContext(new VmComponent());
+        _components["xslt"] = SetComponentContext(new Xslt.XsltComponent());
 
         // Register built-in services
         _services[typeof(IDataFormatRegistry)] = new DataFormatRegistry();
@@ -345,8 +350,35 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     /// <inheritdoc />
     public IEndpoint GetEndpoint(string uri)
     {
-        var parsed = EndpointUriParser.Parse(uri);
+        var resolved = ResolvePlaceholders(uri);
+        var parsed = EndpointUriParser.Parse(resolved);
         return _endpoints.GetOrAdd(parsed.NormalizedKey, _ => CreateEndpoint(parsed));
+    }
+
+    /// <summary>
+    /// Expands Camel-style <c>{{key}}</c> / <c>{{key:default}}</c> property placeholders in an endpoint URI
+    /// before it is parsed, so every connector's URIs externalise their configuration for free. Values come
+    /// from <c>IConfiguration</c> (environment, appsettings, user-secrets) first, then the context's own
+    /// properties as a container-free fallback. No-op for the common case of a URI without placeholders.
+    /// </summary>
+    private string ResolvePlaceholders(string uri)
+    {
+        if (!PropertyPlaceholderResolver.HasPlaceholder(uri))
+            return uri;
+        return PropertyPlaceholderResolver.Resolve(uri, LookupPlaceholderValue);
+    }
+
+    private string? LookupPlaceholderValue(string key)
+    {
+        // IConfiguration already layers env vars + appsettings + user-secrets with its own precedence,
+        // so a single indexer lookup covers what Camel needs env:/sys: prefix functions for.
+        var config = GetService<IConfiguration>() ?? _serviceProvider?.GetService<IConfiguration>();
+        var fromConfig = config?[key];
+        if (!string.IsNullOrEmpty(fromConfig))
+            return fromConfig;
+
+        // Container-free fallback: values set via context.SetProperty(...).
+        return GetProperty<string>(key);
     }
 
     // ── Exception Handling ──
@@ -737,6 +769,9 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 var fromUri = definition.GetFromUri()
                     ?? throw new InvalidOperationException(
                         $"Route '{definition.GetRouteId() ?? "(unnamed)"}' has no From() endpoint.");
+                // Expand {{key}} placeholders before the URI is parsed — dedup/identity keys, the route id
+                // and the consumer endpoint (below) must all see the same resolved value.
+                fromUri = ResolvePlaceholders(fromUri);
 
                 var normalizedFrom = EndpointUriParser.Parse(fromUri).NormalizedKey;
                 // Unnamed routes fall back to the endpoint key as their id; sanitize it so a
@@ -791,7 +826,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         {
             foreach (var definition in builder.Definitions)
             {
-                var fromUri = definition.GetFromUri()!;
+                var fromUri = ResolvePlaceholders(definition.GetFromUri()!);
                 // Unnamed routes fall back to the (sanitized) endpoint key as their id so a
                 // URI secret never leaks through {RouteId}. Kept in sync with the validation
                 // loop above; endpoint identity/dedup still keys on the raw normalizedFrom.
@@ -800,6 +835,9 @@ public class RouteContext : IRouteContext, IAsyncDisposable
 
                 PipelineProcessor pipeline;
                 _compilingRouteId = routeId;   // so nested ReplayableDefinition registers under this route
+                // Route-level .MessageHistory() overrides the global option; each route restarts node numbering.
+                _compilingMessageHistory = definition.GetMessageHistory() ?? _options.EnableMessageHistory;
+                _compilingNodeCounter = 0;
                 try
                 {
                     var inner = definition.CreateProcessor(this);
@@ -815,6 +853,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 finally
                 {
                     _compilingRouteId = null;
+                    _compilingMessageHistory = false;
                 }
 
                 // Wrap with routeId stamp
@@ -1321,6 +1360,33 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     }
 
     // ── Private helpers ──
+
+    /// <summary>
+    /// Compiles a single child definition into its runtime processor. The one seam every scope's body
+    /// compilation flows through (via <see cref="Definitions.NodePipeline"/>), so per-node compile-time
+    /// decoration has exactly one place to live. When message history is enabled for the route being
+    /// compiled, the node is wrapped in a <see cref="MessageHistoryProcessor"/>.
+    /// </summary>
+    internal IProcessor CompileNode(IProcessorDefinition definition)
+    {
+        var inner = definition.CreateProcessor(this);
+        if (!_compilingMessageHistory || inner is null)
+            return inner;
+
+        var label = MessageHistoryLabel(definition);
+        var nodeId = label + (++_compilingNodeCounter);
+        return new MessageHistoryProcessor(inner, _compilingRouteId ?? "route", nodeId, label);
+    }
+
+    /// <summary>Short node label from the definition type (e.g. <c>ToDefinition</c> → <c>to</c>).</summary>
+    private static string MessageHistoryLabel(IProcessorDefinition definition)
+    {
+        var name = definition.GetType().Name;
+        const string suffix = "Definition";
+        if (name.EndsWith(suffix, StringComparison.Ordinal))
+            name = name[..^suffix.Length];
+        return name.Length == 0 ? "node" : char.ToLowerInvariant(name[0]) + name[1..];
+    }
 
     private IEndpoint CreateEndpoint(EndpointUri parsed)
     {

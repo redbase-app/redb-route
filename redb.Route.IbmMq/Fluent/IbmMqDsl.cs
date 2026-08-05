@@ -40,6 +40,7 @@ public sealed class IbmMqBuilder
     private string? _clientId;
 
     // Consumer
+    private IbmMqReceiveMode? _receiveMode;
     private int? _concurrentConsumers;
     private int? _waitInterval;
     private int? _batchSize;
@@ -117,6 +118,15 @@ public sealed class IbmMqBuilder
     public IbmMqBuilder ClientId(string id) { _clientId = id; return this; }
 
     // ── Consumer ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Receive strategy: <see cref="IbmMqReceiveMode.Poll"/> (synchronous MQGET-WAIT, default) or
+    /// <see cref="IbmMqReceiveMode.Listener"/> (event-driven XMS push, &lt;50&#160;ms latency).
+    /// </summary>
+    public IbmMqBuilder ReceiveMode(IbmMqReceiveMode mode) { _receiveMode = mode; return this; }
+
+    /// <summary>Shortcut for <c>ReceiveMode(IbmMqReceiveMode.Listener)</c> — event-driven XMS receive.</summary>
+    public IbmMqBuilder Listener() { _receiveMode = IbmMqReceiveMode.Listener; return this; }
 
     /// <summary>Number of concurrent consumers. Default 1.</summary>
     public IbmMqBuilder ConcurrentConsumers(int count) { _concurrentConsumers = count; return this; }
@@ -280,6 +290,8 @@ public sealed class IbmMqBuilder
         AppendIf("clientId", _clientId);
 
         // Consumer
+        if (_receiveMode.HasValue)
+            Append("receiveMode", _receiveMode.Value.ToString());
         AppendInt("concurrentConsumers", _concurrentConsumers);
         AppendInt("waitInterval", _waitInterval);
         AppendInt("batchSize", _batchSize);

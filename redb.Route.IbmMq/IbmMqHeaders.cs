@@ -77,10 +77,20 @@ public static class IbmMqHeaders
     /// <summary>MQMD PutDateTime.</summary>
     public const string PutDateTime = "redbIbmMq.PutDateTime";
 
-    // ── Internal property for header key catalogue ────────────
+    // ── Internal property carrying the user-header catalogue ────────────
 
-    /// <summary>Comma-delimited list of custom header keys stored by the producer.</summary>
-    internal const string HeaderKeys = "redbIbmMq.HeaderKeys";
+    /// <summary>
+    /// Name of the MQ message property that carries all user headers as a single JSON object.
+    /// <para>
+    /// Bundling into one property is necessary because MQ property names forbid hyphens, so HTTP-style
+    /// header names (<c>X-Custom-Id</c>) can't be individual properties. The name is <b>unqualified</b>
+    /// (no dotted folder prefix) so it lands in the JMS <c>usr</c> folder — the standard, interoperable
+    /// user-property location that both the IBM.WMQ (poll) and IBM.XMS (listener) clients, and any other
+    /// JMS client, read and write. (A dotted name would create a custom MQRFH2 folder that JMS clients,
+    /// including XMS, do not surface as user properties.)
+    /// </para>
+    /// </summary>
+    internal const string HeaderCatalogue = "redbIbmMqHeaders";
 
     /// <summary>Returns true if the header key belongs to the IBM MQ component.</summary>
     public static bool IsRedbHeader(string key) =>

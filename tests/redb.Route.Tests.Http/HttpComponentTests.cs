@@ -1,6 +1,8 @@
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Http;
 using HttpMethod = redb.Route.Http.HttpMethod;
+using HttpDsl = redb.Route.Http.Http;
 
 namespace redb.Route.Tests.Http;
 
@@ -212,6 +214,34 @@ public class HttpComponentTests
         var endpoint = (HttpEndpoint)component.CreateEndpoint(uri);
 
         endpoint.ConsumerPath.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("/api/honest/echo", "/api/honest/echo")]
+    [InlineData("/api", "/api")]
+    [InlineData("/webhook", "/webhook")]
+    [InlineData("/", "/")]
+    public void ConsumerPath_FluentListenWithHostPort_KeepsFullRoutePath(string listenPath, string expected)
+    {
+        // Regression: Http.Listen("/api/honest/echo").Host(..).Port(..) must register the FULL path,
+        // not drop the first segment. The fluent DSL puts host/port in the query string
+        // ("http:/api/honest/echo?host=0.0.0.0&port=5092"), so the whole leading-slash path is the route.
+        var uri = EndpointUriParser.Parse(HttpDsl.Listen(listenPath).Host("0.0.0.0").Port(5092));
+        var endpoint = (HttpEndpoint)new HttpComponent().CreateEndpoint(uri);
+
+        endpoint.ConsumerPath.Should().Be(expected);
+        endpoint.EndpointOptions.Host.Should().Be("0.0.0.0");
+        endpoint.EndpointOptions.Port.Should().Be(5092);
+    }
+
+    [Fact]
+    public void ConsumerPath_FluentListenPortOnly_KeepsFullRoutePath()
+    {
+        // Port-only (host defaulted) still puts port in the query, so the path stays the route.
+        var uri = EndpointUriParser.Parse(HttpDsl.Listen("/api/orders").Port(8080));
+        var endpoint = (HttpEndpoint)new HttpComponent().CreateEndpoint(uri);
+
+        endpoint.ConsumerPath.Should().Be("/api/orders");
     }
 
     // ── DefaultCors (component-level CORS) ──

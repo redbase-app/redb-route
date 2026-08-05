@@ -201,12 +201,15 @@ AST-based compiled expression language with caching (used in `Log`, `Filter(stri
 | `AggregatorProcessor` | `.Aggregate(...)` | Aggregator |
 | `ResequencerProcessor` | `.Resequence(...)` | Resequencer |
 | `DynamicRouterProcessor` | `.DynamicRouter(...)` | Dynamic Router |
+| `RoutingSlipProcessor` | `.RoutingSlip(...)` | Routing Slip |
 | `WireTapProcessor` | `.WireTap(...)` | Wire Tap |
 | `EnrichProcessor` | `.Enrich(...)` | Content Enricher |
+| `XsltProcessor` | `.Xslt(...)` / `xslt:` | Message Translator (XSLT) |
 | `ToProcessor` | `.To(...)` | Message Endpoint |
 | `DelegateProcessor` | `.Process(...)` | Custom Processor |
 | `LogProcessor` | `.Log(...)` | Logging |
 | `RichLogProcessor` | `.Log().Message(...)` | Structured Logging |
+| `MessageHistoryProcessor` | `.MessageHistory()` / `EnableMessageHistory` | Message History |
 | `DelayProcessor` | `.Delay(...)` | Delayer |
 | `LoopProcessor` | `.Loop(...)` | Loop |
 | `ThrottleProcessor` | `.Throttle(...)` | Throttler |
@@ -227,7 +230,7 @@ AST-based compiled expression language with caching (used in `Log`, `Filter(stri
 | `PollEnrichProcessor` | `.PollEnrich(...)` | Polling Consumer / Enricher |
 | `SamplingProcessor` | `.Sample(...)` | Sampling |
 | `TimeoutProcessor` | `.ProcessingTimeout(...)` | Processing timeout |
-| `ToDynamicProcessor` | `.ToD(...)` | Dynamic Endpoint (Routing Slip) |
+| `ToDynamicProcessor` | `.ToD(...)` | Dynamic Endpoint |
 | `CheckpointProcessor` | `.Replayable(...)` | Replay checkpoint |
 | `RoutePolicyProcessor` | `.RoutePolicy(...)` | Route Policy |
 | `StreamCachingProcessor` | `.StreamCaching()` | Stream Caching |
@@ -316,6 +319,22 @@ builder.Services.Configure<RouteEngineOptions>(o =>
     o.ThrowOnCompilationError = true;   // Fail-fast on invalid routes
 });
 ```
+
+### Property Placeholders
+
+Endpoint URIs can externalise their configuration with Camel-style `{{key}}` / `{{key:default}}`
+placeholders, resolved **once at route-compile time** — from `IConfiguration` (environment,
+appsettings, user-secrets), then context properties (`SetProperty`) as a container-free fallback.
+A URI without `{{` is untouched, and an unresolved placeholder without a default fails fast.
+
+```csharp
+From("{{orders.source}}")                         // amqp://broker/orders — from appsettings/env
+    .To("http://api/{{tenant}}/pay");
+From("amqp://broker:{{amqp.port:5672}}/orders");  // default used when the key is not configured
+```
+
+Because `IConfiguration` already layers environment, files and secrets, no `env:`/`sys:` prefix
+functions are needed. Keeps secrets out of source and lets one route run unchanged across environments.
 
 ## Telemetry
 

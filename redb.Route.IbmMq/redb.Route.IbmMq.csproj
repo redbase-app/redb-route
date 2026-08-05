@@ -12,7 +12,15 @@
     <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="IBMMQDotnetClient" Version="9.4.1.1" />
+    <!--
+      IBMXMSDotnetClient is a SUPERSET of IBMMQDotnetClient: the exact same amqmdnetstd.dll
+      (IBM.WMQ, the OO/poll API) PLUS amqmxmsstd.dll (IBM.XMS, the JMS-style event-driven API).
+      We reference ONLY this package: the IBM.WMQ managed .NET client has no public async-consume
+      (no MQQueue.Cb / MQQueueManager.Ctl in any 9.4.x — verified by reflection), so the sole
+      supported event-driven receive path in managed .NET is XMS MessageListener. Referencing both
+      packages would ship two copies of amqmdnetstd.dll. Same vendor, same version, same native layer.
+    -->
+    <PackageReference Include="IBMXMSDotnetClient" Version="9.4.1.1" />
     <PackageReference Include="System.Text.Encoding.CodePages" Version="9.0.5" />
   </ItemGroup>
   <ItemGroup>

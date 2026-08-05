@@ -33,6 +33,10 @@ public sealed class IbmMqConsumer : IConsumer
     private CancellationTokenSource? _cts;
     private readonly InflightDrainGuard _drain = new();
 
+    // Event-driven receive path (ReceiveMode=Listener). When set, Start/Stop delegate entirely to
+    // the XMS engine and the poll workers above are never created. Opt-in; default stays poll.
+    private IbmMqXmsConsumerEngine? _xmsEngine;
+
     private long _processedCount;
     /// <summary>Number of messages successfully processed (summed across all worker loops).</summary>
     public long ProcessedCount => Interlocked.Read(ref _processedCount);
@@ -59,6 +63,17 @@ public sealed class IbmMqConsumer : IConsumer
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
+        // Event-driven path: hand off to the XMS listener engine and skip the poll workers entirely.
+        if (_options.ReceiveMode == IbmMqReceiveMode.Listener)
+        {
+            _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
+            _xmsEngine = new IbmMqXmsConsumerEngine(
+                _endpoint, _processor, _options, _logger,
+                () => Interlocked.Increment(ref _processedCount));
+            await _xmsEngine.StartAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
         var isTopic = _options.DestinationType == IbmMqDestinationType.Topic;
         var workerCount = Math.Max(1, _options.ConcurrentConsumers);
 
@@ -127,6 +142,13 @@ public sealed class IbmMqConsumer : IConsumer
     /// <inheritdoc />
     public async Task Stop(CancellationToken ct = default)
     {
+        if (_xmsEngine != null)
+        {
+            await _xmsEngine.StopAsync(ct).ConfigureAwait(false);
+            _xmsEngine = null;
+            return;
+        }
+
         _cts?.Cancel();
 
         // Drain in-flight processing first (the loops may still be blocked in MQGET WAIT — they exit

@@ -63,22 +63,7 @@ public class ThrottleDefinition : RouteDefinitionBase<ThrottleDefinition>, IRout
     }
 
     private static IProcessor BuildPipeline(IList<IProcessorDefinition> outputs, IRouteContext context)
-    {
-        return outputs.Count switch
-        {
-            0 => new DelegateProcessor(_ => { }),
-            1 => outputs[0].CreateProcessor(context),
-            _ => BuildMulti(outputs, context)
-        };
-    }
-
-    private static PipelineProcessor BuildMulti(IList<IProcessorDefinition> outputs, IRouteContext context)
-    {
-        var pipeline = new PipelineProcessor();
-        foreach (var o in outputs)
-            pipeline.Add(o.CreateProcessor(context));
-        return pipeline;
-    }
+        => NodePipeline.Body(context, outputs);
 }
 
 /// <summary>
@@ -130,22 +115,7 @@ public class DebounceDefinition : RouteDefinitionBase<DebounceDefinition>, IRout
     }
 
     private static IProcessor BuildPipeline(IList<IProcessorDefinition> outputs, IRouteContext context)
-    {
-        return outputs.Count switch
-        {
-            0 => new DelegateProcessor(_ => { }),
-            1 => outputs[0].CreateProcessor(context),
-            _ => BuildMulti(outputs, context)
-        };
-    }
-
-    private static PipelineProcessor BuildMulti(IList<IProcessorDefinition> outputs, IRouteContext context)
-    {
-        var pipeline = new PipelineProcessor();
-        foreach (var o in outputs)
-            pipeline.Add(o.CreateProcessor(context));
-        return pipeline;
-    }
+        => NodePipeline.Body(context, outputs);
 }
 
 /// <summary>
@@ -215,20 +185,5 @@ public class KeyedThrottleDefinition : RouteDefinitionBase<KeyedThrottleDefiniti
     }
 
     private static IProcessor BuildPipeline(IList<IProcessorDefinition> outputs, IRouteContext context)
-    {
-        return outputs.Count switch
-        {
-            0 => new DelegateProcessor(_ => { }),
-            1 => outputs[0].CreateProcessor(context),
-            _ => BuildMulti(outputs, context)
-        };
-    }
-
-    private static PipelineProcessor BuildMulti(IList<IProcessorDefinition> outputs, IRouteContext context)
-    {
-        var pipeline = new PipelineProcessor();
-        foreach (var o in outputs)
-            pipeline.Add(o.CreateProcessor(context));
-        return pipeline;
-    }
+        => NodePipeline.Body(context, outputs);
 }

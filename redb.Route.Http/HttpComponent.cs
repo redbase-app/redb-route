@@ -232,14 +232,25 @@ public class HttpEndpoint : EndpointBase<HttpEndpointOptions>
             if (_hasMethodPrefix && path.StartsWith('/'))
                 return path;
 
-            // Path format: host:port/route or host/route
             if (path.StartsWith('/'))
             {
-                var rest = path[1..]; // host:port/route
-                var restSlash = rest.IndexOf('/');
-                return restSlash >= 0 ? rest[restSlash..] : "/";
+                // Leading-slash form. Its first segment is an embedded host only in the nonstandard
+                // "/host:port/route" shape — recognisable because a host[:port] segment contains a ':'
+                // (route segments never do). Then the route is everything after that segment.
+                // Otherwise the whole path is the route — which is what the fluent DSL emits:
+                // Http.Listen("/api/x").Host(..).Port(..) builds "http:/api/x?host=..&port=..", so the
+                // leading-slash "/api/x" must stay "/api/x", NOT be truncated to "/x".
+                var rest = path[1..];
+                var firstSlash = rest.IndexOf('/');
+                var firstSegment = firstSlash >= 0 ? rest[..firstSlash] : rest;
+
+                if (!firstSegment.Contains(':'))
+                    return path;
+
+                return firstSlash >= 0 ? rest[firstSlash..] : "/";
             }
 
+            // Host-first form "host[:port]/route" (or bare "host") — the route starts at the first slash.
             var idx = path.IndexOf('/');
             return idx >= 0 ? path[idx..] : "/";
         }

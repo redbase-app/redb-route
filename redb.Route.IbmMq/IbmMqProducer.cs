@@ -34,6 +34,11 @@ public sealed class IbmMqProducer : ConnectableProducer
     private CancellationTokenSource? _rpcCts;
     private Task? _rpcTask;
 
+    // Event-driven reply reception (receiveMode=listener): an XMS MessageListener on the reply queue
+    // instead of the poll-MQGET loop below. Opt-in; the request is still sent over IBM.WMQ.
+    private IbmMqXmsReplyReceiver? _xmsReply;
+    private bool UseXmsReply => _options.ReceiveMode == IbmMqReceiveMode.Listener;
+
     /// <summary>Creates an IBM MQ producer.</summary>
     public IbmMqProducer(IbmMqEndpoint endpoint, IbmMqEndpointOptions options)
     {
@@ -77,6 +82,14 @@ public sealed class IbmMqProducer : ConnectableProducer
         foreach (var pending in _pendingResponses)
             pending.Value.TrySetCanceled(ct);
         _pendingResponses.Clear();
+
+        if (_xmsReply != null)
+        {
+            try { await _xmsReply.StopAsync(ct).ConfigureAwait(false); }
+            catch (Exception ex) { Logger?.LogDebug(ex, "IBM MQ: error stopping XMS reply receiver during stop"); }
+            _xmsReply = null;
+            _rpcSetup = false;
+        }
 
         _rpcCts?.Cancel();
 
@@ -188,7 +201,9 @@ public sealed class IbmMqProducer : ConnectableProducer
 
         // Set up reply-to
         var replyToQueue = _options.ReplyToQueue;
-        if (string.IsNullOrEmpty(replyToQueue) && _replyQueue != null)
+        if (UseXmsReply)
+            replyToQueue = _xmsReply!.ReplyQueueName;
+        else if (string.IsNullOrEmpty(replyToQueue) && _replyQueue != null)
             replyToQueue = _replyQueue.Name.Trim();
 
         msg.ReplyToQueueName = replyToQueue ?? string.Empty;
@@ -267,6 +282,21 @@ public sealed class IbmMqProducer : ConnectableProducer
         try
         {
             if (_rpcSetup) return;
+
+            // Event-driven path: an XMS listener on the reply queue replaces the WMQ poll loop below.
+            if (UseXmsReply)
+            {
+                _xmsReply = new IbmMqXmsReplyReceiver(_options, Logger, (correlKey, response) =>
+                {
+                    if (_pendingResponses.TryRemove(correlKey, out var tcs))
+                        tcs.TrySetResult(response);
+                });
+                await _xmsReply.StartAsync(ct).ConfigureAwait(false);
+
+                _rpcSetup = true;
+                Logger?.LogDebug("IBM MQ XMS RPC reply receiver created: replyQueue={ReplyQueue}", _xmsReply.ReplyQueueName);
+                return;
+            }
 
             var replyQueueName = _options.ReplyToQueue;
 

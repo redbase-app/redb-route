@@ -28,21 +28,8 @@ public sealed class ResequenceDefinition : RouteDefinitionBase<ResequenceDefinit
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
     {
-        IProcessor inner = Outputs.Count switch
-        {
-            0 => new DelegateProcessor(_ => { }),
-            1 => Outputs[0].CreateProcessor(context),
-            _ => BuildPipeline(context)
-        };
+        IProcessor inner = NodePipeline.Body(context, Outputs);
         return new ResequencerProcessor(inner, _keySelector, _batchSize, _timeout);
-    }
-
-    private PipelineProcessor BuildPipeline(IRouteContext context)
-    {
-        var pipeline = new PipelineProcessor();
-        foreach (var output in Outputs)
-            pipeline.Add(output.CreateProcessor(context));
-        return pipeline;
     }
 
     /// <summary>Closes the Resequence scope and returns to the parent route.</summary>

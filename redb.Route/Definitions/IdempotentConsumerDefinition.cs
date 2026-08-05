@@ -47,12 +47,7 @@ public class IdempotentConsumerDefinition : RouteDefinitionBase<IdempotentConsum
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
     {
-        IProcessor inner = Outputs.Count switch
-        {
-            0 => new DelegateProcessor(_ => { }),
-            1 => Outputs[0].CreateProcessor(context),
-            _ => BuildPipeline(context)
-        };
+        IProcessor inner = NodePipeline.Body(context, Outputs);
 
         var loggerFactory = context.GetService<ILoggerFactory>();
         var logger = loggerFactory?.CreateLogger<IdempotentConsumerProcessor>();
@@ -62,14 +57,6 @@ public class IdempotentConsumerDefinition : RouteDefinitionBase<IdempotentConsum
             .Get(_repositoryName!);
 
         return new IdempotentConsumerProcessor(inner, repo, _keyExtractor, _skipDuplicate, logger);
-    }
-
-    private PipelineProcessor BuildPipeline(IRouteContext context)
-    {
-        var pipeline = new PipelineProcessor();
-        foreach (var output in Outputs)
-            pipeline.Add(output.CreateProcessor(context));
-        return pipeline;
     }
 
     /// <summary>Closes this idempotent consumer scope and returns the parent route definition.</summary>

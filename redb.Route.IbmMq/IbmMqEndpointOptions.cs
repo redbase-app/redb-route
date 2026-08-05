@@ -15,6 +15,26 @@ public enum IbmMqDestinationType
 }
 
 /// <summary>
+/// Consumer receive strategy.
+/// </summary>
+public enum IbmMqReceiveMode
+{
+    /// <summary>
+    /// Synchronous MQGET-WAIT poll loop (IBM.WMQ). Default, battle-tested, but the managed
+    /// client carries an internal ~500&#160;ms poll tick, so delivery latency is ~250–500&#160;ms.
+    /// </summary>
+    Poll,
+
+    /// <summary>
+    /// Event-driven push via XMS .NET <c>MessageListener</c> (IBM.XMS). The broker pushes
+    /// messages the instant they arrive, dropping delivery latency to &lt;50&#160;ms. This is the
+    /// only supported event-driven receive path on the managed .NET client (IBM.WMQ exposes no
+    /// public MQCB). Opt-in — <see cref="Poll"/> remains the default fallback.
+    /// </summary>
+    Listener
+}
+
+/// <summary>
 /// IBM MQ message persistence mode.
 /// </summary>
 public enum IbmMqPersistence
@@ -112,6 +132,12 @@ public sealed class IbmMqEndpointOptions : EndpointOptions
     public IbmMqDestinationType DestinationType { get; set; } = IbmMqDestinationType.Queue;
 
     // ── Consumer ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Receive strategy: <c>Poll</c> (synchronous MQGET-WAIT, default) or <c>Listener</c>
+    /// (event-driven XMS <c>MessageListener</c>, &lt;50&#160;ms latency). (default: Poll)
+    /// </summary>
+    public IbmMqReceiveMode ReceiveMode { get; set; } = IbmMqReceiveMode.Poll;
 
     /// <summary>Number of concurrent consumer threads. (default: 1)</summary>
     public int ConcurrentConsumers { get; set; } = 1;

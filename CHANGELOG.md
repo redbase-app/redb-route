@@ -47,6 +47,149 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [Unreleased]
+
+### Added
+- **Message History EIP — `.MessageHistory()` / `RouteEngineOptions.EnableMessageHistory`.** Records the
+  trail an exchange takes through a route: each node is timed and appended to
+  `exchange.Properties["CamelMessageHistory"]` as a `MessageHistoryEntry` (route id, node id, label,
+  elapsed ms), and the trail is dumped on failure (when retries are exhausted) so the failing step is
+  visible. Apache Camel parity: **disabled by default** (slight overhead), enabled globally
+  (`EnableMessageHistory`) or per route with `.MessageHistory(bool)` — a route override wins over the
+  global setting. Read the trail with `MessageHistory.GetEntries(exchange)` / render it with
+  `MessageHistory.Format(exchange)`. The elapsed time is recorded even when a node throws.
+  ```csharp
+  From("direct://orders").MessageHistory()
+      .Process(validate)
+      .To("http://fulfil");
+  // on failure the log shows: routeId · to1 · to · 12.400  (etc.)
+  ```
+- **XSLT transformation — `.Xslt(...)` / `.XsltContent(...)` and the `xslt:` component.** Transforms the
+  exchange body through an XSLT stylesheet, Apache Camel `xslt:` parity. Modelled exactly on the built-in
+  validator (leaf DSL **and** a component, engine behind an interface): the engine is `IXsltEngine` with a
+  built-in `XslCompiledTransformEngine` (BCL `System.Xml.Xsl`, **XSLT 1.0**, zero external dependencies —
+  same as Camel's default JAXP engine; a Saxon-backed engine for 2.0/3.0 can be added later as another
+  `IXsltEngine`, exactly as third-party validators live in `redb.Route.Validation.Adapters`). The
+  stylesheet is compiled once when the route is built and reused.
+  ```csharp
+  From("direct://orders").Xslt("styles/orders.xsl");                 // from a file (imports resolve)
+  From("direct://orders").XsltContent(inlineStylesheet, XsltOutput.Bytes);
+  From("direct://orders").To("xslt:styles/orders.xsl?output=bytes"); // component, registered out of the box
+  ```
+  - **Parameters** — all message headers and exchange properties are passed to the stylesheet as
+    `xsl:param` (a stylesheet sees the ones it declares), matching Camel.
+  - **Input body** — `string`, `byte[]`, `Stream`, `XmlReader`, `XDocument`/`XElement`, or `IXPathNavigable`.
+  - **`output`** — `string` (default) / `bytes` / `dom`. **`failOnNullBody`** (default true).
+  - **`allowTemplateFromHeader`** — when set, a per-message stylesheet from the `CamelXsltResourceUri` /
+    `CamelXsltStylesheet` header overrides the compiled default (dynamic stylesheets are compiled once and cached).
+  - The `xslt:` component is **registered out of the box** — `.To("xslt:...")` needs no setup, and it
+    composes as an endpoint (a Routing Slip / Recipient List can target `xslt:`).
+  - Security: script and `document()` are disabled (BCL `XsltSettings.Default`) for stylesheets from
+    outside the app.
+  - `Content-Type` is left unchanged after the transform (matching Camel). `output=file` is intentionally
+    not provided — route the transformed body to the File connector (`.To("file:...")`) instead.
+- **Routing Slip EIP — `.RoutingSlip(...)`.** Pipes the exchange through a list of endpoints that is
+  computed **once** up front (contrast the Dynamic Router, which recomputes the next hop after every
+  step). The slip may be a factory delegate, an `IExpression` yielding a delimited URI string, or a
+  `${...}` template — Apache Camel parity, including the default `,` delimiter and `ignoreInvalidEndpoints`.
+  The same exchange is threaded through the endpoints in sequence with Pipeline semantics (each hop's
+  `Out` becomes the next hop's `In`; the final `Out` is left for an InOut caller), and the current
+  endpoint is exposed on the exchange property `CamelSlipEndpoint`. Producers are cached per URI.
+  ```csharp
+  From("direct://orders")
+      .RoutingSlip("${header.route}")            // e.g. "direct://validate,direct://enrich,amqp://out"
+  // or a factory:
+  From("direct://orders")
+      .RoutingSlip(ex => new[] { "direct://validate", "direct://enrich", "amqp://out" });
+  ```
+- **Property placeholders in endpoint URIs — `{{key}}` / `{{key:default}}`.** Apache Camel
+  `PropertiesComponent` parity: endpoint URIs (and any string routed through `GetEndpoint`) externalise
+  their configuration instead of hard-coding hosts, queue names, ports or paths. Placeholders are
+  resolved **once at route-compile time** — values come from `IConfiguration` (environment variables,
+  appsettings, user-secrets — with the container's own precedence, so no Camel-style `env:`/`sys:` prefix
+  functions are needed), then the context's own properties (`SetProperty`) as a container-free fallback.
+  A placeholder with neither a value nor a default fails fast at compile time. Resolution is single-pass
+  and a URI without `{{` is untouched, so existing routes are unaffected.
+  ```csharp
+  From("{{orders.source}}")                        // e.g. amqp://broker/orders, from appsettings
+      .To("http://api/{{tenant}}/pay");
+  From("amqp://broker:{{amqp.port:5672}}/orders"); // default when the key is not configured
+  ```
+  Deliberately minimal (matching the redb.Route "no gold-plating" line): no nested placeholders, no
+  `{{?optional}}` parameter removal, no encryption — `IConfiguration` already covers the layered-source
+  need. `PropertyPlaceholderResolver` is public for reuse.
+- **`redb.Route.IbmMq` — event-driven receive via XMS `MessageListener`, cutting delivery latency
+  from ~250–500 ms to single-digit ms.** The default consumer polls with a blocking MQGET-WAIT on the
+  IBM.WMQ managed client, which carries an internal ~500 ms tick independent of `waitInterval` — so an
+  idle/low-traffic queue delivered messages ~250–500 ms after they arrived. The managed IBM.WMQ client
+  exposes **no** public async-consume API (there is no `MQQueue.Cb`/`MQQueueManager.Ctl` in any 9.4.x —
+  verified by reflection), so the fix uses **XMS .NET** (`IBM.XMS`), the JMS-style client that *does*
+  support event-driven `MessageListener` push. New opt-in option **`receiveMode=listener`** (default
+  stays `poll`) activates it; measured publish→receive on a local broker dropped to **~2–6 ms**.
+  ```csharp
+  r.From("wmq:ORDERS?queueManager=QM1&channel=DEV.APP.SVRCONN&receiveMode=listener")
+  ```
+  The listener runs the route synchronously on the XMS dispatch thread — one session = one in-flight
+  message = natural back-pressure. The package reference changed from `IBMMQDotnetClient` to its
+  superset `IBMXMSDotnetClient` (same `amqmdnetstd.dll` for IBM.WMQ + `amqmxmsstd.dll` for IBM.XMS;
+  same vendor and version), so the default poll path is byte-for-byte unchanged.
+  - **Transacted listener** (`receiveMode=listener&transacted=true`) uses a JMS `SESSION_TRANSACTED`
+    session and commits/rolls back on the *delivering* session — a processing error rolls back and the
+    broker redelivers, exactly like the poll path's connection syncpoint. An `IbmMqXmsAckAction` is
+    registered on the exchange so a route-level `.Transaction()` block settles it as part of the route
+    unit-of-work (mirroring the poll path's `IbmMqAckAction`); if the route has no transaction block the
+    engine settles the session itself (commit on success, rollback on error). The action is idempotent,
+    so the two paths never double-settle.
+  - **`concurrentConsumers=N`** creates N XMS sessions on the shared connection — N competing consumers
+    processing in parallel (each session single-threaded, queue-manager load-balanced), one in-flight
+    per session for back-pressure. A topic clamps to a single subscriber (parallel subscriptions would
+    duplicate delivery), same rule as the poll path.
+  - **Request-reply, backout threshold and W3C trace propagation** all work on the listener path, at
+    full parity with the poll path. A request carrying `JMSReplyTo` gets an `InOut` exchange and the
+    `Out` body is sent back correlated by message id (non-persistent, so temporary reply queues accept
+    it); a message past `backoutThreshold` is copied to `backoutQueue`; and `traceparent`/`tracestate`
+    on the message continue the distributed trace. RPC reply and the backout copy are issued on the
+    delivering session, so under `transacted` they commit atomically with consuming the request.
+  - **RPC client leg is event-driven too.** With `receiveMode=listener` the producer's request-reply
+    now receives the response through an XMS `MessageListener` on the reply queue instead of the poll
+    loop that carried the ~500 ms tick, so the *whole* round-trip is fast (measured ~16 ms warm vs the
+    poll floor of ~250–500 ms). The request is still sent over IBM.WMQ; only reply reception moves to
+    XMS. A dynamic reply queue uses an XMS temporary queue (owned and consumed by the producer's own
+    connection); a configured `replyToQueue` is used as-is.
+  - **Header parity on the listener path.** The XMS consumer and the event-driven RPC reply now carry
+    the same headers as the poll path: the `redbIbmMq.*` MQMD metadata (Destination, QueueManager, MsgId,
+    CorrelId, Priority, BackoutCount — mapped from the JMS/MQMD properties, gated by `mqmdReadEnabled`
+    like poll) and the application (user) headers.
+  - Fluent `.Listener()` / `.ReceiveMode(...)` on the builder mirror the `receiveMode` URI option.
+- **`redb.Route.IbmMq` — user-header catalogue moved to the JMS `usr` folder (interoperability fix).**
+  User headers are carried as a single JSON property (MQ property names forbid hyphens, so `X-Custom-Id`
+  can't be an individual property). That property was written under a **dotted name** (`redbIbmMq.HeaderKeys`),
+  which MQ places in a custom MQRFH2 folder that JMS clients — including IBM.XMS and any other JMS
+  consumer — do not surface as a user property, so headers were invisible off the IBM.WMQ path. It now
+  uses an **unqualified name** (`redbIbmMqHeaders`) that lands in the standard `usr` folder, readable by
+  IBM.WMQ, IBM.XMS and any JMS client alike. *Wire-format note:* a producer on this version and a consumer
+  on an older one (or vice-versa) will not exchange user headers across the change — deploy producer and
+  consumer of the IBM MQ connector together. MQMD metadata and message bodies are unaffected.
+
+### Changed
+- **Internal: unified the scope-body pipeline builder (`NodePipeline`).** Every scope definition
+  (Choice, Filter, CircuitBreaker, TryCatch, Loop, Metered, Replayable, Aggregate, IdempotentConsumer,
+  Resequence, Threads, Traced, Transaction, Throttle, Debounce, Split) carried its own identical copy of
+  the "0 → no-op / 1 → the child / N → a pipeline" logic; these now route through a single
+  `NodePipeline.Body`/`Node`. Behaviour is unchanged (verified by the full suite, incl. 70 transacted
+  tests), and it provides the single compile-time seam that Message History (above) decorates each node
+  through. No public API or DSL change.
+
+### Fixed
+- **`redb.Route.Http` — the fluent `Http.Listen("/path").Host(..).Port(..)` dropped the first path
+  segment.** The builder emits host/port as query parameters (`http:/api/honest/echo?host=..&port=..`),
+  so the whole leading-slash path is the route — but `HttpEndpoint.ConsumerPath` assumed any leading-slash
+  path was the nonstandard `/host:port/route` form and stripped its first segment, registering
+  `/honest/echo` instead of `/api/honest/echo` (and `/webhook` collapsed to `/`). It now strips the first
+  segment only when it is an actual embedded host (recognised by a `:` in that segment — route segments
+  have none), so `Http.Listen("/api/honest/echo").Host("0.0.0.0").Port(5092)` registers the full path. The
+  equivalent URI DSL (`http:0.0.0.0:5092/api/honest/echo`) was already correct and is unchanged.
+
 ## [3.4.0] — 2026-07-27
 
 > **Why a minor bump (3.3 → 3.4).** This release adds public API surface, not just fixes: replay

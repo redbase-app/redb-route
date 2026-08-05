@@ -42,20 +42,7 @@ public class AggregateDefinition : RouteDefinitionBase<AggregateDefinition>, IRo
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
     {
-        IProcessor target = Outputs.Count switch
-        {
-            0 => new DelegateProcessor(_ => { }),
-            1 => Outputs[0].CreateProcessor(context),
-            _ => BuildPipeline(Outputs, context)
-        };
+        IProcessor target = NodePipeline.Body(context, Outputs);
         return new AggregatorProcessor(_correlationKey, _aggregationStrategy, _completionPredicate, target);
-    }
-
-    private static PipelineProcessor BuildPipeline(IList<IProcessorDefinition> outputs, IRouteContext context)
-    {
-        var pipeline = new PipelineProcessor();
-        foreach (var o in outputs)
-            pipeline.Add(o.CreateProcessor(context));
-        return pipeline;
     }
 }

@@ -7,6 +7,7 @@ using redb.Route.Processors;
 using redb.Route.Telemetry;
 using redb.Route.Transactions;
 using redb.Route.Validation;
+using redb.Route.Xslt;
 
 namespace redb.Route.Definitions;
 
@@ -36,6 +37,7 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     private bool _autoStart = true;
     private TimeSpan? _processingTimeout;
     private bool _cluster;
+    private bool? _messageHistory;
     private IRoutePolicy? _routePolicy;
     internal IRouteContext? _context;
 
@@ -435,6 +437,29 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         return Self;
     }
 
+    // ── XSLT ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Apache Camel <c>xslt:</c> parity: transform the exchange body through an XSLT stylesheet loaded
+    /// from a <b>file</b> (compiled once, reused; <c>xsl:import</c>/<c>xsl:include</c> resolve relative
+    /// to the file). BCL <c>XslCompiledTransform</c> engine (XSLT 1.0).
+    /// </summary>
+    public TSelf Xslt(string stylesheetPath, XsltOutput output = XsltOutput.String, bool failOnNullBody = true, bool allowTemplateFromHeader = false)
+    {
+        AddOutput(new XsltFileDefinition(stylesheetPath, output, failOnNullBody, allowTemplateFromHeader));
+        return Self;
+    }
+
+    /// <summary>
+    /// Transform the exchange body through an <b>inline</b> XSLT stylesheet document (self-contained;
+    /// no <c>xsl:import</c>/<c>xsl:include</c>).
+    /// </summary>
+    public TSelf XsltContent(string stylesheetXml, XsltOutput output = XsltOutput.String, bool failOnNullBody = true, bool allowTemplateFromHeader = false)
+    {
+        AddOutput(new XsltContentDefinition(stylesheetXml, output, failOnNullBody, allowTemplateFromHeader));
+        return Self;
+    }
+
     // ── Serialization ────────────────────────────────────────────────────────
 
     /// <inheritdoc />
@@ -770,6 +795,37 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     public TSelf DynamicRouter(Func<IExchange, string?> routingFunction)
     {
         AddOutput(new DynamicRouterDefinition(routingFunction));
+        return Self;
+    }
+
+    /// <summary>
+    /// Apache Camel parity: Routing Slip — pipe the exchange through a list of endpoints computed
+    /// <b>once</b> up front by <paramref name="slipFactory"/> (contrast Dynamic Router, which recomputes
+    /// per hop). The same exchange is threaded through the endpoints in sequence (Out→In between hops).
+    /// </summary>
+    public TSelf RoutingSlip(Func<IExchange, IEnumerable<string>> slipFactory, bool ignoreInvalidEndpoints = false)
+    {
+        AddOutput(new RoutingSlipDefinition(slipFactory, ignoreInvalidEndpoints));
+        return Self;
+    }
+
+    /// <summary>
+    /// Apache Camel parity: Routing Slip from an <see cref="IExpression"/> yielding a delimited URI
+    /// string (e.g. <c>.RoutingSlip(Header("mySlip"))</c>). Default delimiter is <c>,</c>.
+    /// </summary>
+    public TSelf RoutingSlip(IExpression slip, string uriDelimiter = ",", bool ignoreInvalidEndpoints = false)
+    {
+        AddOutput(new RoutingSlipDefinition(slip, uriDelimiter, ignoreInvalidEndpoints));
+        return Self;
+    }
+
+    /// <summary>
+    /// Apache Camel parity: Routing Slip from a <c>${...}</c> template (or a literal like
+    /// <c>"direct:a,direct:b"</c>) resolving to a delimited URI string. Default delimiter is <c>,</c>.
+    /// </summary>
+    public TSelf RoutingSlip(string slipTemplate, string uriDelimiter = ",", bool ignoreInvalidEndpoints = false)
+    {
+        AddOutput(new RoutingSlipDefinition(slipTemplate, uriDelimiter, ignoreInvalidEndpoints));
         return Self;
     }
 
@@ -1140,6 +1196,16 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
 
     /// <inheritdoc />
     public bool GetCluster() => _cluster;
+
+    /// <inheritdoc />
+    public TSelf MessageHistory(bool value = true)
+    {
+        _messageHistory = value;
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public bool? GetMessageHistory() => _messageHistory;
 
     /// <inheritdoc />
     public TSelf RoutePolicy(IRoutePolicy policy)

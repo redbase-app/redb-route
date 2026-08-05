@@ -93,7 +93,7 @@ public static class IbmMqMessageHelper
     public static void CopyRfh2UserProperties(MQMessage mqMsg, RouteMessage routeMsg)
     {
         string? json = null;
-        try { json = mqMsg.GetStringProperty(IbmMqHeaders.HeaderKeys); }
+        try { json = mqMsg.GetStringProperty(IbmMqHeaders.HeaderCatalogue); }
         catch { /* property not present */ }
 
         if (string.IsNullOrEmpty(json)) return;
@@ -127,7 +127,7 @@ public static class IbmMqMessageHelper
         if (customHeaders.Count == 0) return;
 
         var json = System.Text.Json.JsonSerializer.Serialize(customHeaders);
-        mqMsg.SetStringProperty(IbmMqHeaders.HeaderKeys, json);
+        mqMsg.SetStringProperty(IbmMqHeaders.HeaderCatalogue, json);
     }
 
     /// <summary>
@@ -228,7 +228,7 @@ public static class IbmMqMessageHelper
         if (customHeaders.Count > 0)
         {
             var json = System.Text.Json.JsonSerializer.Serialize(customHeaders);
-            msg.SetStringProperty(IbmMqHeaders.HeaderKeys, json);
+            msg.SetStringProperty(IbmMqHeaders.HeaderCatalogue, json);
         }
 
         // Standard, JMS-equivalent MQMD fields forward from headers BY DEFAULT (header wins over
