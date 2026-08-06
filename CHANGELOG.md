@@ -47,7 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
-## [Unreleased]
+## [3.5.0] — 2026-08-05
+
+> **Why a minor (3.4 → 3.5).** This release adds public API: the **Message History**, **XSLT** and
+> **Routing Slip** EIPs, and `{{key}}` / `{{key:default}}` property placeholders in endpoint URIs.
+> Backward-compatible — existing routes are unchanged, and every new feature is opt-in (Message
+> History is off until `.MessageHistory()` or `EnableMessageHistory`). The ecosystem number moves
+> together: `redb` core, `redb.Tsak` and `redb.Identity` all ship 3.5.0 alongside — see the root
+> `CHANGELOG.md` for why the runtime cannot stay a minor behind the framework.
 
 ### Added
 - **Message History EIP — `.MessageHistory()` / `RouteEngineOptions.EnableMessageHistory`.** Records the
