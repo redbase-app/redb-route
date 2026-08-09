@@ -23,7 +23,7 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 
 ## Highlights
 
-- **27 external transports + 5 built-in components** (Direct, SEDA, Timer, Mock, Log). One of them — `llm:` — is a first-class LLM connector with a universal OpenAI-compatible provider (14 APIs) and a native Anthropic Messages API provider, plus `.AsLlmTool()` to expose any of the other 26 transports as an LLM-callable tool with zero connector changes. Token-by-token streaming runs end-to-end: `?stream=true` on an `llm://` step lands on the wire as Server-Sent Events through `redb.Route.Http` (with an `event: done` summary trailer) or as one `Text` frame per token through `redb.Route.WebSocket`.
+- **28 external transports + 5 built-in components** (Direct, SEDA, Timer, Mock, Log). One of them — `llm:` — is a first-class LLM connector with a universal OpenAI-compatible provider (14 APIs) and a native Anthropic Messages API provider, plus `.AsLlmTool()` to expose any of the other 27 transports as an LLM-callable tool with zero connector changes. Token-by-token streaming runs end-to-end: `?stream=true` on an `llm://` step lands on the wire as Server-Sent Events through `redb.Route.Http` (with an `event: done` summary trailer) or as one `Text` frame per token through `redb.Route.WebSocket`.
 - **MCP client connector — `mcp:` URI.** `redb.Route.Llm.Mcp` spawns external **Model Context Protocol** servers (stdio or HTTP+SSE), runs `initialize` + `tools/list` on startup and registers every remote tool into `IToolDescriptorRegistry` as a first-class `ILlmToolDescriptor`. The agent picks them up like any native tool — full audit (`ToolSetHash`), governance (`Safety`), observability and approval flow inherited automatically. Cancellation is threaded all the way through: an aborted agent iteration emits a JSON-RPC `notifications/cancelled` and the in-flight `tools/call` unwinds. One package = the entire community MCP ecosystem (Serena, filesystem, git, fetch, github, sqlite, …) becomes callable from a redb agent.
 - **30+ EIP patterns** — Splitter, Aggregator, CBR, WireTap, Saga, Circuit Breaker, Idempotent Consumer, Claim Check, Throttle, Resequencer, Scatter-Gather, and more.
 - **Compiled expression engine** — `${header.x}`, `${header.x++}`, arithmetic, JSONPath, XPath compile to `Func<IExchange, T>` via `System.Linq.Expressions`. No interpreter overhead.
@@ -1431,6 +1431,7 @@ Quick reference for `IRouteDefinition` methods. All of them return `IRouteDefini
 | `redis:` | redb.Route.Redis | `Redis.Subscribe("ch")` / `Redis.Set("key")` / … |
 | `sql:` | redb.Route.Sql | `Sql.Poll("query")` / `Sql.Execute("stmt")` / `Sql.Procedure("sp")` |
 | `http:` / `https:` | redb.Route.Http | `Http.Get("path")` / `Http.Listen("path")` / … |
+| `as2:` / `as2s:` | redb.Route.As2 | `As2.Receive("path")` / `As2.Send("url")` / `As2.ReceiveMdn("path")` |
 | `grpc:` | redb.Route.Grpc | `Grpc.Call("host:port")` / `Grpc.Listen("host:port")` |
 | `file:` | redb.Route.File | `FileDsl.Read("dir")` / `FileDsl.Write("dir")` |
 | `sftp:` | redb.Route.Sftp | `Sftp.Directory("path")` |
@@ -1517,6 +1518,8 @@ For transports that support transactions, combine with `.Transacted()` to wrap p
 | `redb.Route.Redis` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Redis?label=)](https://www.nuget.org/packages/redb.Route.Redis) | Redis (StackExchange) — Pub/Sub, Streams, KV, Lists |
 | `redb.Route.Sql` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Sql?label=)](https://www.nuget.org/packages/redb.Route.Sql) | SQL databases (ADO.NET) — Poll, Execute, Procedures |
 | `redb.Route.Http` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Http?label=)](https://www.nuget.org/packages/redb.Route.Http) | HTTP/HTTPS — client and Kestrel server |
+| `redb.Route.Http.Hosting` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Http.Hosting?label=)](https://www.nuget.org/packages/redb.Route.Http.Hosting) | Shared Kestrel host (`SharedHttpServerManager`) reused by HTTP-based transports |
+| `redb.Route.As2` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.As2?label=)](https://www.nuget.org/packages/redb.Route.As2) | AS2 (RFC 4130) B2B/EDI — signed/encrypted S/MIME + MDN (sync/async/signed), interop-validated vs OpenAS2 |
 | `redb.Route.Grpc` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Grpc?label=)](https://www.nuget.org/packages/redb.Route.Grpc) | gRPC — client and Kestrel server |
 | `redb.Route.File` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.File?label=)](https://www.nuget.org/packages/redb.Route.File) | File system — polling, atomic writes, locking |
 | `redb.Route.Sftp` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Sftp?label=)](https://www.nuget.org/packages/redb.Route.Sftp) | SFTP (SSH.NET) |

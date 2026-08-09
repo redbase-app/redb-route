@@ -22,8 +22,8 @@ public static class ServiceCollectionExtensions
     /// <param name="configureCors">Optional action to configure global CORS defaults for all HTTP consumers.</param>
     public static IServiceCollection AddRedbRouteHttp(this IServiceCollection services, Action<HttpCorsOptions>? configureCors)
     {
-        // Shared server manager — single instance across all route contexts
-        services.AddSingleton<SharedHttpServerManager>();
+        // Shared server manager — single instance across all route contexts and HTTP-based connectors.
+        services.AddRedbRouteHttpHosting();
 
         services.AddSingleton(sp =>
         {

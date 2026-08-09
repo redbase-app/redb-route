@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.As2\redb.Route.As2.csproj" />
+  </ItemGroup>
+  <!-- The AS2 consumer hosts Kestrel, so the test runner needs the ASP.NET runtime. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>
+

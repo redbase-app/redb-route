@@ -21,22 +21,8 @@ public enum HttpMethod
     OPTIONS
 }
 
-/// <summary>
-/// HTTP protocol version for Kestrel consumer.
-/// </summary>
-public enum HttpProtocol
-{
-    /// <summary>HTTP/1.1 only.</summary>
-    Http1,
-    /// <summary>HTTP/2 only. Requires HTTPS on most clients.</summary>
-    Http2,
-    /// <summary>HTTP/1.1 and HTTP/2 (default). Negotiated via ALPN.</summary>
-    Http1And2,
-    /// <summary>HTTP/3 only (QUIC). Requires HTTPS.</summary>
-    Http3,
-    /// <summary>HTTP/1.1, HTTP/2, and HTTP/3.</summary>
-    Http1And2And3
-}
+// HttpProtocol moved to redb.Route.Http.Hosting (kept in the redb.Route.Http namespace) — it is shared
+// between the Kestrel host and the HTTP connector options.
 
 /// <summary>
 /// Authentication scheme for producer HTTP requests.

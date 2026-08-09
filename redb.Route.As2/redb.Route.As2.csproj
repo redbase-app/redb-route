@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.As2</PackageId>
+    <Description>AS2 (RFC 4130) B2B/EDI transport for the redb.Route ESB framework: signed/encrypted S/MIME over HTTP with MDN receipts.</Description>
+    <PackageTags>esb;messaging;as2;edi;b2b;smime;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.As2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <!-- Shared Kestrel host (SharedHttpServerManager) — NOT the HTTP connector, so no connector-to-connector
+         coupling. Both share one server manager via AddRedbRouteHttpHosting(). -->
+    <ProjectReference Include="..\redb.Route.Http.Hosting\redb.Route.Http.Hosting.csproj" />
+  </ItemGroup>
+  <!-- AS2 hosts an HTTP receive server, so it needs the ASP.NET runtime (FrameworkReference does not flow
+       transitively through the redb.Route.Http project reference). -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <!-- MimeKit provides the S/MIME crypto (sign/encrypt/compress, MIC) on the Bouncy Castle foundation —
+       the same one the AS2 industry (camel-as2, OpenAS2, Mendelson) interoperates on. See docs/as2/02-DESIGN §5.
+       Version aligned with redb.Route.Mail's MailKit 4.16.0 (which depends on MimeKit 4.16.0). -->
+  <ItemGroup>
+    <PackageReference Include="MimeKit" Version="4.16.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

@@ -12,9 +12,9 @@
   <ItemGroup>
     <!-- Switch back to PackageReference Version="3.4.0" after publishing. -->
     <PackageReference Include="redb.Route.csproj" />
-    <ProjectReference Include=".." Version="3.5.0" />
+    <ProjectReference Include=".." Version="3.5.1" />
     <PackageReference Include="redb.Route.Llm.csproj" />
-    <ProjectReference Include=".." Version="3.5.0" />
+    <ProjectReference Include=".." Version="3.5.1" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.0" />
     <!-- STEP 1 of 3 to enable REDB-backed audit storage: uncomment these two refs.
          (Steps 2 and 3 are in Program.cs — search for "REDB-BACKED AUDIT".)

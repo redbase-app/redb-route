@@ -7,6 +7,7 @@ This changelog covers the **NuGet-published packages**:
 |---------|-------------|
 | `redb.Route` | Core engine: DSL, processors, expressions, telemetry |
 | `redb.Route.Amqp` | AMQP 1.0 transport |
+| `redb.Route.As2` | AS2 (RFC 4130) B2B/EDI transport — signed/encrypted S/MIME over HTTP with MDN receipts |
 | `redb.Route.AzureServiceBus` | Azure Service Bus transport |
 | `redb.Route.Controllers` | Transport-agnostic controller dispatch |
 | `redb.Route.Core` | Bridge to redb.Core props storage |
@@ -18,6 +19,7 @@ This changelog covers the **NuGet-published packages**:
 | `redb.Route.GenericFile` | Base library for file-based transports |
 | `redb.Route.Grpc` | gRPC transport |
 | `redb.Route.Http` | HTTP/HTTPS transport |
+| `redb.Route.Http.Hosting` | Shared Kestrel HTTP hosting (`SharedHttpServerManager`) reused by HTTP-based transports |
 | `redb.Route.IbmMq` | IBM MQ transport |
 | `redb.Route.Kafka` | Apache Kafka transport |
 | `redb.Route.Ldap` | LDAP / Active Directory transport |
@@ -47,6 +49,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [3.5.1] — 2026-08-07
+
+> **Why a separate patch instead of shipping inside 3.5.0.** The AS2 connector and the shared Kestrel
+> host landed on `develop` **after** 3.5.0 had already been published to nuget.org (2026-08-05, 61
+> packages). A published version cannot be replaced, so these two packages — and the
+> `redb.Route.Http` build that goes with them — ship as 3.5.1.
+>
+> **`redb.Route.Http` is republished here on purpose.** `SharedHttpServerManager` moved out of it into
+> `redb.Route.Http.Hosting`, so the 3.5.0 build on nuget.org still carries its own private copy of the
+> multiplexing server. Mixing that 3.5.0 with `redb.Route.As2` would put **two** Kestrel managers in
+> one process — and `redb.Route.As2` does not reference `redb.Route.Http`, so NuGet would never
+> upgrade it for you. Take `redb.Route.Http` **3.5.1** whenever you use AS2 on a shared port; the
+> public API of the package is unchanged either way.
+>
+> The whole `redb.Route` line moves to 3.5.1 together, so no combination of 3.5.x Route packages can
+> mix the two hosting models. `redb` core, `redb.Tsak` and `redb.Identity` stay on 3.5.0 — the
+> shared-runtime compat gate compares the **minor**, and 3.5.0 ↔ 3.5.1 is patch drift, which it allows.
+
+### Added
+- **`redb.Route.As2` — new AS2 (RFC 4130) B2B/EDI connector.** Exchange business documents with trading
+  partners over HTTP(S) using signed and encrypted S/MIME messages and MDN receipts. Schemes `as2` / `as2s`.
+  Both directions, **synchronous and asynchronous MDN**, **signed MDN**, and the standard signature /
+  encryption algorithm matrix (`sha-1/256/384/512` × `aes-128/192/256-cbc`, `3des`, optional RFC 3274
+  compression). Crypto is MimeKit (Bouncy Castle) — the same foundation the AS2 industry interoperates on.
+  ```csharp
+  services.AddRedbRouteAs2();
+
+  context.AddToRegistry("walmart", new As2ConnectionFactory {
+      OurCertificate = ourPfx, PartnerCertificate = theirCer,
+      As2From = "OUR-ID", As2To = "WALMART-ID", PartnerUrl = "https://partner/as2",
+      Sign = true, Encrypt = true, SignedMdn = true, MdnMode = As2MdnMode.Sync });
+
+  From(As2.Receive("/inbound").Host("0.0.0.0").Port(4080).ConnectionFactory("walmart"))
+      .To("direct://process-edi");                                    // receive server
+  From("direct://out")
+      .To(As2.Send("https://partner/as2").ConnectionFactory("walmart")); // send + verify MDN
+  ```
+  - **Partner config via `As2ConnectionFactory`** in the registry — certificates, AS2 IDs and the agreed
+    profile referenced by `.ConnectionFactory("name")`, never in the URI.
+  - **MDN outcome on `exchange.Out`** for a producer: `redbAs2.mdnDisposition`, `redbAs2.signatureValid`,
+    `redbAs2.mdnMicMatch` (the partner received exactly what we sent). Async MDN uses `As2.ReceiveMdn(path)`
+    with correlation by `Original-Message-ID`.
+  - **Received document** on the consumer: business content type on `Message.ContentType` (the S/MIME wrapper
+    type is deliberately kept off the headers), AS2 headers verbatim, computed MIC under `redbAs2.mic`.
+  - Full connector parity — `IEndpointStatistics` / health in Tsak, `Consumer`/`Client` telemetry spans,
+    `[Sensitive]` secret redaction.
+  - **Interop validated against a live OpenAS2 v4.9.0 in both directions** (`redb → OpenAS2` and
+    `OpenAS2 → redb`, signed + encrypted, positive MDN, MIC verified). See `src/redb.Route.As2/TESTING.md`.
+- **`redb.Route.Http.Hosting` — new shared Kestrel hosting package.** `SharedHttpServerManager` (the
+  multiplexing HTTP server, one Kestrel per `host:port`) was extracted from `redb.Route.Http` into a
+  standalone package so HTTP-based connectors (`redb.Route.Http`, `redb.Route.As2`, …) share **one** server
+  without depending on each other. Register once with `services.AddRedbRouteHttpHosting()` (idempotent); every
+  connector resolves the same singleton. **No breaking change** — the types keep the `redb.Route.Http`
+  namespace, so `redb.Route.Http` source and public API are unchanged.
+
 ## [3.5.0] — 2026-08-05
 
 > **Why a minor (3.4 → 3.5).** This release adds public API: the **Message History**, **XSLT** and
@@ -55,6 +112,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > History is off until `.MessageHistory()` or `EnableMessageHistory`). The ecosystem number moves
 > together: `redb` core, `redb.Tsak` and `redb.Identity` all ship 3.5.0 alongside — see the root
 > `CHANGELOG.md` for why the runtime cannot stay a minor behind the framework.
+>
+> The AS2 connector and the shared Kestrel host were written against this version but merged after it
+> was published; they ship in **3.5.1** — see above.
 
 ### Added
 - **Message History EIP — `.MessageHistory()` / `RouteEngineOptions.EnableMessageHistory`.** Records the
