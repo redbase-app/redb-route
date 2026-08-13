@@ -183,7 +183,8 @@ public sealed class LlmConsumer : IConsumer
                 ConversationId = conversationId,
                 MaxIterations = _options.MaxIterations,
                 Temperature = _options.Temperature,
-                MaxTokens = _options.MaxTokens
+                MaxTokens = _options.MaxTokens,
+                PropagateToolHeaders = ToolHeaderPolicy.ParseCsv(_options.PropagateToolHeaders)
             };
 
             var response = await engine.RunAsync(request, ct).ConfigureAwait(false);

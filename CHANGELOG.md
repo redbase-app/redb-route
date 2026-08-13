@@ -49,6 +49,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [3.6.0] — 2026-08-13
+
+> **Why a minor.** `.PropagateToolHeaders(...)` / `?propagateToolHeaders=` is new public API, so this
+> cannot be a patch. Everything else here is a fix, and existing routes are unchanged: the option is
+> opt-in and empty by default. The ecosystem moves together — `redb` core, `redb.Tsak` and
+> `redb.Identity` ship 3.6.0 alongside, which also puts the core back on the shared number after the
+> 3.5.1 split.
+
+### Fixed
+- **Fluent DSL builders — endpoint URIs now round-trip through the parser; space-bearing values no longer
+  corrupt (fixed a `Cron.Schedule(...)` crash that took down the whole module).** Every fluent builder wrote
+  query values with `HttpUtility.UrlEncode` (`application/x-www-form-urlencoded`, where space → `+`), but the
+  endpoint parser decodes with `Uri.UnescapeDataString` (RFC 3986, where `+` stays `+`). The two are not
+  inverse, so any value containing a space came back corrupted. Most visibly **`Cron.Schedule("job",
+  "0 */5 * * * ?")`** — every cron expression has spaces — produced `schedule=0+*/5+...`, and
+  `CronEndpointOptions.Validate()` then threw an `ArgumentException` **inside `context.Start()`**, bringing
+  down the entire module (all routes, not just the one job). The same latent mismatch affected SQL statements,
+  LDAP filters, Exec arguments, LLM prompts and any other space-bearing DSL value. Fixed at the writer side
+  across **all** builders (`HttpUtility.UrlEncode` → `Uri.EscapeDataString`, which writes `%20` and round-trips
+  cleanly). The parser is deliberately **untouched**: hand-written endpoint URIs and existing routes are
+  byte-for-byte unaffected, and `System.Web` is dropped as a dependency. Guarded by a `Build()` → `Parse()`
+  round-trip test so the invariant "write it the way the parser reads it" cannot silently regress again.
+- **`redb.Route.Llm` — conversation isolation no longer depends on tree-filter semantics
+  (cross-conversation leak + tree corruption).** `RedbConversationStore.LoadPathAsync` detected the
+  conversation head with `TreeQuery(root).WhereLeaves()`, trusting the rooted query to scope the
+  subtree. It did not: the core evaluated it as "freshest leaf of the whole schema" (fixed for Pro in
+  `d88ff9fe`, still open for the Free PVT routing), so **any** turn of **any** conversation could load
+  whoever wrote last globally — and the next message was then attached under that foreign node,
+  corrupting `_id_parent` irreversibly. Head detection now goes through the conversation FK the
+  connector already stamps (`value_long` on the indexed `_objects` row): the newest message of a
+  conversation is always a leaf, so `WhereRedb(o => o.ValueLong == rootId)` ordered by `date_create`
+  is exactly "the freshest leaf" without depending on how a provider implements tree filters. The FK
+  was always stamped correctly, so this also **recovers already-corrupted trees** on read.
+  Three further defects in the same file, independent of the core:
+  - `AppendAsync` / `LoadPathAsync(convId, leafId)` resolved a message id across the whole schema, so
+    an application that lets clients branch by message id could read — and write into — another
+    conversation. The lookup is now scoped by the conversation FK and fails loudly.
+  - The foreign conversation root slipped into the transcript as a role-less `MessageProps` (the path
+    was trimmed by `id != rootId`, which only recognises *its own* root), posting an empty role to the
+    provider — a 400 that reads like a model problem.
+  - The root-id cache was keyed by conversation id alone while the redb instance is chosen per
+    exchange (`?redb=`), so with two named databases a root resolved in A was returned for B. Keyed by
+    `(instance, conversation)` now.
+- **`redb.Route.Llm` — tool routes now run on a child of the agent exchange, not on a naked one.**
+  `AgentEngine.DispatchToolEndpointAsync` built the tool's exchange from scratch (`new Message(...)` +
+  `IProducerTemplate.RequestBody`), so a route mounted with `.AsLlmTool(...)` / `[ExposeAsLlmTool]` /
+  MCP received **no** `Properties` (including `LlmKeys.RedbName`), **no** `RouteId` and a **fresh DI
+  scope from the root container** instead of the conversation's. Every scoped service the agent route
+  had resolved — principal, tenant accessor, per-exchange `IRedbService` — came back empty inside the
+  tool. Only the ambient transaction survived, because it flows through the async context.
+  Dispatch now uses `parentExchange.CreateLinkedChild(msg)` + `IProducerTemplate.RequestAsync`, which is
+  what `docs/LLM/PLAN.md §4.1` specified and what `ILlmToolDescriptor` / `RouteToolBridge` documented.
+  The child shares the parent's scope without owning it, so it releases only the `__redb_scope:*` entries
+  the tool itself opened and the conversation keeps its scope after the call. Tool dispatch is
+  sequential within an iteration, so the shared scope carries no concurrency risk.
+- **`redb.Route.Llm` — the run's principal and audit tags reach tools.** The engine copied a hard-coded
+  three-header allowlist (`llm.conversation.id`, `X-Correlation-Id`, `CorrelationId`) and nothing else, so
+  a "who is asking" tool had no way to learn the subject except asking the model for it — an argument the
+  model can be talked into forging. `llm.user.id` and `llm.audit.*` are now propagated **as the values
+  resolved for the run**, not as raw headers: `?user=${header.X-User-Id}` and `?audit=` reach tools too,
+  which a header copy would have missed.
+
+### Added
+- **`redb.Route.Llm` — `.PropagateToolHeaders(...)` / `?propagateToolHeaders=`.** Opt-in list of extra
+  header names forwarded from the agent exchange to every tool call; a trailing `*` makes an entry a
+  prefix match. Also on the inline step as `LlmCallBuilder.WithPropagatedToolHeaders(...)`.
+  ```csharp
+  .To(Llm.Factory("claude")
+        .Tools("profile_state,billing_check")
+        .User("${header.X-User-Id}")
+        .PropagateToolHeaders("x-tenant-id", "accept-language"))
+  ```
+  Propagation stays **default-deny** — the inbound transport's header set is never forwarded implicitly,
+  so an HTTP consumer's `Authorization` / `Cookie` cannot ride into a tool by accident. The policy lives in
+  the new public `ToolHeaderPolicy`, and `AgentRequest.PropagateToolHeaders` carries it to the engine.
+
+  Note the trust model this assumes: `llm.user.id` and `llm.audit.*` are read off the inbound exchange by
+  `LlmProducer`, so a route that forwards client headers verbatim lets the caller set them. That was
+  already true for what the engine persists in `MessageProps.UserId`; a route whose tools make access
+  decisions on the principal must strip or overwrite client-supplied `llm.*` headers before the `llm://` hop.
+
 ## [3.5.1] — 2026-08-07
 
 > **Why a separate patch instead of shipping inside 3.5.0.** The AS2 connector and the shared Kestrel

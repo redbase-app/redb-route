@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 
 namespace redb.Route.Exec;
 
@@ -111,7 +110,7 @@ public sealed class ExecBuilder
             sb.Append(sep);
             sb.Append(key);
             sb.Append('=');
-            sb.Append(HttpUtility.UrlEncode(v));
+            sb.Append(Uri.EscapeDataString(v));
             sep = '&';
         }
         void AppendStr(string key, string? v) { if (!string.IsNullOrEmpty(v)) Append(key, v); }

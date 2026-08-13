@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 
@@ -35,6 +34,7 @@ public sealed class LlmBuilder
     private string? _tools;
     private string? _user;
     private readonly List<KeyValuePair<string, string>> _auditTags = [];
+    private readonly List<string> _propagateToolHeaders = [];
     private string? _promptTemplateName;
     private string? _promptTemplateVersion;
 
@@ -109,6 +109,28 @@ public sealed class LlmBuilder
     }
 
     /// <summary>
+    /// Opts extra headers into propagation from this exchange to every tool call
+    /// of the run. A trailing <c>*</c> makes an entry a prefix match:
+    /// <c>.PropagateToolHeaders("x-tenant-id", "x-app-*")</c>.
+    /// <para>
+    /// Propagation is <b>default-deny</b>. Without this call a tool route already
+    /// receives the conversation id, both correlation-id spellings, the resolved
+    /// principal (<c>llm.user.id</c> — see <see cref="User"/>) and the resolved
+    /// audit tags (<c>llm.audit.*</c> — see <see cref="Audit"/>). The inbound
+    /// transport's own headers are never forwarded implicitly; name here only
+    /// headers the route itself sets or has sanitized.
+    /// </para>
+    /// Repeatable — names accumulate across calls.
+    /// </summary>
+    public LlmBuilder PropagateToolHeaders(params string[] names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        foreach (var n in names)
+            if (!string.IsNullOrWhiteSpace(n)) _propagateToolHeaders.Add(n.Trim());
+        return this;
+    }
+
+    /// <summary>
     /// Locks the prompt-template (name, version) pair onto every persisted row
     /// of the run as <c>MessageProps.PromptTemplateName</c> /
     /// <c>PromptTemplateVersion</c>. Independent of <see cref="SystemPromptRef"/>
@@ -131,7 +153,7 @@ public sealed class LlmBuilder
     /// <inheritdoc />
     public override string ToString()
     {
-        var sb = new StringBuilder("llm://").Append(HttpUtility.UrlEncode(_factory));
+        var sb = new StringBuilder("llm://").Append(Uri.EscapeDataString(_factory));
         var first = true;
         Append(sb, ref first, "temperature", _temperature);
         Append(sb, ref first, "maxTokens", _maxTokens);
@@ -145,8 +167,21 @@ public sealed class LlmBuilder
         Append(sb, ref first, "tools", _tools);
         Append(sb, ref first, "user", _user);
         Append(sb, ref first, "audit", BuildAuditCsv(_auditTags));
+        Append(sb, ref first, "propagateToolHeaders", BuildCsv(_propagateToolHeaders));
         Append(sb, ref first, "promptTemplateName", _promptTemplateName);
         Append(sb, ref first, "promptTemplateVersion", _promptTemplateVersion);
+        return sb.ToString();
+    }
+
+    private static string? BuildCsv(List<string> values)
+    {
+        if (values.Count == 0) return null;
+        var sb = new StringBuilder();
+        for (var i = 0; i < values.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(Uri.EscapeDataString(values[i]));
+        }
         return sb.ToString();
     }
 
@@ -157,9 +192,9 @@ public sealed class LlmBuilder
         for (var i = 0; i < tags.Count; i++)
         {
             if (i > 0) sb.Append(',');
-            sb.Append(HttpUtility.UrlEncode(tags[i].Key))
+            sb.Append(Uri.EscapeDataString(tags[i].Key))
               .Append('=')
-              .Append(HttpUtility.UrlEncode(tags[i].Value));
+              .Append(Uri.EscapeDataString(tags[i].Value));
         }
         return sb.ToString();
     }
@@ -169,6 +204,6 @@ public sealed class LlmBuilder
         if (string.IsNullOrEmpty(value)) return;
         sb.Append(first ? '?' : '&');
         first = false;
-        sb.Append(key).Append('=').Append(HttpUtility.UrlEncode(value));
+        sb.Append(key).Append('=').Append(Uri.EscapeDataString(value));
     }
 }

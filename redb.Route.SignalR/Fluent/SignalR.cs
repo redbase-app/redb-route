@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 using redb.Route.Abstractions;
 
 namespace redb.Route.SignalR;
@@ -156,7 +155,7 @@ public sealed class SignalRBuilder
             sb.Append(sep);
             sb.Append(key);
             sb.Append('=');
-            sb.Append(HttpUtility.UrlEncode(v));
+            sb.Append(Uri.EscapeDataString(v));
             sep = '&';
         }
 

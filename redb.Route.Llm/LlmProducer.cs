@@ -131,7 +131,8 @@ public sealed class LlmProducer : ConnectableProducer
             PromptTemplateName = _options.PromptTemplateName,
             PromptTemplateVersion = _options.PromptTemplateVersion,
             UserId = userId,
-            AuditTags = auditTags
+            AuditTags = auditTags,
+            PropagateToolHeaders = ToolHeaderPolicy.ParseCsv(_options.PropagateToolHeaders)
         };
 
         var sw = Stopwatch.StartNew();

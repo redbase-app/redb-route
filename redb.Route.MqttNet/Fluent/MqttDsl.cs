@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 using redb.Route.Abstractions;
 using redb.Route.Expressions;
 
@@ -186,7 +185,7 @@ public sealed class MqttBuilder
             sb.Append(separator);
             sb.Append(key);
             sb.Append('=');
-            sb.Append(HttpUtility.UrlEncode(value));
+            sb.Append(Uri.EscapeDataString(value));
             separator = '&';
         }
 

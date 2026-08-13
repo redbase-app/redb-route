@@ -25,9 +25,25 @@ public sealed class EchoToolRoute : RouteBuilder
     private readonly string _inputSchema;
     private readonly Func<string, string> _replyFactory;
     private readonly List<string> _capturedInputs = new();
+    private readonly List<Dictionary<string, object?>> _capturedHeaders = new();
+    private readonly List<Dictionary<string, object?>> _capturedProperties = new();
+    private readonly List<IServiceProvider?> _capturedServiceProviders = new();
+    private readonly List<string?> _capturedRouteIds = new();
 
     /// <summary>Inputs (raw JSON) the agent has passed to this tool, in call order.</summary>
     public IReadOnlyList<string> CapturedInputs => _capturedInputs;
+
+    /// <summary>Header snapshot of every tool exchange, in call order.</summary>
+    public IReadOnlyList<Dictionary<string, object?>> CapturedHeaders => _capturedHeaders;
+
+    /// <summary>Exchange-property snapshot of every tool exchange, in call order.</summary>
+    public IReadOnlyList<Dictionary<string, object?>> CapturedProperties => _capturedProperties;
+
+    /// <summary>DI scope provider seen by every tool exchange — reference-compared against the agent exchange's.</summary>
+    public IReadOnlyList<IServiceProvider?> CapturedServiceProviders => _capturedServiceProviders;
+
+    /// <summary>Route id seen by every tool exchange, in call order.</summary>
+    public IReadOnlyList<string?> CapturedRouteIds => _capturedRouteIds;
 
     /// <summary>The endpoint URI the descriptor dispatches to (<c>direct:tool-{name}</c>).</summary>
     public string EndpointUri => $"direct:tool-{_toolName}";
@@ -67,7 +83,14 @@ public sealed class EchoToolRoute : RouteBuilder
                     null => "{}",
                     var x => x.ToString() ?? "{}"
                 };
-                lock (_capturedInputs) _capturedInputs.Add(input);
+                lock (_capturedInputs)
+                {
+                    _capturedInputs.Add(input);
+                    _capturedHeaders.Add(new Dictionary<string, object?>(e.In.Headers, StringComparer.OrdinalIgnoreCase));
+                    _capturedProperties.Add(new Dictionary<string, object?>(e.Properties, StringComparer.OrdinalIgnoreCase));
+                    _capturedServiceProviders.Add(e.ServiceProvider);
+                    _capturedRouteIds.Add(e.RouteId);
+                }
 
                 e.Out ??= e.In.Clone();
                 e.Out.Body = _replyFactory(input);

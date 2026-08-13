@@ -54,8 +54,8 @@ public sealed class S3DslTests
             .Idempotent();
 
         uri.Should().Contain("prefix=incoming");
-        uri.Should().Contain("include=*.csv");
-        uri.Should().Contain("exclude=*.tmp");
+        uri.Should().Contain("include=%2A.csv");
+        uri.Should().Contain("exclude=%2A.tmp");
         uri.Should().Contain("delay=5000");
         uri.Should().Contain("maxMessagesPerPoll=50");
         uri.Should().Contain("deleteAfterRead=true");
@@ -93,7 +93,7 @@ public sealed class S3DslTests
 
         uri.Should().Contain("keyName=data");
         uri.Should().Contain("storageClass=INTELLIGENT_TIERING");
-        uri.Should().Contain("contentType=application%2fjson");
+        uri.Should().Contain("contentType=application%2Fjson");
         uri.Should().Contain("multiPartUpload=true");
         uri.Should().Contain("partSize=10485760");
         uri.Should().Contain("cannedAcl=PublicRead");

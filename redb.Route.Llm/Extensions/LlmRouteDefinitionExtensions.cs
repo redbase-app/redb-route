@@ -77,7 +77,10 @@ public static class LlmRouteDefinitionExtensions
                 ConversationId = conversationId,
                 MaxIterations = builder.MaxIterations,
                 Temperature = builder.Temperature,
-                MaxTokens = builder.MaxTokens
+                MaxTokens = builder.MaxTokens,
+                PropagateToolHeaders = builder.PropagateToolHeaders.Count > 0
+                    ? builder.PropagateToolHeaders
+                    : null
             };
 
             var response = await engine.RunAsync(request, ct).ConfigureAwait(false);
@@ -139,6 +142,13 @@ public sealed class LlmCallBuilder
     public bool UseAllTools { get; set; }
 
     /// <summary>
+    /// Extra header names propagated from the exchange to every tool call
+    /// (trailing <c>*</c> = prefix match). Default-deny — see
+    /// <see cref="ToolHeaderPolicy"/>.
+    /// </summary>
+    public List<string> PropagateToolHeaders { get; } = [];
+
+    /// <summary>
     /// Optional factory for the initial user content. When null, the body of
     /// <c>exchange.In</c> is wrapped in a single <see cref="LlmTextBlock"/>.
     /// </summary>
@@ -190,6 +200,20 @@ public sealed class LlmCallBuilder
     public LlmCallBuilder UseAllRegisteredTools()
     {
         UseAllTools = true;
+        return this;
+    }
+
+    /// <summary>
+    /// Opts extra headers into propagation from this exchange to the tool calls of
+    /// this run (trailing <c>*</c> = prefix match). Propagation is default-deny:
+    /// conversation id, correlation ids, resolved principal and resolved audit tags
+    /// travel without opt-in; inbound transport headers never do.
+    /// </summary>
+    public LlmCallBuilder WithPropagatedToolHeaders(params string[] names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        foreach (var n in names)
+            if (!string.IsNullOrWhiteSpace(n)) PropagateToolHeaders.Add(n.Trim());
         return this;
     }
 

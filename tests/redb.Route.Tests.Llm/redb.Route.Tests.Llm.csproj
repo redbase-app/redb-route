@@ -10,8 +10,8 @@
     <ProjectReference Include="..\..\redb.Route.Llm.Abstractions\redb.Route.Llm.Abstractions.csproj" />
     <ProjectReference Include="..\..\redb.Route.Llm.Tools\redb.Route.Llm.Tools.csproj" />
     <ProjectReference Include="..\..\redb.Route.Exec\redb.Route.Exec.csproj" />
-    <PackageReference Include="redb.Core.Pro" Version="3.5.0" />
-    <PackageReference Include="redb.Postgres.Pro" Version="3.5.0" />
+    <PackageReference Include="redb.Core.Pro" Version="3.6.0" />
+    <PackageReference Include="redb.Postgres.Pro" Version="3.6.0" />
   </ItemGroup>
 
   <ItemGroup>

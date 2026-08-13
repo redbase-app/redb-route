@@ -428,7 +428,7 @@ public sealed class AgentEngine : IAgentEngine
         var sw = Stopwatch.StartNew();
         try
         {
-            var output = await DispatchToolEndpointAsync(tool, use, request.Exchange, ct).ConfigureAwait(false);
+            var output = await DispatchToolEndpointAsync(request, tool, use, ct).ConfigureAwait(false);
             sw.Stop();
             LlmMetrics.ToolInvocations.Add(1, new KeyValuePair<string, object?>("llm.tool.name", use.Name));
 
@@ -613,15 +613,41 @@ public sealed class AgentEngine : IAgentEngine
         return null;
     }
 
+    /// <summary>
+    /// Dispatches one tool call onto its redb.Route endpoint.
+    /// <para>
+    /// The tool runs on a <b>child of the agent exchange</b>, not on a freshly minted
+    /// one: <see cref="IExchange.CreateLinkedChild"/> carries over the parent's
+    /// <c>Properties</c> (including <c>LlmKeys.RedbName</c>), its <c>RouteId</c> and its
+    /// DI scope, so scoped services the conversation resolved — principal, tenant
+    /// accessor, per-exchange <c>IRedbService</c> — are the same instances inside the
+    /// tool. This is what <see cref="ILlmToolDescriptor"/> documents and what
+    /// <c>docs/LLM/PLAN.md §4.1</c> specified; building a naked exchange severed all of it.
+    /// </para>
+    /// <para>
+    /// <b>Linked</b> (shared scope) rather than a scope of its own: tool calls are
+    /// dispatched sequentially inside one iteration (see the <c>foreach</c> in
+    /// <see cref="RunAsync"/>), so there is no concurrent resolution on the shared
+    /// scope — the race that <c>docs/DI_SCOPE_PER_EXCHANGE.md</c> warns about applies to
+    /// parallel forks, not to an inline request/reply. A child scope would also defeat
+    /// the point: the tool would get an empty scope instead of the conversation's.
+    /// </para>
+    /// <para>
+    /// Headers are filtered by <see cref="ToolHeaderPolicy"/> (default-deny), never
+    /// copied wholesale.
+    /// </para>
+    /// </summary>
     private async Task<string> DispatchToolEndpointAsync(
+        AgentRequest request,
         ILlmToolDescriptor descriptor,
         LlmToolUseBlock use,
-        IExchange parentExchange,
         CancellationToken ct)
     {
         if (_producerTemplate is null)
             throw new InvalidOperationException(
                 "AgentEngine has no IProducerTemplate. Register the engine via AddRedbRouteLlm() so the producer template is injected.");
+
+        var parentExchange = request.Exchange;
 
         var endpointUri = descriptor.BuildEndpointUri(use.InputJson, parentExchange);
         if (string.IsNullOrWhiteSpace(endpointUri))
@@ -632,22 +658,23 @@ public sealed class AgentEngine : IAgentEngine
         msg.Headers[LlmHeaders.ToolName] = descriptor.Capability.Name;
         msg.Headers[LlmHeaders.ToolBridgeEndpoint] = endpointUri;
 
-        if (parentExchange.In?.Headers is { } srcHeaders)
+        ToolHeaderPolicy.Apply(request, msg.Headers);
+
+        var child = parentExchange.CreateLinkedChild(msg);
+        try
         {
-            CopyHeader(srcHeaders, msg.Headers, LlmHeaders.ConversationId);
-            CopyHeader(srcHeaders, msg.Headers, "X-Correlation-Id");
-            CopyHeader(srcHeaders, msg.Headers, "CorrelationId");
+            ct.ThrowIfCancellationRequested();
+            var done = await _producerTemplate.RequestAsync(endpointUri, child, ct).ConfigureAwait(false);
+            return SerializeReply(done.Out?.Body ?? done.In.Body);
         }
-
-        ct.ThrowIfCancellationRequested();
-        var reply = await _producerTemplate.RequestBody(endpointUri, msg, ct).ConfigureAwait(false);
-        return SerializeReply(reply);
-    }
-
-    private static void CopyHeader(IDictionary<string, object?> from, IDictionary<string, object?> to, string key)
-    {
-        if (from.TryGetValue(key, out var v) && v is not null)
-            to[key] = v;
+        finally
+        {
+            // Releases only what the tool route itself opened — the named
+            // `__redb_scope:*` entries it resolved (CreateLinkedChild does not copy the
+            // parent's). The shared parent scope is marked not-owned on the child, so
+            // the conversation keeps its scope and connections after the tool returns.
+            await child.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private static readonly JsonSerializerOptions ToolReplyJsonOptions = new(JsonSerializerDefaults.Web)

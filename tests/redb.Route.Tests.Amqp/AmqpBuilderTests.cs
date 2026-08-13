@@ -102,7 +102,7 @@ public class AmqpBuilderTests
     public void ContentType_SetsParam()
     {
         var uri = AmqpDsl.Address("q").ContentType("application/json").Build();
-        uri.Should().Contain("contentType=application%2fjson");
+        uri.Should().Contain("contentType=application%2Fjson");
     }
 
     [Fact]

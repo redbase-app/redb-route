@@ -60,14 +60,14 @@ public sealed class ElasticsearchDslTests
             .SourceIncludes("title,author")
             .SourceExcludes("large_blob");
 
-        uri.Should().Contain("query=%7b");
-        uri.Should().Contain("sort=timestamp%3adesc");
+        uri.Should().Contain("query=%7B");
+        uri.Should().Contain("sort=timestamp%3Adesc");
         uri.Should().Contain("size=50");
         uri.Should().Contain("delay=10000");
         uri.Should().Contain("initialDelay=2000");
         uri.Should().Contain("deleteAfterRead=true");
         uri.Should().Contain("trackTotalHits=true");
-        uri.Should().Contain("sourceIncludes=title%2cauthor");
+        uri.Should().Contain("sourceIncludes=title%2Cauthor");
         uri.Should().Contain("sourceExcludes=large_blob");
     }
 

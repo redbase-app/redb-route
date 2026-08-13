@@ -50,14 +50,14 @@ public class FileBuilderTests
     public void Include_SetsParam()
     {
         var uri = FileDsl.Read("/in").Include("*.csv").Build();
-        uri.Should().Contain("include=*.csv");
+        uri.Should().Contain("include=%2A.csv");
     }
 
     [Fact]
     public void Exclude_SetsParam()
     {
         var uri = FileDsl.Read("/in").Exclude("*.tmp").Build();
-        uri.Should().Contain("exclude=*.tmp");
+        uri.Should().Contain("exclude=%2A.tmp");
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class FileBuilderTests
     public void MoveTo_SetsParam()
     {
         var uri = FileDsl.Read("/in").MoveTo(C("/archive")).Build();
-        uri.Should().Contain("moveTo=%2farchive");
+        uri.Should().Contain("moveTo=%2Farchive");
     }
 
     // ── Idempotency ─────────────────────────────────────────────────
@@ -185,7 +185,7 @@ public class FileBuilderTests
             .Build();
 
         uri.Should().StartWith("file:///incoming?");
-        uri.Should().Contain("include=*.csv");
+        uri.Should().Contain("include=%2A.csv");
         uri.Should().Contain("recursive=true");
         uri.Should().Contain("delay=5000");
         uri.Should().Contain("noop=true");

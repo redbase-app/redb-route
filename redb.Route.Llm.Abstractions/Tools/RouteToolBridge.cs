@@ -6,9 +6,10 @@ namespace redb.Route.Llm.Tools;
 /// <summary>
 /// Bridges a fixed redb.Route endpoint into the LLM tool surface as an
 /// <see cref="ILlmToolDescriptor"/>. The engine forwards the model's JSON
-/// input to <see cref="EndpointUri"/> via the host's producer template,
-/// inheriting the parent agent route's transaction scope, headers, principal
-/// and DI scope.
+/// input to <see cref="EndpointUri"/> on a linked child of the agent exchange,
+/// inheriting its transaction scope, DI scope, properties and route id.
+/// Headers are propagated by policy rather than inherited — see
+/// <see cref="ILlmToolDescriptor"/>.
 /// </summary>
 public sealed class RouteToolBridge : ILlmToolDescriptor
 {

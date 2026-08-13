@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 using redb.Route.Abstractions;
 
 namespace redb.Route.Firebase;
@@ -100,7 +99,7 @@ public sealed class FirestoreBuilder
         foreach (var (key, value) in _params)
         {
             if (!first) sb.Append('&');
-            sb.Append(key).Append('=').Append(HttpUtility.UrlEncode(value));
+            sb.Append(key).Append('=').Append(Uri.EscapeDataString(value));
             first = false;
         }
         return sb.ToString();

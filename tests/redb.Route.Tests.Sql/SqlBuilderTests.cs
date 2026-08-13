@@ -489,7 +489,7 @@ public class SqlBuilderTests
             .DataSource(C("main"))
             .Param("@x", new HeaderExpression("myValue"))
             .Build();
-        uri.Should().Contain("param.x=%24%7bheader.myValue%7d");
+        uri.Should().Contain("param.x=%24%7Bheader.myValue%7D");
     }
 
     [Fact]

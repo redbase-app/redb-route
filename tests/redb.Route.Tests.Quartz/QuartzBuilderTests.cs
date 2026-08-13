@@ -42,6 +42,23 @@ public class CronBuilderTests
         act.Should().Throw<ArgumentException>();
     }
 
+    // ── Round-trip guard ─────────────────────────────────────────────
+    // Build() must survive EndpointUriParser (the ecosystem reader). Regression: HttpUtility.UrlEncode
+    // wrote a space as '+', but the parser's Uri.UnescapeDataString leaves '+' as-is — so every
+    // space-bearing cron expression came back corrupted and CronEndpointOptions.Validate() threw inside
+    // context.Start(), taking down the whole module. Uri.EscapeDataString writes %20, which round-trips.
+
+    [Theory]
+    [InlineData("0 */5 * * * ?")]
+    [InlineData("0/30 * * * * ?")]
+    [InlineData("0 0 12 ? * MON-FRI")]
+    [InlineData("0 15 10 ? * 6L")]
+    public void Build_ScheduleRoundTripsThroughParser(string schedule)
+    {
+        var parsed = EndpointUriParser.Parse(Cron.Schedule("job1", schedule).Build());
+        parsed.RawParameters["schedule"].Should().Be(schedule);
+    }
+
     // ── Params ──────────────────────────────────────────────────────
 
     [Fact]

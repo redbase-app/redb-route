@@ -36,7 +36,7 @@ public class KafkaBuilderTests
     public void Brokers_SetsParam()
     {
         var uri = KafkaDsl.Topic("t").Brokers(C("broker1:9092")).Build();
-        uri.Should().Contain("brokers=broker1%3a9092");
+        uri.Should().Contain("brokers=broker1%3A9092");
     }
 
     [Fact]

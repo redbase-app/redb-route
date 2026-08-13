@@ -265,10 +265,10 @@ public sealed class ExecBuilderTests
 
         uri.Should().StartWith("exec://run?");
         uri.Should().Contain("command=git");
-        uri.Should().Contain("args=status+--short");
-        uri.Should().Contain("allowedCommands=git%2cls");
-        uri.Should().Contain("workingDirectory=%2fsrv%2fapp");
-        uri.Should().Contain("environmentOverrides=LANG%3dC");
+        uri.Should().Contain("args=status%20--short");
+        uri.Should().Contain("allowedCommands=git%2Cls");
+        uri.Should().Contain("workingDirectory=%2Fsrv%2Fapp");
+        uri.Should().Contain("environmentOverrides=LANG%3DC");
         uri.Should().Contain("timeoutMs=5000");
         uri.Should().Contain("maxStdoutBytes=2048");
         uri.Should().Contain("schedule=30s");

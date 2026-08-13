@@ -1,6 +1,5 @@
 using System.Data;
 using System.Text;
-using System.Web;
 using redb.Route.Abstractions;
 
 namespace redb.Route.Sql;
@@ -250,7 +249,7 @@ public sealed class SqlBuilder
             sb.Append(separator);
             sb.Append(key);
             sb.Append('=');
-            sb.Append(HttpUtility.UrlEncode(value));
+            sb.Append(Uri.EscapeDataString(value));
             separator = '&';
         }
 

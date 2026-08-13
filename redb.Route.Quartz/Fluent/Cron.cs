@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 using redb.Route.Abstractions;
 
 namespace redb.Route.Quartz;
@@ -106,7 +105,7 @@ public sealed class CronBuilder
         sb.Append("cron:");
         sb.Append(_name);
         sb.Append("?schedule=");
-        sb.Append(HttpUtility.UrlEncode(_schedule));
+        sb.Append(Uri.EscapeDataString(_schedule));
 
         void AppendIf(string key, string? v) { if (v != null) { sb.Append('&'); sb.Append(key); sb.Append('='); sb.Append(v); } }
         void AppendBool(string key, bool? v) { if (v.HasValue) { sb.Append('&'); sb.Append(key); sb.Append('='); sb.Append(v.Value ? "true" : "false"); } }
@@ -120,8 +119,8 @@ public sealed class CronBuilder
         AppendBool("prefixJobNameWithEndpointId", _prefixJobName);
         if (_misfireInstruction.HasValue) AppendIf("misfireInstruction", _misfireInstruction.Value.ToString());
         AppendIf("timeZone", _timeZone);
-        AppendIf("startAt", _startAt != null ? HttpUtility.UrlEncode(_startAt) : null);
-        AppendIf("endAt", _endAt != null ? HttpUtility.UrlEncode(_endAt) : null);
+        AppendIf("startAt", _startAt != null ? Uri.EscapeDataString(_startAt) : null);
+        AppendIf("endAt", _endAt != null ? Uri.EscapeDataString(_endAt) : null);
         AppendIf("customCalendar", _customCalendar);
         if (_triggerStartDelay.HasValue) AppendIf("triggerStartDelay", _triggerStartDelay.Value.ToString());
 
@@ -260,8 +259,8 @@ public sealed class QTimerBuilder
         AppendBool("prefixJobNameWithEndpointId", _prefixJobName);
         if (_misfireInstruction.HasValue) AppendIf("misfireInstruction", _misfireInstruction.Value.ToString());
         if (_repeatCount.HasValue) AppendIf("repeatCount", _repeatCount.Value.ToString());
-        AppendIf("startAt", _startAt != null ? HttpUtility.UrlEncode(_startAt) : null);
-        AppendIf("endAt", _endAt != null ? HttpUtility.UrlEncode(_endAt) : null);
+        AppendIf("startAt", _startAt != null ? Uri.EscapeDataString(_startAt) : null);
+        AppendIf("endAt", _endAt != null ? Uri.EscapeDataString(_endAt) : null);
         AppendIf("customCalendar", _customCalendar);
 
         return sb.ToString();

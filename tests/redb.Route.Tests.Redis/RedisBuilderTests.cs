@@ -74,7 +74,7 @@ public class RedisBuilderTests
     public void Connection_SetsParam()
     {
         var uri = RedisDsl.Set("k").Connection(C("redis:6379")).Build();
-        uri.Should().Contain("connectionString=redis%3a6379");
+        uri.Should().Contain("connectionString=redis%3A6379");
     }
 
     [Fact]

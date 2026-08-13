@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 
 namespace redb.Route.WebSocket;
 
@@ -123,7 +122,7 @@ public sealed class WsBuilder
         sb.Append(_hostPortPath);
 
         var sep = '?';
-        void Append(string key, string v) { sb.Append(sep); sb.Append(key); sb.Append('='); sb.Append(HttpUtility.UrlEncode(v)); sep = '&'; }
+        void Append(string key, string v) { sb.Append(sep); sb.Append(key); sb.Append('='); sb.Append(Uri.EscapeDataString(v)); sep = '&'; }
         void AppendInt(string key, int? v) { if (v.HasValue) Append(key, v.Value.ToString()); }
         void AppendBool(string key, bool v) { if (v) Append(key, "true"); }
         void AppendBoolN(string key, bool? v) { if (v.HasValue) Append(key, v.Value.ToString().ToLowerInvariant()); }

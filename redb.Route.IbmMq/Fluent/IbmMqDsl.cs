@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 using redb.Route.Abstractions;
 
 namespace redb.Route.IbmMq;
@@ -256,7 +255,7 @@ public sealed class IbmMqBuilder
         void Append(string key, string value)
         {
             sb.Append(sep); sb.Append(key); sb.Append('=');
-            sb.Append(HttpUtility.UrlEncode(value)); sep = '&';
+            sb.Append(Uri.EscapeDataString(value)); sep = '&';
         }
 
         void AppendIf(string key, string? value) { if (value != null) Append(key, value); }

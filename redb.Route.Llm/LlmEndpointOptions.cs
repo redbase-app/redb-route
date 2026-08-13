@@ -117,6 +117,21 @@ public sealed class LlmEndpointOptions : EndpointOptions
     /// <summary>Prompt-template version paired with <see cref="PromptTemplateName"/>.</summary>
     public string? PromptTemplateVersion { get; set; }
 
+    /// <summary>
+    /// Comma-separated extra header names propagated from the agent exchange to
+    /// every tool call of the run. A trailing <c>*</c> makes an entry a prefix
+    /// match. Example: <c>x-tenant-id,accept-language,x-app-*</c>.
+    /// <para>
+    /// Propagation is <b>default-deny</b>: without this option a tool route sees
+    /// only the conversation / correlation ids, the resolved principal
+    /// (<c>llm.user.id</c>) and the resolved audit tags (<c>llm.audit.*</c>) —
+    /// never the inbound transport's header set. Add names here only for headers
+    /// the route itself controls.
+    /// </para>
+    /// URI form: <c>llm://factory?propagateToolHeaders=x-tenant-id,x-app-*</c>.
+    /// </summary>
+    public string? PropagateToolHeaders { get; set; }
+
     /// <inheritdoc />
     public override void Validate()
     {

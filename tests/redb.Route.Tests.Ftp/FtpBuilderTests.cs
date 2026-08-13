@@ -97,14 +97,14 @@ public class FtpBuilderTests
     public void Include_SetsParam()
     {
         var uri = FtpDsl.Directory("/d").Include("*.csv").Build();
-        uri.Should().Contain("include=*.csv");
+        uri.Should().Contain("include=%2A.csv");
     }
 
     [Fact]
     public void Exclude_SetsParam()
     {
         var uri = FtpDsl.Directory("/d").Exclude("*.tmp").Build();
-        uri.Should().Contain("exclude=*.tmp");
+        uri.Should().Contain("exclude=%2A.tmp");
     }
 
     [Fact]
@@ -229,7 +229,7 @@ public class FtpBuilderTests
 
         uri.Should().StartWith("ftp:///incoming?");
         uri.Should().Contain("host=ftp.example.com");
-        uri.Should().Contain("include=*.csv");
+        uri.Should().Contain("include=%2A.csv");
         uri.Should().Contain("recursive=true");
         uri.Should().Contain("delete=true");
     }

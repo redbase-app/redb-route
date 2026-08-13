@@ -102,14 +102,14 @@ public class SftpBuilderTests
     public void Include_SetsParam()
     {
         var uri = SftpDsl.Directory("/d").Include("*.csv").Build();
-        uri.Should().Contain("include=*.csv");
+        uri.Should().Contain("include=%2A.csv");
     }
 
     [Fact]
     public void Exclude_SetsParam()
     {
         var uri = SftpDsl.Directory("/d").Exclude("*.tmp").Build();
-        uri.Should().Contain("exclude=*.tmp");
+        uri.Should().Contain("exclude=%2A.tmp");
     }
 
     [Fact]
@@ -234,7 +234,7 @@ public class SftpBuilderTests
 
         uri.Should().StartWith("sftp:///incoming?");
         uri.Should().Contain("host=sftp.example.com");
-        uri.Should().Contain("include=*.csv");
+        uri.Should().Contain("include=%2A.csv");
         uri.Should().Contain("recursive=true");
         uri.Should().Contain("delete=true");
     }

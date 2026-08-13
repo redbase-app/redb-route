@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 using Telegram.Bot.Types;
 using redb.Route.Abstractions;
 
@@ -202,7 +201,7 @@ public sealed class TgBuilder
         void Append(string key, string value)
         {
             sb.Append(sep); sb.Append(key); sb.Append('=');
-            sb.Append(HttpUtility.UrlEncode(value));
+            sb.Append(Uri.EscapeDataString(value));
             sep = '&';
         }
 

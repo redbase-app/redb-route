@@ -56,8 +56,8 @@ public sealed class FirebaseStorageDslTests
             .IncludeBody();
 
         uri.Should().Contain("prefix=incoming");
-        uri.Should().Contain("include=*.csv");
-        uri.Should().Contain("exclude=*.tmp");
+        uri.Should().Contain("include=%2A.csv");
+        uri.Should().Contain("exclude=%2A.tmp");
         uri.Should().Contain("delay=10000");
         uri.Should().Contain("maxMessagesPerPoll=20");
         uri.Should().Contain("deleteAfterRead=True");

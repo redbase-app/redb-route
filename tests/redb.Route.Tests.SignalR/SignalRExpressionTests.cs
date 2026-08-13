@@ -89,7 +89,7 @@ public class SignalRExpressionTests
 
         uri.Should().Contain("method=");
         // The expression template gets URL-encoded
-        uri.Should().Contain("method=%24%7bheader.hubMethod%7d");
+        uri.Should().Contain("method=%24%7Bheader.hubMethod%7D");
     }
 
     [Fact]

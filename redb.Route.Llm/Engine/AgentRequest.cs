@@ -74,6 +74,17 @@ public sealed class AgentRequest
     /// is stamped on every row of the run; null / empty when no tags are wired.
     /// </summary>
     public IReadOnlyDictionary<string, string>? AuditTags { get; init; }
+
+    /// <summary>
+    /// Extra header names the route author opted into propagating from this
+    /// exchange to every tool call of the run (e.g. <c>x-tenant-id</c>,
+    /// <c>accept-language</c>). A trailing <c>*</c> makes the entry a prefix match
+    /// (<c>x-app-*</c>). Propagation is default-deny: without an entry here only
+    /// <see cref="Engine.ToolHeaderPolicy.DefaultHeaders"/>, the resolved
+    /// <see cref="UserId"/> and the resolved <see cref="AuditTags"/> reach a tool —
+    /// the inbound transport's own headers never do. Null / empty = defaults only.
+    /// </summary>
+    public IReadOnlyList<string>? PropagateToolHeaders { get; init; }
 }
 
 /// <summary>Final agent response.</summary>

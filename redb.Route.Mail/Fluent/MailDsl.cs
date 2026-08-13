@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 using redb.Route.Abstractions;
 
 namespace redb.Route.Mail;
@@ -284,7 +283,7 @@ public sealed class MailBuilder
         void Append(string key, string value)
         {
             sb.Append(sep); sb.Append(key); sb.Append('=');
-            sb.Append(HttpUtility.UrlEncode(value)); sep = '&';
+            sb.Append(Uri.EscapeDataString(value)); sep = '&';
         }
 
         void AppendIf(string key, string? value) { if (!string.IsNullOrEmpty(value)) Append(key, value); }

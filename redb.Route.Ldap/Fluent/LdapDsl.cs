@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 using redb.Route.Abstractions;
 
 namespace redb.Route.Ldap;
@@ -264,7 +263,7 @@ public sealed class LdapBuilder
             sb.Append(sep);
             sb.Append(key);
             sb.Append('=');
-            sb.Append(HttpUtility.UrlEncode(value));
+            sb.Append(Uri.EscapeDataString(value));
             sep = '&';
         }
 

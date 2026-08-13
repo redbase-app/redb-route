@@ -251,12 +251,44 @@ package — `0 bumps` across all sibling connectors.
 1. `.AsLlmTool("name")` (after `.From(...)`) captures the route's `From()` URI
    and registers a `RouteToolBridge` against the name in `IToolDescriptorRegistry`.
 2. When the model emits a `tool_use` block, `AgentEngine` looks up the bridge,
-   builds an `IMessage` with the input JSON body, and calls
-   `IProducerTemplate.RequestBody(uri, msg)` — i.e. invokes the route as
-   request/reply.
+   builds an `IMessage` with the input JSON body, and dispatches it on a
+   **linked child of the agent exchange** (`CreateLinkedChild` +
+   `IProducerTemplate.RequestAsync`) — i.e. invokes the route as request/reply.
 3. The route runs end-to-end. Whatever lands in `exchange.Out.Body` (or
    `In.Body` when `Out` is null) at the end of the pipeline is serialized and
    handed back to the model as the tool result.
+
+### What a tool sees of the caller
+
+Because the tool runs on a child of the agent exchange, it inherits the
+conversation's `Properties` (including the named redb instance from `?redb=`),
+its `RouteId`, its **DI scope** — the same scoped `IRedbService` / principal /
+tenant accessor instances the agent route resolved — and its ambient transaction.
+
+**Headers are the exception: they are filtered, not inherited.** Propagation is
+default-deny, so an inbound HTTP consumer's `Authorization` / `Cookie` never rides
+into a tool by accident. A tool always receives:
+
+| Header | Source |
+|---|---|
+| `llm.tool.name`, `llm.tool.bridge.endpoint` | stamped by the engine |
+| `llm.conversation.id`, `X-Correlation-Id`, `CorrelationId` | copied from the agent exchange |
+| `llm.user.id` | the **resolved** principal of the run (`?user=`, else the header) |
+| `llm.audit.*` | the **resolved** audit tags of the run (`?audit=`, else the headers) |
+
+Anything else is opt-in per name — a trailing `*` makes it a prefix match:
+
+```csharp
+.To(Llm.Factory("claude")
+      .Tools("profile_state,billing_check")
+      .User("${header.X-User-Id}")                       // → llm.user.id in the tool
+      .PropagateToolHeaders("x-tenant-id", "x-app-*"))
+```
+
+> **Trust model.** `llm.user.id` and `llm.audit.*` are read off the inbound
+> exchange, so a route that forwards client headers verbatim lets the caller set
+> them. If your tools make access decisions on the principal, strip or overwrite
+> client-supplied `llm.*` headers before the `llm://` hop.
 
 That last point is important: the tool's result is the **final body of the
 route**, not the body of any specific `.To(...)`. Three patterns work:

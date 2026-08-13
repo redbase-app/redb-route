@@ -179,14 +179,14 @@ public class MqttBuilderTests
     public void ContentType_SetsParam()
     {
         var uri = Mqtt.Publish("t").Broker(C("main")).ContentType("application/json").Build();
-        uri.Should().Contain("contentType=application%2fjson");
+        uri.Should().Contain("contentType=application%2Fjson");
     }
 
     [Fact]
     public void ResponseTopic_SetsParam()
     {
         var uri = Mqtt.Publish("t").Broker(C("main")).ResponseTopic(C("response/topic")).Build();
-        uri.Should().Contain("responseTopic=response%2ftopic");
+        uri.Should().Contain("responseTopic=response%2Ftopic");
     }
 
     // ── Implicit string conversion ──────────────────────────────────
@@ -254,8 +254,8 @@ public class MqttBuilderTests
         uri.Should().Contain("qos=2");
         uri.Should().Contain("retain=true");
         uri.Should().Contain("messageExpiryInterval=600");
-        uri.Should().Contain("contentType=application%2fjson");
-        uri.Should().Contain("responseTopic=responses%2fdevice1");
+        uri.Should().Contain("contentType=application%2Fjson");
+        uri.Should().Contain("responseTopic=responses%2Fdevice1");
     }
 
     // ── Defaults: optional params not included in URI ───────────────

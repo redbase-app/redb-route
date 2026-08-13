@@ -15,11 +15,16 @@ namespace redb.Route.Llm.Storage.Redb;
 /// <c>CreateChildAsync</c>; transcript reads use redb's tree primitives
 /// (<c>TreeQuery&lt;T&gt;(root)</c> for descendants, <c>GetPathToRootAsync</c>
 /// for breadcrumbs — root → leaf order) — server-side tree traversal, not
-/// client-side rebuilding. Latest-leaf detection loads the conversation's
-/// descendants once and selects the most recent message that is not a parent.
+/// client-side rebuilding.
 /// Per-row business identifiers live on indexed <c>_objects</c> columns —
 /// <c>value_string</c> for the conversation/message id and <c>value_long</c>
 /// on each message for the conversation FK (== root <c>_objects.id</c>).
+/// <para>
+/// <b>Conversation isolation is enforced by the <c>value_long</c> FK, not by tree
+/// shape.</b> Head detection and message lookup are scoped by it explicitly, so a
+/// read can never surface — and a write can never attach under — another
+/// conversation's node, independent of how a provider evaluates tree filters.
+/// </para>
 /// Content blocks are stored as a typed nested array, no JSON marshalling
 /// for our own schema.
 /// <para>
@@ -58,7 +63,14 @@ public sealed class RedbConversationStore : IConversationStore
 
     private readonly record struct CachedRoot(long Id, DateTimeOffset ExpiresAt);
 
-    private IRedbService Resolve(IExchange? exchange)
+    /// <summary>
+    /// Resolves the redb instance for this call and returns the name it was
+    /// resolved under. The name is part of the root-id cache key: the instance is
+    /// chosen per exchange (<c>?redb=</c> → <c>LlmKeys.RedbName</c>), so a cache
+    /// keyed by conversation id alone would hand back an id resolved in database A
+    /// while the call runs against database B.
+    /// </summary>
+    private (IRedbService Redb, string Name) Resolve(IExchange? exchange)
     {
         var name = _defaultRedbName;
         if (exchange is not null
@@ -67,8 +79,17 @@ public sealed class RedbConversationStore : IConversationStore
         {
             name = s;
         }
-        return _context.GetRedbService(name ?? string.Empty, exchange);
+        var effective = name ?? string.Empty;
+        return (_context.GetRedbService(effective, exchange), effective);
     }
+
+    // NUL separator: instance name and conversation id are both opaque caller
+    // strings, so any printable separator could be forged into a collision
+    // ("a" + "b:c" vs "a:b" + "c").
+    private const char CacheKeySeparator = (char)0;
+
+    private static string CacheKey(string redbName, string conversationId)
+        => string.Concat(redbName, CacheKeySeparator, conversationId);
 
     /// <inheritdoc />
     public async Task<string> AppendAsync(
@@ -79,16 +100,20 @@ public sealed class RedbConversationStore : IConversationStore
         IExchange? exchange = null,
         CancellationToken ct = default)
     {
-        var redb = Resolve(exchange);
+        var (redb, redbName) = Resolve(exchange);
 
-        var rootId = await GetOrCreateRootIdAsync(redb, conversationId, ct).ConfigureAwait(false);
+        var rootId = await GetOrCreateRootIdAsync(redb, redbName, conversationId, ct).ConfigureAwait(false);
         var rootObj = await redb.LoadAsync<ConversationProps>(rootId).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Conversation root {conversationId} disappeared between lookup and load.");
 
         IRedbObject parentObj = rootObj;
         if (parentMessageId is not null)
         {
-            var parentMsg = await FindMessageByValueStringAsync(redb, parentMessageId).ConfigureAwait(false)
+            // Scoped by rootId on purpose: the lookup is by an opaque caller-supplied
+            // id over the whole schema, so an unscoped resolve would happily attach
+            // this message under another conversation's node — a cross-conversation
+            // write that no later read can undo.
+            var parentMsg = await FindMessageByValueStringAsync(redb, parentMessageId, rootId).ConfigureAwait(false)
                 ?? throw new InvalidOperationException($"Parent message {parentMessageId} not found in conversation {conversationId}.");
             parentObj = parentMsg;
         }
@@ -147,46 +172,54 @@ public sealed class RedbConversationStore : IConversationStore
     public async Task<IReadOnlyList<ConversationMessage>> LoadPathAsync(
         string conversationId, string? leafId = null, IExchange? exchange = null, CancellationToken ct = default)
     {
-        var redb = Resolve(exchange);
+        var (redb, redbName) = Resolve(exchange);
 
-        var rootId = await GetOrCreateRootIdAsync(redb, conversationId, ct).ConfigureAwait(false);
+        var rootId = await GetOrCreateRootIdAsync(redb, redbName, conversationId, ct).ConfigureAwait(false);
 
         TreeRedbObject<MessageProps>? leafObj;
         if (leafId is not null)
         {
-            leafObj = await FindMessageByValueStringAsync(redb, leafId).ConfigureAwait(false);
+            leafObj = await FindMessageByValueStringAsync(redb, leafId, rootId).ConfigureAwait(false);
             if (leafObj is null) return [];
         }
         else
         {
-            // Server-side latest-leaf detection: WhereLeaves filters the
-            // descendant subtree to nodes without children at the SQL level,
-            // then ORDER BY _objects.date_create DESC LIMIT 1 picks the
-            // freshest. Avoids hauling the whole conversation transcript just
-            // to compute a parent-id set in C#.
-            var rootObj = await redb.LoadAsync<ConversationProps>(rootId).ConfigureAwait(false);
-            if (rootObj is null) return [];
-
-            var latestLeaf = await redb.TreeQuery<MessageProps>(rootObj)
-                .WhereLeaves()
+            // Head detection scoped by the conversation FK, not by tree traversal.
+            //
+            // The newest message of a conversation is always a leaf — anything that
+            // became a parent has a child created after it — so "newest by
+            // date_create within this conversation" is exactly "the freshest leaf",
+            // without depending on how a provider implements WhereLeaves(). That
+            // matters: a rooted TreeQuery(root).WhereLeaves() used to be evaluated
+            // as "freshest leaf of the whole schema" (fixed for Pro in d88ff9fe,
+            // still open for the Free PVT routing), which returned another
+            // conversation's transcript and then attached the next message under it.
+            //
+            // value_long carries the root's _objects.id and lives on the indexed
+            // _objects row, so this stays a single-row server-side lookup.
+            var head = await redb.Query<MessageProps>()
+                .WhereRedb(o => o.ValueLong == rootId)
                 .OrderByDescendingRedb(o => o.DateCreate)
                 .FirstOrDefaultAsync()
                 .ConfigureAwait(false);
-            if (latestLeaf is null) return [];
+            if (head is null) return [];
 
             // The path walker needs a TreeRedbObject; reload the leaf as a
             // single-node tree to satisfy GetPathToRootAsync.
-            leafObj = await redb.LoadTreeAsync<MessageProps>(latestLeaf.id, maxDepth: 0).ConfigureAwait(false);
+            leafObj = await redb.LoadTreeAsync<MessageProps>(head.id, maxDepth: 0).ConfigureAwait(false);
             if (leafObj is null) return [];
         }
 
         // Server-side ancestor walk; returns root → leaf order. The conversation
         // root is a ConversationProps node — GetPathToRootAsync<MessageProps>
         // still returns it (cast to MessageProps with default Props), so trim by id.
+        // The Role guard is belt-and-braces for that cast: a role-less row is not a
+        // message, and letting one through means posting an empty role to the
+        // provider (a 400 that looks like a model problem, not a storage one).
         var ancestors = (await redb.GetPathToRootAsync<MessageProps>(leafObj).ConfigureAwait(false)).ToList();
 
         var path = ancestors
-            .Where(a => a.id != rootId)
+            .Where(a => a.id != rootId && !string.IsNullOrEmpty(a.Props.Role))
             .Select(row => Materialize(row, conversationId, rootId, parentLookup: null))
             .ToList();
 
@@ -200,9 +233,9 @@ public sealed class RedbConversationStore : IConversationStore
 
     private async Task<List<ConversationMessage>> LoadAllMessagesAsync(string conversationId, IExchange? exchange)
     {
-        var redb = Resolve(exchange);
+        var (redb, redbName) = Resolve(exchange);
 
-        var rootId = await GetOrCreateRootIdAsync(redb, conversationId, CancellationToken.None).ConfigureAwait(false);
+        var rootId = await GetOrCreateRootIdAsync(redb, redbName, conversationId, CancellationToken.None).ConfigureAwait(false);
         var rootObj = await redb.LoadAsync<ConversationProps>(rootId).ConfigureAwait(false);
         if (rootObj is null) return [];
 
@@ -277,13 +310,17 @@ public sealed class RedbConversationStore : IConversationStore
         };
     }
 
-    private async Task<long> GetOrCreateRootIdAsync(IRedbService redb, string conversationId, CancellationToken ct)
+    private async Task<long> GetOrCreateRootIdAsync(
+        IRedbService redb, string redbName, string conversationId, CancellationToken ct)
     {
         // TTL-bound cache: stale entries (e.g. someone purged the conversation
         // out-of-band) self-heal after RootCacheTtl instead of pinning a dead
-        // id for the whole process lifetime.
+        // id for the whole process lifetime. Keyed by (instance, conversation) —
+        // the same conversation id in two named databases resolves to two
+        // different root ids, and a conversation-only key would cross them.
+        var key = CacheKey(redbName, conversationId);
         var now = DateTimeOffset.UtcNow;
-        if (_rootIds.TryGetValue(conversationId, out var cached) && cached.ExpiresAt > now)
+        if (_rootIds.TryGetValue(key, out var cached) && cached.ExpiresAt > now)
             return cached.Id;
 
         var hit = await redb.Query<ConversationProps>()
@@ -293,7 +330,7 @@ public sealed class RedbConversationStore : IConversationStore
 
         if (hit is not null)
         {
-            _rootIds[conversationId] = new CachedRoot(hit.id, now + RootCacheTtl);
+            _rootIds[key] = new CachedRoot(hit.id, now + RootCacheTtl);
             return hit.id;
         }
 
@@ -309,14 +346,23 @@ public sealed class RedbConversationStore : IConversationStore
             }
         };
         var id = await redb.SaveAsync(root).ConfigureAwait(false);
-        _rootIds[conversationId] = new CachedRoot(id, now + RootCacheTtl);
+        _rootIds[key] = new CachedRoot(id, now + RootCacheTtl);
         return id;
     }
 
-    private static async Task<TreeRedbObject<MessageProps>?> FindMessageByValueStringAsync(IRedbService redb, string messageId)
+    /// <summary>
+    /// Resolves a message by its business id <b>within one conversation</b>.
+    /// <paramref name="rootId"/> is not an optimisation — the id is opaque and
+    /// caller-supplied, so an unscoped lookup lets a caller reach (and, through
+    /// <c>AppendAsync</c>, write under) another conversation's node. Returns null
+    /// when the message does not exist or belongs to a different conversation;
+    /// the two cases are deliberately indistinguishable to the caller.
+    /// </summary>
+    private static async Task<TreeRedbObject<MessageProps>?> FindMessageByValueStringAsync(
+        IRedbService redb, string messageId, long rootId)
     {
         var hit = await redb.Query<MessageProps>()
-            .WhereRedb(x => x.ValueString == messageId)
+            .WhereRedb(x => x.ValueString == messageId && x.ValueLong == rootId)
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
         return hit is null ? null : await redb.LoadTreeAsync<MessageProps>(hit.id, maxDepth: 0).ConfigureAwait(false);

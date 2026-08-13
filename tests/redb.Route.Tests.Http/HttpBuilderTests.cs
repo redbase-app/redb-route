@@ -88,7 +88,7 @@ public class HttpBuilderTests
     public void ContentType_SetsParam()
     {
         var uri = HttpDsl.Post("api.example.com").ContentType("text/xml").Build();
-        uri.Should().Contain("contentType=text%2fxml");
+        uri.Should().Contain("contentType=text%2Fxml");
     }
 
     // ── Producer params ─────────────────────────────────────────────
@@ -157,7 +157,7 @@ public class HttpBuilderTests
     public void Methods_SetsParam()
     {
         var uri = HttpDsl.Listen("/api").Methods("POST,PUT").Build();
-        uri.Should().Contain("methods=POST%2cPUT");
+        uri.Should().Contain("methods=POST%2CPUT");
     }
 
     [Fact]
@@ -249,7 +249,7 @@ public class HttpBuilderTests
 
         uri.Should().StartWith("https:api.example.com/submit?");
         uri.Should().Contain("method=POST");
-        uri.Should().Contain("contentType=application%2fxml");
+        uri.Should().Contain("contentType=application%2Fxml");
         uri.Should().Contain("timeout=10000");
         uri.Should().Contain("authScheme=Basic");
     }
@@ -383,7 +383,7 @@ public class HttpBuilderTests
         var uri = HttpDsl.Post("api.example.com/users")
             .Param("userId", new HeaderExpression("userId"))
             .Build();
-        uri.Should().Contain("param.userId=%24%7bheader.userId%7d");
+        uri.Should().Contain("param.userId=%24%7Bheader.userId%7D");
     }
 
     [Fact]
@@ -405,7 +405,7 @@ public class HttpBuilderTests
             .Build();
         uri.Should().Contain("param.q=test");
         uri.Should().Contain("param.page=1");
-        uri.Should().Contain("param.sort=%24%7bheader.sortField%7d");
+        uri.Should().Contain("param.sort=%24%7Bheader.sortField%7D");
     }
 
     [Fact]

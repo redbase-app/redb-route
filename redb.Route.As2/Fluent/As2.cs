@@ -1,5 +1,4 @@
 using System.Text;
-using System.Web;
 
 namespace redb.Route.As2.Fluent;
 
@@ -80,7 +79,7 @@ public sealed class As2Builder
         var path = _target.StartsWith('/') ? _target : "/" + _target;
         var sb = new StringBuilder("as2:").Append(path);
         var sep = '?';
-        void Add(string k, string v) { sb.Append(sep).Append(k).Append('=').Append(HttpUtility.UrlEncode(v)); sep = '&'; }
+        void Add(string k, string v) { sb.Append(sep).Append(k).Append('=').Append(Uri.EscapeDataString(v)); sep = '&'; }
 
         if (_host is not null) Add("host", _host);
         if (_port is not null) Add("port", _port.Value.ToString());
@@ -101,7 +100,7 @@ public sealed class As2Builder
 
         var sb = new StringBuilder(scheme).Append("://").Append(rest);
         var sep = rest.Contains('?') ? '&' : '?';
-        void Add(string k, string v) { sb.Append(sep).Append(k).Append('=').Append(HttpUtility.UrlEncode(v)); sep = '&'; }
+        void Add(string k, string v) { sb.Append(sep).Append(k).Append('=').Append(Uri.EscapeDataString(v)); sep = '&'; }
 
         if (_connectionFactory is not null) Add("connectionFactory", _connectionFactory);
         return sb.ToString();

@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Web;
 
 namespace redb.Route.Abstractions;
 
@@ -49,9 +48,9 @@ public sealed record EndpointUri(
         foreach (var (key, value) in RawParameters)
         {
             sb.Append(sep);
-            sb.Append(HttpUtility.UrlEncode(key));
+            sb.Append(Uri.EscapeDataString(key));
             sb.Append('=');
-            sb.Append(HttpUtility.UrlEncode(value));
+            sb.Append(Uri.EscapeDataString(value));
             sep = '&';
         }
 
@@ -242,9 +241,9 @@ public sealed record EndpointUri(
         foreach (var (key, value) in RawParameters)
         {
             sb.Append(sep);
-            sb.Append(HttpUtility.UrlEncode(key));
+            sb.Append(Uri.EscapeDataString(key));
             sb.Append('=');
-            sb.Append(IsSensitiveKey(key) ? Redacted : HttpUtility.UrlEncode(value));
+            sb.Append(IsSensitiveKey(key) ? Redacted : Uri.EscapeDataString(value));
             sep = '&';
         }
 

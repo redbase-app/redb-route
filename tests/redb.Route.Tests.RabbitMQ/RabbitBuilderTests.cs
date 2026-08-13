@@ -83,7 +83,7 @@ public class RabbitBuilderTests
     public void RoutingKey_SetsParam()
     {
         var uri = Rabbit.Queue("q").RoutingKey(C("order.*")).Build();
-        uri.Should().Contain("routingKey=order.*");
+        uri.Should().Contain("routingKey=order.%2A");
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public class RabbitBuilderTests
         uri.Should().Contain("host=rabbit1");
         uri.Should().Contain("exchange=events");
         uri.Should().Contain("exchangeType=topic");
-        uri.Should().Contain("routingKey=order.*");
+        uri.Should().Contain("routingKey=order.%2A");
         uri.Should().Contain("declare=true");
         uri.Should().Contain("concurrentConsumers=4");
     }
