@@ -139,6 +139,17 @@ public abstract class DrainableConsumer : IConsumer
         {
             await Processor.Process(exchange, processingCt).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (processingCt.IsCancellationRequested)
+        {
+            throw; // shutdown — let the worker loop exit
+        }
+        catch (Exception ex)
+        {
+            // Last-resort net: the route's own error handling (OnException / DeadLetterChannel) runs inside the
+            // pipeline; only a genuinely unhandled exchange reaches here. Log and drop it — a single failure
+            // must NOT terminate the worker and silently stop the consumer draining the queue.
+            Logger?.LogError(ex, "{Consumer} dropped an exchange after an unhandled failure; continuing.", ConsumerName);
+        }
         finally
         {
             _drain.Decrement();

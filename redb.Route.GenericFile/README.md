@@ -32,14 +32,21 @@ The `GenericFileConsumer` runs a poll loop with the following steps:
 2. **Filter** — exclude temp/internal files (`.redb_*`, temp prefix), apply glob `include`/`exclude` patterns
 3. **Sort** — by name, date, or size (ascending or descending)
 4. **Limit** — apply `maxMessagesPerPoll`
-5. **Per-file checks** — `minAge`, `maxAge`, done-file presence, idempotency repository
-6. **Pre-move** — optionally move to a staging directory before processing
-7. **Read body** — as `byte[]` (default) or `Stream` (`streamBody=true`)
-8. **Invoke processor** — pass exchange to the downstream pipeline
-9. **Post-process** — `Noop` (leave in place) / `Delete` / `MoveTo`
-10. **Confirm** — mark idempotent key, delete done file
+5. **Eligibility checks** — `minAge`, `maxAge`, done-file presence
+6. **Read lock** — transport-specific claim on the file (local file only)
+7. **Idempotency** — skip files already in the repository
+8. **Pre-move** — optionally move to a staging directory before processing
+9. **Read body** — as `byte[]` (default) or `Stream` (`streamBody=true`)
+10. **Invoke processor** — pass exchange to the downstream pipeline
+11. **Post-process** — `Noop` (leave in place) / `Delete` / `MoveTo`
+12. **Confirm** — mark idempotent key, delete done file
 
-On processing failure: remove idempotent key, move to `moveFailed` directory (if configured).
+The read lock is taken **before** the idempotency claim: a consumer that loses the lock race
+must not consume the idempotent key, or the file would never be picked up again by anyone.
+
+On processing failure: remove idempotent key, leave the file in place, move to `moveFailed`
+directory (if configured). A file that cannot be **read** is treated the same way — it is
+never delivered as an empty message.
 
 ## Producer Pipeline
 
@@ -64,8 +71,8 @@ The `GenericFileProducer` writes files with atomic temp-then-rename:
 |----------|------|---------|-------------|
 | `Delay` | `int` | `500` | Poll interval (ms) |
 | `InitialDelay` | `int` | `0` | Delay before first poll (ms) |
-| `Include` | `string?` | — | Glob include pattern (`*.csv,*.xml`) |
-| `Exclude` | `string?` | — | Glob exclude pattern |
+| `Include` | `string` | `""` | Glob include pattern (`*.csv,*.xml`) |
+| `Exclude` | `string` | `""` | Glob exclude pattern |
 | `Recursive` | `bool` | `false` | Recurse subdirectories |
 | `MaxDepth` | `int` | `0` | Max recursion depth (0 = unlimited) |
 | `MinDepth` | `int` | `0` | Min depth for file selection |
@@ -79,9 +86,9 @@ The `GenericFileProducer` writes files with atomic temp-then-rename:
 |----------|------|---------|-------------|
 | `Noop` | `bool` | `false` | Leave file in place after processing |
 | `Delete` | `bool` | `false` | Delete file after processing |
-| `MoveTo` | `DynamicValue<string>?` | — | Move after processing (expression) |
+| `MoveTo` | `string` | `""` | Move after processing. Supports `${file:name}` / `${file:name.noext}` |
 | `MoveExisting` | `GenericFileExistStrategy` | `Override` | Strategy at move target |
-| `PreMove` | `DynamicValue<string>?` | — | Move before processing |
+| `PreMove` | `string` | `""` | Move before processing. Supports `${file:name}` / `${file:name.noext}` |
 
 Only one of `Noop`, `Delete`, `MoveTo` can be set.
 
@@ -90,8 +97,8 @@ Only one of `Noop`, `Delete`, `MoveTo` can be set.
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `Idempotent` | `bool` | `false` | Enable idempotent consumer |
-| `IdempotentKey` | `DynamicValue<string>?` | — | Custom key expression |
-| `DoneFileName` | `DynamicValue<string>?` | — | Done-file pattern (`${file:name}.done`) |
+| `IdempotentKey` | `string` | `""` | Custom key. Supports `${file:name}` / `${file:name.noext}` only |
+| `DoneFileName` | `string` | `""` | Done-file pattern (`${file:name}.done`) |
 
 Default idempotent key: `"{fullPath}|{lastModifiedUtc:O}|{length}"`.
 
@@ -141,7 +148,7 @@ Default idempotent key: `"{fullPath}|{lastModifiedUtc:O}|{length}"`.
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `MaxAge` | `long` | `0` | Max file age (ms, 0 = unlimited) |
-| `MoveFailed` | `DynamicValue<string>?` | — | Move on failure (expression) |
+| `MoveFailed` | `string` | `""` | Move on failure. Supports `${file:name}` / `${file:name.noext}` |
 | `StartingDirectoryMustExist` | `bool` | `false` | Fail if base dir doesn't exist |
 | `SendEmptyMessageWhenIdle` | `bool` | `false` | Send empty exchange when no files |
 

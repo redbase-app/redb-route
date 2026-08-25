@@ -150,33 +150,53 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
                 return;
         }
 
-        // Check idempotency
-        var idempotentKey = "";
-        if (_idempotentRepo != null)
-        {
-            idempotentKey = string.IsNullOrEmpty(Options.IdempotentKey)
-                ? InMemoryGenericFileIdempotentRepository.DefaultKey(file)
-                : Options.IdempotentKey;
-
-            if (!await _idempotentRepo.Add(idempotentKey, ct).ConfigureAwait(false))
-                return; // Already processed
-        }
-
-        // Acquire read lock (virtual — local file only)
+        // Acquire read lock (virtual — local file only).
+        // This runs BEFORE the idempotency claim: a consumer that loses the lock race must not
+        // burn the idempotent key, otherwise the file is never picked up again by anyone.
         if (!await AcquireReadLockAsync(file, ct).ConfigureAwait(false))
             return;
 
+        var idempotentKey = "";
+
         try
         {
+            // Check idempotency
+            if (_idempotentRepo != null)
+            {
+                idempotentKey = string.IsNullOrEmpty(Options.IdempotentKey)
+                    ? InMemoryGenericFileIdempotentRepository.DefaultKey(file)
+                    : GenericFileUtils.SubstituteFileTokens(file.Name, Options.IdempotentKey, Operations);
+
+                if (!await _idempotentRepo.Add(idempotentKey, ct).ConfigureAwait(false))
+                    return; // Already processed
+            }
+
             // PreMove
-            var workPath = file.FullPath;
+            var workPath = ResolveWorkPath(file);
             if (!string.IsNullOrEmpty(Options.PreMove))
             {
                 workPath = await PreMoveFileAsync(file, ct).ConfigureAwait(false);
             }
 
-            // Create exchange with body and protocol-specific headers
-            var exchange = await CreateExchangeAsync(file, workPath, ct).ConfigureAwait(false);
+            // Create exchange with body and protocol-specific headers.
+            // A file that cannot be read is a failure, not an empty message: releasing the
+            // idempotent key and leaving the file in place lets the next poll retry it.
+            Exchange exchange;
+            try
+            {
+                exchange = await CreateExchangeAsync(file, workPath, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger?.LogError(ex, "{Consumer}: cannot read {Path}, leaving the file in place", ConsumerName, workPath);
+
+                if (_idempotentRepo != null)
+                    await _idempotentRepo.Remove(idempotentKey, ct).ConfigureAwait(false);
+
+                await OnProcessingFailedAsync(workPath, file.Name, file.BasePath, ct).ConfigureAwait(false);
+                return;
+            }
+
             exchange.Pattern = ExchangePattern.InOnly;
 
             IncrementInflight();
@@ -295,9 +315,11 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
     /// </summary>
     protected virtual async Task<string> PreMoveFileAsync(GenericFileInfo file, CancellationToken ct)
     {
-        var preMoveDir = ResolveDirectory(Options.PreMove, file.BasePath);
+        var preMoveDir = ResolveDirectory(
+            GenericFileUtils.SubstituteFileTokens(file.Name, Options.PreMove, Operations), file.BasePath);
         await Operations.CreateDirectoryAsync(preMoveDir, ct).ConfigureAwait(false);
 
+        var sourcePath = ResolveWorkPath(file);
         var targetPath = Operations.CombinePath(preMoveDir, file.Name);
 
         // Delete existing file at target if present
@@ -313,7 +335,7 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
             }
         }
 
-        await Operations.MoveAsync(file.FullPath, targetPath, true, ct).ConfigureAwait(false);
+        await Operations.MoveAsync(sourcePath, targetPath, true, ct).ConfigureAwait(false);
         return targetPath;
     }
 
@@ -340,7 +362,8 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
 
         if (!string.IsNullOrEmpty(Options.MoveTo))
         {
-            var moveDir = ResolveDirectory(Options.MoveTo, basePath);
+            var moveDir = ResolveDirectory(
+                GenericFileUtils.SubstituteFileTokens(fileName, Options.MoveTo, Operations), basePath);
             await Operations.CreateDirectoryAsync(moveDir, ct).ConfigureAwait(false);
 
             var targetPath = Operations.CombinePath(moveDir, fileName);
@@ -392,25 +415,16 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
     /// <param name="file">Original file info (for metadata).</param>
     /// <param name="workPath">Current file path (may differ from file.FullPath after pre-move).</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <remarks>
+    /// Read failures propagate. A file that cannot be read must not be delivered as an empty
+    /// message: the caller treats the exception as a processing failure and leaves the file
+    /// in place for the next poll.
+    /// </remarks>
     protected virtual async Task<Exchange> CreateExchangeAsync(GenericFileInfo file, string workPath, CancellationToken ct)
     {
-        object body;
-        try
-        {
-            if (Options.StreamBody)
-            {
-                body = await Operations.OpenReadAsync(workPath, ct).ConfigureAwait(false);
-            }
-            else
-            {
-                body = await Operations.ReadAllBytesAsync(workPath, ct).ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger?.LogWarning(ex, "{Consumer}: failed to read {Path}, using empty content", ConsumerName, workPath);
-            body = Array.Empty<byte>();
-        }
+        object body = Options.StreamBody
+            ? await Operations.OpenReadAsync(workPath, ct).ConfigureAwait(false)
+            : await Operations.ReadAllBytesAsync(workPath, ct).ConfigureAwait(false);
 
         var message = new Message { Body = body };
         SetExchangeHeaders(message, file, workPath);
@@ -466,6 +480,13 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
     /// </summary>
     protected virtual Task<bool> AcquireReadLockAsync(GenericFileInfo file, CancellationToken ct)
         => Task.FromResult(true);
+
+    /// <summary>
+    /// Path the file occupies once the read lock is held. Called after
+    /// <see cref="AcquireReadLockAsync"/> and before pre-move.
+    /// Override where a read-lock strategy relocates the file (local file, rename strategy).
+    /// </summary>
+    protected virtual string ResolveWorkPath(GenericFileInfo file) => file.FullPath;
 
     /// <summary>
     /// Releases the read lock after processing. Override in local file consumer.

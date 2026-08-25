@@ -6,8 +6,8 @@ Thank you for your interest in redb.Route!
 
 ### Reporting Issues
 
-- Use [GitHub Issues](https://github.com/redbase-app/redb/issues) for bug reports
-- Use [GitHub Discussions](https://github.com/redbase-app/redb/discussions) for questions and feature requests
+- Use [GitHub Issues](https://github.com/redbase-app/redb-route/issues) for bug reports
+- Use [GitHub Discussions](https://github.com/redbase-app/redb-route/discussions) for questions and feature requests
 
 ### Bug Reports
 
@@ -20,7 +20,7 @@ Please include:
 
 ### Feature Requests
 
-Open a [Discussion](https://github.com/redbase-app/redb/discussions/categories/ideas) with:
+Open a [Discussion](https://github.com/redbase-app/redb-route/discussions/categories/ideas) with:
 - Description of the feature
 - Use case / motivation
 - Example code showing the desired DSL or API (if applicable)

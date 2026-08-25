@@ -1,7 +1,7 @@
 # redb.Route.Controllers
 
 Transport-agnostic controller dispatch for the [redb.Route](../README.md) ESB framework.  
-Provides a `RedbController` base class, attribute-based routing, parameter binding, and four dispatcher implementations for **generic**, **HTTP**, **SignalR**, and **gRPC** transports with 13 DSL extension methods. Controllers are transport-unaware — the same controller class works behind any InOut endpoint.
+Provides a `RedbController` base class, attribute-based routing, parameter binding, and five dispatcher implementations for **generic**, **HTTP**, **SOAP**, **SignalR**, and **gRPC** transports with 16 DSL extension methods. Controllers are transport-unaware — the same controller class works behind any InOut endpoint.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Controllers?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Controllers)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
@@ -47,6 +47,7 @@ This is **not** a connector (no `IComponent`, no URI scheme, no producer/consume
 
 ```
 HTTP Consumer → [redbHttp.Method, redbHttp.Path] → HttpControllerDispatcher → OrdersController.GetOrder()
+SOAP Consumer → [redbSoap.operation]             → SoapControllerDispatcher → AirController.GetFares()
 SignalR Hub   → [redbSignalR.Method]              → SignalRControllerDispatcher → ChatController.Send()
 gRPC Service  → [dispatch-method]                 → GrpcControllerDispatcher → CalcController.Add()
 Any Endpoint  → [route.method, route.path]        → ControllerDispatcherProcessor → generic dispatch
@@ -164,6 +165,42 @@ route.From("grpc://0.0.0.0:5000")
      .RedbGrpcController(typeof(CalcController), typeof(DataController));
 ```
 
+### SoapControllerDispatcher
+
+Reads the `redbSoap.operation` header (the `<soap:Body>` root element's local name, set by the SOAP consumer)
+and dispatches to the method whose name — or `[SoapOperation("...")]` — matches. The XML body binds to the
+`[FromBody]` / single complex parameter via `XmlSerializer`, and the return value is XML-serialized into the
+response, which the SOAP consumer wraps in an envelope. A missing/unknown operation or an invocation exception
+throws, so the SOAP consumer returns a `soap:Fault`.
+
+```csharp
+[Route("air")]
+public class AirController : RedbController
+{
+    // Method name = SOAP operation; body binds from XML, reply serializes to XML.
+    public Task<GetFaresResponse> GetFares([FromBody] GetFaresRequest req) => /* ... */;
+
+    // Explicit operation name when it differs from the method name:
+    [SoapOperation("HealthCheck")]
+    public string Health() => "ok";
+}
+
+// Behind a Soap.Listen(...) consumer:
+route.From(Soap.Listen("/svc/air").Host("0.0.0.0").Port(4090))
+     .RedbSoapController<AirController>();
+
+// Multiple controllers (qualified "Air.GetFares" disambiguates):
+route.From(Soap.Listen("/svc").Host("0.0.0.0").Port(4090))
+     .RedbSoapController(typeof(AirController), typeof(HotelController));
+```
+
+DTOs are ordinary XML-serializable types (`[XmlRoot]` matching the request/response element), and may be
+generated from a WSDL with `dotnet-svcutil`. No HTTP attributes required.
+
+Use it behind a consumer in the default `Payload` data format. The dispatcher owns per-operation typing and
+the inner `<soap:Body>` XML, so it is not meant to be combined with `Message` (whole-envelope) or `Pojo`
+(single fixed request type) mode.
+
 ## ControllerRegistry
 
 Builds a route lookup table by scanning assemblies or registering individual controller types:
@@ -221,6 +258,9 @@ All methods are on `IRouteDefinition`:
 | `RedbSignalRController<T>()` | SignalR | `redbSignalR.Method` |
 | `RedbSignalRController(types)` | SignalR | `redbSignalR.Method` |
 | `RedbSignalRController(registry)` | SignalR | `redbSignalR.Method` |
+| `RedbSoapController<T>()` | SOAP | `redbSoap.operation` |
+| `RedbSoapController(types)` | SOAP | `redbSoap.operation` |
+| `RedbSoapController(registry)` | SOAP | `redbSoap.operation` |
 | `RedbGrpcController<T>()` | gRPC | `dispatch-method` |
 | `RedbGrpcController(types)` | gRPC | `dispatch-method` |
 | `RedbGrpcController(registry)` | gRPC | `dispatch-method` |

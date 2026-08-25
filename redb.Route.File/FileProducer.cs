@@ -26,6 +26,33 @@ public class FileProducer : GenericFileProducer<FileEndpointOptions>
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The file name usually comes from an incoming message, so it is not trusted: a relative
+    /// "../" name or an absolute path would otherwise write outside the endpoint directory
+    /// (<see cref="Path.Combine(string,string)"/> silently discards the base for absolute paths).
+    /// Set <see cref="FileEndpointOptions.JailStartingDirectory"/> to false to allow it.
+    /// </remarks>
+    protected override void ValidatePath(string targetPath)
+    {
+        if (!Options.JailStartingDirectory)
+            return;
+
+        var fullTarget = Path.GetFullPath(targetPath);
+        var root = Path.GetFullPath(BasePath);
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (!GenericFileUtils.IsWithinDirectory(root, fullTarget, Path.DirectorySeparatorChar, comparison))
+        {
+            throw new UnauthorizedAccessException(
+                $"Producer path '{targetPath}' resolves to '{fullTarget}', outside the endpoint directory '{root}'. " +
+                "Set jailStartingDirectory=false to allow writing outside the base directory.");
+        }
+    }
+
+    /// <inheritdoc />
     protected override string ResolveTargetPath(IExchange exchange)
     {
         string fileName;

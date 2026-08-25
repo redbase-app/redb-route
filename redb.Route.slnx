@@ -21,6 +21,7 @@
     <Project Path="redb.Route.Sql/redb.Route.Sql.csproj" />
     <Project Path="redb.Route.MqttNet/redb.Route.MqttNet.csproj" />
     <Project Path="redb.Route.SignalR/redb.Route.SignalR.csproj" />
+    <Project Path="redb.Route.Soap/redb.Route.Soap.csproj" />
     <Project Path="redb.Route.IbmMq/redb.Route.IbmMq.csproj" />
     <Project Path="redb.Route.AzureServiceBus/redb.Route.AzureServiceBus.csproj" />
     <Project Path="redb.Route.Sqs/redb.Route.Sqs.csproj" />
@@ -32,10 +33,15 @@
     <Project Path="redb.Route.Llm.Tools/redb.Route.Llm.Tools.csproj" />
     <Project Path="redb.Route.Llm.Mcp/redb.Route.Llm.Mcp.csproj" />
     <Project Path="redb.Route.Exec/redb.Route.Exec.csproj" />
+    <Project Path="redb.Route.Elasticsearch/redb.Route.Elasticsearch.csproj" />
+    <Project Path="redb.Route.Ldap/redb.Route.Ldap.csproj" />
+    <Project Path="redb.Route.S3/redb.Route.S3.csproj" />
+    <Project Path="redb.Route.Validation.Adapters/redb.Route.Validation.Adapters.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/redb.Route.Tests.As2/redb.Route.Tests.As2.csproj" />
     <Project Path="tests/redb.Route.Tests.File/redb.Route.Tests.File.csproj" />
+    <Project Path="tests/redb.Route.Tests.GenericFile/redb.Route.Tests.GenericFile.csproj" />
     <Project Path="tests/redb.Route.Tests.Ftp/redb.Route.Tests.Ftp.csproj" />
     <Project Path="tests/redb.Route.Tests.Grpc/redb.Route.Tests.Grpc.csproj" />
     <Project Path="tests/redb.Route.Tests.Http/redb.Route.Tests.Http.csproj" />
@@ -53,6 +59,7 @@
     <Project Path="tests/redb.Route.Tests.Redis/redb.Route.Tests.Redis.csproj" />
     <Project Path="tests/redb.Route.Tests.Core/redb.Route.Tests.Core.csproj" />
     <Project Path="tests/redb.Route.Tests.Sql/redb.Route.Tests.Sql.csproj" />
+    <Project Path="tests/redb.Route.Tests.Soap/redb.Route.Tests.Soap.csproj" />
     <Project Path="tests/redb.Route.Tests.MqttNet/redb.Route.Tests.MqttNet.csproj" />
     <Project Path="tests/redb.Route.Tests/redb.Route.Tests.csproj" />
     <Project Path="tests/redb.Route.Tests.Controllers/redb.Route.Tests.Controllers.csproj" />

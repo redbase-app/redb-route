@@ -30,7 +30,7 @@
     <ProjectReference Include="..\..\redb.Route.Llm.Tools\redb.Route.Llm.Tools.csproj" />
     <ProjectReference Include="..\..\redb.Route.Exec\redb.Route.Exec.csproj" />
     <ProjectReference Include="..\..\redb.Route.Core\redb.Route.Core.csproj" />
-    <PackageReference Include="redb.Core" Version="3.6.0" />
+    <PackageReference Include="redb.Core" Version="3.7.0" />
   </ItemGroup>
 
   <!-- Npgsql for SQL component (Postgres provider) -->

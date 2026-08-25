@@ -49,6 +49,13 @@ public sealed class As2ConnectionFactory
     /// <summary>Require/produce a signed MDN. Default true.</summary>
     public bool SignedMdn { get; set; } = true;
 
+    /// <summary>
+    /// When true, a send whose MDN is negative, has a MIC mismatch, or lacks a required valid signature throws
+    /// (the transfer is treated as not confirmed) instead of only logging. Default false: the outcome is
+    /// surfaced on <c>redbAs2.mdn*</c> headers for the route to act on.
+    /// </summary>
+    public bool RequireValidMdn { get; set; }
+
     /// <summary>URL the partner posts asynchronous MDNs to (our receiver).</summary>
     public string? AsyncMdnUrl { get; set; }
 }

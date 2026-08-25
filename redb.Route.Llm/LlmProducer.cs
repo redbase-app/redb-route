@@ -385,8 +385,25 @@ public sealed class LlmProducer : ConnectableProducer
         var sw = Stopwatch.StartNew();
         LlmMetrics.Calls.Add(1, providerTag, modelTag, factoryTag);
 
-        await foreach (var chunk in provider.StreamAsync(llmRequest, ct).ConfigureAwait(false))
+        // Manual enumeration so a mid-stream failure can be recorded (the stream is drained by the consumer,
+        // outside Producer.Process, so an exception there would otherwise vanish — no endpoint error, no metric).
+        await using var enumerator = provider.StreamAsync(llmRequest, ct).GetAsyncEnumerator(ct);
+        while (true)
         {
+            try
+            {
+                if (!await enumerator.MoveNextAsync().ConfigureAwait(false)) break;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _endpoint.RecordError(ex);
+                LlmMetrics.AgentRuns.Add(1, providerTag, modelTag, factoryTag,
+                    new KeyValuePair<string, object?>("llm.stop_reason", "error"));
+                throw;
+            }
+
+            var chunk = enumerator.Current;
             foreach (var block in chunk.Content)
             {
                 if (block is LlmTextBlock { Text: { Length: > 0 } text })

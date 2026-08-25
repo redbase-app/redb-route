@@ -460,6 +460,21 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         return Self;
     }
 
+    // ── Control Bus ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Apache Camel <c>controlbus:</c> parity: manage a route at runtime by sending a control message.
+    /// Sugar over <c>.To("controlbus:route?routeId=...&amp;action=...")</c>. Use <c>routeId</c> <c>"current"</c>
+    /// to target the sending route. Stopping the current route uses async dispatch to avoid a self-deadlock.
+    /// </summary>
+    public TSelf ControlBus(redb.Route.ControlBus.ControlBusAction action, string routeId, bool async = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(routeId);
+        var uri = $"controlbus:route?routeId={System.Uri.EscapeDataString(routeId)}&action={action.ToString().ToLowerInvariant()}";
+        if (async) uri += "&async=true";
+        return To(uri);
+    }
+
     // ── Serialization ────────────────────────────────────────────────────────
 
     /// <inheritdoc />
@@ -889,6 +904,37 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         AddOutput(def);
         return def;
     }
+
+    /// <inheritdoc />
+    public TSelf ClaimCheck(
+        ClaimCheckOperation operation,
+        string? key = null,
+        TimeSpan? ttl = null,
+        string? repositoryName = null)
+    {
+        AddOutput(new ClaimCheckDefinition(operation, key, ttl, repositoryName));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ClaimCheck(
+        IClaimCheckRepository repository,
+        ClaimCheckOperation operation,
+        string? key = null,
+        TimeSpan? ttl = null)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        AddOutput(new ClaimCheckDefinition(repository, operation, key, ttl));
+        return Self;
+    }
+
+    IRouteDefinition IRouteDefinition.ClaimCheck(
+        ClaimCheckOperation operation, string? key, TimeSpan? ttl, string? repositoryName)
+        => ClaimCheck(operation, key, ttl, repositoryName);
+
+    IRouteDefinition IRouteDefinition.ClaimCheck(
+        IClaimCheckRepository repository, ClaimCheckOperation operation, string? key, TimeSpan? ttl)
+        => ClaimCheck(repository, operation, key, ttl);
 
     /// <inheritdoc />
     public ChoiceDefinition Choice()

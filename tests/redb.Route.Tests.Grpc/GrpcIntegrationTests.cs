@@ -187,7 +187,12 @@ public class GrpcIntegrationTests : IAsyncLifetime
         await producer.Start();
 
         var exchange = new Exchange(new Message("fail-me"));
-        await producer.Process(exchange);
+
+        // The producer rethrows (ThrowOnError, default) so .OnException / retry / dead-letter see the
+        // failure — the same contract as the HTTP and SOAP producers. The exchange still carries the
+        // status for handlers that want to branch on it.
+        var act = async () => await producer.Process(exchange);
+        await act.Should().ThrowAsync<global::Grpc.Core.RpcException>();
 
         exchange.Exception.Should().NotBeNull();
         exchange.Exception.Should().BeOfType<global::Grpc.Core.RpcException>();
@@ -309,6 +314,38 @@ public class GrpcIntegrationTests : IAsyncLifetime
         exchange.Out.Should().NotBeNull();
         Encoding.UTF8.GetString((byte[])exchange.Out!.Body!).Should().Be("deadline-ok");
         _receivedExchange.Should().NotBeNull();
+    }
+
+
+    [Theory]
+    [InlineData("trace-bin")]        // a legal HTTP header name; -bin means "binary value" to gRPC
+    [InlineData("has space")]
+    [InlineData("unicode-ключ")]
+    public async Task A_header_that_cannot_be_a_metadata_key_does_not_kill_the_call(string headerName)
+    {
+        // Exchange headers are whatever upstream put there — copied HTTP request headers, values a
+        // processor derived from data. gRPC metadata keys are a far narrower alphabet, and Metadata.Add
+        // throws ArgumentException on anything outside it. That loop runs BEFORE the producer's try
+        // block, so one odd header name took the whole call down with an exception carrying no status
+        // and no route error contract. A header that cannot be represented must be dropped, not fatal.
+        var (consumer, producer) = CreatePair(inOut: true, onProcess: ex =>
+        {
+            ex.Out = new Message("ok");
+            return Task.CompletedTask;
+        });
+        await consumer.Start();
+        await producer.Start();
+
+        var exchange = new Exchange(new Message("payload"));
+        exchange.In.Headers[headerName] = "value";
+        exchange.In.Headers["x-normal"] = "kept";
+
+        await producer.Process(exchange);
+
+        Encoding.UTF8.GetString((byte[])exchange.Out!.Body!).Should().Be("ok");
+
+        // The representable header still travelled: dropping the bad one must not drop the rest.
+        _receivedExchange!.In.Headers.Should().ContainKey("x-normal");
     }
 
     private static int GetFreePort()

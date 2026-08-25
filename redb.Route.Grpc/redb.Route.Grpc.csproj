@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>redb.Route.Grpc</PackageId>
-    <Description>gRPC transport for redb.Route ESB framework. Provides Kestrel-based gRPC consumer (server) and GrpcChannel-based producer (client) with generic binary message exchange.</Description>
+    <Description>gRPC transport for redb.Route ESB framework. Serves gRPC methods as path routes on the shared Kestrel host (one port, many methods) and calls them with a GrpcChannel-based producer.</Description>
     <PackageTags>esb;messaging;grpc;protobuf;rpc;http2;redb</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
@@ -11,16 +11,28 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <!-- Shared Kestrel host (SharedHttpServerManager, HttpProtocol) — the same one Http, As2 and Soap
+         serve on, so a gRPC route and an HTTP route in one worker never fight over a port. -->
+    <ProjectReference Include="..\redb.Route.Http.Hosting\redb.Route.Http.Hosting.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Grpc.AspNetCore" Version="2.76.0" />
+    <!--
+      The gRPC wire protocol is implemented in GrpcWire (framing, trailers, statuses, deadlines) rather
+      than taken from Grpc.AspNetCore. That server stack requires AddGrpc()/MapGrpcService() to be wired
+      into an ASP.NET host before it is built, which would force one gRPC endpoint per port, a host
+      restart on hot-reload, and a header-based route selector instead of the method address. We keep
+      only the message layer (Google.Protobuf + Grpc.Tools) and the client channel (Grpc.Net.Client).
+    -->
+    <PackageReference Include="Google.Protobuf" Version="3.31.1" />
+    <PackageReference Include="Grpc.Tools" Version="2.76.0" PrivateAssets="all" />
     <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="Protos\redb_service.proto" GrpcServices="Both" />
+    <!-- Client stubs only: the server side is ours. -->
+    <Protobuf Include="Protos\redb_service.proto" GrpcServices="Client" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

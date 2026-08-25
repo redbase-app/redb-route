@@ -26,6 +26,15 @@ public class FileEndpointOptions : GenericFileEndpointOptions
     /// <summary>Extension used for marker file lock (default: ".redbLock").</summary>
     public string ReadLockMarkerFileExtension { get; set; } = ".redbLock";
 
+    // ── Producer safety ─────────────────────────────────────────────
+
+    /// <summary>
+    /// If true, the producer refuses to write outside the endpoint directory (default: true).
+    /// File names usually arrive from the incoming message, so a "../" or absolute name would
+    /// otherwise escape the directory. Set to false only when writing outside is intended.
+    /// </summary>
+    public bool JailStartingDirectory { get; set; } = true;
+
     /// <inheritdoc />
     public override void Validate()
     {

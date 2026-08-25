@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using redb.Route.Llm.Providers;
 
 namespace redb.Route.Llm;
@@ -28,6 +29,15 @@ public sealed class LlmConnectionFactory
 
     /// <summary>Optional pinned model version for deterministic deploys.</summary>
     public string? ModelVersion { get; set; }
+
+    /// <summary>
+    /// Optional Anthropic contract-tier override (<c>legacy</c>/<c>transitional</c>/<c>modern</c>).
+    /// Escape-hatch for self-hosted ids, proxies, or model snapshots the built-in generation
+    /// table does not recognise. When unset, the tier is inferred from <see cref="ModelId"/>
+    /// (unknown ids default to <c>modern</c> — no removed sampling knobs are sent). Anthropic-only;
+    /// ignored by OpenAI-compatible providers. See <see cref="Providers.AnthropicModelProfile"/>.
+    /// </summary>
+    public string? ModelContractTier { get; set; }
 
     /// <summary>API key. Prefer <see cref="ApiKeySecretRef"/> for production deployments.</summary>
     public string? ApiKey { get; set; }
@@ -60,6 +70,13 @@ public sealed class LlmConnectionFactory
     public ILlmProvider? PrebuiltProvider { get; set; }
 
     /// <summary>
+    /// Logger factory used by built providers for diagnostics (e.g. Anthropic sampling-knob
+    /// drops). Set automatically at registration by <c>AddLlmConnectionFactory</c> from DI;
+    /// null in bare test setups (providers then fall back to activity events only).
+    /// </summary>
+    public ILoggerFactory? LoggerFactory { get; set; }
+
+    /// <summary>
     /// Builds an <see cref="ILlmProvider"/> from this configuration. Resolution order:
     /// <list type="number">
     ///   <item><see cref="PrebuiltProvider"/> if set;</item>
@@ -70,7 +87,18 @@ public sealed class LlmConnectionFactory
     public ILlmProvider Build()
     {
         if (PrebuiltProvider is not null) return PrebuiltProvider;
+        if (_cached is not null) return _cached;
+        // Cache the built provider so its HttpClient is reused, not minted (and leaked) per call. Providers are
+        // stateless per request and HttpClient is thread-safe, so one instance per factory is correct.
+        lock (_buildLock)
+            return _cached ??= BuildCore();
+    }
 
+    private ILlmProvider? _cached;
+    private readonly object _buildLock = new();
+
+    private ILlmProvider BuildCore()
+    {
         return Provider?.ToLowerInvariant() switch
         {
             "stub" => new StubProvider(this),

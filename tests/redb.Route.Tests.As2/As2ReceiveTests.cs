@@ -150,6 +150,38 @@ public class As2ReceiveTests
     }
 
     [Fact]
+    public async Task Unsigned_Message_Rejected_When_Signature_Required()
+    {
+        var port = FreePort();
+        await using var context = new RouteContext();
+        context.AddComponent(new As2Component());
+        // The receiver requires a signature; the sender does not sign.
+        context.AddToRegistry("recv", new As2ConnectionFactory
+        {
+            OurCertificate = Cert, PartnerCertificate = Cert, As2From = "THEM", As2To = "US",
+            Sign = true, Encrypt = false, MdnMode = As2MdnMode.Sync, SignedMdn = false,
+        });
+        context.AddToRegistry("send", new As2ConnectionFactory
+        {
+            OurCertificate = Cert, PartnerCertificate = Cert, As2From = "US", As2To = "THEM",
+            Sign = false, Encrypt = false, MdnMode = As2MdnMode.Sync, SignedMdn = false,
+        });
+
+        var delivered = new List<string>();
+        context.AddRoutes(r =>
+            r.From(As2Dsl.Receive("/in").Host("127.0.0.1").Port(port).ConnectionFactory("recv"))
+                .Process(e => delivered.Add(Encoding.UTF8.GetString((byte[])e.In.Body!))));
+        await context.Start();
+
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/in").ConnectionFactory("send")).CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("PO*UNSIGNED~") { ContentType = "application/edi-x12" }));
+
+        // The unsigned message must NOT reach the business route (rejected with a negative MDN).
+        delivered.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Loopback_RecordsConsumerStatistics()
     {
         var port = FreePort();

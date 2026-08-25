@@ -66,9 +66,12 @@ public sealed class GrpcTelemetrySmokeTests : IAsyncLifetime
 
         tracer.ForceFlush(1000);
         activities.Should().NotBeEmpty();
-        var activity = activities.First();
+
+        // Both sides now emit a span (the consumer opens "grpc receive" as a Server span, mirroring the
+        // As2 and Soap consumers), and the exporter also sees spans from test classes running in
+        // parallel — so select the producer's span by name and kind instead of taking whatever is first.
+        var activity = activities.First(a => a.Kind == ActivityKind.Client && a.OperationName == "grpc.invoke");
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
-        activity.Kind.Should().Be(ActivityKind.Client);
         activity.GetTagItem("rpc.system").Should().Be("grpc");
         activity.GetTagItem("redb.route.endpoint").Should().NotBeNull();
     }

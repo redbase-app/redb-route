@@ -236,6 +236,49 @@ URI handle many variations without rewrites:
 | `systemPromptRef` | `LlmHeaders.SystemPrompt` |
 | `conversation=header` | `LlmHeaders.ConversationId` |
 
+### 6. Sampling knobs and the Anthropic model contract
+
+`temperature` and `top_p` are **not** a fixed contract on Anthropic — the Messages
+API changed what it accepts across model generations, and the native
+`AnthropicProvider` shapes each request to match the target `ModelId` so you never
+get an HTTP 400 for sending a knob the model removed:
+
+| Generation | `temperature` / `top_p` | What the connector sends |
+|---|---|---|
+| Claude 3.x | both accepted | both, if you set them |
+| Claude 4.0–4.6 (Sonnet/Haiku 4.5, Opus/Sonnet 4.6) | **at most one** — both together → 400 | `temperature` wins; `top_p` is dropped when both are set |
+| Claude 4.7+ / 5 (Opus 4.7/4.8/5, Sonnet 5, Fable 5) | **rejected** — non-default → 400 | neither — steer with the system prompt instead |
+| unknown / future id | treated as current-generation | neither (fail-forward — a new model id never 400s on a removed field) |
+
+This is automatic. You keep setting `Temperature`/`TopP` the way you always have;
+the connector emits them only where the model accepts them and drops the rest,
+leaving a **warning in the logs** and an `llm.sampling.dropped` event on the
+OpenTelemetry span (with the model id, tier and dropped params) so a dropped knob
+is visible in both logs and traces, never silent.
+
+**Steering current-generation models.** Because `temperature=0` no longer reaches
+Opus 4.7+/Sonnet 5, put determinism and style in the prompt: *"Reply with the
+translated text only, no preamble."* rather than a low temperature.
+
+**Override for proxies / self-hosted ids.** If you route through a gateway whose
+model id the built-in generation table can't classify (a proxy alias, a pinned
+snapshot), set the tier explicitly on the factory:
+
+```csharp
+route.Services.AddLlmConnectionFactory("claude", f =>
+{
+    f.Provider          = "anthropic";
+    f.ModelId           = "my-proxy/claude-latest";  // not a canonical id
+    f.ModelContractTier = "modern";                  // legacy | transitional | modern
+    f.ApiKeySecretRef   = "anthropic.api-key";
+});
+```
+
+`legacy`/`transitional` allow one sampling knob; `modern` omits them. When unset,
+the tier is inferred from `ModelId` (and an unrecognised id defaults to `modern`).
+This gate is Anthropic-only — the OpenAI-compatible providers accept sampling and
+are untouched.
+
 ## Tools
 
 > **Tools are routes.** A tool is an ordinary `RouteBuilder` route mounted

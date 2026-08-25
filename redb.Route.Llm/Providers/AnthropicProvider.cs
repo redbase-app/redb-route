@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
 using redb.Route.Llm.Abstractions.Tools;
 
 namespace redb.Route.Llm.Providers;
@@ -48,6 +49,11 @@ public sealed class AnthropicProvider : ILlmProvider
     private readonly LlmConnectionFactory _factory;
     private readonly HttpClient _http;
     private readonly Uri _endpoint;
+    private readonly ILogger? _logger;
+
+    // The factory's model id and contract tier are fixed for this provider, so its profile is
+    // resolved once; only a per-request ModelId override triggers a fresh resolve (see BuildRequestBody).
+    private readonly AnthropicModelProfile _factoryProfile;
 
     /// <summary>Creates the provider with a connection factory (builds an internal HttpClient).</summary>
     public AnthropicProvider(LlmConnectionFactory factory)
@@ -60,6 +66,8 @@ public sealed class AnthropicProvider : ILlmProvider
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _http = http ?? throw new ArgumentNullException(nameof(http));
+        _logger = factory.LoggerFactory?.CreateLogger("redb.Route.Llm.AnthropicProvider");
+        _factoryProfile = AnthropicModelProfile.Resolve(factory.ModelId, factory.ModelContractTier);
 
         var baseUrl = factory.BaseUrl ?? DefaultBaseUrl;
         _endpoint = new Uri(EnsureTrailingSlash(baseUrl), "v1/messages");
@@ -284,9 +292,10 @@ public sealed class AnthropicProvider : ILlmProvider
 
     private JsonObject BuildRequestBody(LlmRequest request, bool stream)
     {
+        var model = request.ModelId ?? _factory.ModelId;
         var body = new JsonObject
         {
-            ["model"] = request.ModelId ?? _factory.ModelId,
+            ["model"] = model,
             // Anthropic requires max_tokens; default conservatively when caller omits it.
             ["max_tokens"] = request.MaxTokens ?? _factory.MaxTokens ?? 1024,
             ["messages"] = BuildMessages(request)
@@ -295,8 +304,16 @@ public sealed class AnthropicProvider : ILlmProvider
         if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
             body["system"] = request.SystemPrompt;
 
-        if (request.Temperature is { } t) body["temperature"] = t;
-        if (request.TopP is { } tp) body["top_p"] = tp;
+        // The sampling knobs (temperature/top_p) changed contract across Anthropic
+        // generations: Claude 3.x accepts both, Claude 4.0–4.6 accepts at most one (both
+        // → 400), Claude 4.7+/5 reject non-default sampling entirely (→ 400). Shape the
+        // request by the target model's policy so we never send a field it will reject;
+        // unknown ids default to the modern (no-sampling) contract — see AnthropicModelProfile.
+        // Reuse the factory profile unless the request overrides the model id.
+        var profile = (request.ModelId is null || request.ModelId == _factory.ModelId)
+            ? _factoryProfile
+            : AnthropicModelProfile.Resolve(model, _factory.ModelContractTier);
+        ApplySampling(body, request, model, profile);
 
         if (request.StopSequences is { Count: > 0 } stops)
         {
@@ -315,6 +332,68 @@ public sealed class AnthropicProvider : ILlmProvider
 
         if (stream) body["stream"] = true;
         return body;
+    }
+
+    /// <summary>
+    /// Writes <c>temperature</c>/<c>top_p</c> onto the request body according to the model's
+    /// <see cref="AnthropicSamplingPolicy"/>: both when allowed, a single preferred knob on
+    /// 4.0–4.6 (temperature wins), or neither on 4.7+/5. Anything dropped that the caller set
+    /// leaves an <c>llm.sampling.dropped</c> breadcrumb on the current activity so
+    /// "why is temperature ignored?" is answerable.
+    /// </summary>
+    private void ApplySampling(JsonObject body, LlmRequest request, string model, AnthropicModelProfile profile)
+    {
+        switch (profile.Sampling)
+        {
+            case AnthropicSamplingPolicy.Both:
+                if (request.Temperature is { } t0) body["temperature"] = t0;
+                if (request.TopP is { } p0) body["top_p"] = p0;
+                break;
+
+            case AnthropicSamplingPolicy.AtMostOne:
+                // Both knobs together 400 on Claude 4.0–4.6; prefer temperature and drop top_p.
+                if (request.Temperature is { } t1)
+                {
+                    body["temperature"] = t1;
+                    if (request.TopP is not null)
+                        NoteDropped(model, profile, "top_p", "accepts at most one sampling knob");
+                }
+                else if (request.TopP is { } p1)
+                {
+                    body["top_p"] = p1;
+                }
+                break;
+
+            case AnthropicSamplingPolicy.None:
+                if (request.Temperature is not null && request.TopP is not null)
+                    NoteDropped(model, profile, "temperature,top_p", "sampling removed on this model");
+                else if (request.Temperature is not null)
+                    NoteDropped(model, profile, "temperature", "sampling removed on this model");
+                else if (request.TopP is not null)
+                    NoteDropped(model, profile, "top_p", "sampling removed on this model");
+                break;
+        }
+    }
+
+    private void NoteDropped(string model, AnthropicModelProfile profile, string dropped, string reason)
+    {
+        // Warn on the logger (when wired) and leave a span event either way, so a dropped knob
+        // is answerable via logs and traces — never silent.
+        _logger?.LogWarning(
+            "anthropic: model '{Model}' ({Tier}) {Reason}; dropped {Dropped}. " +
+            "Steer via the system prompt, or set LlmConnectionFactory.ModelContractTier to override.",
+            model, profile.Tier, reason, dropped);
+
+        System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent(
+            "llm.sampling.dropped",
+            tags: new System.Diagnostics.ActivityTagsCollection
+            {
+                ["llm.model.id"] = model,
+                ["llm.model.tier"] = profile.Tier.ToString(),
+                ["llm.sampling.policy"] = profile.Sampling.ToString(),
+                ["llm.sampling.dropped_params"] = dropped,
+                ["llm.sampling.reason"] = reason
+            }));
     }
 
     private static JsonArray BuildMessages(LlmRequest request)

@@ -124,6 +124,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         _components["direct-vm"] = SetComponentContext(new DirectVmComponent());
         _components["vm"] = SetComponentContext(new VmComponent());
         _components["xslt"] = SetComponentContext(new Xslt.XsltComponent());
+        _components["controlbus"] = SetComponentContext(new ControlBus.ControlBusComponent());
 
         // Register built-in services
         _services[typeof(IDataFormatRegistry)] = new DataFormatRegistry();

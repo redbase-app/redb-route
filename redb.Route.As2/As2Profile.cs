@@ -23,6 +23,7 @@ internal sealed class As2Profile
     public string EncryptAlg { get; init; } = "aes-128-cbc";
     public As2MdnMode MdnMode { get; init; }
     public bool SignedMdn { get; init; }
+    public bool RequireValidMdn { get; init; }
     public string? AsyncMdnUrl { get; init; }
 
     /// <summary>Resolves the effective profile: connection factory (if named) wins over inline options.</summary>
@@ -46,6 +47,7 @@ internal sealed class As2Profile
             EncryptAlg = NonEmpty(f?.EncryptAlg, options.EncryptAlg) ?? "aes-128-cbc",
             MdnMode = f?.MdnMode ?? options.MdnMode,
             SignedMdn = f?.SignedMdn ?? options.SignedMdn,
+            RequireValidMdn = f?.RequireValidMdn ?? options.RequireValidMdn,
             AsyncMdnUrl = NonEmpty(f?.AsyncMdnUrl, options.AsyncMdnUrl),
         };
     }

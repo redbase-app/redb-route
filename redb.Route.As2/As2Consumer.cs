@@ -97,6 +97,8 @@ internal sealed class As2Consumer : IConsumer
 
         As2Mic? mic = null;
         var signatureValid = true;
+        var wasSigned = false;
+        var wasEncrypted = false;
         string? errorText = null;
         IExchange? exchange = null;
 
@@ -110,6 +112,7 @@ internal sealed class As2Consumer : IConsumer
                 if (profile.OurCertificate is null)
                     throw new InvalidOperationException("No certificate configured to decrypt the AS2 message.");
                 entity = _engine.Decrypt(enveloped, profile.OurCertificate);
+                wasEncrypted = true;
             }
 
             if (entity is MultipartSigned signed)
@@ -119,12 +122,23 @@ internal sealed class As2Consumer : IConsumer
                 signatureValid = _engine.Verify(signed, profile.PartnerCertificate);
                 mic = _engine.ComputeMic(signed[0], profile.SignAlg, includeHeaders: true);
                 entity = signed[0];
+                wasSigned = true;
             }
 
             if (entity is ApplicationPkcs7Mime { SecureMimeType: SecureMimeType.CompressedData } compressed)
                 entity = _engine.Decompress(compressed);
 
             mic ??= _engine.ComputeMic(entity, profile.SignAlg, includeHeaders: false);
+
+            // ENFORCE the profile before handing the payload to the route: a message that the partnership
+            // requires to be signed/encrypted but is not, or whose signature did not verify, is rejected with a
+            // negative MDN (RFC 4130 authentication/integrity-check-failed) — never processed as if trusted.
+            if (profile.Encrypt && !wasEncrypted)
+                throw new InvalidOperationException("AS2 message is not encrypted, but the partnership requires encryption.");
+            if (profile.Sign && !wasSigned)
+                throw new InvalidOperationException("AS2 message is not signed, but the partnership requires a signature.");
+            if (wasSigned && !signatureValid)
+                throw new InvalidOperationException("AS2 message signature verification failed (untrusted or tampered).");
 
             // Extract the business payload.
             var (payload, payloadContentType) = ExtractPayload(entity);
@@ -185,7 +199,12 @@ internal sealed class As2Consumer : IConsumer
         if (!string.IsNullOrEmpty(receiptUrl))
         {
             http.Response.StatusCode = StatusCodes.Status200OK;
-            await PostAsyncMdn(receiptUrl, mdnContentType, mdnCte, mdnBody, profile, http.RequestAborted).ConfigureAwait(false);
+            // The receipt URL comes verbatim from the (unauthenticated-at-transport) request: validate it so
+            // it can't drive an SSRF POST to a loopback/link-local/private-range target (169.254.169.254, etc.).
+            if (IsSafeReceiptUrl(receiptUrl))
+                await PostAsyncMdn(receiptUrl, mdnContentType, mdnCte, mdnBody, profile, http.RequestAborted).ConfigureAwait(false);
+            else
+                _logger?.LogWarning("AS2 async MDN not delivered: unsafe Receipt-Delivery-Option URL '{Url}'.", receiptUrl);
         }
         else
         {
@@ -199,6 +218,29 @@ internal sealed class As2Consumer : IConsumer
             if (!string.IsNullOrEmpty(mdnCte)) response.Headers["Content-Transfer-Encoding"] = mdnCte;
             await response.Body.WriteAsync(mdnBody, http.RequestAborted).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// True when the async-MDN receipt URL is an acceptable http(s) target. Blocks link-local literal IPs
+    /// (169.254.0.0/16 and IPv6 fe80::/10) — the cloud-metadata SSRF class — reached via the
+    /// attacker-controlled Receipt-Delivery-Option header. Loopback and private ranges are allowed, since
+    /// co-located and internal-network AS2 partners are legitimate; a stricter partner-host allowlist is a
+    /// deployment choice, and DNS-rebinding (a hostname resolving to a blocked IP) is out of scope here.
+    /// </summary>
+    private static bool IsSafeReceiptUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return false;
+        if (System.Net.IPAddress.TryParse(uri.Host, out var ip))
+        {
+            if (ip.IsIPv6LinkLocal) return false;
+            if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+            {
+                var b = ip.GetAddressBytes();
+                if (b[0] == 169 && b[1] == 254) return false;   // 169.254.0.0/16 (incl. 169.254.169.254 metadata)
+            }
+        }
+        return true;
     }
 
     private async Task PostAsyncMdn(string url, string contentType, string? transferEncoding, byte[] body, As2Profile profile, CancellationToken ct)

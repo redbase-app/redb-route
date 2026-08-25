@@ -33,6 +33,61 @@ public static class GenericFileUtils
     }
 
     /// <summary>
+    /// Tests whether a already-normalized path is the base directory itself or lives underneath it.
+    /// Used by producers to keep a caller-supplied file name from escaping the endpoint directory.
+    /// </summary>
+    /// <param name="basePath">Base directory. A trailing separator is ignored.</param>
+    /// <param name="candidatePath">Candidate path. Must already be normalized (no "..", no "." segments).</param>
+    /// <param name="separator">Path separator of the transport ('/' for remote, OS separator for local).</param>
+    /// <param name="comparison">Comparison to use. Remote paths are case-sensitive; local ones follow the OS.</param>
+    /// <returns>True when the candidate stays inside the base directory.</returns>
+    /// <remarks>
+    /// The separator is part of the comparison on purpose: a plain prefix test would accept
+    /// "/data/out2/x" as living inside "/data/out".
+    /// </remarks>
+    public static bool IsWithinDirectory(
+        string basePath, string candidatePath, char separator, StringComparison comparison)
+    {
+        ArgumentNullException.ThrowIfNull(basePath);
+        ArgumentNullException.ThrowIfNull(candidatePath);
+
+        var root = basePath.TrimEnd(separator);
+        if (root.Length == 0)
+            return true; // the whole file system is the base
+
+        return candidatePath.Equals(root, comparison)
+               || candidatePath.StartsWith(root + separator, comparison);
+    }
+
+    /// <summary>
+    /// Substitutes file-level variables in a pattern.
+    /// Supported: <c>${file:name}</c> (full name with extension) and
+    /// <c>${file:name.noext}</c> (name without extension).
+    /// </summary>
+    /// <param name="fileName">File name with extension (e.g. "order.csv").</param>
+    /// <param name="pattern">Pattern to substitute into. Returned unchanged when it holds no variables.</param>
+    /// <param name="ops">File operations for path helpers.</param>
+    /// <returns>The pattern with file variables replaced.</returns>
+    /// <remarks>
+    /// Only file-level variables are supported. Exchange-level expressions (<c>${header.*}</c>,
+    /// <c>${body}</c>) cannot be used here: these patterns are resolved before the exchange
+    /// exists, or while it is being disposed.
+    /// </remarks>
+    public static string SubstituteFileTokens(string fileName, string pattern, IFileOperations ops)
+    {
+        ArgumentNullException.ThrowIfNull(fileName);
+        ArgumentNullException.ThrowIfNull(pattern);
+        ArgumentNullException.ThrowIfNull(ops);
+
+        if (pattern.Length == 0 || !pattern.Contains("${", StringComparison.Ordinal))
+            return pattern;
+
+        var result = pattern.Replace("${file:name}", fileName, StringComparison.OrdinalIgnoreCase);
+        return result.Replace("${file:name.noext}",
+            ops.GetFileNameWithoutExtension(fileName), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Resolves a done-file name pattern by substituting ${file:name} and ${file:name.noext} variables.
     /// </summary>
     /// <param name="file">The file to resolve the done-file name for.</param>
@@ -45,10 +100,7 @@ public static class GenericFileUtils
         ArgumentNullException.ThrowIfNull(doneFilePattern);
         ArgumentNullException.ThrowIfNull(ops);
 
-        var pattern = doneFilePattern;
-        pattern = pattern.Replace("${file:name}", file.Name, StringComparison.OrdinalIgnoreCase);
-        pattern = pattern.Replace("${file:name.noext}",
-            ops.GetFileNameWithoutExtension(file.Name), StringComparison.OrdinalIgnoreCase);
+        var pattern = SubstituteFileTokens(file.Name, doneFilePattern, ops);
 
         if (ops.IsAbsolutePath(pattern))
             return pattern;

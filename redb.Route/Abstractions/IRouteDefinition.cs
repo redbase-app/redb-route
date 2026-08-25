@@ -212,6 +212,11 @@ public interface IRouteDefinition : IProcessorDefinition
     /// <summary>Transform the body through an inline XSLT stylesheet document.</summary>
     IRouteDefinition XsltContent(string stylesheetXml, XsltOutput output = XsltOutput.String, bool failOnNullBody = true, bool allowTemplateFromHeader = false);
 
+    // ── Control Bus ──
+
+    /// <summary>Apache Camel <c>controlbus:</c> parity: manage a route at runtime (start/stop/suspend/resume/restart/status/stats/fail).</summary>
+    IRouteDefinition ControlBus(redb.Route.ControlBus.ControlBusAction action, string routeId, bool async = false);
+
     // ── Serialization ──
 
     /// <summary>Marshals (serializes) the exchange body using the specified serializer type.</summary>
@@ -413,6 +418,37 @@ public interface IRouteDefinition : IProcessorDefinition
         IIdempotentRepository repository,
         Func<IExchange, string> keyExtractor,
         bool skipDuplicate = true);
+
+    /// <summary>
+    /// Claim Check step (Hohpe/Woolf). Stores the body away and lets a short claim key travel
+    /// the route in its place, or restores the body from such a key.
+    /// </summary>
+    /// <param name="operation">
+    /// <see cref="ClaimCheckOperation.Set"/> / <see cref="ClaimCheckOperation.Get"/> /
+    /// <see cref="ClaimCheckOperation.GetAndRemove"/> address an explicit key;
+    /// <see cref="ClaimCheckOperation.Push"/> / <see cref="ClaimCheckOperation.Pop"/> use an
+    /// exchange-scoped stack and need none.
+    /// </param>
+    /// <param name="key">Explicit claim key for Set/Get/GetAndRemove. Ignored by Push/Pop.</param>
+    /// <param name="ttl">Time-to-live for stored data. Used by Set/Push.</param>
+    /// <param name="repositoryName">
+    /// Logical name of a repository registered with
+    /// <c>context.AddClaimCheckRepository(name, repository)</c>. Null uses the context default.
+    /// </param>
+    IRouteDefinition ClaimCheck(
+        ClaimCheckOperation operation,
+        string? key = null,
+        TimeSpan? ttl = null,
+        string? repositoryName = null);
+
+    /// <summary>
+    /// Claim Check step against an explicit repository instance.
+    /// </summary>
+    IRouteDefinition ClaimCheck(
+        IClaimCheckRepository repository,
+        ClaimCheckOperation operation,
+        string? key = null,
+        TimeSpan? ttl = null);
 
     /// <summary>
     /// Opens a Choice (content-based router) scope.

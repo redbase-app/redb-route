@@ -210,6 +210,7 @@ AST-based compiled expression language with caching (used in `Log`, `Filter(stri
 | `LogProcessor` | `.Log(...)` | Logging |
 | `RichLogProcessor` | `.Log().Message(...)` | Structured Logging |
 | `MessageHistoryProcessor` | `.MessageHistory()` / `EnableMessageHistory` | Message History |
+| `ControlBusProducer` | `.ControlBus(...)` / `controlbus:` | Control Bus |
 | `DelayProcessor` | `.Delay(...)` | Delayer |
 | `LoopProcessor` | `.Loop(...)` | Loop |
 | `ThrottleProcessor` | `.Throttle(...)` | Throttler |

@@ -164,6 +164,12 @@ public static class ParameterResolver
         if (allParams.Length == 0)
             return [];
 
+        // A JSON object binds BY NAME (honouring [FromRoute]/[FromQuery] key names, [FromBody] = the whole
+        // object, a lone unbound complex parameter = the whole object). Arrays and everything else stay
+        // positional, so existing single-value and positional-array callers are unchanged.
+        if (body is JsonElement { ValueKind: JsonValueKind.Object } jsonObject)
+            return ResolveNamed(allParams, jsonObject, ct);
+
         // Unpack body into args array
         var args = body switch
         {
@@ -197,6 +203,70 @@ public static class ParameterResolver
         }
 
         return values;
+    }
+
+    /// <summary>
+    /// Binds a JSON-object body by name. A <c>[FromBody]</c> parameter (or, when none is present, the single
+    /// unbound complex parameter) receives the whole object; every other parameter takes the object property
+    /// matching its name — or its <c>[FromRoute]</c> / <c>[FromQuery]</c> key — case-insensitively; unmatched
+    /// parameters fall back to their default. <see cref="CancellationToken"/> is injected. Extra object keys
+    /// are ignored by deserialization.
+    /// </summary>
+    private static object?[] ResolveNamed(ParameterInfo[] parameters, JsonElement obj, CancellationToken ct)
+    {
+        var hasFromBody = false;
+        foreach (var p in parameters)
+            if (p.GetCustomAttribute<FromBodyAttribute>() is not null) { hasFromBody = true; break; }
+
+        var values = new object?[parameters.Length];
+        var loneComplex = new List<int>();
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var p = parameters[i];
+
+            if (p.ParameterType == typeof(CancellationToken)) { values[i] = ct; continue; }
+
+            if (p.GetCustomAttribute<FromBodyAttribute>() is not null)
+            {
+                values[i] = obj.Deserialize(p.ParameterType, JsonOptions);
+                continue;
+            }
+
+            var key = p.GetCustomAttribute<FromRouteAttribute>()?.Name
+                      ?? p.GetCustomAttribute<FromQueryAttribute>()?.Name
+                      ?? p.Name!;
+
+            if (TryGetPropertyIgnoreCase(obj, key, out var element))
+            {
+                values[i] = ConvertOrDeserialize(element, p.ParameterType);
+                continue;
+            }
+
+            // Unbound: take the default now; a lone complex parameter may receive the whole object below.
+            values[i] = p.HasDefaultValue ? p.DefaultValue : ConvertValue(null, p.ParameterType);
+            if (!hasFromBody && !IsSimpleType(p.ParameterType))
+                loneComplex.Add(i);
+        }
+
+        // No [FromBody], exactly one unbound complex parameter: it receives the whole object. This preserves
+        // the common `Method(RequestDto dto)` shape whose parameter name never matches the object's keys.
+        if (!hasFromBody && loneComplex.Count == 1)
+            values[loneComplex[0]] = obj.Deserialize(parameters[loneComplex[0]].ParameterType, JsonOptions);
+
+        return values;
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement obj, string name, out JsonElement value)
+    {
+        foreach (var prop in obj.EnumerateObject())
+            if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = prop.Value;
+                return true;
+            }
+        value = default;
+        return false;
     }
 
     /// <summary>

@@ -36,6 +36,7 @@ This changelog covers the **NuGet-published packages**:
 | `redb.Route.Sftp` | SFTP transport |
 | `redb.Route.SignalR` | SignalR transport |
 | `redb.Route.Sql` | SQL database transport |
+| `redb.Route.Soap` | SOAP 1.1/1.2 transport — WS-Security, MTOM attachments, WSDL-first services |
 | `redb.Route.Sqs` | Amazon SQS + SNS transport |
 | `redb.Route.Tcp` | Raw TCP transport |
 | `redb.Route.Telegram` | Telegram Bot transport |
@@ -48,6 +49,391 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Note on version history:** redb.Route has been running in production since version 1.0.0.
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
+
+## [3.7.0] — 2026-08-25
+
+> **Why a minor.** A new connector package (`redb.Route.Soap`), two new EIPs in the DSL
+> (`.ClaimCheck(...)`, `.ControlBus(...)` + the `controlbus:` component) and a rebuilt `redb.Route.Grpc`
+> are all new public surface, so this cannot be a patch. The ecosystem moves together — `redb` core,
+> `redb.Tsak` and `redb.Identity` ship 3.7.0 alongside.
+>
+> **Two behavioural changes need reading before upgrading**, both in `redb.Route.Grpc`: a failed call
+> now throws (`ThrowOnError`, default `true`) where it used to return an error document, and errors
+> reach clients as real gRPC statuses instead of `OK` plus a body. See **Changed (behavioural)**.
+> `InMemoryFileIdempotentRepository` / `InMemorySftpIdempotentRepository` are removed — see **Removed**.
+
+### Added
+- **`redb.Route.Grpc` — a gRPC method address is now a route, and many of them share one port.** The
+  consumer registers its method address (`/package.Service/Method`) as a path route on the shared Kestrel
+  host — the same `SharedHttpServerManager` that already serves Http, As2 and Soap — and speaks the gRPC
+  wire protocol itself (`GrpcWire`: length-prefixed framing, `grpc-status` / `grpc-message` trailers,
+  `grpc-timeout` deadlines). Previously every `From("grpc:host:port")` built its own Kestrel, so a second
+  gRPC route on the same port failed to bind and a facade had to be one route with a `Choice()` inside.
+  Now `From("grpc:0.0.0.0:5001/identity.v1.Identity/Token")` and `…/Introspect` are ordinary routes with
+  their own ids, policies, metrics and lifecycle, and the address — not a private header — selects them.
+  A URI with no method address keeps serving the built-in generic `RedbService/Process` **and**
+  `ProcessStream`, unchanged.
+- **`redb.Route.Grpc` — real gRPC statuses out of a route.** The consumer maps the transport-neutral
+  `status.code` that every controller dispatcher writes onto a gRPC status (401 → `Unauthenticated`,
+  403 → `PermissionDenied`, 404 → `NotFound`, 429 → `ResourceExhausted`, …), and honours an explicit
+  `redbGrpc.StatusCode` / `redbGrpc.StatusDetail`. `redbGrpc.Trailer.*` headers become response trailers.
+  A non-OK status is delivered trailers-only because clients discard the payload of a failed call.
+- **`redb.Route.Grpc` — typed `.proto` services without generated server stubs.** `Envelope=Auto` keeps the
+  `RedbMessage` wrapper for the built-in address and passes raw protobuf bytes for any other, so a client
+  generated from a real `.proto` can call a redb route directly. `.Envelope(Message|Raw)` overrides.
+- **`redb.Route.Grpc` — server streaming, mTLS, health.** An `IAsyncEnumerable` reply body is written one
+  frame per yield (the framework's own streaming shape, as in the HTTP consumer);
+  `.ClientCertificates(mode, thumbprints…)` requires and pins client certificates, surfacing
+  `redbGrpc.ClientCert*`; `.Health()` serves `grpc.health.v1.Health/Check` for Kubernetes / Consul / Envoy
+  probes. The client address is resolved to `redbGrpc.RemoteIp` / `RemotePort`, and
+  `.EmitHttpCompatHeaders()` mirrors it into `redbHttp.RemoteAddress` so IP-keyed processors written for
+  HTTP (rate limiting, lockout, device metadata) work behind a gRPC facade unchanged.
+- **`redb.Route.Grpc` — gzip.** Compressed requests are accepted and inflated (the size limit is
+  re-checked after inflation, so a small frame cannot expand into an arbitrarily large buffer);
+  `identity,gzip` is advertised back on every response. `.Compression(GrpcCompression.Gzip)` compresses
+  replies, but only when the caller advertised gzip, and gzips outgoing requests on the client side. An
+  unknown codec is answered with `Unimplemented` instead of a parse failure.
+- **`redb.Route.Grpc` — the producer streams too.** `.Streaming()` on a client endpoint makes the call
+  server-streaming and puts an `IAsyncEnumerable` into `Out.Body`, so a gRPC stream flows straight into a
+  streaming consumer (the HTTP one turns it into SSE or chunked output) without being buffered in between.
+  Parity with camel-grpc's `producerStrategy=STREAMING`.
+- **`redb.Route.Grpc` — a stream body on a unary address fails loudly.** A unary call carries exactly one
+  message, so an `IAsyncEnumerable` reply there cannot be delivered; the route now gets an error naming the
+  address instead of the enumerable's type name going out as the payload.
+- **`redb.Route.Grpc` — live interop tests against an independent gRPC stack.** Since the wire protocol is
+  ours now, correctness is verified against Node.js `@grpc/grpc-js` in a container (`C:\Work\yaml\grpc`),
+  both directions and cross-process: a foreign server parses our frames, a foreign client accepts our
+  replies, trailers, `PERMISSION_DENIED` status, server stream, gzipped request and a real mTLS handshake
+  with a pinned client certificate. The contract is a typed `.proto`, so the same tests prove a generated
+  client can call a redb route with no server stubs on our side. Gated on the container
+  (`--filter Category=Interop`), mirroring the SOAP and AS2 fixtures.
+- **`redb.Route.Grpc` — camel-grpc parity on the URI.** `grpc://host:port/my.Service?method=Call` works
+  alongside the full-address spelling, plus `maxMessageSize` and `negotiationType=PLAINTEXT|TLS`.
+- **`redb.Route.Controllers` — `[GrpcMethod("Name")]`.** Pins the name gRPC callers dispatch on so renaming
+  a C# method is not a breaking change, mirroring `[SoapOperation]` for SOAP.
+- **`redb.Route.Http.Hosting` — client certificates on the shared host.** `RegisterRoute` accepts
+  `clientCertificateMode` and a `clientCertificateValidation` callback (thumbprint pinning on top of
+  Kestrel's chain validation), available to every HTTP-based transport.
+
+### Added
+- **`.ClaimCheck(...)` — the Claim Check EIP is now reachable from the DSL.** The processor, the five
+  operations, the headers and two repositories (in-memory and file-backed) were all implemented, but
+  nothing constructed `ClaimCheckDefinition`, so the pattern could not be used from a route at all.
+  A large body is now checked into a store and a short claim key travels the route in its place:
+  ```csharp
+  .ClaimCheck(ClaimCheckOperation.Set, "order-42")   // body → key, original type kept in headers
+  .To("kafka://orders")                              // the broker carries the key, not the payload
+  .ClaimCheck(ClaimCheckOperation.Get, "order-42")   // key → body, restored as its original type
+  ```
+  `Push` / `Pop` use an exchange-scoped stack instead of a key and nest, so a body can be parked around
+  an enrich call and restored after it. The repository is resolved at compile time: an explicit instance,
+  a name registered with `context.AddClaimCheckRepository(name, repository)`, a context default set with
+  `SetDefaultClaimCheckRepository`, an `IClaimCheckRepository` service, or — failing all of those — one
+  shared in-memory repository created per route context, so a `Set` in one step and a `Get` in another
+  reach the same store. An unknown repository name fails at startup naming the missing registration,
+  not at the first message.
+
+### Removed
+- **`InMemoryFileIdempotentRepository` (`redb.Route.File`) and `InMemorySftpIdempotentRepository`
+  (`redb.Route.Sftp`).** Both were byte-for-byte copies of `InMemoryGenericFileIdempotentRepository`,
+  differing only in the signature of their static `DefaultKey`, and neither was reachable in production:
+  the file consumer constructs the generic one directly, no endpoint option names a repository, and
+  nothing resolves them from the registry or by reflection. They were left behind when the GenericFile
+  extraction unified the three implementations — FTP, added later, never had one. Their tests were
+  consolidated into `redb.Route.Tests.GenericFile` against the class that actually runs. Code that
+  constructed either type directly should use `InMemoryGenericFileIdempotentRepository`, or the core
+  `InMemoryIdempotentRepository` for a non-file `.IdempotentConsumer(...)`.
+
+### Fixed
+- **`redb.Route.File` / `redb.Route.GenericFile`: four defects found by a critical review of the file
+  transports, each reproduced before it was fixed.** Three of them lost data silently, and all three
+  survived a fully green suite because the tests covered options one at a time while the defects lived in
+  their combinations.
+  - **`readLock=Rename` delivered empty files forever.** The strategy renames the file aside to claim it,
+    but the consumer kept reading the original path. The read failed, the failure was swallowed into an
+    empty body, post-processing failed on the same missing path, the lock renamed the file back, and the
+    next poll started over. Measured before the fix: six deliveries of a one-file directory, every body
+    empty, the file still there. A read-lock strategy can now report the path it moved the file to.
+  - **`readLock=FileLock` did the same, for the opposite reason.** The strategy held the file open with
+    `FileShare.None`, so the consumer's own second open was refused by its own lock, and again the failure
+    became an empty body. The strategy now exposes the handle it holds and the consumer reads through it.
+    It also opens with `FileShare.Delete` so post-processing can delete or move the file while the lock is
+    still held — exclusivity against other processes is unchanged and pinned by a test.
+  - **`idempotent` together with any `readLock` could lose a file permanently.** The idempotent key was
+    claimed *before* the read lock was taken, and the lock-refused path returned without releasing it. A
+    consumer that lost the lock race had already marked the file as processed; since the default key is
+    path + last-modified + size, it stayed marked forever and no consumer ever picked the file up again,
+    with nothing in the log. The read lock is now taken first.
+  - **A custom `idempotentKey` was used as a literal.** The DSL accepts an expression and the README
+    promised one, but the runtime took the string as-is, so every file got the same key: the first file
+    was processed and every later one silently skipped, permanently. `idempotentKey`, `moveTo`, `preMove`
+    and `moveFailed` now resolve the same file variables that `doneFileName` already did — `${file:name}`
+    and `${file:name.noext}`. Exchange-level expressions remain unavailable there by design: these values
+    are needed before the exchange exists or while it is being disposed, and the DSL and README now say so
+    instead of implying otherwise. Affects `redb.Route.Ftp` and `redb.Route.Sftp` too — the code is shared.
+- **`redb.Route.GenericFile`: the idempotent repository folded case, so `Order.csv` shadowed `order.csv`.**
+  The key embeds the file path and the set compared with `OrdinalIgnoreCase`. On every SFTP/FTP server
+  and every non-Windows file system those are two different files, and the second one was skipped as a
+  duplicate it never was — silently, and permanently for as long as the process lived. Now `Ordinal`,
+  matching the core `InMemoryIdempotentRepository`.
+- **`redb.Route.GenericFile`: an unreadable file arrived as a successfully processed empty message.**
+  `CreateExchangeAsync` caught every read error, logged a warning and substituted `Array.Empty<byte>()`,
+  after which post-processing happily deleted or archived the file. This is what made the two read-lock
+  defects above silent. A read failure is now a processing failure for that file: the idempotent key is
+  released, `moveFailed` applies, the file stays where it is, and the rest of the poll batch continues.
+- **`redb.Route.Grpc`: four defects found by a critical review of the connector, each reproduced before
+  it was fixed.** All four share one shape — untrusted or upstream-supplied input reaching code that sits
+  *outside* the handler's own try block, so the failure escaped the route's error contract entirely.
+  - **A crafted `grpc-timeout` could kill the request at the host.** The microsecond arm multiplied a
+    caller-supplied `long` by 10 unchecked; `1000000000000000000u` wrapped to a negative tick count and
+    `CancelAfter` threw `ArgumentOutOfRangeException` before the consumer's try block, while
+    `9223372036854775807u` produced a tiny negative deadline that cancelled the call instantly. Worse, the
+    `catch` only handled `OverflowException`, but `TimeSpan.FromHours` and friends raise
+    `ArgumentOutOfRangeException` — so `9223372036854775807H` escaped the method too. Both are caught now,
+    and the multiply is `checked`, so an unreadable deadline means what the doc always claimed: no
+    deadline enforced, call proceeds.
+  - **A header name the wire cannot express killed the call.** The producer copied every exchange header
+    into gRPC metadata, whose key alphabet is far narrower — `Metadata.Add` throws on spaces, non-ASCII,
+    and on any `-bin` suffix, which is a perfectly legal HTTP header name (`trace-bin`). That loop runs
+    before the producer's try, so one odd header from an upstream HTTP consumer took the whole call down
+    with an `ArgumentException` carrying no status. Unrepresentable keys are now dropped and logged; the
+    rest of the headers still travel.
+  - **A malformed envelope was reported as our fault.** In envelope mode the consumer parses
+    caller-supplied bytes as a `RedbMessage`; garbage fell through the catch-all as `INTERNAL` — telling
+    the caller "server problem, retry" about input only they can fix — and put the protobuf parser's own
+    wording into `grpc-message`. Now `INVALID_ARGUMENT`, naming what was expected.
+  - **A server stream that broke mid-flight was invisible.** Streaming failures surface while the consumer
+    enumerates, long after `Process` returned, so `.OnException`, retry and dead-letter cannot see them —
+    inherent to lazy streaming. But nothing recorded them either: a stream that broke every time looked
+    like a stream that ended early. The break is now logged and counted on the endpoint, then rethrown so
+    the reader still learns the stream did not finish.
+- **`redb.Route.Llm` — review hardening: scheduled consumer, tool-loop, streaming and tool-error JSON.** A
+  provider/HTTP timeout no longer terminates the scheduled consumer forever (an `HttpClient` timeout throws
+  `OperationCanceledException` on a different token — only real shutdown stops the loop now). Hitting
+  `MaxIterations`/budget mid tool-round returns the last assistant content instead of an empty answer. The
+  provider's `HttpClient` is reused (cached in the factory) rather than minted and leaked per call, and a
+  mid-stream failure is recorded as an endpoint error and failure metric instead of vanishing. Tool-error
+  results are JSON-serialized, so a control character in a message no longer produces invalid JSON.
+- **`redb.Route.Llm` — the native `AnthropicProvider` no longer 400s on current-generation Claude models.**
+  Anthropic's Messages API changed the sampling contract across generations, and the connector sent
+  `temperature`/`top_p` unconditionally: any config that set them and targeted Opus 4.7/4.8/5, Sonnet 5 or
+  Fable 5 was rejected with HTTP 400 (those models removed the knobs), and Claude 4.0–4.6 rejected the two
+  *together*. The provider now resolves an `AnthropicModelProfile` from the model id and shapes the request
+  to the model's sampling policy — Claude 3.x takes both, Claude 4.0–4.6 takes one (`temperature` wins,
+  `top_p` dropped), Claude 4.7+/5 takes neither — with an unrecognised id defaulting to the modern
+  (no-sampling) contract so a future model release never 400s on a removed field. A dropped knob logs a
+  warning and leaves an `llm.sampling.dropped` event on the span (model id, tier, dropped params) rather
+  than failing silently.
+  `LlmConnectionFactory.ModelContractTier` (`legacy`/`transitional`/`modern`) overrides the inference for
+  proxy or self-hosted model ids. Anthropic-only; the OpenAI-compatible providers are untouched.
+- **`redb.Route.As2` — MIC now matches for the compress-without-sign profile.** The sender hashed the
+  compressed part while the receiver hashes the decompressed payload, so `Compress=true, Sign=false` always
+  reported a MIC mismatch; the unsigned MIC is now computed over the uncompressed payload.
+- **`redb.Route.Soap` — review hardening across modes, WS-Security symmetry and the controller/MIME edges.**
+  Message (transparent-proxy) mode no longer decrypts/verifies the producer's response envelope (it now stays
+  verbatim, matching the consumer's inbound skip); the consumer now signs/encrypts its response when certs are
+  configured, so the producer's decrypt/verify leg is actually symmetric; a non-XML body in Message mode no
+  longer throws out of the header-plane read; SOAP 1.2 `action` parses correctly when it is not the last
+  Content-Type parameter. The SOAP controller dispatcher now fails fast on an ambiguous operation name across
+  controllers (instead of silently running the first), awaits `ValueTask`/`ValueTask<T>` returns, and matches
+  operation names case-sensitively (XML names are). The MTOM multipart parser respects quoted Content-Type
+  parameters, so a foreign `boundary`/`start-info` containing `;` no longer breaks parsing.
+- **An unhandled exception in a SEDA/in-memory consumer no longer kills the worker ([issue #6](https://github.com/redbase-app/redb-route/issues/6)).**
+  The worker loop caught only cancellation and channel-closed, so a single failing exchange (e.g. a DB unique
+  violation with no `OnException`) terminated the loop permanently and silently: the producer kept enqueueing,
+  the route stopped consuming, and the exception surfaced only at shutdown. `ProcessWithTracking` now logs an
+  unhandled exchange failure and drops it, so the consumer keeps draining — Apache Camel's `DefaultErrorHandler`
+  + `SedaConsumer` behaviour. `OnException` / `DeadLetterChannel` remain the handled paths (they run inside the
+  pipeline and never reach this net); broker consumers are unaffected (they use the manual ack/nack path). The
+  fix covers every `ProcessWithTracking` consumer: `seda`, `direct-vm`, `timer`, and the S3 / Elasticsearch /
+  Firebase / LDAP pollers.
+- **`AddRouteBuilder<T>()` / `AddComponent<T>()` no longer fail host startup ([issue #5](https://github.com/redbase-app/redb-route/issues/5)).**
+  The builder/component was registered only under its base type (`RouteBuilder` / `IComponent`), while the
+  configurator resolves the concrete type — so startup threw `InvalidOperationException: No service for type
+  '…' has been registered`. Both are now registered under the concrete type and exposed as the base type
+  (same singleton). The documented onboarding path (`AddRedbRoute(r => r.AddRouteBuilder<MyRoutes>())`) works.
+- **README — `.Retry(...)` examples corrected to the real error-handling API.** `.Retry` is not a route step;
+  the README showed it as one in several places (a compile error). Route-level retry is `OnException(...)`
+  with `MaximumRedeliveries` / `RedeliveryDelay`; per-step retry is `Transacted().Retry(attempts, delay)`.
+- **`redb.Route.Controllers` — a JSON-object request body binds to controller parameters by name (gRPC / SignalR).**
+  `ResolvePositional` used to drop the whole object into the first parameter, so a method with a route/path
+  parameter plus a `[FromBody]` (the object became the id, the body stayed null) or with simple parameters
+  (the object could not become an `int`) failed. A JSON object now binds each parameter by its name — honouring
+  the `[FromRoute]`/`[FromQuery]` key, case-insensitively — while `[FromBody]` (or a lone unbound complex
+  parameter) still receives the whole object, and unmatched parameters keep their defaults. JSON arrays and
+  single values stay positional, so existing callers are unchanged.
+- **`redb.Route.Grpc` — a reply body that is not a payload is refused instead of stringified.** A route
+  answering with, say, a dictionary used to put the literal text
+  `System.Collections.Generic.Dictionary\`2[…]` on the wire with an OK status. That is reachable in
+  practice: a builder-level `OnException(...).Handled()` anywhere in the context replaces the answer with
+  its own error document, and the route ends before any encoder of ours runs. The consumer now fails with
+  `Internal` naming the offending type — the same lesson as the SOAP `byte[]` fix, one connector over.
+
+### Security
+- **`redb.Route.File`: the producer would write anywhere the incoming message told it to.** The target
+  file name normally arrives from a header (`redbFile.Name`), i.e. from whatever produced the message —
+  an uploaded file name, a partner's file name, a field of a payload. The local producer never validated
+  it: `ValidatePath` is a no-op in the shared base and only the remote transports overrode it. Two ways
+  out of the endpoint directory, both confirmed against the real producer: a relative `../escaped.txt`,
+  and an absolute path, which `Path.Combine` silently honours by discarding the base entirely. The local
+  producer now jails the target the way SFTP and FTP already did, under the same option name —
+  `jailStartingDirectory`, default `true` — and throws `UnauthorizedAccessException` naming both the
+  requested and the resolved path.
+- **`redb.Route.Sftp`, `redb.Route.Ftp`, `redb.Route.File`: the jail compared a bare string prefix.** With
+  a base of `/upload/in`, the target `/upload/instructions/x` starts with the base and was allowed
+  through, into a directory the endpoint has nothing to do with. The check now compares on the directory
+  boundary via the shared `GenericFileUtils.IsWithinDirectory`. The same flaw was in
+  `FileClaimCheckRepository.GetSafePath`, which is now on the same helper.
+- **`redb.Route.Grpc`: asking a producer for TLS left it connecting in cleartext.** `.Ssl()` sets
+  `ssl=true`, but the producer builds its target address from `Plaintext` — a separate option that
+  defaults to `true` and that nothing linked to `ssl`. Only `negotiationType=TLS` happened to set both.
+  So `GrpcDsl.Call("host:443").Ssl()` produced `http://host:443`: the obvious spelling of "use TLS" was
+  ignored, silently, on the leg that carries credentials outward. `ssl=true` now implies
+  `plaintext=false`, and an explicit `plaintext` still wins so local debugging keeps its knob.
+- **`redb.Route.Soap` — WS-Security signature-wrapping bypass fixed.** The anti-wrapping check resolved the
+  protected Body with `GetElementsByTagName` (document order, any depth) while the processing path reads the
+  Envelope's direct-child Body. An attacker could nest a genuinely-signed Body inside `<Header>` and put an
+  unsigned Body as the direct child: the signature validated over the original while the route consumed the
+  attacker's content with `redbSoap.signatureValid=true`. Verification now resolves the same direct-child Body
+  the route uses and rejects an envelope with more than one Body. Regression test included.
+- **`redb.Route.Soap` — XML-Encryption no longer leaks extra Body children in cleartext.** `EncryptBody`
+  encrypted only the first `<soap:Body>` child, so a document/literal body with several elements sent the rest
+  unencrypted. All children are now encrypted under one session key (a single `EncryptedKey` / `ReferenceList`),
+  and decrypt restores them all.
+- **`redb.Route.As2` — the receiver now enforces the partnership's signature/encryption requirements.** The
+  inbound handler computed `signatureValid` but never acted on it: an unsigned message (or one whose signature
+  failed) was delivered to the route and answered with a positive MDN. A message that the partnership requires
+  to be signed/encrypted, or whose signature does not verify, is now rejected with a negative MDN and never
+  processed. The crypto (signer pinned to the partner cert) was already correct; only the result was ignored.
+- **`redb.Route.As2` — an unsigned/forged MDN is no longer accepted as a valid receipt.** `MdnParser` defaulted
+  `SignatureValid` to true, lowering it only for a signed MDN — so a stripped-signature or fabricated
+  `multipart/report` read as a valid signed receipt. It now defaults false; only a present-and-verified
+  signature sets it true, and `RequireValidMdn` hard-fails a send on an unacceptable MDN (negative, MIC
+  mismatch, or missing required signature).
+- **`redb.Route.As2` — SSRF via `Receipt-Delivery-Option` blocked.** The async-MDN receipt URL was POSTed to
+  verbatim; a request could point it at link-local metadata (169.254.169.254). Link-local literal IP targets
+  are now rejected before delivery.
+- **`redb.Route.As2` — the async-MDN correlation store no longer grows unbounded.** `Sweep` was never invoked;
+  a partner that never delivered a promised async MDN leaked one live waiter per message. The store now runs a
+  periodic eviction timer (and is disposed with the component).
+- **`redb.Route.Http` / `redb.Route.Grpc` — a caller can no longer forge transport headers.** `HttpConsumer`
+  set `redbHttp.RemoteAddress` from the connection and then copied the request headers over it, so a client
+  sending a header literally named `redbHttp.RemoteAddress` (a valid HTTP token) replaced the socket
+  address — the input to per-IP rate limiting, brute-force lockout and audit records. Inbound headers
+  carrying a transport-reserved prefix (`redbHttp.`, `redbGrpc.`, `redbSoap.`, `redbSignalR.`, `redbMail.`,
+  `redbAs2.`) are now dropped; the gRPC consumer applies the same rule to metadata and envelope headers, with
+  `allowClientReservedHeaders=true` as an explicit, logged opt-out.
+
+### Testing
+- **`redb.Route.Tests.GenericFile` — the shared file pipeline now has its own suite.** The poll loop,
+  filtering, sorting, limits, idempotency, done-file, pre-move / move / delete, the failure contract and
+  the producer write flow are exercised against an in-memory `IFileOperations`, so the code that File, FTP
+  and SFTP all share is covered in milliseconds without a disk or a server. Previously it had no suite of
+  its own and was reached only through `redb.Route.Tests.File` and through docker-gated FTP/SFTP
+  integration tests. The File suite gained end-to-end read-lock tests (the existing ones drove the
+  strategies in isolation, where all five are correct) and producer path-safety tests. Every test added
+  here was confirmed to fail on the unfixed code first.
+- **`ClaimCheckDslTests`** covers the new DSL end to end: `Set`/`Get`/`GetAndRemove`, nested `Push`/`Pop`,
+  and all four repository-resolution paths including the startup failure on an unknown name.
+- **The idempotent-repository suite moved to the class that runs.** The two per-connector copies tested
+  removed types; one of them also pinned the case-folding defect as correct behaviour
+  (`CaseInsensitive_Keys` asserted that `File.TXT` and `file.txt` were the same file). The consolidated
+  suite asserts the opposite, plus concurrency: exactly one of fifty racing `Add` calls wins the claim.
+
+### Changed (behavioural)
+- **`redb.Route.Grpc` — the producer throws on a failed call (`ThrowOnError`, default `true`).** It used to
+  record the `RpcException` on the exchange and return; nothing in the pipeline reads that field, so
+  `.OnException(...)`, retry and dead-letter never saw the failure and the route carried on with an empty
+  `Out`. It now behaves like the HTTP and SOAP producers. Set `throwOnError=false` for the old behaviour.
+- **`redb.Route.Grpc` — errors reach clients as gRPC statuses instead of `OK` plus an error document.** A
+  caller that ignored the status and parsed the body will now see an `RpcException`. Set
+  `suppressStatusMapping=true` to keep answering `OK`.
+- **`redb.Route.Http.Hosting` — conflicting listener settings on one port now throw.** `Protocol` and
+  `clientCertificateMode` from a later `RegisterRoute` used to be discarded silently, which put a gRPC
+  route (HTTP/2 only) on an HTTP/1.1 listener and failed every call with an unreadable framing error.
+- **`redb.Route.Grpc` — the consumer now opens a span.** `grpc receive` (`ActivityKind.Server`,
+  `rpc.system=grpc`), mirroring the AS2 and SOAP consumers; previously only the producer's `grpc.invoke`
+  existed. Traces and any span-count assertions will see one more span per call.
+- **`redb.Route.Grpc` — `GrpcEndpoint.BuildProducerAddress()` composes from host and port** instead of
+  echoing the URI path, which now also carries the method address. A URI without an explicit port
+  (`grpc:myhost`) resolves to `http://myhost:50051` rather than `http://myhost`.
+
+### Dependencies
+- **`redb.Route.Grpc` no longer references `Grpc.AspNetCore`.** The server stack is gone with the wire
+  protocol moving into `GrpcWire`; what remains is the message layer (`Google.Protobuf`, plus `Grpc.Tools`
+  as a build-only dependency) and the client channel (`Grpc.Net.Client`, which brings `Grpc.Core.Api` —
+  still used on both sides for `StatusCode` and `RpcException`). The generated `redb_service.proto` now
+  emits `GrpcServices="Client"`: the server side is ours.
+- **`redb.Route.Grpc` now references `redb.Route.Http.Hosting`**, the shared Kestrel host it serves on,
+  joining `redb.Route.Http`, `redb.Route.As2` and `redb.Route.Soap`. `AddRedbRouteGrpc()` calls
+  `AddRedbRouteHttpHosting()` itself (idempotent), so a worker with several HTTP-based transports still
+  ends up with one server manager.
+
+### Added
+- **`redb.Route.Controllers` — SOAP as a controller transport (`SoapControllerDispatcher` + `RedbSoapController`).**
+  SOAP joins HTTP / SignalR / gRPC as a controller dispatch target: `redbSoap.operation` maps to a controller
+  method (by name or `[SoapOperation("...")]`), the XML body binds to the `[FromBody]` / complex parameter via
+  `XmlSerializer`, and the typed reply serializes back into the response envelope. Errors become a `soap:Fault`.
+  `From(Soap.Listen("/svc/air")…).RedbSoapController<AirController>();` — no HTTP attributes, DTOs may be
+  `dotnet-svcutil`-generated. Use it in the default `Payload` data format. A required simple parameter that
+  cannot bind faults with a readable message (naming the parameter) rather than a reflection error, and a
+  `byte[]` reply body is emitted as XML instead of `"System.Byte[]"`. Verified end to end through the real
+  SOAP consumer.
+- **Control Bus EIP — `controlbus:` component + `.ControlBus(...)` DSL (Apache Camel parity).** Manage routes
+  at runtime by sending a message: **start / stop / suspend / resume / restart / status / stats / fail** a
+  route addressed by `routeId` (`current` targets the sending route). Registered out of the box, producer-only
+  (`.To("controlbus:route?routeId=orders&action=stop")` or `.ControlBus(ControlBusAction.Stop, "orders")`).
+  Options mirror Camel: `routeId`, `action`, `async` (fire-and-forget), `restartDelay` (ms), `loggingLevel`;
+  plus the `controlbus:language:<lang>` command. `status` puts the route's `RouteStatus` on the body; `stats`
+  returns per-route XML built from the endpoint's real `IEndpointStatistics` (messages in/out, errors,
+  throughput, health), or the whole context when `routeId` is omitted. A control action opens a `Client`
+  telemetry span like any other connector. Stopping the **current** route is auto-deferred (async dispatch)
+  so a route can safely stop itself without deadlocking on its own in-flight exchange.
+  ```csharp
+  From("kafka://ingest")
+      .Choice().When(Overloaded).ControlBus(ControlBusAction.Suspend, "current", async: true).End()
+      .To("direct://process");
+  ```
+  Per-context, matching Camel — for cross-context control, send over `direct-vm`/`vm` to the target context
+  and run `controlbus:` there. Built entirely on the existing per-route lifecycle
+  (`StartRoute`/`StopRoute`/`ResumeRoute`); no new machinery.
+- **`controlbus:notify` — consume route/context lifecycle events as messages (redb extension, beyond Camel).**
+  Camel's control bus is producer-only; lifecycle changes are observed through the EventNotifier callback SPI
+  (redb's equivalent is `IRouteLifecycleListener`). This adds a **consumer** so events flow into a route and
+  can be handled with the full EIP pipeline: `From("controlbus:notify").Filter(...).To("telegram://ops")`.
+  Emits `RouteStarted` / `RouteStopped` / `RouteSuspending` / `RouteErrored` / `ContextStarting|Started|Stopping|Stopped`
+  / `ExchangeTimedOut`, with `controlbus.event` / `controlbus.routeId` / `controlbus.timestamp` (+ `controlbus.error`,
+  `controlbus.exchangeId`, `controlbus.elapsedMs`) headers. Optional `routeId` and `events=` filters. Events are
+  dispatched off the lifecycle-notification thread, so a slow reaction never stalls route start/stop.
+- **`redb.Route.Soap` — new SOAP / WSDL web-service connector (baseline), oriented to Apache Camel `camel-cxf`.**
+  Call SOAP services and host SOAP endpoints as ordinary route steps. Schemes `soap` / `soaps`. Producer wraps
+  the body in a 1.1/1.2 envelope, POSTs it and surfaces the response on `exchange.Out`; a `soap:Fault` (both
+  versions) throws `SoapFaultException` with `redbSoap.fault*`. Consumer hosts on the shared Kestrel host,
+  delivers the `<soap:Body>` payload to the route and returns a response envelope (route exception ⇒ SOAP
+  fault; a `byte[]` reply body is emitted as XML, not `"System.Byte[]"`). Two header planes handled correctly — transport HTTP headers vs the envelope `<soap:Header>` block
+  (mapped under `redbSoap.header.*`), plus `redbSoap.operation` and the ContentType canonical plane.
+  **WS-Security**: UsernameToken, XML-Signature of the Body (sign + verify) and XML-Encryption of the Body
+  (encrypt + decrypt) in the standard WSS layout (`EncryptedKey` in the `wsse:Security` header with a
+  `ReferenceList` to the `EncryptedData`, AES-256-CBC + RSA-OAEP), validated end to end by an independent
+  crypto stack (Node.js OpenSSL). On the patched `System.Security.Cryptography.Xml` 9.0.18 (CVE-2026-50648). Signature
+  verification authenticates against the configured partner certificate (rejecting a signature from any other
+  cert) and requires the signature to cover the `<soap:Body>` (defeating signature-wrapping); the producer
+  decrypts and verifies responses symmetrically. Full connector cross-cutting — `Client`/`Server` telemetry
+  spans, `IEndpointStatistics`, `[Sensitive]` redaction, partner config via `SoapConnectionFactory`.
+  ```csharp
+  services.AddRedbRouteSoap();
+  From("direct://q").To(Soap.Call("https://gds/air.svc").ConnectionFactory("amadeus").Operation("GetFares"));
+  From(Soap.Listen("/svc/orders").Host("0.0.0.0").Port(4090)).Process(handle);
+  ```
+  **camel-cxf dataFormat + MTOM parity**: `Payload` (default), `Message` (whole-envelope transparent proxy)
+  and `Pojo` (typed request/response via `XmlSerializer`, DTOs may be `dotnet-svcutil`-generated) — set on
+  `SoapConnectionFactory.DataFormat`. **MTOM/XOP** binary attachments as `multipart/related`, exposed on the
+  `redbSoap.attachments` plane (`SoapAttachment`) like Camel's `AttachmentMessage`, on both producer and
+  consumer. **WSDL publishing** (`?wsdl` parity): a consumer with `SoapConnectionFactory.Wsdl` set serves the
+  contract on `GET ?wsdl` with the `soap:address` rewritten to the caller's URL. Baseline is in-box (HttpClient
+  + shared Kestrel + `System.Security.Cryptography.Xml`, no CoreWCF). Verified against an independent SOAP
+  stack (Node.js `soap`) in both directions — plain SOAP and MTOM (their `forceMTOM` client ↔ our consumer) —
+  as gated `Category=Interop` tests (harness in `C:\Work\yaml\soap`). See `docs/SOAP_CONNECTOR_PLAN.md`.
 
 ## [3.6.0] — 2026-08-13
 

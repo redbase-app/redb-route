@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Components;
 using redb.Route.Core;
 using redb.Route.Processors;
 
@@ -227,12 +228,13 @@ public sealed class DynamicRouterDefinition : ProcessorDefinition
 /// </summary>
 public sealed class ClaimCheckDefinition : ProcessorDefinition
 {
-    private readonly IClaimCheckRepository _repository;
+    private readonly IClaimCheckRepository? _repository;
+    private readonly string? _repositoryName;
     private readonly ClaimCheckOperation _operation;
     private readonly string? _key;
     private readonly TimeSpan? _ttl;
 
-    /// <summary>Creates a claim check definition.</summary>
+    /// <summary>Creates a claim check definition bound to an explicit repository.</summary>
     public ClaimCheckDefinition(
         IClaimCheckRepository repository,
         ClaimCheckOperation operation,
@@ -246,10 +248,28 @@ public sealed class ClaimCheckDefinition : ProcessorDefinition
         _ttl = ttl;
     }
 
+    /// <summary>
+    /// Creates a claim check definition whose repository is resolved from the route context
+    /// at compile time: by <paramref name="repositoryName"/> if given, otherwise the context
+    /// default (see <see cref="Components.ClaimCheckRepositoryRegistry"/>).
+    /// </summary>
+    public ClaimCheckDefinition(
+        ClaimCheckOperation operation,
+        string? key = null,
+        TimeSpan? ttl = null,
+        string? repositoryName = null)
+    {
+        _operation = operation;
+        _key = key;
+        _ttl = ttl;
+        _repositoryName = repositoryName;
+    }
+
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
     {
         var logger = context.GetService<ILoggerFactory>()?.CreateLogger<ClaimCheckProcessor>();
-        return new ClaimCheckProcessor(_repository, _operation, _key, _ttl, logger);
+        var repository = _repository ?? context.ResolveClaimCheckRepository(_repositoryName);
+        return new ClaimCheckProcessor(repository, _operation, _key, _ttl, logger);
     }
 }

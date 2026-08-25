@@ -73,6 +73,7 @@ internal sealed class As2Producer : ConnectableProducer
 
         // 1. Payload MIME entity from the exchange body.
         MimeEntity entity = BuildPayload(exchange.In);
+        var uncompressed = entity;   // handle to the pre-compression payload, for the unsigned MIC
 
         // 2. compress → sign (compute MIC over what we sign) → encrypt, per profile.
         if (profile.Compress)
@@ -81,12 +82,16 @@ internal sealed class As2Producer : ConnectableProducer
         As2Mic mic;
         if (profile.Sign)
         {
+            // Signed: the MIC is over the signed content (the compressed part, when compress-then-sign) —
+            // which is exactly what the receiver hashes from the signed entity.
             mic = _engine.ComputeMic(entity, profile.SignAlg, includeHeaders: true);
             entity = _engine.Sign(entity, profile.OurCertificate!, profile.SignAlg);
         }
         else
         {
-            mic = _engine.ComputeMic(entity, profile.SignAlg, includeHeaders: false);
+            // Unsigned: the receiver decompresses first and hashes the DECOMPRESSED payload, so compute the MIC
+            // over the uncompressed entity here — otherwise compress-without-sign always reported a MIC mismatch.
+            mic = _engine.ComputeMic(uncompressed, profile.SignAlg, includeHeaders: false);
         }
 
         if (profile.Encrypt)
@@ -161,10 +166,22 @@ internal sealed class As2Producer : ConnectableProducer
             exchange.Out = outMessage;
             exchange.Pattern = ExchangePattern.InOut;
 
-            if (!result.IsPositive || !micMatch || !result.SignatureValid)
+            // A definitive rejection means the transfer is NOT confirmed: a negative disposition, a MIC
+            // mismatch (tamper/corruption), or a missing/invalid signature when a signed MDN was required. The
+            // outcome is always on the redbAs2.mdn* headers (accurate now that an unsigned MDN reads
+            // signatureValid=false); with RequireValidMdn it is also a hard failure for the route.
+            var unacceptable = !result.IsPositive || !micMatch || (profile.SignedMdn && !result.SignatureValid);
+            if (unacceptable)
+            {
                 Logger?.LogWarning(
-                    "AS2 MDN concern: id={MessageId}, disposition={Disposition}, micMatch={MicMatch}, sigValid={SigValid}",
+                    "AS2 MDN not acceptable: id={MessageId}, disposition={Disposition}, micMatch={MicMatch}, sigValid={SigValid}",
                     messageId, result.Disposition, micMatch, result.SignatureValid);
+                if (profile.RequireValidMdn)
+                    throw new InvalidOperationException(
+                        $"AS2 transfer not confirmed for '{messageId}': disposition='{result.Disposition ?? "(none)"}', " +
+                        $"micMatch={micMatch}, signatureValid={result.SignatureValid}" +
+                        (profile.SignedMdn && !result.SignatureValid ? " (a signed MDN was required)" : "") + ".");
+            }
         }
         else if (profile.MdnMode == As2MdnMode.Async)
         {

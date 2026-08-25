@@ -106,7 +106,8 @@ public abstract class RemoteFileConsumer<TOptions> : GenericFileConsumer<TOption
 
         try
         {
-            var failedDir = ResolveDirectory(Options.MoveFailed, basePath);
+            var failedDir = ResolveDirectory(
+                GenericFileUtils.SubstituteFileTokens(fileName, Options.MoveFailed, Operations), basePath);
             await Operations.CreateDirectoryAsync(failedDir, ct).ConfigureAwait(false);
 
             var targetPath = Operations.CombinePath(failedDir, fileName);

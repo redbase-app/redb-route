@@ -1,11 +1,14 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Routing.Template;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.Logging;
 
 namespace redb.Route.Http;
@@ -40,6 +43,12 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
     /// different routes on the same <c>(host, port)</c> can declare different CORS policies.
     /// When null, no CORS headers are emitted for this route.</param>
     /// <param name="maxRequestBodySize">Max request body size (0 = unlimited).</param>
+    /// <param name="protocol">HTTP protocol set for the listener. Every route on a given
+    /// <c>(host, port)</c> must agree — a mismatch throws rather than silently keeping the first value.</param>
+    /// <param name="clientCertificateMode">Client-certificate policy (mTLS). Belongs to the TLS
+    /// handshake, so it is per listener and must agree across routes on the same port.</param>
+    /// <param name="clientCertificateValidation">Extra check on a presented client certificate, applied
+    /// on top of Kestrel's chain validation (e.g. a thumbprint allow-list).</param>
     /// <returns>A registration handle that can be used to unregister the route.</returns>
     public RouteRegistration RegisterRoute(
         string host,
@@ -52,19 +61,38 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
         string? sslCertPassword = null,
         RouteCorsOptions? corsOptions = null,
         long maxRequestBodySize = 0,
-        HttpProtocol protocol = HttpProtocol.Http1And2)
+        HttpProtocol protocol = HttpProtocol.Http1And2,
+        ClientCertificateMode? clientCertificateMode = null,
+        Func<X509Certificate2, X509Chain?, SslPolicyErrors, bool>? clientCertificateValidation = null)
     {
         var key = BuildKey(host, port);
 
         lock (_lock)
         {
-            var entry = _servers.GetOrAdd(key, _ => new ServerEntry(host, port, ssl, sslCertPath, sslCertPassword, maxRequestBodySize, protocol));
+            var entry = _servers.GetOrAdd(key, _ => new ServerEntry(host, port, ssl, sslCertPath, sslCertPassword,
+                maxRequestBodySize, protocol, clientCertificateMode, clientCertificateValidation));
 
             // Validate scheme consistency
             if (entry.Ssl != ssl)
                 throw new InvalidOperationException(
                     $"Server on {host}:{port} is already registered as {(entry.Ssl ? "HTTPS" : "HTTP")}. " +
                     $"Cannot register a {(ssl ? "HTTPS" : "HTTP")} route on the same port.");
+
+            // One listener cannot speak two protocol sets. Silently keeping the first value used to send
+            // a gRPC route to an HTTP/1.1 listener, where every call fails with an unreadable framing
+            // error instead of a configuration one.
+            if (entry.Protocol != protocol)
+                throw new InvalidOperationException(
+                    $"Server on {host}:{port} is already listening as {entry.Protocol}. " +
+                    $"Cannot register a {protocol} route on the same port — use a separate port.");
+
+            // Same reasoning for mTLS: the client-certificate policy belongs to the TLS handshake, so it
+            // is per listener, not per route.
+            if (entry.ClientCertificateMode != clientCertificateMode)
+                throw new InvalidOperationException(
+                    $"Server on {host}:{port} is already registered with client-certificate mode " +
+                    $"'{entry.ClientCertificateMode?.ToString() ?? "none"}'. Cannot register a route with " +
+                    $"'{clientCertificateMode?.ToString() ?? "none"}' on the same port.");
 
             var registration = new RouteRegistration(key, pathTemplate, methods, handler, corsOptions);
             entry.Routes.Add(registration);
@@ -186,7 +214,14 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
                 kestrel.Listen(IPAddress.Parse(entry.Host), entry.Port, listenOptions =>
                 {
                     listenOptions.Protocols = protocols;
-                    listenOptions.UseHttps(entry.SslCertPath, entry.SslCertPassword);
+                    listenOptions.UseHttps(entry.SslCertPath!, entry.SslCertPassword, httpsOptions =>
+                    {
+                        if (entry.ClientCertificateMode is { } mode)
+                            httpsOptions.ClientCertificateMode = mode;
+
+                        if (entry.ClientCertificateValidation is { } validate)
+                            httpsOptions.ClientCertificateValidation = (cert, chain, errors) => validate(cert, chain, errors);
+                    });
                 });
             }
             else
@@ -424,7 +459,19 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
         private readonly TemplateMatcher[] _matchers = [];
         private volatile (TemplateMatcher matcher, RouteRegistration reg, string[]? methods)[]? _compiled;
 
-        public ServerEntry(string host, int port, bool ssl, string? sslCertPath, string? sslCertPassword, long maxRequestBodySize, HttpProtocol protocol = HttpProtocol.Http1And2)
+        /// <summary>Client-certificate policy for the listener (mTLS). Null = do not request one.</summary>
+        public ClientCertificateMode? ClientCertificateMode { get; }
+
+        /// <summary>
+        /// Extra check applied to a presented client certificate on top of Kestrel's chain validation
+        /// (for example an allow-list of thumbprints).
+        /// </summary>
+        public Func<X509Certificate2, X509Chain?, SslPolicyErrors, bool>? ClientCertificateValidation { get; }
+
+        public ServerEntry(string host, int port, bool ssl, string? sslCertPath, string? sslCertPassword,
+            long maxRequestBodySize, HttpProtocol protocol = HttpProtocol.Http1And2,
+            ClientCertificateMode? clientCertificateMode = null,
+            Func<X509Certificate2, X509Chain?, SslPolicyErrors, bool>? clientCertificateValidation = null)
         {
             Host = host;
             Port = port;
@@ -433,6 +480,8 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
             SslCertPassword = sslCertPassword;
             MaxRequestBodySize = maxRequestBodySize;
             Protocol = protocol;
+            ClientCertificateMode = clientCertificateMode;
+            ClientCertificateValidation = clientCertificateValidation;
         }
 
         public RouteMatch MatchRoute(string requestPath, string requestMethod)

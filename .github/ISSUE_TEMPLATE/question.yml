@@ -1,0 +1,28 @@
+name: Question
+description: Ask anything about redb.Route — usage, behaviour, or design
+title: "[Question] "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Anyone can open this — no permissions or prior contributions needed.
+
+        For open-ended topics, [Discussions → Q&A](https://github.com/redbase-app/redb-route/discussions/categories/q-a)
+        is usually a better fit. Use this form when you would rather have it tracked as an issue.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What would you like to know?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context (optional)
+      description: Versions, configuration, code snippet — whatever helps.
+      render: text
+    validations:
+      required: false

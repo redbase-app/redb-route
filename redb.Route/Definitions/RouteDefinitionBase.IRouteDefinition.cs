@@ -92,6 +92,7 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.ValidateXsd(System.Xml.Schema.XmlSchemaSet schemaSet, bool throwOnFailure) => ValidateXsd(schemaSet, throwOnFailure);
     IRouteDefinition IRouteDefinition.Xslt(string stylesheetPath, XsltOutput output, bool failOnNullBody, bool allowTemplateFromHeader) => Xslt(stylesheetPath, output, failOnNullBody, allowTemplateFromHeader);
     IRouteDefinition IRouteDefinition.XsltContent(string stylesheetXml, XsltOutput output, bool failOnNullBody, bool allowTemplateFromHeader) => XsltContent(stylesheetXml, output, failOnNullBody, allowTemplateFromHeader);
+    IRouteDefinition IRouteDefinition.ControlBus(redb.Route.ControlBus.ControlBusAction action, string routeId, bool async) => ControlBus(action, routeId, async);
 
     // ── Serialization ──
     IRouteDefinition IRouteDefinition.Marshal(Type serializerType) => Marshal(serializerType);

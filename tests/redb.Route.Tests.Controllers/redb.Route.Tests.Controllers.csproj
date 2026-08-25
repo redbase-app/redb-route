@@ -6,6 +6,7 @@
     <ProjectReference Include="..\..\redb.Route.Http\redb.Route.Http.csproj" />
     <ProjectReference Include="..\..\redb.Route.SignalR\redb.Route.SignalR.csproj" />
     <ProjectReference Include="..\..\redb.Route.Grpc\redb.Route.Grpc.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Soap\redb.Route.Soap.csproj" />
   </ItemGroup>
 
   <ItemGroup>

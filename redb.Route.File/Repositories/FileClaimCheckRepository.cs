@@ -151,8 +151,19 @@ public sealed class FileClaimCheckRepository : IClaimCheckRepository
     {
         var fullPath = Path.GetFullPath(Path.Combine(_directory, key + extension));
         var normalizedDir = Path.GetFullPath(_directory);
-        if (!fullPath.StartsWith(normalizedDir, StringComparison.OrdinalIgnoreCase))
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        // Compare on the directory boundary: a bare prefix test would accept a sibling
+        // directory whose name merely starts the same way ("/claims2" against "/claims").
+        if (!GenericFile.GenericFileUtils.IsWithinDirectory(
+                normalizedDir, fullPath, Path.DirectorySeparatorChar, comparison))
+        {
             throw new ArgumentException($"Key '{key}' resolves outside the claim check directory.", nameof(key));
+        }
+
         return fullPath;
     }
 

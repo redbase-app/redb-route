@@ -256,6 +256,64 @@ public static class ControllerRouteExtensions
         return route.RedbSignalRController(types);
     }
 
+    // ── SOAP controller dispatch ──────────────────────────
+
+    /// <summary>
+    /// Dispatches SOAP requests to methods on <typeparamref name="TController"/> by operation. The operation is
+    /// read from <c>redbSoap.operation</c> (set by the SOAP consumer); the XML body binds to the method's
+    /// <c>[FromBody]</c> / single complex parameter, and the return value is XML-serialized into the response.
+    /// <para>No HTTP attributes required. Use <see cref="Attributes.SoapOperationAttribute"/> when the method
+    /// name differs from the operation.</para>
+    /// </summary>
+    /// <typeparam name="TController">Controller whose methods become SOAP operations.</typeparam>
+    /// <param name="route">Route definition (behind a <c>Soap.Listen(...)</c> consumer).</param>
+    public static IRouteDefinition RedbSoapController<TController>(this IRouteDefinition route)
+        where TController : RedbController
+    {
+        return route.Process((exchange, ct) =>
+        {
+            var context = route.GetContext()
+                ?? throw new InvalidOperationException("RouteContext is not available.");
+            var dispatcher = new SoapControllerDispatcher(context, typeof(TController));
+            return dispatcher.Process(exchange, ct);
+        });
+    }
+
+    /// <summary>
+    /// Dispatches SOAP requests across multiple controller types by operation (<c>redbSoap.operation</c>). Use
+    /// the qualified form <c>"Controller.Operation"</c> to disambiguate; unqualified names resolve to the first
+    /// match.
+    /// </summary>
+    /// <param name="route">Route definition.</param>
+    /// <param name="controllerTypes">Controller types to register.</param>
+    public static IRouteDefinition RedbSoapController(
+        this IRouteDefinition route,
+        params Type[] controllerTypes)
+    {
+        return route.Process((exchange, ct) =>
+        {
+            var context = route.GetContext()
+                ?? throw new InvalidOperationException("RouteContext is not available.");
+            var dispatcher = new SoapControllerDispatcher(context, controllerTypes);
+            return dispatcher.Process(exchange, ct);
+        });
+    }
+
+    /// <summary>
+    /// Dispatches SOAP requests to controllers registered in an existing <see cref="ControllerRegistry"/>,
+    /// reusing it as a source of controller types; dispatch is by SOAP operation, not HTTP method/path.
+    /// </summary>
+    /// <param name="route">Route definition.</param>
+    /// <param name="registry">Controller registry with registered controllers.</param>
+    public static IRouteDefinition RedbSoapController(
+        this IRouteDefinition route,
+        ControllerRegistry registry)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        var types = registry.Actions.Select(a => a.ControllerType).Distinct().ToArray();
+        return route.RedbSoapController(types);
+    }
+
     // ── HTTP controller dispatch ──────────────────────────
 
     /// <summary>

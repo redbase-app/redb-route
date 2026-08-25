@@ -56,6 +56,9 @@ public sealed class As2EndpointOptions : EndpointOptions
     /// <summary>Request/produce a signed MDN. Default true.</summary>
     public bool SignedMdn { get; set; } = true;
 
+    /// <summary>Hard-fail a send on an unacceptable MDN (negative / MIC mismatch / missing required signature).</summary>
+    public bool RequireValidMdn { get; set; }
+
     /// <summary>URL the partner posts asynchronous MDNs to (our receiver). Required for async MDN.</summary>
     public string? AsyncMdnUrl { get; set; }
 

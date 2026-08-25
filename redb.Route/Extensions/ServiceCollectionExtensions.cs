@@ -86,7 +86,11 @@ public sealed class RedbRouteBuilder
     /// <returns>This builder for chaining.</returns>
     public RedbRouteBuilder AddRouteBuilder<TBuilder>() where TBuilder : RouteBuilder
     {
-        _services.AddSingleton<RouteBuilder, TBuilder>();
+        // Register the CONCRETE type (the configurator resolves TBuilder) and expose the SAME singleton as the
+        // base RouteBuilder for enumeration. Registering only the base left GetRequiredService<TBuilder>()
+        // unresolvable, so host startup threw "No service for type '…' has been registered".
+        _services.AddSingleton<TBuilder>();
+        _services.AddSingleton<RouteBuilder>(sp => sp.GetRequiredService<TBuilder>());
 
         // Hook up to context via a post-configure callback
         _services.AddSingleton<IRouteContextConfigurator>(sp =>
@@ -102,7 +106,10 @@ public sealed class RedbRouteBuilder
     /// <returns>This builder for chaining.</returns>
     public RedbRouteBuilder AddComponent<TComponent>() where TComponent : class, IComponent
     {
-        _services.AddSingleton<IComponent, TComponent>();
+        // Same fix as AddRouteBuilder: the ComponentConfigurator resolves the concrete TComponent, so register
+        // it directly and expose the same singleton as IComponent for enumeration.
+        _services.AddSingleton<TComponent>();
+        _services.AddSingleton<IComponent>(sp => sp.GetRequiredService<TComponent>());
 
         _services.AddSingleton<IRouteContextConfigurator>(sp =>
             new ComponentConfigurator<TComponent>(sp));

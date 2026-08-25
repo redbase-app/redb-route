@@ -327,6 +327,36 @@ public class SharedHttpServerTests : IAsyncLifetime
         body.Should().Be("echoed");
     }
 
+    // ── Listener-wide settings must agree across routes ──
+
+    [Fact]
+    public void Conflicting_protocol_on_one_port_is_rejected()
+    {
+        // One listener cannot speak two protocol sets. Keeping the first value silently used to put a
+        // gRPC route (HTTP/2 only) on an HTTP/1.1 listener, where every call failed with an unreadable
+        // framing error instead of a configuration one.
+        var manager = new SharedHttpServerManager();
+        manager.RegisterRoute("127.0.0.1", _port, "/a", "POST", _ => Task.CompletedTask);
+
+        var act = () => manager.RegisterRoute("127.0.0.1", _port, "/b", "POST", _ => Task.CompletedTask,
+            protocol: HttpProtocol.Http2);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*already listening as*");
+    }
+
+    [Fact]
+    public void Conflicting_client_certificate_mode_on_one_port_is_rejected()
+    {
+        // The client-certificate policy belongs to the TLS handshake, so it is per listener, not per route.
+        var manager = new SharedHttpServerManager();
+        manager.RegisterRoute("127.0.0.1", _port, "/a", "POST", _ => Task.CompletedTask);
+
+        var act = () => manager.RegisterRoute("127.0.0.1", _port, "/b", "POST", _ => Task.CompletedTask,
+            clientCertificateMode: Microsoft.AspNetCore.Server.Kestrel.Https.ClientCertificateMode.RequireCertificate);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*client-certificate mode*");
+    }
+
     // ── Util ──
 
     private static int GetFreePort()

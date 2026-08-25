@@ -221,6 +221,13 @@ public class HttpConsumer : IConsumer
             // Skip pseudo-headers
             if (header.Key.StartsWith(':')) continue;
 
+            // Transport-owned headers are set above from the connection itself, and processors trust
+            // them: redbHttp.RemoteAddress drives rate limiting, brute-force lockout and audit. This copy
+            // runs AFTER those assignments, so without the guard a caller sending a header literally
+            // named "redbHttp.RemoteAddress" (a valid HTTP token) would overwrite the socket address and
+            // pick its own throttle bucket.
+            if (HttpHeaders.IsRedbHeader(header.Key)) continue;
+
             requestHeaderNames.Add(header.Key);
             message.Headers[header.Key] = header.Value.Count switch
             {

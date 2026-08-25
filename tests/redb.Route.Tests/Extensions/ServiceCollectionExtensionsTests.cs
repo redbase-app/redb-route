@@ -76,6 +76,51 @@ public class ServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddRouteBuilder_StartsWithoutResolutionError()   // repro for GitHub issue #5
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddRedbRoute(route => route.AddRouteBuilder<Probe>());
+        var sp = services.BuildServiceProvider();
+
+        // The builder was registered only under the base type, but the configurator resolves the concrete
+        // one — so host startup threw "No service for type 'Probe' has been registered".
+        sp.GetRequiredService<Probe>().Should().NotBeNull();
+        sp.GetRequiredService<RouteBuilder>().Should().BeSameAs(sp.GetRequiredService<Probe>());
+
+        // The actual startup path: running the configurators must not throw.
+        var ctx = sp.GetRequiredService<RouteContext>();
+        var act = () => { foreach (var c in sp.GetServices<IRouteContextConfigurator>()) c.Configure(ctx); };
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void AddComponent_StartsWithoutResolutionError()   // same defect as AddRouteBuilder
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddRedbRoute(route => route.AddComponent<ProbeComponent>());
+        var sp = services.BuildServiceProvider();
+
+        sp.GetRequiredService<ProbeComponent>().Should().NotBeNull();
+
+        var ctx = sp.GetRequiredService<RouteContext>();
+        var act = () => { foreach (var c in sp.GetServices<IRouteContextConfigurator>()) c.Configure(ctx); };
+        act.Should().NotThrow();
+    }
+
+    private sealed class Probe : RouteBuilder
+    {
+        protected override void Configure() => From("direct://probe").Process(_ => { });
+    }
+
+    private sealed class ProbeComponent : IComponent
+    {
+        public string Scheme => "probe";
+        public IEndpoint CreateEndpoint(EndpointUri uri) => throw new NotSupportedException();
+    }
+
+    [Fact]
     public void AddRedbRouteCheck_RegistersHealthCheck()
     {
         var services = new ServiceCollection();

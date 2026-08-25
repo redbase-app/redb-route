@@ -5,6 +5,7 @@ using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Controllers;
 using redb.Route.Grpc;
+using Grpc.Core;
 
 namespace redb.Route.Tests.Controllers;
 
@@ -191,11 +192,16 @@ public class GrpcControllerIntegrationTests : IAsyncLifetime
         await StartPair(typeof(EchoController));
 
         var exchange = CreateGrpcExchange("NonExistent");
-        await _producer!.Process(exchange);
 
-        exchange.Out.Should().NotBeNull();
-        var body = Encoding.UTF8.GetString((byte[])exchange.Out!.Body!);
-        body.Should().Contain("NotFound");
+        // The dispatcher writes the transport-neutral status.code=404 that every controller dispatcher
+        // uses; the gRPC consumer now turns that into a real NotFound status instead of answering OK with
+        // an error document nobody inspects. Same outcome the SOAP dispatcher has always produced (it
+        // throws and the consumer emits a Fault) — the two operation-style transports finally agree.
+        var act = async () => await _producer!.Process(exchange);
+
+        var ex = await act.Should().ThrowAsync<RpcException>();
+        ex.Which.StatusCode.Should().Be(StatusCode.NotFound);
+        exchange.In.Headers[GrpcHeaders.StatusCode].Should().Be((int)StatusCode.NotFound);
     }
 
     // ── Multiple sequential requests ────────────────────

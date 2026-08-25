@@ -69,6 +69,7 @@ public sealed class FileBuilder
     private bool _allowNullBody;
     private string? _appendChars;
     private bool? _eagerDeleteTargetFile;
+    private bool? _jailStartingDirectory;
 
     internal FileBuilder(string directory)
     {
@@ -120,7 +121,11 @@ public sealed class FileBuilder
 
     /// <summary>Move processed file to this directory.</summary>
     public FileBuilder MoveTo(IExpression directory) { _moveTo = directory.ToTemplateString(); return this; }
-    /// <summary>Move processed file to this directory (template string, supports ${...}).</summary>
+    /// <summary>
+    /// Move processed file to this directory. Supports the file variables
+    /// <c>${file:name}</c> and <c>${file:name.noext}</c>; exchange expressions are not
+    /// available here, the directory is resolved from file metadata alone.
+    /// </summary>
     public FileBuilder MoveTo(string directory) => MoveTo(new StringExpression(directory));
 
     /// <summary>Strategy when file exists in move target: Override, Append, Fail, Ignore, Move, TryRename.</summary>
@@ -128,14 +133,22 @@ public sealed class FileBuilder
 
     /// <summary>Pre-move directory (temporary move before processing).</summary>
     public FileBuilder PreMove(IExpression directory) { _preMove = directory.ToTemplateString(); return this; }
-    /// <summary>Pre-move directory (template string, supports ${...}).</summary>
+    /// <summary>
+    /// Pre-move directory (temporary move before processing). Supports the file variables
+    /// <c>${file:name}</c> and <c>${file:name.noext}</c>.
+    /// </summary>
     public FileBuilder PreMove(string directory) => PreMove(new StringExpression(directory));
 
     // ── Idempotency ───────────────────────────────────────────────────
 
     /// <summary>Enable idempotent consumer with an optional key expression.</summary>
     public FileBuilder Idempotent(IExpression? key = null) { _idempotent = true; _idempotentKey = key?.ToTemplateString(); return this; }
-    /// <summary>Enable idempotent consumer with a key (template string, supports ${...}).</summary>
+    /// <summary>
+    /// Enable idempotent consumer with a custom key. Supports the file variables
+    /// <c>${file:name}</c> and <c>${file:name.noext}</c>; the key is computed before the
+    /// exchange exists, so header and body expressions cannot be used.
+    /// Without a key the default is path + last modified + size.
+    /// </summary>
     public FileBuilder Idempotent(string key) => Idempotent(new StringExpression(key));
 
     // ── Read locking ──────────────────────────────────────────────────
@@ -206,6 +219,12 @@ public sealed class FileBuilder
     /// <summary>Eagerly delete target file before writing. Default true.</summary>
     public FileBuilder EagerDeleteTargetFile(bool eager = true) { _eagerDeleteTargetFile = eager; return this; }
 
+    /// <summary>
+    /// Whether the producer refuses to write outside this directory. Default true.
+    /// Turn it off only when a "../" or absolute target file name is intended.
+    /// </summary>
+    public FileBuilder JailStartingDirectory(bool jail = true) { _jailStartingDirectory = jail; return this; }
+
     // ── Build ─────────────────────────────────────────────────────────
 
     /// <summary>Builds the File endpoint URI string.</summary>
@@ -274,6 +293,7 @@ public sealed class FileBuilder
         AppendBool("allowNullBody", _allowNullBody);
         AppendIf("appendChars", _appendChars);
         AppendBoolExplicit("eagerDeleteTargetFile", _eagerDeleteTargetFile);
+        AppendBoolExplicit("jailStartingDirectory", _jailStartingDirectory);
 
         return sb.ToString();
     }

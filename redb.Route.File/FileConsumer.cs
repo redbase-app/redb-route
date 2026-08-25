@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.GenericFile;
 
 namespace redb.Route.File;
@@ -72,6 +73,44 @@ public class FileConsumer : GenericFileConsumer<FileEndpointOptions>
     {
         var info = new FileInfo(file.FullPath);
         return await _readLock.AcquireLock(info, Options, ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>The rename strategy moves the file aside while it holds the lock.</remarks>
+    protected override string ResolveWorkPath(GenericFileInfo file)
+        => _readLock.GetWorkPath(file.FullPath);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// When the strategy holds an exclusive handle (<see cref="ReadLockStrategy.FileLock"/>),
+    /// the body is read through that handle. Opening the file a second time would be refused
+    /// by the very lock this consumer holds.
+    /// </remarks>
+    protected override async Task<Exchange> CreateExchangeAsync(GenericFileInfo file, string workPath, CancellationToken ct)
+    {
+        var locked = _readLock.GetLockedStream(file.FullPath);
+        if (locked == null)
+            return await base.CreateExchangeAsync(file, workPath, ct).ConfigureAwait(false);
+
+        if (locked.CanSeek)
+            locked.Seek(0, SeekOrigin.Begin);
+
+        object body;
+        if (Options.StreamBody)
+        {
+            body = locked;
+        }
+        else
+        {
+            using var buffer = new MemoryStream();
+            await locked.CopyToAsync(buffer, ct).ConfigureAwait(false);
+            body = buffer.ToArray();
+        }
+
+        var message = new Message { Body = body };
+        SetExchangeHeaders(message, file, workPath);
+
+        return Exchange.Create(message, Endpoint.ScopeFactory);
     }
 
     /// <inheritdoc />

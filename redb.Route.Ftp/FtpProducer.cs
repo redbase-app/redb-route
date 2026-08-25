@@ -70,7 +70,7 @@ public sealed class FtpProducer : RemoteFileProducer<FtpEndpointOptions>
             return;
 
         var normalizedTarget = NormalizePath(targetPath);
-        if (!normalizedTarget.StartsWith(BasePath, StringComparison.Ordinal))
+        if (!GenericFileUtils.IsWithinDirectory(BasePath, normalizedTarget, '/', StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 $"Producer path '{targetPath}' escapes the jail directory '{BasePath}'. " +

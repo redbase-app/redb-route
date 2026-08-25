@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Soap</PackageId>
+    <Description>SOAP / WSDL web-service transport for the redb.Route ESB framework: call and host SOAP services with WS-Security, oriented to Apache Camel's camel-cxf.</Description>
+    <PackageTags>esb;soap;wsdl;webservice;ws-security;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Soap" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <!-- Shared Kestrel host for the SOAP receive server (same reuse as AS2; no connector-to-connector coupling). -->
+    <ProjectReference Include="..\redb.Route.Http.Hosting\redb.Route.Http.Hosting.csproj" />
+  </ItemGroup>
+  <!-- Baseline hosts a SOAP receive server on the shared Kestrel, so it needs the ASP.NET runtime.
+       WS-Security crypto (System.Security.Cryptography.Xml) is added in Ф4; System.ServiceModel / CoreWCF
+       are optional later phases (Pojo / ?wsdl), deliberately NOT baseline dependencies. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <!-- WS-Security XML-Signature / XML-Encryption (Ф4b). In-box crypto over the envelope. -->
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="9.0.18" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

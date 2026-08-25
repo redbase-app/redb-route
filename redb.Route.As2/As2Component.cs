@@ -73,6 +73,7 @@ public sealed class As2Component : ComponentBase
     /// <inheritdoc />
     public override async ValueTask DisposeAsync()
     {
+        Correlation.Dispose();   // stop the eviction timer
         // Only the private fallback is ours to dispose; a DI-injected shared server is owned by the container.
         if (_ownServer.IsValueCreated)
             await _ownServer.Value.DisposeAsync().ConfigureAwait(false);

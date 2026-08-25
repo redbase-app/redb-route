@@ -104,7 +104,10 @@ public sealed class LlmConsumer : IConsumer
             {
                 await FireOnceAsync(ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { return; }
+            // Only real shutdown stops the loop. An HttpClient timeout also throws OperationCanceledException
+            // (TaskCanceledException) but on a different token — that must fall through to the transient catch,
+            // not silently terminate the scheduled consumer forever.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch (Exception ex)
             {
                 _endpoint.RecordError();

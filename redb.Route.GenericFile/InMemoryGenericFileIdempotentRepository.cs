@@ -9,7 +9,10 @@ namespace redb.Route.GenericFile;
 /// </summary>
 public sealed class InMemoryGenericFileIdempotentRepository : IIdempotentRepository
 {
-    private readonly HashSet<string> _keys = new(StringComparer.OrdinalIgnoreCase);
+    // Ordinal, not OrdinalIgnoreCase: the key embeds the file path, and every SFTP/FTP server
+    // and every non-Windows file system is case-sensitive. Folding case there makes two real
+    // files share one key, and the second one is skipped as a duplicate that it never was.
+    private readonly HashSet<string> _keys = new(StringComparer.Ordinal);
     private readonly object _lock = new();
 
     /// <summary>Current number of tracked keys.</summary>

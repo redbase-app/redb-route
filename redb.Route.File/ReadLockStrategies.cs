@@ -22,6 +22,24 @@ public interface IReadLockStrategy
     /// <param name="file">The file to unlock.</param>
     /// <param name="options">Endpoint options with lock configuration.</param>
     void ReleaseLock(FileInfo file, FileEndpointOptions options);
+
+    /// <summary>
+    /// Path the file occupies while this lock is held. Strategies that relocate the file
+    /// (see <see cref="ReadLockStrategy.Rename"/>) report the new location here so the
+    /// consumer reads and post-processes the right path.
+    /// </summary>
+    /// <param name="originalPath">Path the file had before the lock was acquired.</param>
+    /// <returns>The effective path. Default: unchanged.</returns>
+    string GetWorkPath(string originalPath) => originalPath;
+
+    /// <summary>
+    /// Read stream already held by this lock, if any. Strategies that keep an exclusive
+    /// handle (see <see cref="ReadLockStrategy.FileLock"/>) expose it here: reopening such a
+    /// file would fail against the lock this very consumer holds.
+    /// </summary>
+    /// <param name="originalPath">Path the file had before the lock was acquired.</param>
+    /// <returns>The open stream, or null when the consumer should open the file itself.</returns>
+    Stream? GetLockedStream(string originalPath) => null;
 }
 
 /// <summary>
@@ -134,8 +152,6 @@ internal sealed class ChangedReadLock : IReadLockStrategy
 /// </summary>
 internal sealed class FileLockReadLock : IReadLockStrategy
 {
-    public static readonly FileLockReadLock Instance = new();
-
     // Holds active lock streams keyed by absolute path
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, FileStream> _locks = new();
 
@@ -143,13 +159,20 @@ internal sealed class FileLockReadLock : IReadLockStrategy
     {
         try
         {
-            var fs = new FileStream(file.FullName, FileMode.Open, FileAccess.Read, FileShare.None);
+            // FileShare.Delete and nothing else: other processes can neither read nor write the
+            // file while we hold it, but this process can still delete or move it during
+            // post-processing (Windows requires FILE_SHARE_DELETE on the open handle for that).
+            var fs = new FileStream(file.FullName, FileMode.Open, FileAccess.Read, FileShare.Delete);
             _locks[file.FullName] = fs;
             return Task.FromResult(true);
         }
         catch (IOException)
         {
             return Task.FromResult(false); // File is locked by another process
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Task.FromResult(false);
         }
     }
 
@@ -160,6 +183,13 @@ internal sealed class FileLockReadLock : IReadLockStrategy
             fs.Dispose();
         }
     }
+
+    /// <summary>
+    /// The exclusive handle acquired by this strategy. The consumer must read through it:
+    /// opening the file a second time would be denied by our own lock.
+    /// </summary>
+    public Stream? GetLockedStream(string originalPath)
+        => _locks.TryGetValue(originalPath, out var fs) ? fs : null;
 }
 
 /// <summary>
@@ -168,9 +198,14 @@ internal sealed class FileLockReadLock : IReadLockStrategy
 /// </summary>
 internal sealed class RenameReadLock : IReadLockStrategy
 {
-    public static readonly RenameReadLock Instance = new();
-
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _renames = new();
+
+    /// <summary>
+    /// While the lock is held the file lives under the temporary name, so that is where the
+    /// consumer must read from and post-process.
+    /// </summary>
+    public string GetWorkPath(string originalPath)
+        => _renames.TryGetValue(originalPath, out var temp) ? temp : originalPath;
 
     public Task<bool> AcquireLock(FileInfo file, FileEndpointOptions options, CancellationToken ct)
     {

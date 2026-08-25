@@ -316,9 +316,16 @@ public sealed class AgentEngine : IAgentEngine
             }, CancellationToken.None).ConfigureAwait(false);
         }
 
+        // Return the last ASSISTANT content, not transcript[^1]: when the loop stops mid-round (MaxIterations
+        // or budget) the tail is a tool-results user message with no text, which would surface as an empty
+        // answer. The last assistant message carries the model's actual output.
+        LlmMessage? lastAssistant = null;
+        for (var i = transcript.Count - 1; i >= 0; i--)
+            if (transcript[i].Role == "assistant") { lastAssistant = transcript[i]; break; }
+
         return new AgentResponse
         {
-            Content = transcript[^1].Content,
+            Content = (lastAssistant ?? transcript[^1]).Content,
             Usage = new LlmUsage(totalUsage.InputTokens, totalUsage.OutputTokens),
             Iterations = iter,
             StopReason = last?.StopReason ?? LlmStopReason.Other
@@ -367,7 +374,7 @@ public sealed class AgentEngine : IAgentEngine
         if (tool is null)
         {
             return new LlmToolResultBlock(use.ToolUseId,
-                $"{{\"error\":\"unknown tool '{use.Name}'\"}}", IsError: true);
+                JsonSerializer.Serialize(new { error = "unknown_tool", name = use.Name }, JsonOptions), IsError: true);
         }
 
         var redactedInput = _redaction.Redact(use.InputJson, RedactionContext.ToolInput);
@@ -472,7 +479,7 @@ public sealed class AgentEngine : IAgentEngine
             }, ct).ConfigureAwait(false);
 
             return new LlmToolResultBlock(use.ToolUseId,
-                $"{{\"error\":\"{ex.GetType().Name}: {EscapeJson(ex.Message)}\"}}", IsError: true);
+                JsonSerializer.Serialize(new { error = ex.GetType().Name, message = ex.Message }, JsonOptions), IsError: true);
         }
     }
 
@@ -693,7 +700,6 @@ public sealed class AgentEngine : IAgentEngine
         return JsonSerializer.Serialize(reply, reply.GetType(), ToolReplyJsonOptions);
     }
 
-    private static string EscapeJson(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
     /// <summary>
     /// Stable hash of the tool-capability set exposed to the model on a single

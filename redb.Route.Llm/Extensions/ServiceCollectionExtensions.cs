@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Llm.Abstractions.Tools;
@@ -281,6 +282,7 @@ public static class LlmServiceCollectionExtensions
             var factory = new LlmConnectionFactory { Name = name };
             configure(factory);
             factory.Name = name; // re-assert in case configure overwrote it
+            factory.LoggerFactory ??= sp.GetService<ILoggerFactory>(); // for provider diagnostics
             sp.GetRequiredService<IRouteContext>().AddToRegistry(name, factory);
             return new LlmFactoryRegistrar();
         });

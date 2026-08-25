@@ -3,6 +3,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
     <ProjectReference Include="..\..\redb.Route.Grpc\redb.Route.Grpc.csproj" />
+    <!-- Shared Kestrel host: the gRPC consumer serves its methods as path routes on it,
+         the same way Http/As2/Soap do. -->
+    <ProjectReference Include="..\..\redb.Route.Http.Hosting\redb.Route.Http.Hosting.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -19,7 +19,9 @@ internal static class MdnParser
     {
         var entity = LoadEntity(contentType, transferEncoding, body);
 
-        var signatureValid = true;
+        // Default false: an UNSIGNED MDN is not a valid signature. Only a present-and-verified signature sets it
+        // true, so a sender that requires a signed receipt (SignedMdn) can reject a stripped/forged one.
+        var signatureValid = false;
         if (entity is MultipartSigned signed)
         {
             signatureValid = partnerCert is not null && engine.Verify(signed, partnerCert);

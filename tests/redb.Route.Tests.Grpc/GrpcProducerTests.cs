@@ -287,7 +287,10 @@ public class GrpcProducerTests : IAsyncLifetime
         await producer.Start();
 
         var exchange = new Exchange(new Message("fail"));
-        await producer.Process(exchange);
+
+        // ThrowOnError (default) — a failed call must reach .OnException / retry, like Http and Soap.
+        var act = async () => await producer.Process(exchange);
+        await act.Should().ThrowAsync<global::Grpc.Core.RpcException>();
 
         exchange.Exception.Should().BeOfType<global::Grpc.Core.RpcException>();
         exchange.In.Headers.Should().ContainKey(GrpcHeaders.StatusCode);
@@ -320,5 +323,32 @@ public class GrpcProducerTests : IAsyncLifetime
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         return port;
+    }
+
+    [Fact]
+    public void Asking_a_producer_for_tls_does_not_leave_it_in_cleartext()
+    {
+        // .Ssl() is the obvious way to ask a client for TLS. It sets ssl=true — and the producer builds
+        // its address from Plaintext, which defaults to true and which nothing here touched. The call
+        // then goes out over http:// with the endpoint believing it is secured. Only negotiationType=TLS
+        // happened to link the two.
+        var uri = GrpcDsl.Call("secure.internal:443").Ssl().Build();
+        var endpoint = (GrpcEndpoint)new GrpcComponent().CreateEndpoint(
+            EndpointUriParser.Parse(uri + "&sslCertPath=/etc/redb/x.pfx"));
+
+        endpoint.BuildProducerAddress().Should().StartWith("https://",
+            "a producer told to use TLS must not connect in the clear");
+    }
+
+    [Fact]
+    public void An_explicit_plaintext_still_wins_over_ssl()
+    {
+        // The inverse must keep working: someone who says plaintext outright gets it, whatever else the
+        // URI carries. Otherwise the fix above would take away a knob people use for local debugging.
+        var uri = GrpcDsl.Call("localhost:5000").Ssl().Plaintext().Build();
+        var endpoint = (GrpcEndpoint)new GrpcComponent().CreateEndpoint(
+            EndpointUriParser.Parse(uri + "&sslCertPath=/etc/redb/x.pfx"));
+
+        endpoint.BuildProducerAddress().Should().StartWith("http://");
     }
 }

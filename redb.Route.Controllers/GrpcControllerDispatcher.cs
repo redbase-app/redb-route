@@ -133,11 +133,15 @@ public sealed class GrpcControllerDispatcher : IProcessor
             {
                 var entry = new MethodEntry(type, method);
 
+                // [GrpcMethod] pins the wire name so renaming the C# method is not a breaking change for
+                // callers. Same role SoapOperationAttribute plays for SOAP operations.
+                var name = method.GetCustomAttribute<Attributes.GrpcMethodAttribute>()?.Method ?? method.Name;
+
                 // Qualified name: "Modules.GetAll" — always registered, last-write wins per controller
-                map[$"{controllerName}.{method.Name}"] = entry;
+                map[$"{controllerName}.{name}"] = entry;
 
                 // Short name: "GetAll" — only if no collision across controllers
-                map.TryAdd(method.Name, entry);
+                map.TryAdd(name, entry);
             }
         }
 
