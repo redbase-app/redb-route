@@ -48,7 +48,7 @@ docker compose -f C:\Work\yaml\Amazon\docker-compose.yml up -d
 ## Run
 
 ```bash
-dotnet run --project redb.Route/demos/SqsRpcDemo --framework net9.0
+dotnet run --project redb.Route/demos/SqsRpcDemo --framework net10.0
 ```
 
 Expected output: 12 numbers squared via RPC, each with its round-trip time, and a

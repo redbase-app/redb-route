@@ -5,7 +5,7 @@
        hot-loaded by the Tsak worker. It contains ONLY route code — no host,
        no DB provider: the worker supplies redb + SQLite at runtime. -->
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>EchoModule</RootNamespace>

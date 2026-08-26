@@ -3,7 +3,7 @@
   <PropertyGroup>
     <!-- Console application (exe), single file Program.cs -->
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>SqsPubSubDemo</RootNamespace>
@@ -16,8 +16,8 @@
   -->
   <ItemGroup>
     <PackageReference Include="redb.Route.csproj" />
-    <ProjectReference Include=".." Version="3.7.0" />
-    <PackageReference Include="redb.Route.Sqs" Version="3.7.0" />
+    <ProjectReference Include=".." Version="3.7.1" />
+    <PackageReference Include="redb.Route.Sqs" Version="3.7.1" />
   </ItemGroup>
 
   <ItemGroup>
