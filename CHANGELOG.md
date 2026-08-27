@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [3.7.2] — 2026-08-27
+
+No changes of its own. The version moves with the ecosystem so the exact-version pins between packages keep resolving: `redb.Route.Core` 3.7.2 depends on `redb.Core` 3.7.2, and a partial release would demand a package that does not exist.
+
 ## [3.7.1] — 2026-08-26
 
 > **Why 3.7.1, and what happened to 3.7.0.** 3.7.0 is withdrawn: it was built on .NET 9 and carries

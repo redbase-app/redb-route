@@ -16,8 +16,8 @@
   -->
   <ItemGroup>
     <PackageReference Include="redb.Route.csproj" />
-    <ProjectReference Include=".." Version="3.7.1" />
-    <PackageReference Include="redb.Route.Sqs" Version="3.7.1" />
+    <ProjectReference Include=".." Version="3.7.2" />
+    <PackageReference Include="redb.Route.Sqs" Version="3.7.2" />
   </ItemGroup>
 
   <ItemGroup>

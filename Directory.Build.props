@@ -17,7 +17,7 @@
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/redbase-app/redb</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <Version>3.7.1</Version>
-    <PackageVersion>3.7.1</PackageVersion>
+    <Version>3.7.2</Version>
+    <PackageVersion>3.7.2</PackageVersion>
   </PropertyGroup>
 </Project>
