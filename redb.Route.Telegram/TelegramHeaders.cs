@@ -123,6 +123,57 @@ public static class TelegramHeaders
     /// <summary>File name to use when the exchange body is a <see cref="System.IO.Stream"/> or <c>byte[]</c>.</summary>
     public const string FileName = "telegram.fileName";
 
+    // ── Inbound attachments (set by the consumer / webhook unpack) ────────────
+    //
+    // Deliberately NOT reusing FileId above: that one is a *producer* instruction
+    // ("send this already-hosted file"), and headers travel with the exchange. A route
+    // that consumes a voice message and then sends a document would otherwise echo the
+    // user's own file back at them — silently, because both sides read the same key.
+
+    /// <summary>
+    /// Kind of the attachment on an incoming message: <c>voice</c>, <c>audio</c>,
+    /// <c>videoNote</c>, <c>video</c>, <c>animation</c>, <c>document</c>, <c>photo</c>,
+    /// <c>sticker</c>. Absent when the message carries no file.
+    /// <para>
+    /// Present alongside <see cref="AttachmentFileId"/>; the pair is what a route needs to
+    /// decide "this is a voice note" and then fetch it via <c>getFile</c>.
+    /// </para>
+    /// </summary>
+    public const string AttachmentKind = "telegram.attachment.kind";
+
+    /// <summary>
+    /// Telegram <c>file_id</c> of the attachment on an incoming message. Pass it to
+    /// <c>getFile</c> to obtain a download path.
+    /// <para>
+    /// Photos arrive as a size ladder; the largest is reported, because a route that wants
+    /// the picture wants the picture, and downscaling is the caller's choice.
+    /// </para>
+    /// </summary>
+    public const string AttachmentFileId = "telegram.attachment.fileId";
+
+    /// <summary>MIME type reported by Telegram for the attachment, when it sends one (nullable).</summary>
+    public const string AttachmentMimeType = "telegram.attachment.mimeType";
+
+    /// <summary>Attachment size in bytes, when Telegram reports it (<c>long</c>, nullable).</summary>
+    public const string AttachmentFileSize = "telegram.attachment.fileSize";
+
+    /// <summary>
+    /// Duration in seconds for time-based attachments — voice, audio, video, video note
+    /// (<c>int</c>, nullable). Lets a route reject a twenty-minute recording before
+    /// downloading it.
+    /// </summary>
+    public const string AttachmentDuration = "telegram.attachment.duration";
+
+    /// <summary>Original file name of a document or audio attachment, when present (nullable).</summary>
+    public const string AttachmentFileName = "telegram.attachment.fileName";
+
+    /// <summary>
+    /// Caption typed alongside the attachment (nullable). Kept out of the exchange body on
+    /// purpose: the body stays "what the user typed as a message", and silently promoting a
+    /// caption to a body would make a captioned photo look like a text command.
+    /// </summary>
+    public const string AttachmentCaption = "telegram.attachment.caption";
+
     // ── Producer results (set on the outgoing exchange after publish) ─────────
 
     /// <summary>

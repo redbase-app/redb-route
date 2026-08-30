@@ -137,7 +137,7 @@ From(Tg.Receive(token))
     .Process(...);
 ```
 
-See [CONCURRENCY.md](../CONCURRENCY.md) for the full model.
+See [CONCURRENCY.md](../../CONCURRENCY.md) for the full model.
 
 ---
 
@@ -166,6 +166,31 @@ After receiving an update, the consumer populates these headers on the exchange:
 | `telegram.lastName` | `string?` | Sender last name (omitted if not set) |
 | `telegram.username` | `string?` | Sender `@username` without `@` (omitted if not set) |
 | `telegram.languageCode` | `string?` | Sender language code, e.g. `ru`, `en` |
+
+### Attachments (any message carrying a file)
+
+Present only when the message has one; a plain text message gets none of them.
+
+| Header | Type | Description |
+|---|---|---|
+| `telegram.attachment.kind` | `string` | `voice`, `audio`, `videoNote`, `video`, `animation`, `document`, `photo`, `sticker` |
+| `telegram.attachment.fileId` | `string` | Telegram `file_id` — pass it to `getFile` to download |
+| `telegram.attachment.mimeType` | `string?` | MIME type, when Telegram reports one |
+| `telegram.attachment.fileSize` | `long?` | Size in bytes, when reported |
+| `telegram.attachment.duration` | `int?` | Seconds — voice, audio, video, video note |
+| `telegram.attachment.fileName` | `string?` | Original name of a document or audio file |
+| `telegram.attachment.caption` | `string?` | Caption typed alongside the file |
+
+Photos arrive as a size ladder; the **largest** size is reported — downscaling is
+the caller's choice, not the connector's.
+
+⚠️ **Not to be confused with the producer's `telegram.fileId`.** That one is an
+instruction to *send* an already-hosted file, and headers travel with the exchange:
+a route that consumed a voice note and then answered with a document would echo the
+user's own recording back at them if both sides read one key.
+
+The caption stays a header and does **not** become the body: promoting it would make
+a captioned photo indistinguishable from a typed command downstream.
 
 ### Callback query updates (`updateType` = CallbackQuery)
 

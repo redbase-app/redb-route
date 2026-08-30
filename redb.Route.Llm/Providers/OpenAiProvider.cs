@@ -104,8 +104,10 @@ public sealed class OpenAiProvider : ILlmProvider
         if (!resp.IsSuccessStatusCode)
         {
             var raw = await SafeReadAsync(resp, ct).ConfigureAwait(false);
-            throw new HttpRequestException(
-                $"{_providerId}: {(int)resp.StatusCode} {resp.ReasonPhrase} from {_endpoint}. Body: {raw}");
+            throw LlmHttpErrors.FromResponse(
+                _providerId, resp,
+                $"{_providerId}: {(int)resp.StatusCode} {resp.ReasonPhrase} from {_endpoint}. Body: {raw}",
+                raw);
         }
 
         var json = await resp.Content.ReadFromJsonAsync<JsonObject>(JsonOpts, ct).ConfigureAwait(false)
@@ -140,8 +142,10 @@ public sealed class OpenAiProvider : ILlmProvider
         if (!resp.IsSuccessStatusCode)
         {
             var raw = await SafeReadAsync(resp, ct).ConfigureAwait(false);
-            throw new HttpRequestException(
-                $"{_providerId}: {(int)resp.StatusCode} {resp.ReasonPhrase} from {_endpoint}. Body: {raw}");
+            throw LlmHttpErrors.FromResponse(
+                _providerId, resp,
+                $"{_providerId}: {(int)resp.StatusCode} {resp.ReasonPhrase} from {_endpoint}. Body: {raw}",
+                raw);
         }
 
         using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);

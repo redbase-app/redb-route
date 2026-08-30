@@ -533,26 +533,12 @@ public sealed class AnthropicProvider : ILlmProvider
     private async Task ThrowMappedAsync(HttpResponseMessage resp, CancellationToken ct)
     {
         var raw = await SafeReadAsync(resp, ct).ConfigureAwait(false);
-        var status = (int)resp.StatusCode;
-        var summary = $"anthropic: {status} {resp.ReasonPhrase} from {_endpoint}";
+        var summary = $"anthropic: {(int)resp.StatusCode} {resp.ReasonPhrase} from {_endpoint}";
 
-        if (status == 429)
-        {
-            TimeSpan? retryAfter = null;
-            if (resp.Headers.RetryAfter is { } ra)
-            {
-                if (ra.Delta is { } d) retryAfter = d;
-                else if (ra.Date is { } when) retryAfter = when - DateTimeOffset.UtcNow;
-            }
-            throw new LlmRateLimitException(ProviderId, $"{summary}. Body: {raw}", retryAfter, raw);
-        }
-
-        // Anthropic returns 529 for the soft "overloaded" signal.
-        if (status == 529 || (status >= 500 && status <= 599))
-            throw new LlmTransientException(ProviderId, $"{summary}. Body: {raw}", status, raw);
-
-        throw new HttpRequestException($"{summary}. Body: {raw}", inner: null,
-            statusCode: resp.StatusCode);
+        // The mapping itself moved to LlmHttpErrors so the OpenAI family can share it — two
+        // copies of "which status means retry" drift apart, and the drift is invisible until
+        // production. Behaviour here is unchanged, including the soft "overloaded" 529.
+        throw LlmHttpErrors.FromResponse(ProviderId, resp, $"{summary}. Body: {raw}", raw);
     }
 
     private static Uri EnsureTrailingSlash(Uri uri)

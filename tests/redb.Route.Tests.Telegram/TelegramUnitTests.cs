@@ -324,6 +324,141 @@ public class TelegramUnitTests
     }
 
     [Fact]
+    public void MapMessage_Voice_ExposesFileIdAndMetadata()
+    {
+        var msg = new TgMessage
+        {
+            Id = 44,
+            Chat = new Chat { Id = 123, Type = ChatType.Private },
+            From = new User { Id = 7, FirstName = "Ann" },
+            Voice = new Voice
+            {
+                FileId = "AwACAgIAAxkBAAI",
+                FileUniqueId = "AgADXwEAAg",
+                Duration = 48,
+                MimeType = "audio/ogg",
+                FileSize = 91_234,
+            },
+        };
+        var m = new Message();
+
+        TelegramUpdateMapper.MapMessage(msg, UpdateType.Message, m);
+
+        // Without these headers a voice note is unreachable: the body carries Text, which a
+        // recording does not have, so a route could see THAT a file arrived and still have no
+        // way to fetch it.
+        m.Headers[TelegramHeaders.AttachmentKind].Should().Be("voice");
+        m.Headers[TelegramHeaders.AttachmentFileId].Should().Be("AwACAgIAAxkBAAI");
+        m.Headers[TelegramHeaders.AttachmentDuration].Should().Be(48);
+        m.Headers[TelegramHeaders.AttachmentMimeType].Should().Be("audio/ogg");
+        m.Headers[TelegramHeaders.AttachmentFileSize].Should().Be(91_234L);
+
+        // The body stays "what the user typed", and a voice note has nothing typed.
+        m.Body.Should().Be(string.Empty);
+
+        // The producer's own file_id key must NOT be set from an incoming file: headers travel
+        // with the exchange, and a route that answers with a document would otherwise echo the
+        // user's own recording back at them.
+        m.Headers.Should().NotContainKey(TelegramHeaders.FileId);
+    }
+
+    [Fact]
+    public void MapMessage_PhotoWithCaption_TakesLargestSizeAndKeepsCaptionOutOfBody()
+    {
+        var msg = new TgMessage
+        {
+            Id = 45,
+            Chat = new Chat { Id = 123, Type = ChatType.Private },
+            Caption = "вот моя карта",
+            Photo =
+            [
+                new PhotoSize { FileId = "small", FileUniqueId = "u1", Width = 90,   Height = 90,   FileSize = 1_200 },
+                new PhotoSize { FileId = "large", FileUniqueId = "u2", Width = 1280, Height = 1280, FileSize = 240_000 },
+            ],
+        };
+        var m = new Message();
+
+        TelegramUpdateMapper.MapMessage(msg, UpdateType.Message, m);
+
+        // A photo arrives as a size ladder; the largest is the one a route asking for the
+        // picture actually wants — downscaling is the caller's choice, not the mapper's.
+        m.Headers[TelegramHeaders.AttachmentKind].Should().Be("photo");
+        m.Headers[TelegramHeaders.AttachmentFileId].Should().Be("large");
+        m.Headers[TelegramHeaders.AttachmentFileSize].Should().Be(240_000L);
+
+        // Caption is a header, not the body: promoting it would make a captioned photo
+        // indistinguishable from a typed command downstream.
+        m.Headers[TelegramHeaders.AttachmentCaption].Should().Be("вот моя карта");
+        m.Body.Should().Be(string.Empty);
+    }
+
+    [Fact]
+    public void MapMessage_Document_ReportsNameAndTextMessageStaysClean()
+    {
+        var document = new TgMessage
+        {
+            Id = 46,
+            Chat = new Chat { Id = 123, Type = ChatType.Private },
+            Document = new Document
+            {
+                FileId = "doc-1",
+                FileUniqueId = "u3",
+                FileName = "отчёт.pdf",
+                MimeType = "application/pdf",
+                FileSize = 5_000,
+            },
+        };
+        var docMessage = new Message();
+
+        TelegramUpdateMapper.MapMessage(document, UpdateType.Message, docMessage);
+
+        docMessage.Headers[TelegramHeaders.AttachmentKind].Should().Be("document");
+        docMessage.Headers[TelegramHeaders.AttachmentFileName].Should().Be("отчёт.pdf");
+        docMessage.Headers[TelegramHeaders.AttachmentMimeType].Should().Be("application/pdf");
+        docMessage.Headers.Should().NotContainKey(TelegramHeaders.AttachmentDuration);
+
+        // A plain text message must not grow attachment headers — the addition is additive
+        // only where there is a file.
+        var text = new TgMessage
+        {
+            Id = 47,
+            Text = "hello",
+            Chat = new Chat { Id = 123, Type = ChatType.Private },
+        };
+        var textMessage = new Message();
+
+        TelegramUpdateMapper.MapMessage(text, UpdateType.Message, textMessage);
+
+        textMessage.Headers.Should().NotContainKey(TelegramHeaders.AttachmentKind);
+        textMessage.Headers.Should().NotContainKey(TelegramHeaders.AttachmentFileId);
+        textMessage.Body.Should().Be("hello");
+    }
+
+    [Fact]
+    public void MapUpdate_VoiceMessage_CarriesAttachmentHeadersThroughTheUpdatePath()
+    {
+        var update = new Update
+        {
+            Id = 900,
+            Message = new TgMessage
+            {
+                Id = 48,
+                Chat = new Chat { Id = 123, Type = ChatType.Private },
+                Voice = new Voice { FileId = "v-1", FileUniqueId = "u4", Duration = 3 },
+            },
+        };
+        var m = new Message();
+
+        // Long polling and webhooks share the mapper on purpose; a header that appeared on one
+        // path only would make the webhook contour quietly different.
+        TelegramUpdateMapper.MapUpdate(update, m).Should().BeTrue();
+
+        m.Headers[TelegramHeaders.AttachmentKind].Should().Be("voice");
+        m.Headers[TelegramHeaders.AttachmentFileId].Should().Be("v-1");
+        m.Headers[TelegramHeaders.AttachmentDuration].Should().Be(3);
+    }
+
+    [Fact]
     public void MapUpdate_TextMessage_HasNoWebAppHeaders()
     {
         var update = new Update

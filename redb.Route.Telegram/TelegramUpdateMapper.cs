@@ -42,6 +42,8 @@ public static class TelegramUpdateMapper
             AddIfNotNull(message.Headers, TelegramHeaders.WebAppButtonText, webApp.ButtonText);
         }
 
+        MapAttachment(msg, message);
+
         message.Headers[TelegramHeaders.ChatId]   = msg.Chat.Id;
         message.Headers[TelegramHeaders.ChatType] = msg.Chat.Type.ToString();
 
@@ -92,7 +94,74 @@ public static class TelegramUpdateMapper
         }
     }
 
-    // ── Internal helper ───────────────────────────────────────────────────────
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Exposes the attachment of an incoming message as headers: kind, <c>file_id</c> and
+    /// whatever metadata Telegram sent with it.
+    /// <para>
+    /// Without this a file-bearing update is unreachable: the body carries
+    /// <see cref="TgMessage.Text"/>, which a voice note does not have, so a route could see
+    /// <em>that</em> a recording arrived (<see cref="TelegramHeaders.MessageType"/>) but had no
+    /// way to fetch it. The body is deliberately left alone — a caption stays a header, so a
+    /// captioned photo is not mistaken for a typed command.
+    /// </para>
+    /// </summary>
+    private static void MapAttachment(TgMessage msg, IMessage message)
+    {
+        // Photo is a size ladder rather than a single file; the last entry is the largest.
+        var photo = msg.Photo is { Length: > 0 } sizes ? sizes[^1] : null;
+
+        var (kind, file) = msg switch
+        {
+            { Voice:     { } voice }     => ("voice",     (FileBase)voice),
+            { Audio:     { } audio }     => ("audio",     audio),
+            { VideoNote: { } note }      => ("videoNote", note),
+            { Video:     { } video }     => ("video",     video),
+            { Animation: { } animation } => ("animation", animation),
+            { Document:  { } document }  => ("document",  document),
+            { Sticker:   { } sticker }   => ("sticker",   sticker),
+            _ when photo is not null     => ("photo",     photo),
+            _                            => (null, null),
+        };
+
+        if (kind is null || file is null)
+            return;
+
+        message.Headers[TelegramHeaders.AttachmentKind]   = kind;
+        message.Headers[TelegramHeaders.AttachmentFileId] = file.FileId;
+
+        AddIfNotNull(message.Headers, TelegramHeaders.AttachmentFileSize, file.FileSize);
+        AddIfNotNull(message.Headers, TelegramHeaders.AttachmentCaption,  msg.Caption);
+
+        AddIfNotNull(message.Headers, TelegramHeaders.AttachmentMimeType, msg switch
+        {
+            { Voice:     { } voice }     => voice.MimeType,
+            { Audio:     { } audio }     => audio.MimeType,
+            { Video:     { } video }     => video.MimeType,
+            { Animation: { } animation } => animation.MimeType,
+            { Document:  { } document }  => document.MimeType,
+            _ => null,
+        });
+
+        AddIfNotNull(message.Headers, TelegramHeaders.AttachmentDuration, msg switch
+        {
+            { Voice:     { } voice }     => voice.Duration,
+            { Audio:     { } audio }     => audio.Duration,
+            { Video:     { } video }     => video.Duration,
+            { Animation: { } animation } => animation.Duration,
+            { VideoNote: { } note }      => note.Duration,
+            _ => (int?)null,
+        });
+
+        AddIfNotNull(message.Headers, TelegramHeaders.AttachmentFileName, msg switch
+        {
+            { Audio:    { } audio }    => audio.FileName,
+            { Video:    { } video }    => video.FileName,
+            { Document: { } document } => document.FileName,
+            _ => null,
+        });
+    }
 
     private static void AddIfNotNull(IDictionary<string, object?> headers, string key, object? value)
     {

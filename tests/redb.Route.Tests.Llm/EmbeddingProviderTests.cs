@@ -93,4 +93,59 @@ public sealed class EmbeddingProviderTests
         var act = async () => await provider.EmbedAsync(new[] { "x" });
         await act.Should().ThrowAsync<HttpRequestException>();
     }
+
+    /// <summary>Stub that also sets <c>Retry-After</c>, which only the 429 path reads.</summary>
+    private sealed class RetryAfterHandler(HttpStatusCode status, int? retryAfterSeconds) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var response = new HttpResponseMessage(status)
+            {
+                Content = new StringContent("""{"error":"slow down"}""", Encoding.UTF8, "application/json")
+            };
+
+            if (retryAfterSeconds is { } seconds)
+                response.Headers.Add("Retry-After", seconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+            return Task.FromResult(response);
+        }
+    }
+
+    [Fact]
+    public async Task EmbedAsync_RateLimited_ThrowsTypedRateLimit_WithRetryAfter()
+    {
+        // Retrieval degrades to keyword on ANY embedder failure, so an expired key and a busy
+        // server used to look identical to the caller. 429 has to be its own kind, with the
+        // provider's own wait time, or "retry" is guesswork.
+        var provider = new OpenAiEmbeddingProvider(
+            Factory(), new HttpClient(new RetryAfterHandler(HttpStatusCode.TooManyRequests, 7)));
+
+        var error = await Assert.ThrowsAsync<LlmRateLimitException>(
+            () => provider.EmbedAsync(new[] { "x" }));
+
+        error.ProviderId.Should().Be("openai");
+        error.RetryAfter.Should().Be(TimeSpan.FromSeconds(7));
+    }
+
+    [Fact]
+    public async Task EmbedAsync_ServerError_ThrowsTypedTransient_ButClientErrorDoesNot()
+    {
+        var transient = new OpenAiEmbeddingProvider(
+            Factory(), new HttpClient(new RetryAfterHandler(HttpStatusCode.ServiceUnavailable, null)));
+
+        var error = await Assert.ThrowsAsync<LlmTransientException>(
+            () => transient.EmbedAsync(new[] { "x" }));
+
+        error.StatusCode.Should().Be(503);
+
+        // 401 stays a plain HttpRequestException on purpose: a wrong key is not worth retrying,
+        // and lumping it in with "transient" would spin forever on a dead credential.
+        var unauthorized = new OpenAiEmbeddingProvider(
+            Factory(), new HttpClient(new RetryAfterHandler(HttpStatusCode.Unauthorized, null)));
+
+        var act = async () => await unauthorized.EmbedAsync(new[] { "x" });
+
+        (await act.Should().ThrowAsync<HttpRequestException>())
+            .And.Should().NotBeOfType<LlmTransientException>();
+    }
 }

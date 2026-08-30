@@ -50,6 +50,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [Unreleased]
+
+### Added
+- **Incoming attachments are reachable (`redb.Route.Telegram`).** `TelegramUpdateMapper` put only
+  `msg.Text` into the body and nothing at all from attachments. A voice note therefore arrived with
+  an **empty body** and `telegram.messageType = Voice`: a route could see *that* a file had come and
+  had no way to fetch it, because the `file_id` never reached the exchange.
+  New consumer headers, present only when the message carries a file:
+  `telegram.attachment.kind` / `.fileId` / `.mimeType` / `.fileSize` / `.duration` / `.fileName` /
+  `.caption`. Covers voice, audio, video note, video, animation, document, sticker and photo — for
+  photos the **largest** size of the ladder is reported, because downscaling is the caller's choice
+  and upscaling is not available.
+  Deliberately **not** the existing `telegram.fileId`: that one is a *producer* instruction ("send
+  this already-hosted file"), and headers travel with the exchange. A route that consumed a voice
+  note and answered with a document would have echoed the user's own recording back at them,
+  silently, since both sides read one key.
+  The body is untouched, and a caption stays a header: promoting it would make a captioned photo
+  indistinguishable from a typed command downstream. Long polling and webhooks share the mapper, so
+  both paths gained the headers at once.
+
+### Changed
+- **The OpenAI provider family now uses the typed failures (`redb.Route.Llm`).**
+  `LlmRateLimitException` (429, carrying `Retry-After`) and `LlmTransientException` (5xx and the soft
+  529 "overloaded") existed and `AnthropicProvider` threw them, but `OpenAiProvider` (two call sites)
+  and `OpenAiEmbeddingProvider` threw a bare `HttpRequestException` with the status as *text*. A
+  caller could not tell "wait and retry" from "your key is wrong", and retrieval degrades to keyword
+  search on any embedder failure, so an expired credential looked exactly like a busy server.
+  The mapping moved into `LlmHttpErrors.FromResponse` and is now shared by all four call sites,
+  Anthropic included: two copies of "which status means retry" drift apart, and the drift only shows
+  in production. Anthropic's behaviour is unchanged. `4xx` other than 429 stays a plain
+  `HttpRequestException` on purpose: a wrong key is not worth retrying.
+  ⚠️ Behavioural break for a caller that catches `HttpRequestException` around an OpenAI-compatible
+  provider. 429 and 5xx now arrive as `LlmRateLimitException` / `LlmTransientException`, and those
+  derive from `Exception`, not from `HttpRequestException`.
+
 ## [3.7.2] — 2026-08-27
 
 No changes of its own. The version moves with the ecosystem so the exact-version pins between packages keep resolving: `redb.Route.Core` 3.7.2 depends on `redb.Core` 3.7.2, and a partial release would demand a package that does not exist.

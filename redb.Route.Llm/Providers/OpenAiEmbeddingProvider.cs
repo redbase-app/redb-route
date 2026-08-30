@@ -85,8 +85,14 @@ public sealed class OpenAiEmbeddingProvider : IEmbeddingProvider
         if (!resp.IsSuccessStatusCode)
         {
             var raw = await SafeReadAsync(resp, ct).ConfigureAwait(false);
-            throw new HttpRequestException(
-                $"{_providerId} embeddings: {(int)resp.StatusCode} {resp.ReasonPhrase} from {_endpoint}. Body: {raw}");
+
+            // Typed, like the chat providers: a caller that cannot tell "wait and retry" from
+            // "your key is wrong" can only degrade blindly. Retrieval degrades to keyword on
+            // ANY failure, so an expired key would look exactly like a busy server.
+            throw LlmHttpErrors.FromResponse(
+                _providerId, resp,
+                $"{_providerId} embeddings: {(int)resp.StatusCode} {resp.ReasonPhrase} from {_endpoint}. Body: {raw}",
+                raw);
         }
 
         var json = await resp.Content.ReadFromJsonAsync<JsonObject>(JsonOpts, ct).ConfigureAwait(false)
