@@ -70,7 +70,7 @@ we author one connector and the entire engine carries it.
 Pieces:
 
 - **`LlmComponent`** — registers itself for scheme `llm` (one URI scheme,
-  by design — see PLAN.md §3a).
+  by design — see [PLAN.md](doc/PLAN.md) §3a).
 - **`LlmEndpoint`** — created from `llm://<connectionFactoryName>?...`. Resolves
   the named `LlmConnectionFactory` from the route registry, owns options, exposes
   `IEndpointStatistics` (tsak.web reads these).
@@ -554,6 +554,30 @@ llm://<connectionFactoryName>
 | `maxIterations` | yes | yes |
 | `tools` | yes | yes |
 
+## Failures
+
+Every provider maps a failed HTTP response through one rule (`LlmHttpErrors.FromResponse`), so a
+caller can tell "wait and retry" from "your key is wrong" without parsing a message string.
+
+| Status | Exception | What it carries |
+|---|---|---|
+| `429` | `LlmRateLimitException` | `RetryAfter`, read from the `Retry-After` header in both its delta and date forms; `null` when the provider sent none |
+| `5xx`, and the soft `529` "overloaded" | `LlmTransientException` | `StatusCode` |
+| any other non-2xx (`401`, `403`, `404`, `422`, ...) | `HttpRequestException` | `StatusCode` |
+
+Both typed exceptions also carry `ProviderId` and `RawBody`. They derive from `Exception`, **not**
+from `HttpRequestException`, so a `catch (HttpRequestException)` around a provider call will not see
+a 429 or a 5xx. That is deliberate: those two are the retryable cases, and catching them in the same
+clause as a dead key is exactly the mistake the split exists to prevent.
+
+A 4xx other than 429 stays untyped on purpose. A wrong key, a missing model and a malformed request
+are not worth retrying, and a caller that treats every failure alike degrades blindly: retrieval
+that falls back to keyword search on any embedder failure cannot tell an expired credential from a
+busy server.
+
+The rule covers chat and embeddings alike: `AnthropicProvider`, `OpenAiProvider` (both the buffered
+and the streaming call site) and `OpenAiEmbeddingProvider`.
+
 ## Comparison with Apache Camel `langchain4j-*`
 
 Camel's LLM story lives in a family — `camel-langchain4j-chat`,
@@ -806,9 +830,9 @@ LlmConsumer.cs          PeriodicTimer scheduler, fires AgentEngine on each tick
 See [doc/USER-GUIDE.md](doc/USER-GUIDE.md) — the full long-form guide
 covering every DSL shape, the `#`-registry pattern, all 14 providers, the
 Claude live-test suite, the testing strategy, the Camel comparison and a FAQ.
-For phase planning: doc/PLAN.md,
-doc/PHASE-1-MVP.md,
-doc/PHASE-2.md, doc/STATUS.md.
+For phase planning: [doc/PLAN.md](doc/PLAN.md),
+[doc/PHASE-1-MVP.md](doc/PHASE-1-MVP.md),
+[doc/PHASE-2.md](doc/PHASE-2.md), [doc/STATUS.md](doc/STATUS.md).
 
 ## Design principles
 
