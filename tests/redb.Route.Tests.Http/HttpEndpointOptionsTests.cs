@@ -161,11 +161,16 @@ public class HttpEndpointOptionsTests
     }
 
     [Fact]
-    public void Validate_Ssl_WithoutCertPath_Throws()
+    public void Validate_Ssl_WithoutCertPath_DefersToTheBind()
     {
+        // The certificate may legitimately arrive from a named connection factory or from the host
+        // default (HttpHostingOptions.Tls), neither of which the options object can see. So this is
+        // no longer an endpoint-level error; "TLS asked for and nothing resolves" is enforced once,
+        // at the bind, by SharedHttpServerManager — see SharedHostTlsTests, which asserts that a
+        // listener in exactly this state refuses to open rather than serving plaintext.
         var options = new HttpEndpointOptions { Ssl = true };
         var act = () => options.Validate();
-        act.Should().Throw<ArgumentException>().WithMessage("*SslCertPath*");
+        act.Should().NotThrow();
     }
 
     [Fact]

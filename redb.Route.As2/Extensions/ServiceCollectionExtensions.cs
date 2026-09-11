@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Http;
 
 namespace redb.Route.As2;
@@ -28,21 +28,16 @@ public static class ServiceCollectionExtensions
         services.AddRedbRouteHttpHosting();
         services.AddSingleton<As2Component>();
 
-        services.AddSingleton<IAs2ComponentRegistrar>(sp =>
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteContextConfigurator((sp, context) =>
         {
-            var context = sp.GetRequiredService<IRouteContext>();
             var component = sp.GetRequiredService<As2Component>();
             component.ServerManager = sp.GetRequiredService<SharedHttpServerManager>();
             context.AddComponent(component);   // registers as2 + as2s, sets Context + Logger
-            return new As2ComponentRegistrar();
         });
 
         return services;
     }
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IAs2ComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class As2ComponentRegistrar : IAs2ComponentRegistrar;

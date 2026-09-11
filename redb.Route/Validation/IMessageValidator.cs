@@ -55,6 +55,15 @@ public sealed class ValidationResult
 public interface IMessageValidator
 {
     /// <summary>
+    /// Validates the exchange asynchronously. The default forwards to <see cref="Validate"/>;
+    /// a validator that has to consult a store or a service overrides this one, and the
+    /// processor awaits it.
+    /// </summary>
+    /// <param name="exchange">The exchange to validate.</param>
+    /// <returns>A task yielding the validation result.</returns>
+    Task<ValidationResult> ValidateAsync(IExchange exchange) => Task.FromResult(Validate(exchange));
+
+    /// <summary>
     /// Validates the exchange and returns a result indicating success or failure with error details.
     /// </summary>
     /// <param name="exchange">The exchange to validate.</param>

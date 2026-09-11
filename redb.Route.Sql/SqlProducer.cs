@@ -85,22 +85,30 @@ internal sealed class SqlProducer : IProducer
         var connection = await factory.CreateConnectionAsync(
             readOnly: outputType != SqlOutputType.None, ct).ConfigureAwait(false);
 
-        // If ambient TransactionScope exists (route-level .Transacted()), the connection
-        // auto-enlists — no local DbTransaction needed. Otherwise always wrap in a
-        // local transaction for atomicity (like EF SaveChanges).
+        // From here the connection is owned resource: everything that can throw — starting the
+        // transaction included, since a dropped socket or a cancellation surfaces exactly there —
+        // runs under the finally that returns it to the pool. This is the hot path for audit and
+        // usage writes, and those failure modes come in bursts, so a leak here drains the pool
+        // rather than dripping.
         var hasAmbientTx = Transaction.Current != null;
         DbTransaction? tx = null;
-        if (!hasAmbientTx)
-        {
-            tx = _options.IsolationLevel.HasValue
-                ? await connection.BeginTransactionAsync(_options.IsolationLevel.Value, ct).ConfigureAwait(false)
-                : await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
-        }
+        DbCommand? cmd = null;
+        var streamOwnsResources = false;
 
         try
         {
+            // If ambient TransactionScope exists (route-level .Transacted()), the connection
+            // auto-enlists — no local DbTransaction needed. Otherwise always wrap in a
+            // local transaction for atomicity (like EF SaveChanges).
+            if (!hasAmbientTx)
+            {
+                tx = _options.IsolationLevel.HasValue
+                    ? await connection.BeginTransactionAsync(_options.IsolationLevel.Value, ct).ConfigureAwait(false)
+                    : await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+            }
+
             var sql = ResolveQuery(exchange);
-            var cmd = connection.CreateCommand();
+            cmd = connection.CreateCommand();
             cmd.CommandText = sql;
             cmd.CommandTimeout = _options.CommandTimeout;
             if (tx != null) cmd.Transaction = tx;
@@ -125,9 +133,13 @@ internal sealed class SqlProducer : IProducer
                     break;
 
                 case SqlOutputType.StreamList:
-                    // StreamList takes ownership of connection, cmd, and tx —
-                    // they will be disposed when the stream is fully consumed.
+                    // StreamList hands connection, cmd and tx to the stream, which disposes them
+                    // as the enumerator is disposed (fully consumed or abandoned early — the
+                    // iterators hold them in `await using`). The flag, not the option value,
+                    // decides who cleans up: an error before this line — the reader failing to
+                    // open, say — means ownership never left this method.
                     await ExecuteStreamList(cmd, exchange, connection, tx, ct).ConfigureAwait(false);
+                    streamOwnsResources = true;
                     SetCommonHeaders(exchange, sql, executionMs);
                     return;
 
@@ -144,8 +156,6 @@ internal sealed class SqlProducer : IProducer
                 exchange.In.Headers[SqlHeaders.TransactionId] = tx.GetHashCode().ToString();
                 await tx.CommitAsync(ct).ConfigureAwait(false);
             }
-
-            await cmd.DisposeAsync().ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -160,8 +170,10 @@ internal sealed class SqlProducer : IProducer
         }
         finally
         {
-            if (_options.OutputType != SqlOutputType.StreamList)
+            if (!streamOwnsResources)
             {
+                if (cmd != null)
+                    await cmd.DisposeAsync().ConfigureAwait(false);
                 if (tx != null)
                     await tx.DisposeAsync().ConfigureAwait(false);
                 await connection.DisposeAsync().ConfigureAwait(false);

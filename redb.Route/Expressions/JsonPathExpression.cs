@@ -1,406 +1,115 @@
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Json.Path;
 using redb.Route.Abstractions;
 
 namespace redb.Route.Expressions;
 
 /// <summary>
-/// Expression for evaluating JsonPath queries against the message body in an <see cref="IExchange"/>.
+/// Expression for evaluating JSONPath (RFC 9535, JsonPath.Net) queries against the message body.
 /// </summary>
 /// <remarks>
-/// Extracts data from a JSON document using JsonPath expressions.
-/// Supports both string-based JSON and <see cref="JObject"/>/<see cref="JArray"/> bodies.
+/// Accepts JSON text, <c>byte[]</c>, <see cref="Stream"/>, a System.Text.Json tree (<see cref="JsonNode"/>,
+/// <see cref="JsonElement"/>, <see cref="JsonDocument"/>) or a POCO (serialized with its C# member names).
+/// JSON text may contain comments and trailing commas. Results convert to the requested type the way
+/// they always did: a scalar to <typeparamref name="T"/>, an array to a typed CLR array / list, an object
+/// to a POCO or dictionary, anything to <c>string</c> as its text (compact JSON for arrays and objects,
+/// invariant culture for numbers). Dates stay strings unless a <see cref="DateTime"/> is asked for.
 /// </remarks>
 public class JsonPathExpression : Expression
 {
+    private static readonly JsonDocumentOptions LenientText = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
+    private static readonly JsonSerializerOptions PocoOptions = new();   // C# member names, as JToken.FromObject kept them
+    private static readonly PathParsingOptions ParsingOptions = new() { AllowMathOperations = true, AllowInOperator = true, AllowJsonConstructs = true, TolerateExtraWhitespace = true };
+
     private readonly string _jsonPath;
+    private readonly JsonPath _compiled;
+    private readonly bool _isFilter;
+    private readonly IExpression? _source;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="JsonPathExpression"/> class.
     /// </summary>
-    /// <param name="jsonPath">The JsonPath expression used to extract data.</param>
+    /// <param name="jsonPath">The JSONPath expression used to extract data.</param>
+    /// <param name="source">
+    /// What to run the path against. <c>null</c> — the default — means the message body.
+    /// </param>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="jsonPath"/> is <c>null</c>.</exception>
-    public JsonPathExpression(string jsonPath)
+    /// <exception cref="ArgumentException">Thrown when the path does not parse (so a route fails at build, not on the first message).</exception>
+    public JsonPathExpression(string jsonPath, IExpression? source = null)
     {
+        _source = source;
         _jsonPath = jsonPath ?? throw new ArgumentNullException(nameof(jsonPath));
+        try
+        {
+            _compiled = JsonPath.Parse(jsonPath, ParsingOptions);
+        }
+        catch (PathParseException ex)
+        {
+            throw new ArgumentException($"Invalid JSONPath '{jsonPath}': {ex.Message}", nameof(jsonPath), ex);
+        }
+        _isFilter = jsonPath.Contains("[?", StringComparison.Ordinal);
+    }
+
+    /// <summary>The JSONPath text.</summary>
+    public string Path => _jsonPath;
+
+    /// <summary>
+    /// Returns the same expression reading <paramref name="source"/> instead of the message body.
+    /// </summary>
+    /// <remarks>
+    /// <c>JPath("$.id").From(Property("original-payload"))</c>. Without it, querying JSON that
+    /// arrived in a header or property means moving it into the body first, which damages the body
+    /// for the rest of the route.
+    /// </remarks>
+    /// <param name="source">The expression producing the JSON to read.</param>
+    /// <returns>A new expression; this one is unchanged.</returns>
+    public JsonPathExpression From(IExpression source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return new JsonPathExpression(_jsonPath, source);
     }
 
     /// <inheritdoc />
-    /// <exception cref="InvalidOperationException">Thrown when the JsonPath expression cannot be evaluated.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when the body is not JSON or the value cannot be converted.</exception>
     public override T Evaluate<T>(IExchange exchange)
+        => EvaluateOn<T>(ExpressionValues.ReadInput(_source, exchange), _source is not null);
+
+    /// <summary>
+    /// Runs the path against an already-resolved input. Used by the expression language, where the
+    /// source arrives as a value rather than as an expression.
+    /// </summary>
+    internal T EvaluateOn<T>(object? input, bool fromSource)
     {
+        var body = input;
+        if (body is null)
+            throw new InvalidOperationException(ExpressionValues.NoInput(fromSource, "JsonPath"));
+
+        JsonNode? root;
         try
         {
-            // Get the current message body
-            var body = exchange.In.getBody<object>();
-            if (body == null)
-            {
-                throw new InvalidOperationException("Exchange body is null. Cannot evaluate JsonPath expression.");
-            }
-
-            // Convert the message body to a JToken for JsonPath evaluation
-            JToken jsonToken;
-            if (body is JToken jToken)
-            {
-                jsonToken = jToken;
-            }
-            else if (body is string bodyString && TryParseJson(bodyString, out var parsedToken))
-            {
-                jsonToken = parsedToken;
-            }
-            else
-            {
-                // Serialize the object to a JToken
-                jsonToken = JToken.FromObject(body);
-            }
-
-            // Use SelectTokens for recursive descent (..) and other advanced JsonPath features
-            if (_jsonPath.Contains("..") || _jsonPath.Contains("[?") || _jsonPath.Contains("[*]") || 
-               (_jsonPath.Contains("[") && System.Text.RegularExpressions.Regex.IsMatch(_jsonPath, @"\[\d+:\d+\]")))
-            {
-                var tokens = jsonToken.SelectTokens(_jsonPath).ToList();
-
-                // For filter queries, if the return type is bool and there is at least one result, return true
-                if (_jsonPath.Contains("[?") && typeof(T) == typeof(bool) && tokens.Count > 0)
-                {
-                    return (T)(object)true;
-                }
-
-                return ProcessJTokens<T>(tokens, _jsonPath);
-            }
-            else
-            {
-                var token = jsonToken.SelectToken(_jsonPath);
-                return ConvertJTokenToType<T>(token, _jsonPath);
-            }
+            root = JsonPathValues.ToNode(body, LenientText, PocoOptions);
         }
         catch (JsonException ex)
         {
             throw new InvalidOperationException($"JSON parsing error in JsonPathExpression: {ex.Message}", ex);
         }
-        catch (InvalidOperationException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw new InvalidOperationException($"Error evaluating JsonPath '{_jsonPath}': {ex.Message}", ex);
-        }
-    }
 
-    /// <summary>
-    /// Processes a collection of <see cref="JToken"/> results obtained from a <c>SelectTokens</c> query.
-    /// </summary>
-    /// <typeparam name="T">The target type for conversion.</typeparam>
-    /// <param name="tokens">The collection of <see cref="JToken"/> from the query.</param>
-    /// <param name="jsonPath">The JsonPath string (used in error messages).</param>
-    /// <returns>The converted value of type <typeparamref name="T"/>.</returns>
-    private T ProcessJTokens<T>(List<JToken> tokens, string jsonPath)
-    {
-        // If there are tokens in the result collection
-        if (tokens.Count > 0)
-        {
-            // For string and primitive types with a single result
-            if (tokens.Count == 1 && tokens[0] is JValue singleJValue)
-            {
-                if (typeof(T) == typeof(string))
-                    return (T)(object)singleJValue.ToString();
+        var matches = _compiled.Evaluate(root).Matches;
+        var nodes = matches is null ? [] : matches.Select(m => m.Value).ToList();
 
-                if (singleJValue.Value is T directResult)
-                    return directResult;
-
-                try
-                {
-                    return (T)Convert.ChangeType(singleJValue.Value, typeof(T));
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"JsonPath '{jsonPath}': Convert.ChangeType({singleJValue.Value?.GetType().Name} -> {typeof(T).Name}) failed: {ex.Message}");
-                    // Fall through to the next handlers
-                }
-            }
-
-            // Create a JArray from the results
-            var resultArray = new JArray(tokens);
-
-            // Handle as an array
-            if (typeof(T) == typeof(string))
-            {
-                // Enhanced string conversion for arrays of simple values
-                if (tokens.All(t => t is JValue))
-                {
-                    // If all array elements are simple values, join them with a comma
-                    return (T)(object)string.Join(", ", tokens.Select(t => t.ToString()));
-                }
-                else
-                {
-                    // For complex objects, use the standard JArray-to-string conversion
-                    return (T)(object)resultArray.ToString(Formatting.None);
-                }
-            }
-
-            if (typeof(T) == typeof(JArray) || typeof(T) == typeof(JToken))
-                return (T)(object)resultArray;
-
-            // Try converting to the requested array or list type
-            try
-            {
-                return resultArray.ToObject<T>();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"JsonPath '{jsonPath}': ToObject<{typeof(T).Name}> failed: {ex.Message}");
-                // If conversion failed, fall back to a string representation
-                if (typeof(T) == typeof(string))
-                {
-                    if (tokens.All(t => t is JValue))
-                    {
-                        return (T)(object)string.Join(", ", tokens.Select(t => t.ToString()));
-                    }
-                    else
-                    {
-                        return (T)(object)resultArray.ToString(Formatting.None);
-                    }
-                }
-            }
-        }
-
-        // If nothing was found
-        if (typeof(T).IsValueType && Nullable.GetUnderlyingType(typeof(T)) == null)
-        {
-            throw new InvalidOperationException($"No values found for JsonPath: {jsonPath}");
-        }
-
-        return default!;
-    }
-
-    /// <summary>
-    /// Converts a single <see cref="JToken"/> to the specified type.
-    /// </summary>
-    /// <typeparam name="T">The target type for conversion.</typeparam>
-    /// <param name="token">The <see cref="JToken"/> to convert.</param>
-    /// <param name="jsonPath">The JsonPath string (used in error messages).</param>
-    /// <returns>The converted value of type <typeparamref name="T"/>.</returns>
-    private T ConvertJTokenToType<T>(JToken token, string jsonPath)
-    {
-        if (token == null)
-        {
-            if (typeof(T).IsValueType && Nullable.GetUnderlyingType(typeof(T)) == null)
-            {
-                throw new InvalidOperationException($"No value found for JsonPath: {jsonPath}");
-            }
-            return default!;
-        }
-
-        // Handle arrays
-        if (token is JArray array)
-        {
-            // Check if this is an array of primitive types
-            if (array.Count > 0 && array.All(t => t is JValue))
-            {
-                // Determine the element type of the array
-                Type elementType;
-                if (array.Count == 0)
-                {
-                    elementType = typeof(object);
-                }
-                else
-                {
-                    // Check whether all elements have the same type
-                    var firstTokenType = array[0].Type;
-                    bool isHomogeneous = array.All(t => t.Type == firstTokenType);
-
-                    if (isHomogeneous)
-                    {
-                        elementType = firstTokenType switch
-                        {
-                            JTokenType.String => typeof(string),
-                            JTokenType.Integer => typeof(int),
-                            JTokenType.Float => typeof(double),
-                            JTokenType.Boolean => typeof(bool),
-                            JTokenType.Null => typeof(object),
-                            JTokenType.Undefined => typeof(object),
-                            JTokenType.Date => typeof(DateTime),
-                            JTokenType.Raw => typeof(string),
-                            JTokenType.Bytes => typeof(byte[]),
-                            JTokenType.Guid => typeof(Guid),
-                            JTokenType.Uri => typeof(Uri),
-                            JTokenType.TimeSpan => typeof(TimeSpan),
-                            JTokenType.Object => typeof(object),
-                            JTokenType.Array => typeof(object[]),
-                            JTokenType.Constructor => typeof(object),
-                            JTokenType.Property => typeof(object),
-                            JTokenType.Comment => typeof(string),
-                            JTokenType.None => typeof(object),
-                            _ => typeof(object)
-                        };
-                    }
-                    else
-                    {
-                        // If types differ, fall back to object
-                        elementType = typeof(object);
-                    }
-                }
-
-                // Create a typed array
-                var typedArray = Array.CreateInstance(elementType, array.Count);
-                for (int i = 0; i < array.Count; i++)
-                {
-                    try
-                    {
-                        var value = array[i].ToObject(elementType);
-                        typedArray.SetValue(value, i);
-                    }
-                    catch (Exception ex)
-                    {
-                        throw new InvalidOperationException($"Cannot convert array element at index {i} to type {elementType.Name}", ex);
-                    }
-                }
-
-                // If T is object[], return as-is
-                if (typeof(T) == typeof(object[]))
-                {
-                    return (T)(object)typedArray;
-                }
-
-                // If T is a specific array type, check compatibility
-                if (typeof(T).IsArray)
-                {
-                    var requestedElementType = typeof(T).GetElementType();
-                    if (requestedElementType != null && (requestedElementType == elementType || requestedElementType == typeof(object)))
-                    {
-                        return (T)(object)typedArray;
-                    }
-                    else if (requestedElementType != null)
-                    {
-                        // Try converting to the requested element type
-                        var convertedArray = Array.CreateInstance(requestedElementType, array.Count);
-                        for (int i = 0; i < array.Count; i++)
-                        {
-                            try
-                            {
-                                var convertedValue = Convert.ChangeType(typedArray.GetValue(i), requestedElementType);
-                                convertedArray.SetValue(convertedValue, i);
-                            }
-                            catch (Exception ex)
-                            {
-                                throw new InvalidOperationException($"Cannot convert array element at index {i} to requested type {requestedElementType.Name}", ex);
-                            }
-                        }
-                        return (T)(object)convertedArray;
-                    }
-                }
-
-                // If T is IEnumerable<>, List<>, or IList<>, try converting
-                if (typeof(T).IsGenericType)
-                {
-                    var genericTypeDef = typeof(T).GetGenericTypeDefinition();
-                    if (genericTypeDef == typeof(List<>) || genericTypeDef == typeof(IEnumerable<>) || genericTypeDef == typeof(IList<>))
-                    {
-                        var requestedElementType = typeof(T).GetGenericArguments()[0];
-                        var listType = typeof(List<>).MakeGenericType(requestedElementType);
-                        var list = Activator.CreateInstance(listType);
-                        var addMethod = listType.GetMethod("Add");
-
-                        if (addMethod != null)
-                        {
-                            for (int i = 0; i < array.Count; i++)
-                            {
-                                try
-                                {
-                                    var value = typedArray.GetValue(i);
-                                    var convertedValue = requestedElementType == elementType ? value : Convert.ChangeType(value, requestedElementType);
-                                    addMethod.Invoke(list, new[] { convertedValue });
-                                }
-                                catch (Exception ex)
-                                {
-                                    throw new InvalidOperationException($"Cannot convert array element at index {i} to type {requestedElementType.Name}", ex);
-                                }
-                            }
-                            return (T)list!;
-                        }
-                    }
-                }
-
-                // If conversion to the desired type failed, return the typed array if compatible
-                if (typedArray is T primitiveResult)
-                {
-                    return primitiveResult;
-                }
-            }
-
-            // If it is not an array of primitives or conversion failed, return the JArray as-is
-            return (T)(object)array;
-        }
-
-        // Handle objects
-        if (token is JObject obj)
-        {
-            return obj.ToObject<T>();
-        }
-
-        // Handle JValue — extract the primitive value
-        if (token is JValue jValue)
-        {
-            // If JValue contains null
-            if (jValue.Value == null)
-            {
-                if (typeof(T).IsValueType && Nullable.GetUnderlyingType(typeof(T)) == null)
-                {
-                    throw new InvalidOperationException($"JsonPath returned null but type {typeof(T).Name} is not nullable");
-                }
-                return default!;
-            }
-
-            // Get the primitive value from JValue
-            var primitiveValue = jValue.Value;
-
-            // If T matches the primitive value type directly
-            if (primitiveValue is T directResult)
-            {
-                return directResult;
-            }
-
-            // Try converting to the desired type
-            try
-            {
-                return (T)Convert.ChangeType(primitiveValue, typeof(T));
-            }
-            catch (InvalidCastException)
-            {
-                throw new InvalidCastException($"Cannot convert JValue with value '{primitiveValue}' of type {primitiveValue.GetType().Name} to type {typeof(T).Name}.");
-            }
-            catch (FormatException)
-            {
-                throw new FormatException($"JValue with value '{primitiveValue}' cannot be converted to type {typeof(T).Name} due to format issues.");
-            }
-        }
-
-        // Return JToken as-is via deserialization
-        return token.ToObject<T>();
-    }
-
-    /// <summary>
-    /// Attempts to parse a JSON string into a <see cref="JToken"/>.
-    /// </summary>
-    /// <param name="jsonString">The JSON string to parse.</param>
-    /// <param name="parsedToken">When successful, the parsed <see cref="JToken"/>.</param>
-    /// <returns><c>true</c> if parsing succeeded; otherwise, <c>false</c>.</returns>
-    private static bool TryParseJson(string jsonString, out JToken parsedToken)
-    {
         try
         {
-            parsedToken = JToken.Parse(jsonString);
-            return true;
+            return _compiled.IsSingular
+                ? JsonPathValues.ConvertSingle<T>(nodes.Count == 0 ? null : nodes[0], _jsonPath)
+                : JsonPathValues.ConvertMany<T>(nodes, _jsonPath, _isFilter);
         }
-        catch (JsonReaderException)
+        catch (InvalidOperationException) { throw; }
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or JsonException or OverflowException)
         {
-            parsedToken = null!;
-            return false;
+            throw new InvalidOperationException($"Error evaluating JsonPath '{_jsonPath}': {ex.Message}", ex);
         }
     }
 
@@ -413,4 +122,189 @@ public class JsonPathExpression : Expression
 
     /// <inheritdoc />
     public override string ToTemplateString() => $"${{jsonpath({_jsonPath})}}";
+}
+
+/// <summary>Body → tree and node → CLR conversions of <see cref="JsonPathExpression"/>, kept apart so the rules read in one place.</summary>
+internal static class JsonPathValues
+{
+    public static JsonNode? ToNode(object body, JsonDocumentOptions lenient, JsonSerializerOptions pocoOptions) => body switch
+    {
+        JsonNode node => node,
+        JsonElement element => JsonSerializer.SerializeToNode(element),
+        JsonDocument document => JsonSerializer.SerializeToNode(document.RootElement),
+        string text => JsonNode.Parse(text, documentOptions: lenient),
+        byte[] bytes => JsonNode.Parse(bytes, documentOptions: lenient),
+        Stream stream => ParseStream(stream, lenient),
+        _ => JsonSerializer.SerializeToNode(body, pocoOptions),
+    };
+
+    /// <summary>
+    /// A stream body is read from its current position and left there afterwards, so a second
+    /// expression on the same exchange (or a redelivery) sees the same JSON. A stream that cannot seek
+    /// is consumed — there is nothing to restore.
+    /// </summary>
+    private static JsonNode? ParseStream(Stream stream, JsonDocumentOptions lenient)
+    {
+        if (!stream.CanSeek)
+            return JsonNode.Parse(stream, documentOptions: lenient);
+
+        var position = stream.Position;
+        try
+        {
+            return JsonNode.Parse(stream, documentOptions: lenient);
+        }
+        finally
+        {
+            stream.Position = position;
+        }
+    }
+
+    /// <summary>A singular path: one node or nothing (the old <c>SelectToken</c> branch).</summary>
+    public static T ConvertSingle<T>(JsonNode? node, string path)
+    {
+        if (node is null)
+        {
+            if (IsNonNullableValueType<T>())
+                throw new InvalidOperationException($"No value found for JsonPath: {path}");
+            return default!;
+        }
+        return (T)ConvertNode(node, typeof(T), path)!;
+    }
+
+    /// <summary>A non-singular path (wildcard, descent, slice, filter): the old <c>SelectTokens</c> branch.</summary>
+    public static T ConvertMany<T>(List<JsonNode?> nodes, string path, bool isFilter)
+    {
+        if (isFilter && typeof(T) == typeof(bool))
+            return (T)(object)(nodes.Count > 0);
+
+        // A single scalar match unwraps — unless the caller asked for a collection, which keeps the array shape.
+        if (nodes.Count == 1 && nodes[0] is JsonValue single && !IsCollectionType(typeof(T)))
+            return (T)ConvertNode(single, typeof(T), path)!;
+
+        if (nodes.Count > 0)
+        {
+            var array = new JsonArray(nodes.Select(n => n?.DeepClone()).ToArray());
+            if (typeof(T) == typeof(string))
+                return (T)(object)(nodes.All(n => n is null or JsonValue)
+                    ? string.Join(", ", nodes.Select(n => Text(n)))
+                    : array.ToJsonString());
+            return (T)ConvertNode(array, typeof(T), path)!;
+        }
+
+        if (IsNonNullableValueType<T>())
+            throw new InvalidOperationException($"No values found for JsonPath: {path}");
+        return default!;
+    }
+
+    private static object? ConvertNode(JsonNode? node, Type target, string path)
+    {
+        if (node is null)
+        {
+            if (target.IsValueType && Nullable.GetUnderlyingType(target) is null)
+                throw new InvalidOperationException($"JsonPath returned null but type {target.Name} is not nullable");
+            return null;
+        }
+
+        if (target == typeof(JsonNode) || target == node.GetType()) return node;
+
+        switch (node)
+        {
+            case JsonArray array:
+                if (target == typeof(string)) return array.ToJsonString();
+                if (target == typeof(object) || target == typeof(object[])) return TypedArray(array, target == typeof(object[]));
+                return array.Deserialize(target)
+                    ?? throw new InvalidOperationException($"Cannot convert JsonPath '{path}' array to {target.Name}");
+
+            case JsonObject obj:
+                if (target == typeof(object)) return obj;
+                if (target == typeof(string)) return obj.ToJsonString();
+                return obj.Deserialize(target)
+                    ?? throw new InvalidOperationException($"Cannot convert JsonPath '{path}' object to {target.Name}");
+
+            case JsonValue value:
+                var primitive = Primitive(value);
+                if (primitive is null)
+                {
+                    if (target.IsValueType && Nullable.GetUnderlyingType(target) is null)
+                        throw new InvalidOperationException($"JsonPath returned null but type {target.Name} is not nullable");
+                    return null;
+                }
+                var effective = Nullable.GetUnderlyingType(target) ?? target;
+                if (effective == typeof(object) || effective.IsInstanceOfType(primitive)) return primitive;
+                if (effective == typeof(string)) return Text(value);
+                if (effective == typeof(DateTimeOffset)) return DateTimeOffset.Parse(Text(value), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+                if (effective == typeof(DateTime)) return DateTime.Parse(Text(value), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+                if (effective == typeof(Guid)) return Guid.Parse(Text(value));
+                if (effective.IsEnum) return Enum.Parse(effective, Text(value), ignoreCase: true);
+                return Convert.ChangeType(primitive, effective, CultureInfo.InvariantCulture);
+        }
+
+        return node.Deserialize(target);
+    }
+
+    /// <summary>Homogeneous scalar arrays become typed CLR arrays (<c>int[]</c>, <c>string[]</c>, <c>double[]</c>, <c>bool[]</c>); anything else <c>object[]</c>.</summary>
+    private static object TypedArray(JsonArray array, bool forceObject)
+    {
+        var items = array.Select(n => n is JsonValue v ? Primitive(v) : n).ToArray();
+        if (forceObject || items.Length == 0 || items.Any(i => i is null or JsonNode))
+            return items;
+
+        var elementType = items[0]!.GetType();
+        if (items.All(i => i!.GetType() == elementType))
+        {
+            var kind = elementType == typeof(long) && items.All(i => (long)i! is >= int.MinValue and <= int.MaxValue) ? typeof(int) : elementType;
+            var typed = Array.CreateInstance(kind, items.Length);
+            for (var i = 0; i < items.Length; i++)
+                typed.SetValue(kind == typeof(int) ? (object)(int)(long)items[i]! : items[i], i);
+            return typed;
+        }
+        return items;
+    }
+
+    /// <summary>
+    /// JSON scalar → CLR: strings stay strings, integers are <c>long</c>, other numbers <c>double</c>,
+    /// booleans <c>bool</c>. A <see cref="JsonValue"/> may be backed by a parsed element or by a CLR value
+    /// the path engine produced (a double even for a whole number), so both backings are read.
+    /// </summary>
+    private static object? Primitive(JsonValue value)
+    {
+        if (value.TryGetValue<string>(out var s)) return s;
+        if (value.TryGetValue<bool>(out var b)) return b;
+        if (value.TryGetValue<long>(out var l)) return l;
+        if (value.TryGetValue<int>(out var i)) return (long)i;
+        if (value.TryGetValue<double>(out var d))
+            return d == Math.Floor(d) && Math.Abs(d) < 9.2e18 && !double.IsInfinity(d) ? (long)d : d;
+        if (value.TryGetValue<decimal>(out var m))
+            return m == decimal.Truncate(m) && Math.Abs(m) < 9.2e18m ? (long)m : (double)m;
+
+        var element = value.GetValue<JsonElement>();
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            JsonValueKind.Number => element.TryGetInt64(out var el) ? el : element.GetDouble(),
+            _ => element.GetRawText(),
+        };
+    }
+
+    private static string Text(JsonNode? node) => node switch
+    {
+        null => string.Empty,
+        JsonValue value => Primitive(value) switch
+        {
+            null => string.Empty,
+            string s => s,
+            bool b => b ? "true" : "false",
+            IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
+            var other => other.ToString() ?? string.Empty,
+        },
+        _ => node.ToJsonString(),
+    };
+
+    private static bool IsNonNullableValueType<T>() => typeof(T).IsValueType && Nullable.GetUnderlyingType(typeof(T)) is null;
+
+    private static bool IsCollectionType(Type type)
+        => type != typeof(string) && (type.IsArray || typeof(System.Collections.IEnumerable).IsAssignableFrom(type));
 }

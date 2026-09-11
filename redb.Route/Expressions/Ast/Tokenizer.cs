@@ -45,6 +45,7 @@ public class Tokenizer
         { "-", "-" },
         { "*", "*" },
         { "/", "/" },
+        { "%", "%" },
         { "==", "==" },
         { "!=", "!=" },
         { ">", ">" },
@@ -154,6 +155,7 @@ public class Tokenizer
             case '-':
             case '*':
             case '/':
+            case '%':
             case '!':
             case '=':
             case '<':

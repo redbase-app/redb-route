@@ -41,6 +41,13 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     [Sensitive]
     public string? SslKeyPassword { get; set; }
 
+    /// <summary>
+    /// SSL endpoint identification: "https" verifies the broker hostname against its certificate,
+    /// "" (empty) disables the check. Unset = librdkafka default. Was factory-only before волна A7,
+    /// so a URI-configured TLS endpoint could not control hostname verification at all.
+    /// </summary>
+    public string? SslEndpointIdentificationAlgorithm { get; set; }
+
     /// <summary>Name of <see cref="KafkaConnectionFactory"/> in the route registry.</summary>
     public string? ConnectionFactory { get; set; }
 
@@ -95,7 +102,11 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     /// <summary>Partition assignment strategy: Range, RoundRobin, CooperativeSticky.</summary>
     public string? PartitionAssignmentStrategy { get; set; }
 
-    /// <summary>Isolation level: ReadUncommitted, ReadCommitted. Must be ReadCommitted for exactly-once.</summary>
+    /// <summary>
+    /// Isolation level: ReadUncommitted, ReadCommitted. ReadCommitted hides records of aborted
+    /// transactions written by EOS producers elsewhere; this connector itself is at-least-once
+    /// (see <see cref="Transacted"/>).
+    /// </summary>
     public string? IsolationLevel { get; set; }
 
     // ── Producer ──
@@ -115,11 +126,13 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     /// <summary>Explicit partition number to send to (bypasses partitioner).</summary>
     public int? PartitionNumber { get; set; }
 
-    /// <summary>Enable transactional producer (exactly-once semantics).</summary>
+    /// <summary>
+    /// Idempotent producer whose send is deferred to the route's transaction boundary
+    /// (<c>.Transacted()</c> / <c>.CommitTransaction()</c>) — at-least-once, <b>not</b> Kafka
+    /// exactly-once. No <c>transactional.id</c> is configured and no <c>InitTransactions</c> is
+    /// called; the why and the path to real EOS live in <c>docs/KAFKA_TRANSACTIONS_TODO.md</c>.
+    /// </summary>
     public bool Transacted { get; set; }
-
-    /// <summary>Prefix for the transactional.id producer setting.</summary>
-    public string TransactionIdPrefix { get; set; } = "redb-kafka";
 
     // ── Producer tuning ──
 
@@ -149,6 +162,36 @@ public sealed class KafkaEndpointOptions : EndpointOptions
         if (string.IsNullOrWhiteSpace(Brokers))
             throw new ArgumentException("The 'brokers' parameter is required for Kafka endpoints.", nameof(Brokers));
 
+        // Волна A1: every enum-valued option is parsed strictly at endpoint creation. A typo used
+        // to fall through Enum.TryParse / a silent `_ =>` arm into the default — for
+        // securityProtocol that meant a PLAINTEXT connection with no credentials.
+        // Note: SASL protocol without an explicit mechanism stays legal — librdkafka defaults to
+        // GSSAPI there, which is exactly what a Kerberos cluster wants.
+        KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.SecurityProtocol>(SecurityProtocol, "securityProtocol");
+        if (!string.IsNullOrWhiteSpace(SaslMechanism))
+        {
+            var mechanism = KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.SaslMechanism>(SaslMechanism, "saslMechanism");
+            KafkaOptionParsers.RequireSaslCredentials(mechanism, SaslUsername, SaslPassword);
+        }
+
+        KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.AutoOffsetReset>(AutoOffsetReset, "autoOffsetReset");
+        KafkaOptionParsers.ParseAcks(Acks);
+        if (!string.IsNullOrEmpty(IsolationLevel))
+            KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.IsolationLevel>(IsolationLevel, "isolationLevel");
+        if (!string.IsNullOrEmpty(PartitionAssignmentStrategy))
+            KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.PartitionAssignmentStrategy>(PartitionAssignmentStrategy, "partitionAssignmentStrategy");
+        if (!string.IsNullOrEmpty(CompressionType))
+            KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.CompressionType>(CompressionType, "compressionType");
+        if (!string.IsNullOrWhiteSpace(SeekTo))
+            KafkaOptionParsers.ParseSeekTo(SeekTo);
+
+        // A regex subscription and an explicit partition assignment contradict each other:
+        // Subscribe(pattern) joins the group, Assign(partition) bypasses it.
+        if (TopicIsPattern && PartitionNumber.HasValue)
+            throw new ArgumentException(
+                "'topicIsPattern' cannot be combined with 'partitionNumber': a regex subscription " +
+                "goes through the consumer group, an explicit partition bypasses it.");
+
         if (MaxPollRecords < 0)
             throw new ArgumentOutOfRangeException(nameof(MaxPollRecords), MaxPollRecords, "MaxPollRecords cannot be negative.");
 
@@ -161,15 +204,23 @@ public sealed class KafkaEndpointOptions : EndpointOptions
 
     // ── Config builders (internal) ──
 
-    /// <summary>Builds a <see cref="ConsumerConfig"/> from the options, optionally using a named factory as base.</summary>
-    internal ConsumerConfig BuildConsumerConfig(KafkaConnectionFactory? factory = null)
+    /// <summary>
+    /// Builds a <see cref="ConsumerConfig"/> from the options, optionally using a named factory as
+    /// the base. Волна A6.1: the family precedence rule — a parameter the URI actually supplied
+    /// (<paramref name="supplied"/> = raw URI parameters) wins over the factory, everything else
+    /// keeps the factory's value. The old code was asymmetric: URI brokers were honored, URI
+    /// SASL/SSL silently swallowed, and endpoint DEFAULTS stomped explicit factory settings.
+    /// </summary>
+    internal ConsumerConfig BuildConsumerConfig(KafkaConnectionFactory? factory = null,
+        IReadOnlyDictionary<string, string>? supplied = null)
     {
         if (factory is not null)
         {
             var config = factory.BuildConsumerConfig(GroupId);
-            // Endpoint-level overrides
             if (!string.IsNullOrWhiteSpace(Brokers)) config.BootstrapServers = Brokers;
-            config.AutoOffsetReset = ParseAutoOffsetReset();
+            if (WasSupplied(supplied, nameof(AutoOffsetReset)))
+                config.AutoOffsetReset = ParseAutoOffsetReset();
+            ApplySecurityOverrides(config, supplied);
             ApplyConsumerTuning(config);
             ApplyAdditionalProperties(config);
             return config;
@@ -190,16 +241,21 @@ public sealed class KafkaEndpointOptions : EndpointOptions
         return cfg;
     }
 
-    /// <summary>Builds a <see cref="ProducerConfig"/> from the options, optionally using a named factory as base.</summary>
-    internal ProducerConfig BuildProducerConfig(KafkaConnectionFactory? factory = null)
+    /// <summary>Builds a <see cref="ProducerConfig"/> from the options, optionally using a named factory as base.
+    /// Same precedence rule as <see cref="BuildConsumerConfig"/>.</summary>
+    internal ProducerConfig BuildProducerConfig(KafkaConnectionFactory? factory = null,
+        IReadOnlyDictionary<string, string>? supplied = null)
     {
         ProducerConfig config;
         if (factory is not null)
         {
             config = factory.BuildProducerConfig();
-            // Endpoint-level overrides
             if (!string.IsNullOrWhiteSpace(Brokers)) config.BootstrapServers = Brokers;
-            if (Retries > 0) config.MessageSendMaxRetries = Retries;
+            if (WasSupplied(supplied, nameof(Retries)))
+                config.MessageSendMaxRetries = Retries;
+            if (WasSupplied(supplied, nameof(Acks)))
+                config.Acks = ParseAcks();
+            ApplySecurityOverrides(config, supplied);
         }
         else
         {
@@ -231,33 +287,20 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     }
 
     private Confluent.Kafka.AutoOffsetReset ParseAutoOffsetReset() =>
-        AutoOffsetReset?.Trim().ToLowerInvariant() switch
-        {
-            "earliest" => Confluent.Kafka.AutoOffsetReset.Earliest,
-            "latest" => Confluent.Kafka.AutoOffsetReset.Latest,
-            "error" => Confluent.Kafka.AutoOffsetReset.Error,
-            _ => Confluent.Kafka.AutoOffsetReset.Latest
-        };
+        KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.AutoOffsetReset>(AutoOffsetReset, "autoOffsetReset");
 
-    private Confluent.Kafka.Acks ParseAcks() =>
-        Acks?.Trim().ToLowerInvariant() switch
-        {
-            "none" or "0" => Confluent.Kafka.Acks.None,
-            "leader" or "1" => Confluent.Kafka.Acks.Leader,
-            "all" or "-1" => Confluent.Kafka.Acks.All,
-            _ => Confluent.Kafka.Acks.Leader
-        };
+    private Confluent.Kafka.Acks ParseAcks() => KafkaOptionParsers.ParseAcks(Acks);
 
     private void ApplySecurity(ClientConfig config)
     {
-        if (Enum.TryParse<Confluent.Kafka.SecurityProtocol>(SecurityProtocol, true, out var proto))
-            config.SecurityProtocol = proto;
+        config.SecurityProtocol =
+            KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.SecurityProtocol>(SecurityProtocol, "securityProtocol");
 
         if (!string.IsNullOrWhiteSpace(SaslMechanism))
         {
-            if (Enum.TryParse<Confluent.Kafka.SaslMechanism>(SaslMechanism, true, out var mechanism))
-                config.SaslMechanism = mechanism;
-
+            var mechanism = KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.SaslMechanism>(SaslMechanism, "saslMechanism");
+            KafkaOptionParsers.RequireSaslCredentials(mechanism, SaslUsername, SaslPassword);
+            config.SaslMechanism = mechanism;
             config.SaslUsername = SaslUsername;
             config.SaslPassword = SaslPassword;
         }
@@ -269,6 +312,49 @@ public sealed class KafkaEndpointOptions : EndpointOptions
         if (!string.IsNullOrEmpty(SslCertificateLocation)) config.SslCertificateLocation = SslCertificateLocation;
         if (!string.IsNullOrEmpty(SslKeyLocation)) config.SslKeyLocation = SslKeyLocation;
         if (!string.IsNullOrEmpty(SslKeyPassword)) config.SslKeyPassword = SslKeyPassword;
+        ApplySslEndpointIdentification(config);
+    }
+
+    private void ApplySslEndpointIdentification(ClientConfig config)
+    {
+        if (SslEndpointIdentificationAlgorithm is null) return;
+        config.SslEndpointIdentificationAlgorithm = SslEndpointIdentificationAlgorithm == string.Empty
+            ? Confluent.Kafka.SslEndpointIdentificationAlgorithm.None
+            : Confluent.Kafka.SslEndpointIdentificationAlgorithm.Https;
+    }
+
+    /// <summary>Admin/metadata client config carrying the endpoint's own security (волна A6.2).</summary>
+    internal AdminClientConfig BuildAdminConfig()
+    {
+        var config = new AdminClientConfig { BootstrapServers = Brokers };
+        ApplySecurity(config);
+        ApplySsl(config);
+        return config;
+    }
+
+    private static bool WasSupplied(IReadOnlyDictionary<string, string>? supplied, string name)
+        => supplied is not null && supplied.Keys.Any(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// URI-supplied security/SSL parameters applied over the factory base, key by key: a hybrid
+    /// like "mechanism from the factory, password from the URI" resolves the way it reads.
+    /// </summary>
+    private void ApplySecurityOverrides(ClientConfig config, IReadOnlyDictionary<string, string>? supplied)
+    {
+        if (WasSupplied(supplied, nameof(SecurityProtocol)))
+            config.SecurityProtocol =
+                KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.SecurityProtocol>(SecurityProtocol, "securityProtocol");
+        if (WasSupplied(supplied, nameof(SaslMechanism)) && !string.IsNullOrWhiteSpace(SaslMechanism))
+            config.SaslMechanism =
+                KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.SaslMechanism>(SaslMechanism, "saslMechanism");
+        if (WasSupplied(supplied, nameof(SaslUsername))) config.SaslUsername = SaslUsername;
+        if (WasSupplied(supplied, nameof(SaslPassword))) config.SaslPassword = SaslPassword;
+        if (WasSupplied(supplied, nameof(SslCaLocation))) config.SslCaLocation = SslCaLocation;
+        if (WasSupplied(supplied, nameof(SslCertificateLocation))) config.SslCertificateLocation = SslCertificateLocation;
+        if (WasSupplied(supplied, nameof(SslKeyLocation))) config.SslKeyLocation = SslKeyLocation;
+        if (WasSupplied(supplied, nameof(SslKeyPassword))) config.SslKeyPassword = SslKeyPassword;
+        if (WasSupplied(supplied, nameof(SslEndpointIdentificationAlgorithm)))
+            ApplySslEndpointIdentification(config);
     }
 
     private void ApplyConsumerTuning(ConsumerConfig config)
@@ -278,22 +364,11 @@ public sealed class KafkaEndpointOptions : EndpointOptions
         if (HeartbeatIntervalMs.HasValue) config.HeartbeatIntervalMs = HeartbeatIntervalMs.Value;
         if (MaxPollIntervalMs.HasValue) config.MaxPollIntervalMs = MaxPollIntervalMs.Value;
         if (!string.IsNullOrEmpty(PartitionAssignmentStrategy))
-        {
-            config.PartitionAssignmentStrategy = PartitionAssignmentStrategy?.Trim().ToLowerInvariant() switch
-            {
-                "roundrobin" => Confluent.Kafka.PartitionAssignmentStrategy.RoundRobin,
-                "cooperativesticky" => Confluent.Kafka.PartitionAssignmentStrategy.CooperativeSticky,
-                _ => Confluent.Kafka.PartitionAssignmentStrategy.Range
-            };
-        }
+            config.PartitionAssignmentStrategy = KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.PartitionAssignmentStrategy>(
+                PartitionAssignmentStrategy, "partitionAssignmentStrategy");
         if (!string.IsNullOrEmpty(IsolationLevel))
-        {
-            config.IsolationLevel = IsolationLevel?.Trim().ToLowerInvariant() switch
-            {
-                "readcommitted" or "read_committed" => Confluent.Kafka.IsolationLevel.ReadCommitted,
-                _ => Confluent.Kafka.IsolationLevel.ReadUncommitted
-            };
-        }
+            config.IsolationLevel = KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.IsolationLevel>(
+                IsolationLevel, "isolationLevel");
     }
 
     private void ApplyProducerTuning(ProducerConfig config)
@@ -302,16 +377,8 @@ public sealed class KafkaEndpointOptions : EndpointOptions
         if (BatchSize.HasValue) config.BatchSize = BatchSize.Value;
         if (MessageTimeoutMs.HasValue) config.MessageTimeoutMs = MessageTimeoutMs.Value;
         if (!string.IsNullOrEmpty(CompressionType))
-        {
-            config.CompressionType = CompressionType?.Trim().ToLowerInvariant() switch
-            {
-                "gzip" => Confluent.Kafka.CompressionType.Gzip,
-                "snappy" => Confluent.Kafka.CompressionType.Snappy,
-                "lz4" => Confluent.Kafka.CompressionType.Lz4,
-                "zstd" => Confluent.Kafka.CompressionType.Zstd,
-                _ => Confluent.Kafka.CompressionType.None
-            };
-        }
+            config.CompressionType = KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.CompressionType>(
+                CompressionType, "compressionType");
         ApplyAdditionalProperties(config);
     }
 

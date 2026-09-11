@@ -191,8 +191,8 @@ public class Parser
     {
         var node = UnaryExpression();
 
-        while (_currentToken.Type == TokenType.Operator && 
-              (_currentToken.Value == "*" || _currentToken.Value == "/"))
+        while (_currentToken.Type == TokenType.Operator &&
+              (_currentToken.Value == "*" || _currentToken.Value == "/" || _currentToken.Value == "%"))
         {
             var op = _currentToken.Value;
             Advance();
@@ -247,9 +247,12 @@ public class Parser
                 Advance();
                 if (token.Value.Contains('.'))
                 {
-                    return new LiteralNode(double.Parse(token.Value));
+                    // Source text is culture-invariant: "2.5" is two and a half on every machine.
+                    // Until 2026-08-29 this parsed with the ambient culture, so a route with a
+                    // decimal literal compiled on en-US and failed to compile on ru-RU.
+                    return new LiteralNode(double.Parse(token.Value, System.Globalization.CultureInfo.InvariantCulture));
                 }
-                return new LiteralNode(int.Parse(token.Value));
+                return new LiteralNode(int.Parse(token.Value, System.Globalization.CultureInfo.InvariantCulture));
 
             case TokenType.String:
                 Advance();

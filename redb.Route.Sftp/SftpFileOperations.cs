@@ -107,7 +107,20 @@ internal sealed class SftpFileOperations : IRemoteFileOperations
                 if (recursive && (maxDepth == 0 || depth < maxDepth))
                 {
                     var subPath = CombinePath(dirPath, entry.Name);
-                    result.AddRange(EnumerateFiles(client, subPath, basePath, depth + 1, recursive, maxDepth, minDepth));
+                    try
+                    {
+                        result.AddRange(EnumerateFiles(client, subPath, basePath, depth + 1, recursive, maxDepth, minDepth));
+                    }
+                    catch (Renci.SshNet.Common.SftpPathNotFoundException)
+                        when (!_options.DirectoryMustExist && !client.Exists(subPath))
+                    {
+                        // The subdirectory vanished between the parent listing and the descent
+                        // (another process consumed it). directoryMustExist=false (default): skip;
+                        // true: let it escape - the poll reports the inconsistency (часть B).
+                        // The Exists probe keeps this a TOCTOU guard and nothing more: a directory
+                        // that still exists means the path was built wrong - that must escape,
+                        // not become a silent per-poll skip (арка-ревью, S3).
+                    }
                 }
             }
             else if (entry.IsRegularFile)
@@ -275,25 +288,35 @@ internal sealed class SftpFileOperations : IRemoteFileOperations
     //  PATH HELPERS
     // ═══════════════════════════════════════════════════════════════════
 
+    // The SFTP protocol's one true separator. The separator option only controls whether the
+    // INPUTS are normalized (Auto) or taken byte-for-byte (Unix) - see SftpSeparator.
+    private const char Sep = '/';
+
     /// <inheritdoc />
     public string CombinePath(string basePath, string relativePath)
     {
-        if (string.IsNullOrEmpty(basePath)) return "/" + relativePath;
+        if (_options.Separator == SftpSeparator.Auto)
+        {
+            basePath = basePath?.Replace('\\', '/') ?? "";
+            relativePath = relativePath?.Replace('\\', '/') ?? "";
+        }
+
+        if (string.IsNullOrEmpty(basePath)) return Sep + relativePath;
         if (string.IsNullOrEmpty(relativePath)) return basePath;
-        return basePath.TrimEnd('/') + "/" + relativePath.TrimStart('/');
+        return basePath.TrimEnd(Sep) + Sep + relativePath.TrimStart(Sep);
     }
 
     /// <inheritdoc />
     public string GetParentPath(string path)
     {
-        var lastSlash = path.LastIndexOf('/');
-        return lastSlash <= 0 ? "/" : path[..lastSlash];
+        var lastSlash = path.LastIndexOf(Sep);
+        return lastSlash <= 0 ? Sep.ToString() : path[..lastSlash];
     }
 
     /// <inheritdoc />
     public string GetFileName(string path)
     {
-        var lastSlash = path.LastIndexOf('/');
+        var lastSlash = path.LastIndexOf(Sep);
         return lastSlash >= 0 ? path[(lastSlash + 1)..] : path;
     }
 

@@ -46,4 +46,16 @@ public static class FirebaseStorageHeaders
 
     /// <summary>Number of objects in a list result.</summary>
     public const string ObjectCount = "redbStorage.ObjectCount";
+
+    /// <summary>Destination object name for the Copy operation.</summary>
+    public const string DestinationObjectName = "redbStorage.DestinationObjectName";
+
+    /// <summary>Destination bucket for the Copy operation (default: source bucket).</summary>
+    public const string DestinationBucket = "redbStorage.DestinationBucket";
+
+    /// <summary>Signed download URL produced by CreateDownloadLink.</summary>
+    public const string DownloadUrl = "redbStorage.DownloadUrl";
+
+    /// <summary>Number of buckets in a ListBuckets result.</summary>
+    public const string BucketCount = "redbStorage.BucketCount";
 }

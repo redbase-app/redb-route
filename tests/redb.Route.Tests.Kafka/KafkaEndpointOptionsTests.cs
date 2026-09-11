@@ -20,7 +20,7 @@ public sealed class KafkaEndpointOptionsTests
         opts.Retries.Should().Be(3);
         opts.RecordMetadata.Should().BeFalse();
         opts.Transacted.Should().BeFalse();
-        opts.TransactionIdPrefix.Should().Be("redb-kafka");
+        // TransactionIdPrefix removed in волна A3: transactional.id is deliberately never set, the value was discarded
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public sealed class KafkaEndpointOptionsTests
     [Fact]
     public void BuildProducerConfig_Transacted_EnablesIdempotence()
     {
-        var opts = new KafkaEndpointOptions { Brokers = "x:9092", Transacted = true, TransactionIdPrefix = "test" };
+        var opts = new KafkaEndpointOptions { Brokers = "x:9092", Transacted = true };
         var config = opts.BuildProducerConfig();
 
         // `transacted=true` is deferred-idempotent, NOT Kafka EOS: BuildProducerConfig deliberately
@@ -113,14 +113,14 @@ public sealed class KafkaEndpointOptionsTests
         // state"). See redb.Route.Kafka/KafkaEndpointOptions.BuildProducerConfig + KAFKA_TRANSACTIONS_TODO.md.
         config.EnableIdempotence.Should().BeTrue();
         config.Acks.Should().Be(Confluent.Kafka.Acks.All);
-        config.TransactionalId.Should().BeNull("TransactionIdPrefix must not leak into transactional.id");
+        config.TransactionalId.Should().BeNull("transactional.id must stay unset in deferred-idempotent mode");
     }
 
     [Theory]
     [InlineData("earliest", Confluent.Kafka.AutoOffsetReset.Earliest)]
     [InlineData("latest", Confluent.Kafka.AutoOffsetReset.Latest)]
     [InlineData("error", Confluent.Kafka.AutoOffsetReset.Error)]
-    [InlineData("unknown", Confluent.Kafka.AutoOffsetReset.Latest)]
+    // "unknown" -> Latest was the silent fallback; a typo now throws (волна A1, KafkaLoudConfigTests)
     public void BuildConsumerConfig_AutoOffsetReset_AllValues(string input, Confluent.Kafka.AutoOffsetReset expected)
     {
         var opts = new KafkaEndpointOptions { Brokers = "x:9092", GroupId = "g", AutoOffsetReset = input };
@@ -135,7 +135,7 @@ public sealed class KafkaEndpointOptionsTests
     [InlineData("1", Confluent.Kafka.Acks.Leader)]
     [InlineData("all", Confluent.Kafka.Acks.All)]
     [InlineData("-1", Confluent.Kafka.Acks.All)]
-    [InlineData("unknown", Confluent.Kafka.Acks.Leader)]
+    // "unknown" -> Leader was the silent fallback; a typo now throws (волна A1, KafkaLoudConfigTests)
     public void BuildProducerConfig_Acks_AllValues(string input, Confluent.Kafka.Acks expected)
     {
         var opts = new KafkaEndpointOptions { Brokers = "x:9092", Acks = input };

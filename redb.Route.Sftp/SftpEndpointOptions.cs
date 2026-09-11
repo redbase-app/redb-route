@@ -105,19 +105,17 @@ public class SftpEndpointOptions : RemoteFileEndpointOptions
     //  TRANSFER OPTIONS (SFTP-specific)
     // ═══════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// If true, transfer files in binary mode (raw bytes). If false, use text mode with charset conversion.
-    /// (default: true)
-    /// </summary>
-    public bool Binary { get; set; } = true;
+    // Binary and StepWise are gone (часть B of the options sweep): both were declared and read by
+    // nothing, and neither CAN mean anything here. SFTP has no text mode - the protocol moves raw
+    // bytes, full stop. And it has no change-directory operation either (SSH_FXP_* requests carry
+    // paths; a client-side "cd" is bookkeeping), so the FTP notion of step-wise navigation does
+    // not map - directory creation already walks segment by segment unconditionally.
 
     /// <summary>
-    /// If true, use step-wise directory navigation (cd into each path component).
-    /// If false, use the absolute path directly. Step-wise is safer with some servers. (default: true)
+    /// Input normalization for remote paths: Auto (default) converts backslashes in configured
+    /// paths and file names to "/", Unix takes them byte-for-byte. The wire separator is always
+    /// "/" — that is the SFTP protocol, there is no Windows mode.
     /// </summary>
-    public bool StepWise { get; set; } = true;
-
-    /// <summary>Path separator mode for remote paths. (default: Auto)</summary>
     public SftpSeparator Separator { get; set; } = SftpSeparator.Auto;
 
     /// <summary>

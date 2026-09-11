@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Sqs;
 
@@ -25,22 +25,15 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<SqsComponent>();
         services.AddSingleton<SnsComponent>();
-
-        // Post-configure: register both components in the route context after engine start.
-        services.AddSingleton<IAwsComponentRegistrar>(sp =>
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteContextConfigurator((sp, context) =>
         {
-            var context = sp.GetRequiredService<IRouteContext>();
             context.AddComponent(sp.GetRequiredService<SqsComponent>());
             context.AddComponent(sp.GetRequiredService<SnsComponent>());
-            return new AwsComponentRegistrar();
         });
 
         return services;
     }
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IAwsComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class AwsComponentRegistrar : IAwsComponentRegistrar;

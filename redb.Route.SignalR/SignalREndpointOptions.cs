@@ -98,6 +98,13 @@ public class SignalREndpointOptions : EndpointOptions
     public string? SslCertPassword { get; set; }
 
     /// <summary>
+    /// Client-mode producer only: accept any server certificate, including a self-signed one.
+    /// Off by default and never implied by another option — until Ф14 this fired whenever
+    /// <c>ssl=false</c>, which silently disabled validation for the whole transport.
+    /// </summary>
+    public bool TrustAllCertificates { get; set; }
+
+    /// <summary>
     /// Named <see cref="SignalRConnectionFactory"/> from the route registry. Lets the access token
     /// and TLS certificate password live in the registry instead of the endpoint URI, so they
     /// never reach logs or dashboards.
@@ -110,6 +117,23 @@ public class SignalREndpointOptions : EndpointOptions
     [Sensitive]
     public string? AccessToken { get; set; }
 
+    // ── Admission limits (HTTP_CONCURRENCY_LIMITS_PLAN, волна В4) ──
+
+    /// <summary>
+    /// Maximum hub connections this endpoint accepts (server mode). 0 (default) = unlimited.
+    /// A connection over the limit is aborted at OnConnected — before the Connected lifecycle
+    /// event reaches the pipeline — and counted in the endpoint's Rejected. SignalR concurrency
+    /// is connections × invocations, so this is the coarse lever;
+    /// <see cref="MaxParallelInvocationsPerClient"/> is the fine one.
+    /// </summary>
+    public int MaxConnections { get; set; }
+
+    /// <summary>
+    /// SignalR's own <c>MaximumParallelInvocationsPerClient</c>: how many hub method calls ONE
+    /// client may run in parallel. 0 (default) = SignalR's default (1, i.e. per-client serial).
+    /// </summary>
+    public int MaxParallelInvocationsPerClient { get; set; }
+
     /// <inheritdoc />
     public override void Validate()
     {
@@ -121,5 +145,11 @@ public class SignalREndpointOptions : EndpointOptions
 
         if (MaxReconnectAttempts < 0)
             throw new ArgumentException("MaxReconnectAttempts must be >= 0.");
+
+        if (MaxConnections < 0)
+            throw new ArgumentException("maxConnections must be >= 0 (0 = unlimited).");
+
+        if (MaxParallelInvocationsPerClient < 0)
+            throw new ArgumentException("maxParallelInvocationsPerClient must be >= 0 (0 = SignalR default).");
     }
 }

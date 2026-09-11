@@ -13,15 +13,21 @@ namespace redb.Route.Expressions;
 public sealed class TypedJsonPathExpression<TValue> : Expression
 {
     private readonly JsonPathExpression _inner;
+    private readonly string _path;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TypedJsonPathExpression{TValue}"/> class.
     /// </summary>
     /// <param name="jsonPath">The JsonPath expression string.</param>
-    public TypedJsonPathExpression(string jsonPath)
+    /// <param name="source">What to run the path against; <c>null</c> means the message body.</param>
+    public TypedJsonPathExpression(string jsonPath, IExpression? source = null)
     {
-        _inner = new JsonPathExpression(jsonPath);
+        _path = jsonPath;
+        _inner = new JsonPathExpression(jsonPath, source);
     }
+
+    /// <inheritdoc cref="JsonPathExpression.From(IExpression)"/>
+    public TypedJsonPathExpression<TValue> From(IExpression source) => new(_path, source);
 
     /// <inheritdoc />
     public override T Evaluate<T>(IExchange exchange)

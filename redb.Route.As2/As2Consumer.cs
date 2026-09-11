@@ -8,6 +8,7 @@ using redb.Route.Abstractions;
 using redb.Route.As2.Crypto;
 using redb.Route.As2.Mdn;
 using redb.Route.Core;
+using redb.Route.Extensions;
 using redb.Route.Http;
 using redb.Route.Telemetry;
 
@@ -55,6 +56,26 @@ internal sealed class As2Consumer : IConsumer
         (_endpoint.Component as As2Component)?.Server
         ?? throw new InvalidOperationException("AS2 endpoint has no As2Component/server.");
 
+    /// <summary>
+    /// The TLS certificate of the receive server: the endpoint's own, else the one on the named
+    /// connection factory (which is where its password belongs). Nothing here means the host
+    /// default is asked next, inside the shared host.
+    /// </summary>
+    private (string? Path, string? Password) ResolveServerCertificate()
+    {
+        if (!string.IsNullOrEmpty(_options.SslCertPath))
+            return (_options.SslCertPath, _options.SslCertPassword);
+
+        if (!string.IsNullOrEmpty(_options.ConnectionFactory))
+        {
+            var factory = _endpoint.Context.GetRequiredFromRegistry<As2ConnectionFactory>(_options.ConnectionFactory);
+            if (!string.IsNullOrEmpty(factory.SslCertPath))
+                return (factory.SslCertPath, factory.SslCertPassword);
+        }
+
+        return (null, null);
+    }
+
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
@@ -62,7 +83,17 @@ internal sealed class As2Consumer : IConsumer
         var port = _options.Port;
         var path = _endpoint.Uri.Path;   // e.g. "/inbound/orders" — kept intact by the DSL
 
-        _registration = Server.RegisterRoute(host, port, path, "POST", HandleRequest, _options.UseTls);
+        // The TLS server certificate travels with the registration. Until Ф14 it did not, so an
+        // as2s:// receiver opened a PLAINTEXT port while PartnerUrl advertised https:// to the
+        // trading partner.
+        var (certPath, certPassword) = ResolveServerCertificate();
+
+        _registration = Server.RegisterRoute(host, port, path, "POST", HandleRequest,
+            _options.UseTls, certPath, certPassword,
+            concurrencyLimit: ConcurrencyLimitOptions.FromEndpoint(
+                _options.MaxConcurrentRequests, _options.RequestQueueLimit,
+                _options.RejectStatusCode, _options.RetryAfterSeconds,
+                onRejected: _endpoint.RecordRejected));
         await Server.EnsureStarted(host, port, ct).ConfigureAwait(false);
 
         _logger?.LogInformation("AS2 consumer started: {Host}:{Port}{Path}", host, port, path);

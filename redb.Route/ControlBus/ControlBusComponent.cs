@@ -280,20 +280,38 @@ public sealed class ControlBusProducer : IProducer
         sb.Append("<routeStats>");
         foreach (var r in routes)
         {
-            sb.Append("<route id=\"").Append(r.RouteId).Append("\" status=\"").Append(r.Status).Append('"');
+            sb.Append("<route id=\"").Append(Escape(r.RouteId)).Append("\" status=\"").Append(r.Status).Append('"');
             if (r.Endpoint is IEndpointStatistics s)
             {
+                // The whole IEndpointStatistics counter surface: this XML is the one DSL-reachable
+                // view of the numbers, and it used to trail the interface — Warnings, Rejected,
+                // Cancelled, bytes and the last error were readable through a captured context but
+                // invisible from a route.
                 sb.Append(" messagesIn=\"").Append(s.MessagesIn).Append('"')
                   .Append(" messagesOut=\"").Append(s.MessagesOut).Append('"')
                   .Append(" errors=\"").Append(s.Errors).Append('"')
+                  .Append(" warnings=\"").Append(s.Warnings).Append('"')
+                  .Append(" rejected=\"").Append(s.Rejected).Append('"')
+                  .Append(" cancelled=\"").Append(s.Cancelled).Append('"')
+                  .Append(" bytesIn=\"").Append(s.BytesIn).Append('"')
+                  .Append(" bytesOut=\"").Append(s.BytesOut).Append('"')
                   .Append(" throughputPerSecond=\"").Append(s.ThroughputPerSecond.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)).Append('"')
                   .Append(" health=\"").Append(s.HealthStatus).Append('"');
+
+                if (s.LastErrorMessage is { Length: > 0 } lastError)
+                    sb.Append(" lastError=\"").Append(Escape(lastError)).Append('"');
             }
             sb.Append("/>");
         }
         sb.Append("</routeStats>");
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Attribute-escapes free text. Route ids and error messages are arbitrary strings; a quote or
+    /// an angle bracket appended raw would corrupt the document for whoever parses it downstream.
+    /// </summary>
+    private static string Escape(string value) => System.Security.SecurityElement.Escape(value);
 
     /// <inheritdoc />
     public Task Start(CancellationToken ct = default) => Task.CompletedTask;

@@ -12,12 +12,24 @@ namespace redb.Route.Definitions;
 /// child steps build the <em>main</em> downstream pipeline.
 /// Close with <see cref="EndCircuitBreaker"/>.
 /// </summary>
-public class CircuitBreakerDefinition : RouteDefinitionBase<CircuitBreakerDefinition>, IRouteScope
+public class CircuitBreakerDefinition : RouteDefinitionBase<CircuitBreakerDefinition>, IRouteScope, IBranchingDefinition
 {
     private int _failureThreshold = 5;
     private TimeSpan? _resetTimeout;
     private int _halfOpenMaxCalls = 1;
     internal FallbackDefinition? FallbackBlock;
+
+    /// <summary>
+    /// The fallback body — a logical child outside <see cref="Outputs"/> (which holds the main
+    /// pipeline), exposed so a generic tree-walk (validation, AdviceWith) reaches steps nested in it.
+    /// </summary>
+    public IEnumerable<IProcessorDefinition> Branches
+    {
+        get
+        {
+            if (FallbackBlock is not null) yield return FallbackBlock;
+        }
+    }
 
     internal CircuitBreakerDefinition() { }
 

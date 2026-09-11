@@ -110,19 +110,8 @@ public sealed class S3DslTests
         uri.Should().Contain("kmsKeyId=my-kms-key-id");
     }
 
-    [Fact]
-    public void Builder_StreamingUpload_GeneratesUri()
-    {
-        string uri = S3Dsl.Bucket("stream")
-            .AccessKey("key").SecretKey("secret")
-            .StreamingUpload(batchMessages: 20, batchSize: 2_097_152)
-            .NamingStrategy(S3NamingStrategy.Random);
-
-        uri.Should().Contain("streamingUploadMode=true");
-        uri.Should().Contain("batchMessageNumber=20");
-        uri.Should().Contain("batchSize=2097152");
-        uri.Should().Contain("namingStrategy=Random");
-    }
+    // Builder_StreamingUpload_GeneratesUri removed with the streaming-upload block (часть B):
+    // the mode was never implemented; accumulate-then-write is the core Aggregate(...) EIP.
 
     [Fact]
     public void Builder_ImplicitStringConversion()

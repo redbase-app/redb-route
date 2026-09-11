@@ -57,7 +57,7 @@ public sealed class KafkaComponentTests
     public void CreateEndpoint_WithProducerOptions_ParsesCorrectly()
     {
         var uri = EndpointUriParser.Parse(
-            "kafka://orders?brokers=localhost:9092&acks=All&retries=5&recordMetadata=true&key=OrderId&transacted=true&transactionIdPrefix=my-app");
+            "kafka://orders?brokers=localhost:9092&acks=All&retries=5&recordMetadata=true&key=OrderId&transacted=true");
 
         var endpoint = (KafkaEndpoint)_sut.CreateEndpoint(uri);
         endpoint.TopicName.Should().Be("orders");

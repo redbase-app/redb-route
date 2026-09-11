@@ -32,6 +32,20 @@ public abstract class ComponentBase : IComponent, IAsyncDisposable
     public abstract IEndpoint CreateEndpoint(EndpointUri uri);
 
     /// <summary>
+    /// Optional one-line path synonym for the structured XML form (Route-XML Ф0 §7.2):
+    /// kafka → <c>topic</c>, rabbitmq → <c>queue</c>, file → <c>directory</c>. Read by the XML
+    /// loader, the component catalog and the generated schema — never from a hand-kept list.
+    /// A component without an override is addressed by the universal <c>path</c> attribute.
+    /// </summary>
+    public virtual string? StructuredPathSynonym => null;
+
+    /// <summary>
+    /// The path part of this component's URIs is a text body (sql: the query). The structured
+    /// XML form then reads the path from the element's content (CDATA) rather than an attribute.
+    /// </summary>
+    public virtual bool PathIsText => false;
+
+    /// <summary>
     /// Releases component-owned long-lived resources. Default implementation is a no-op.
     /// Override in subclasses that hold connection pools, broker sessions, etc.
     /// Called by <see cref="RouteContext.DisposeAsync"/>.

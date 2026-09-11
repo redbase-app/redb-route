@@ -59,7 +59,7 @@ public sealed class FtpConnectionFactoryTests
     }
 
     [Fact]
-    public void MissingFactory_FallsBackToUriParameters()
+    public void MissingFactory_FailsLoud()
     {
         var context = new RouteContext();
         var component = new FtpComponent();
@@ -68,7 +68,9 @@ public sealed class FtpConnectionFactoryTests
         var uri = EndpointUriParser.Parse("ftp://inbox?connectionFactory=absent&host=direct");
         var act = () => component.CreateEndpoint(uri);
 
-        act.Should().NotThrow();
+        // Ф11 Ж-1: опечатка в connectionFactory обязана падать громко, а не молча фолбэчиться
+        act.Should().Throw<InvalidOperationException>()
+            .Which.Message.Should().Contain("absent");
     }
 
     [Fact]

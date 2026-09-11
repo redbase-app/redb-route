@@ -510,4 +510,106 @@ public sealed class MailIntegrationTests
 
         await imap.DisconnectAsync(true);
     }
+
+    // ── Часть B плана KAFKA_HARDENING_AND_OPTIONS_SWEEP_PLAN: четыре мёртвые опции Mail ──
+
+    private async Task<IExchange> ConsumeOneAsync(ImapEndpoint ep, int timeoutMs = 10_000)
+    {
+        IExchange? captured = null;
+        var tcs = new TaskCompletionSource();
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                captured = ci.ArgAt<IExchange>(0).Snapshot();
+                tcs.TrySetResult();
+                return Task.CompletedTask;
+            });
+
+        var consumer = (ImapConsumer)ep.CreateConsumer(processor);
+        await consumer.Start();
+        await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
+        await consumer.Stop();
+
+        captured.Should().NotBeNull("письмо обязано дойти до процессора");
+        return captured!;
+    }
+
+    [Fact]
+    public async Task FetchBodyFalse_DeliversHeadersOnly()
+    {
+        var user = UniqueUser();
+        await SendDirectAsync(user, "Envelope scan", "a body that must NOT travel");
+
+        var ep = CreateImapEndpoint(user, extraParams: "delay=500&fetchBody=false");
+        var rx = await ConsumeOneAsync(ep);
+
+        rx.In.Headers[MailHeaders.Subject].Should().Be("Envelope scan",
+            "заголовки при envelope-сканировании обязаны быть");
+        (rx.In.Body as string).Should().BeNullOrEmpty(
+            "fetchBody=false обещал не выкачивать тело - и раньше молча выкачивал");
+        rx.In.Headers.Should().NotContainKey(MailHeaders.TextBody);
+    }
+
+    [Fact]
+    public async Task FetchAttachmentsFalse_KeepsMetadataDropsPayload()
+    {
+        var user = UniqueUser();
+        await SendWithAttachmentAsync(user, "Att meta", "text", "big.bin", new byte[512]);
+
+        var ep = CreateImapEndpoint(user, extraParams: "delay=500&fetchAttachments=false");
+        var rx = await ConsumeOneAsync(ep);
+
+        rx.In.Headers[MailHeaders.HasAttachments].Should().Be(true);
+        rx.In.Headers[MailHeaders.AttachmentNames].ToString().Should().Contain("big.bin",
+            "метаданные вложений остаются");
+        rx.In.Body.Should().NotBeOfType<MailMessageBody>(
+            "fetchAttachments=false обещал не таскать полезную нагрузку вложений");
+    }
+
+    [Fact]
+    public async Task MaxAttachmentSize_DropsOversizedPayload()
+    {
+        var user = UniqueUser();
+        await SendWithAttachmentAsync(user, "Att cap", "text", "big.bin", new byte[256]);
+
+        var ep = CreateImapEndpoint(user, extraParams: "delay=500&maxAttachmentSize=64");
+        var rx = await ConsumeOneAsync(ep);
+
+        rx.In.Headers[MailHeaders.AttachmentNames].ToString().Should().Contain("big.bin");
+        // The body TYPE is predictable from HasAttachments (an existing route casts on it);
+        // the cap drops the payload, not the shape (ревью дуги, M17).
+        var body = rx.In.Body.Should().BeOfType<MailMessageBody>().Subject;
+        body.Attachments.Should().BeEmpty("вложение больше потолка не должно ехать в маршрут");
+    }
+
+    [Fact]
+    public async Task MapMimeHeaders_CopiesRawHeadersWithPrefix()
+    {
+        var user = UniqueUser();
+        await ProvisionUserAsync("sender");
+        await ProvisionUserAsync(user);
+
+        var mime = new MimeMessage();
+        mime.From.Add(new MailboxAddress("sender", "sender@localhost"));
+        mime.To.Add(new MailboxAddress(user, $"{user}@localhost"));
+        mime.Subject = "Mime map";
+        mime.Headers.Add("X-Custom-Track", "trace-42");
+        mime.Body = new TextPart("plain") { Text = "body" };
+
+        using (var client = new SmtpClient())
+        {
+            await client.ConnectAsync(SmtpHost, SmtpPort, MailKit.Security.SecureSocketOptions.None);
+            await client.AuthenticateAsync("sender", "secret");
+            await client.SendAsync(mime);
+            await client.DisconnectAsync(true);
+        }
+
+        var ep = CreateImapEndpoint(user, extraParams: "delay=500&mapMimeHeaders=true");
+        var rx = await ConsumeOneAsync(ep);
+
+        rx.In.Headers.Should().ContainKey(MailHeaders.MimePrefix + "X-Custom-Track",
+            "mapMimeHeaders=true обязан копировать сырые MIME-заголовки");
+        rx.In.Headers[MailHeaders.MimePrefix + "X-Custom-Track"].Should().Be("trace-42");
+    }
 }

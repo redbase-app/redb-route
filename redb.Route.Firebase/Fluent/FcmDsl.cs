@@ -39,6 +39,17 @@ public static class Fcm
 
     /// <summary>Creates a Condition-targeted FCM producer endpoint with expression.</summary>
     public static FcmBuilder Condition(IExpression condition) => new(FcmMessageType.Condition, "condition", condition.ToTemplateString());
+
+    /// <summary>Multicast: the same message to many tokens (body or Tokens header).</summary>
+    public static FcmBuilder Multicast() => new(FcmOperationType.Multicast);
+
+    /// <summary>Subscribe device tokens (body or Tokens header) to the topic.</summary>
+    public static FcmBuilder SubscribeToTopic(string topic)
+        => new FcmBuilder(FcmOperationType.SubscribeToTopic).Set("topic", topic);
+
+    /// <summary>Unsubscribe device tokens (body or Tokens header) from the topic.</summary>
+    public static FcmBuilder UnsubscribeFromTopic(string topic)
+        => new FcmBuilder(FcmOperationType.UnsubscribeFromTopic).Set("topic", topic);
 }
 
 /// <summary>
@@ -54,6 +65,12 @@ public sealed class FcmBuilder
         _type = type;
         _params["messageType"] = type.ToString();
         _params[targetKey] = targetValue;
+    }
+
+    internal FcmBuilder(FcmOperationType operation)
+    {
+        _type = FcmMessageType.Token;
+        _params["operation"] = operation.ToString();
     }
 
     /// <summary>Notification title.</summary>
@@ -122,5 +139,5 @@ public sealed class FcmBuilder
     /// <inheritdoc/>
     public override string ToString() => Build();
 
-    private FcmBuilder Set(string k, object v) { _params[k] = v.ToString()!; return this; }
+    internal FcmBuilder Set(string k, object v) { _params[k] = v.ToString()!; return this; }
 }

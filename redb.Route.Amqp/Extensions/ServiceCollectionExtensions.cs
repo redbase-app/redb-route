@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Amqp;
 
@@ -23,22 +23,11 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddRedbRouteAmqp(this IServiceCollection services)
     {
-        services.AddSingleton<AmqpComponent>();
-
-        services.AddSingleton<IAmqpComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            var component = sp.GetRequiredService<AmqpComponent>();
-            context.AddComponent(component);
-            return new AmqpComponentRegistrar();
-        });
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteComponent<AmqpComponent>();
 
         return services;
     }
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IAmqpComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class AmqpComponentRegistrar : IAmqpComponentRegistrar;

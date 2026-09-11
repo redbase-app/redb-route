@@ -20,6 +20,7 @@ public sealed class DeadLetterChannelProcessor : IProcessor
     private readonly bool _rethrow;
     private readonly ILogger? _logger;
     private IProducer? _producer;
+    private IEndpoint? _endpoint;
     private readonly SemaphoreSlim _producerLock = new(1, 1);
 
     /// <summary>Creates a dead-letter channel processor.</summary>
@@ -64,8 +65,8 @@ public sealed class DeadLetterChannelProcessor : IProcessor
             _logger?.LogWarning(ex, "Dead-lettering exchange to {Uri}.", _deadLetterUri);
             try
             {
-                var producer = await GetOrCreateProducer(ct).ConfigureAwait(false);
-                await producer.Process(exchange, ct).ConfigureAwait(false);
+                var (endpoint, producer) = await GetOrCreatePair(ct).ConfigureAwait(false);
+                await Core.CountedSend.Process(endpoint, producer, exchange, ct).ConfigureAwait(false);
                 ProcessorMetrics.DeadLetterSent.Add(1);
             }
             catch (Exception sendEx)
@@ -78,19 +79,20 @@ public sealed class DeadLetterChannelProcessor : IProcessor
         }
     }
 
-    private async Task<IProducer> GetOrCreateProducer(CancellationToken ct)
+    private async Task<(IEndpoint, IProducer)> GetOrCreatePair(CancellationToken ct)
     {
-        if (_producer is not null) return _producer;
+        if (_producer is not null) return (_endpoint!, _producer);
         await _producerLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_producer is not null) return _producer;
+            if (_producer is not null) return (_endpoint!, _producer);
             var endpoint = _context.GetEndpoint(_deadLetterUri);
             var producer = endpoint.CreateProducer();
             await producer.Start(ct).ConfigureAwait(false);
             (_context as RouteContext)?.TrackProducer(producer);
+            _endpoint = endpoint;
             _producer = producer;
-            return producer;
+            return (endpoint, producer);
         }
         finally
         {

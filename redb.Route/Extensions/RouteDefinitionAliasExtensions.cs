@@ -126,9 +126,9 @@ public static class RouteDefinitionAliasExtensions
     public static WhenDefinition When(this IRouteDefinition self, IExpression expression)
         => FindEnclosingChoice(self, "When").When(expression);
 
-    /// <summary>Opens (or continues) a When branch on the nearest enclosing Choice scope using a Simple template.</summary>
+    /// <summary>Opens (or continues) a When branch on the nearest enclosing Choice scope using a Simple condition.</summary>
     public static WhenDefinition When(this IRouteDefinition self, string simpleTemplate)
-        => FindEnclosingChoice(self, "When").When(new redb.Route.Expressions.StringExpression(simpleTemplate));
+        => FindEnclosingChoice(self, "When").When(simpleTemplate);
 
     /// <summary>Opens the Otherwise branch on the nearest enclosing Choice scope.</summary>
     public static OtherwiseDefinition Otherwise(this IRouteDefinition self)
@@ -166,15 +166,6 @@ public static class RouteDefinitionAliasExtensions
 
     public static LoopDefinition LoopExpression(this IRouteDefinition self, IExpression expression)
         => self.Loop(ex => expression.Evaluate<int>(ex));
-
-    public static IRouteDefinition DelayExpression(this IRouteDefinition self, IExpression expression)
-        => self.Delay(ex => TimeSpan.FromMilliseconds(expression.Evaluate<long>(ex)));
-
-    public static IRouteDefinition DelayExpression(this IRouteDefinition self, string simpleTemplate)
-    {
-        var expr = new redb.Route.Expressions.StringExpression(simpleTemplate);
-        return self.Delay(ex => TimeSpan.FromMilliseconds(expr.Evaluate<long>(ex)));
-    }
 
     // ---------------------------------------------------------------------
     // TryCatch aliases (Camel-style doTry / doCatch / doFinally).

@@ -77,7 +77,8 @@ public sealed class DelayExpressionDefinition : ProcessorDefinition
                 await Task.Delay(delay, ct).ConfigureAwait(false);
         });
 
-    private static TimeSpan ConvertToTimeSpan(object? value) => value switch
+    /// <summary>Delay value → <see cref="TimeSpan"/>: a <see cref="TimeSpan"/>, a number of milliseconds, or <c>hh:mm:ss</c> text.</summary>
+    internal static TimeSpan ConvertToTimeSpan(object? value) => value switch
     {
         TimeSpan ts => ts,
         int ms => TimeSpan.FromMilliseconds(ms),

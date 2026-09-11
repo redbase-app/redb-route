@@ -114,9 +114,14 @@ public static class TelegramHeaders
     public const string DisableNotification = "telegram.disableNotification";
 
     /// <summary>
-    /// Explicit Telegram file_id for <c>document</c>/<c>photo</c> producer modes.
-    /// When present, the producer reuses the file already hosted on Telegram
-    /// instead of uploading the exchange body.
+    /// Explicit Telegram file_id for the <c>document</c>/<c>photo</c>/<c>download</c>
+    /// producer modes.
+    /// <para>
+    /// On <c>document</c>/<c>photo</c> it means "send this file already hosted on
+    /// Telegram instead of uploading the exchange body"; on <c>download</c> it names
+    /// the file to fetch. Both readings are the same instruction — <i>the file this
+    /// producer call is about</i> — which is why they share one key.
+    /// </para>
     /// </summary>
     public const string FileId = "telegram.fileId";
 
@@ -183,6 +188,32 @@ public static class TelegramHeaders
     /// a separate round-trip.
     /// </summary>
     public const string SentMessageId = "telegram.sentMessageId";
+
+    /// <summary>
+    /// Set by the <c>download</c> producer to the server-side path <c>getFile</c> reported
+    /// (<c>voice/file_42.oga</c>). Useful for the extension — Telegram does not send a MIME
+    /// type for every attachment kind, but it always names the file it stored.
+    /// <para>
+    /// Deliberately NOT a URL: the download URL embeds the bot token, and a header travels
+    /// with the exchange into logs, audits and dead letters.
+    /// </para>
+    /// </summary>
+    public const string FilePath = "telegram.file.path";
+
+    /// <summary>
+    /// Set by the <c>download</c> producer to the number of bytes actually downloaded
+    /// (<c>long</c>). Not the same as <see cref="AttachmentFileSize"/>, which is what the
+    /// update claimed before anything was fetched.
+    /// </summary>
+    public const string FileSize = "telegram.file.size";
+
+    /// <summary>
+    /// Set by the <c>download</c> producer to the file's <c>file_unique_id</c> — stable
+    /// across bots and over time, unlike <c>file_id</c>. The identifier to deduplicate or
+    /// cache by; it cannot be used to download anything, which is exactly why it is safe
+    /// to keep.
+    /// </summary>
+    public const string FileUniqueId = "telegram.file.uniqueId";
 
     // ── Internal ──────────────────────────────────────────────────────────────
 

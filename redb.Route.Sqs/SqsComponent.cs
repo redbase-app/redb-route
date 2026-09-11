@@ -2,6 +2,7 @@ using Amazon.SQS;
 using Amazon.SQS.Model;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.Sqs;
@@ -84,10 +85,11 @@ public sealed class SqsEndpoint : EndpointBase<SqsEndpointOptions>, IDisposable
         {
             if (_client is not null) return _client;
 
-            if (!string.IsNullOrEmpty(Options.ConnectionFactory)
-                && (Component as SqsComponent)?.Context?.GetFromRegistry<AwsConnectionFactory>(Options.ConnectionFactory) is { } factory)
+            if (!string.IsNullOrEmpty(Options.ConnectionFactory))
             {
-                _client = factory.BuildSqs();
+                // A set-but-unknown name fails loud — never a silent fallback (Ф11 Ж-1).
+                var context = (Component as SqsComponent)?.Context;
+                _client = context.GetRequiredFromRegistry<AwsConnectionFactory>(Options.ConnectionFactory).BuildSqs();
             }
             else
             {

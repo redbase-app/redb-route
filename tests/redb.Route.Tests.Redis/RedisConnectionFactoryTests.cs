@@ -90,4 +90,36 @@ public sealed class RedisConnectionFactoryTests
         config.Ssl.Should().BeTrue();
         // SslHost is not explicitly set by factory, library may or may not populate it
     }
+
+    // ── Волна A1.3 плана KAFKA_HARDENING_AND_OPTIONS_SWEEP_PLAN ──
+
+    [Fact]
+    public void Build_SslProtocolsTypo_FailsInsteadOfSilentlyUsingTheDefault()
+    {
+        // Enum.TryParse used to swallow the typo, so the protocol policy the admin explicitly
+        // pinned was silently NOT applied (library default used instead). Milder than Kafka's
+        // plaintext case (Ssl here is a separate flag), but the same disease.
+        var factory = new RedisConnectionFactory
+        {
+            ConnectionString = "localhost:6379",
+            Ssl = true,
+            SslProtocols = "Tls13x",
+        };
+
+        var act = () => factory.Build();
+        act.Should().Throw<ArgumentException>().WithMessage("*sslProtocols*");
+    }
+
+    [Fact]
+    public void Build_SslProtocols_ValidValueIsApplied()
+    {
+        var factory = new RedisConnectionFactory
+        {
+            ConnectionString = "localhost:6379",
+            Ssl = true,
+            SslProtocols = "Tls12",
+        };
+
+        factory.Build().SslProtocols.Should().Be(System.Security.Authentication.SslProtocols.Tls12);
+    }
 }

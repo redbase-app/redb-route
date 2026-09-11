@@ -52,17 +52,35 @@ public sealed class AmqpEndpoint : EndpointBase<AmqpEndpointOptions>
     /// <summary>
     /// Creates a sender link on the shared session. Thread-safe.
     /// </summary>
+    /// <summary>
+    /// Terminus for the sender side. expiryPolicy and terminusTimeout ride here — both were
+    /// declared options that nothing read (часть B of the options sweep): ResolveExpiryPolicy()
+    /// existed and was called by nobody.
+    /// </summary>
+    internal Target BuildTargetTerminus() => new()
+    {
+        Address = Address,
+        Durable = Options.Durable,
+        ExpiryPolicy = Options.ResolveExpiryPolicy(),
+        Timeout = Options.TerminusTimeout,
+    };
+
+    /// <summary>Terminus for the receiver side — same wiring as <see cref="BuildTargetTerminus"/>.</summary>
+    internal Source BuildSourceTerminus() => new()
+    {
+        Address = Address,
+        Durable = Options.Durable,
+        ExpiryPolicy = Options.ResolveExpiryPolicy(),
+        Timeout = Options.TerminusTimeout,
+    };
+
     internal async Task<SenderLink> CreateSenderLinkAsync(string? name = null, CancellationToken ct = default)
     {
         await EnsureConnectionAsync(ct).ConfigureAwait(false);
 
         var linkName = name ?? $"sender-{Address}-{Guid.NewGuid():N}";
 
-        var target = new Target
-        {
-            Address = Address,
-            Durable = Options.Durable,
-        };
+        var target = BuildTargetTerminus();
 
         var caps = Options.ResolveCapabilities();
         if (caps.Length > 0)
@@ -122,11 +140,7 @@ public sealed class AmqpEndpoint : EndpointBase<AmqpEndpointOptions>
     {
         var linkName = name ?? $"receiver-{Address}-{Guid.NewGuid():N}";
 
-        var source = new Source
-        {
-            Address = Address,
-            Durable = Options.Durable,
-        };
+        var source = BuildSourceTerminus();
 
         var caps = Options.ResolveCapabilities();
         if (caps.Length > 0)

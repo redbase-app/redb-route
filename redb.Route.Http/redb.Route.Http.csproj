@@ -11,6 +11,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.Xml\redb.Route.Xml.csproj" />
     <!-- Shared Kestrel host (SharedHttpServerManager, HttpProtocol, RouteCorsOptions). -->
     <ProjectReference Include="..\redb.Route.Http.Hosting\redb.Route.Http.Hosting.csproj" />
   </ItemGroup>

@@ -33,7 +33,14 @@ public class HttpProducer : ConnectableProducer
     protected override IEndpoint ProducerEndpoint => _endpoint;
 
     /// <inheritdoc />
-    protected override string ProducerName => $"http:{_endpoint.BuildProducerUrl()}";
+    // The name is logged as "producer started", so it goes through the same redaction as every
+    // other URI at a logging boundary: [Sensitive] option names cover the query parameters, and
+    // Sanitize additionally masks a userinfo password, which lives in the authority and therefore
+    // cannot be reached by any attribute.
+    protected override string ProducerName => $"http:{EndpointUri.Sanitize(_endpoint.BuildProducerUrl())}";
+
+    /// <summary>The logged producer name, so a test can pin the redaction.</summary>
+    internal string DiagnosticName => ProducerName;
 
     /// <inheritdoc />
     protected override Task ConnectAsync(CancellationToken ct)
@@ -95,6 +102,17 @@ public class HttpProducer : ConnectableProducer
             BridgeExchangeHeaders(request, exchange);
         }
 
+        // preserveHostHeader=true: the reverse-proxy case - the target sees the ORIGINAL
+        // request's Host. Off (default): the target sees its own host, like any plain client.
+        // Host is excluded from the header bridge, so this explicit set is the only path.
+        // Independent of bridgeHeaders, like in camel-http.
+        if (_options.PreserveHostHeader
+            && exchange.In.Headers.TryGetValue("Host", out var originalHost)
+            && originalHost?.ToString() is { Length: > 0 } hostValue)
+        {
+            request.Headers.TryAddWithoutValidation("Host", hostValue);
+        }
+
         // Set per-request auth if using dynamic token
         ConfigurePerRequestAuth(request, exchange);
 
@@ -107,7 +125,7 @@ public class HttpProducer : ConnectableProducer
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Logger?.LogError(ex, "HTTP {Method} to {Url} failed. Timeout={Timeout}ms, auth={Auth}",
-                method.Method, url, _options.Timeout, _options.AuthScheme);
+                method.Method, EndpointUri.Sanitize(url), _options.Timeout, _options.AuthScheme);
             throw;
         }
 

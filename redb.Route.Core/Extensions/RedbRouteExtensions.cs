@@ -318,7 +318,7 @@ public static class RedbRouteExtensions
 
     // ── Private helpers ──────────────────────────────────────────────
 
-    private static IRedbService ResolveRedbService(IRouteDefinition route, IExchange exchange)
+    internal static IRedbService ResolveRedbService(IRouteDefinition route, IExchange exchange)
     {
         // Fast path: if the exchange's own DI scope already carries redb, return it WITHOUT
         // resolving the route context. GetContext() walks the Parent chain, so it must not run

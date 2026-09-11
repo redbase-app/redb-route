@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Exec;
 
@@ -13,19 +13,11 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddRedbRouteExec(this IServiceCollection services)
     {
-        services.AddSingleton<ExecComponent>();
-
-        services.AddSingleton<IExecComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            var component = sp.GetRequiredService<ExecComponent>();
-            context.AddComponent(component);
-            return new ExecComponentRegistrar();
-        });
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteComponent<ExecComponent>();
 
         return services;
     }
 }
 
-internal interface IExecComponentRegistrar;
-internal sealed class ExecComponentRegistrar : IExecComponentRegistrar;

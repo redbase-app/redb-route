@@ -99,6 +99,39 @@ public class ControlBusTests
     }
 
     [Fact]
+    public async Task ControlBus_Stats_CarriesTheWholeCounterSurface()
+    {
+        // The stats XML trailed IEndpointStatistics: Warnings, Rejected, Cancelled, bytes and
+        // LastError were readable through a captured context but invisible through the one DSL
+        // path a route has — exactly the columns the recent accounting work made honest.
+        await using var ctx = new RouteContext();
+        ctx.AddRoutes(r =>
+        {
+            r.From("direct://w5").RouteId("w5").Process(_ => throw new InvalidOperationException("boom & <bang>"));
+            r.From("direct://ctl-stats-full").RouteId("c5")
+                .To("controlbus:route?routeId=w5&action=stats");
+        });
+
+        var worker = await StartAndProducer(ctx, "direct://w5");
+        var act = () => worker.Process(new Exchange(new Message("x")));
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        var control = ctx.GetEndpoint("direct://ctl-stats-full").CreateProducer();
+        await control.Start();
+        var ex = new Exchange(new Message("x"));
+        await control.Process(ex);
+
+        var body = ex.In.Body!.ToString()!;
+        body.Should().Contain("errors=\"1\"")
+            .And.Contain("warnings=\"0\"")
+            .And.Contain("rejected=\"0\"")
+            .And.Contain("cancelled=\"0\"")
+            .And.Contain("bytesIn=\"")
+            .And.Contain("lastError=\"boom &amp; &lt;bang&gt;\"",
+                "the message must be XML-escaped, or a quote in an exception text corrupts the document");
+    }
+
+    [Fact]
     public async Task ControlBus_Dsl_Current_StopsSelf_Async_NoDeadlock()
     {
         await using var ctx = new RouteContext();

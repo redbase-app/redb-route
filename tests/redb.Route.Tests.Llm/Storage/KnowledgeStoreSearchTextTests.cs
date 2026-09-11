@@ -76,11 +76,11 @@ public sealed class InMemoryKnowledgeStoreSearchTextTests
 }
 
 /// <summary>Integration: <see cref="RedbKnowledgeStore.SearchTextAsync"/> against Postgres Pro.</summary>
-[Collection("PostgresPro")]
+[Collection("StoragePro")]
 public sealed class RedbKnowledgeStoreSearchTextTests
 {
-    private readonly PostgresProFixture _fx;
-    public RedbKnowledgeStoreSearchTextTests(PostgresProFixture fx) => _fx = fx;
+    private readonly StorageProFixture _fx;
+    public RedbKnowledgeStoreSearchTextTests(StorageProFixture fx) => _fx = fx;
 
     private static KnowledgeChunk Chunk(string id, string text, string? collection = null, string? meta = null)
         => new() { Id = id, Text = text, Collection = collection, MetadataJson = meta, Embedding = new float[] { 0.1f, 0.2f } };

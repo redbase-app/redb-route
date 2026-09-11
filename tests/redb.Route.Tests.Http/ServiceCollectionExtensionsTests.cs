@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using redb.Route.Core;
+using redb.Route.Extensions;
 using redb.Route.Abstractions;
 using redb.Route.Http;
 
@@ -83,22 +85,19 @@ public class ServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddRedbRouteHttp_RegistersComponentsInRouteContext()
+    public async Task AddRedbRouteHttp_RegistersComponentsInRouteContext()
     {
-        var routeContext = Substitute.For<IRouteContext>();
-
         var services = new ServiceCollection();
-        services.AddSingleton(routeContext);
         services.AddRedbRouteHttp();
 
-        var sp = services.BuildServiceProvider();
+        await using var sp = services.BuildServiceProvider();
+        await using var context = new RouteContext();
 
-        // Resolve the registrar to trigger component registration
-        var registrar = sp.GetService<IHttpComponentRegistrar>();
-        registrar.Should().NotBeNull();
+        // The hook RouteHostedService applies at startup
+        foreach (var configurator in sp.GetServices<IRouteContextConfigurator>())
+            configurator.Configure(context);
 
-        // Verify AddComponent was called for both http and https
-        routeContext.Received(1).AddComponent(Arg.Is<HttpComponent>(c => c.Scheme == "http"));
-        routeContext.Received(1).AddComponent(Arg.Is<HttpsComponent>(c => c.Scheme == "https"));
+        context.HasComponent("http").Should().BeTrue();
+        context.HasComponent("https").Should().BeTrue();
     }
 }

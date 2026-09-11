@@ -26,8 +26,12 @@ public sealed class SqsEndpointOptions : AwsEndpointOptions
     /// <summary>Visibility timeout in seconds for received messages. 0 = use the queue default.</summary>
     public int VisibilityTimeout { get; set; }
 
-    /// <summary>Number of concurrent receive/processing loops. Default 1 (serial). &gt;1 = competing consumers.</summary>
-    public int ConcurrentConsumers { get; set; } = 1;
+    /// <summary>Concurrent receive/processing loops: a number or "auto" (= max(CPU, 2)). Default 1 (serial).</summary>
+    // A string so "auto" binds verbatim instead of silently degrading to the int default (В-7).
+    public string? ConcurrentConsumers { get; set; }
+
+    /// <summary>Resolved consumer parallelism (see <see cref="ConcurrencyOption"/>).</summary>
+    public int ResolvedConcurrentConsumers => ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers");
 
     /// <summary>
     /// Keep extending a message's visibility while it is still being processed, so long handlers never
@@ -84,8 +88,7 @@ public sealed class SqsEndpointOptions : AwsEndpointOptions
             throw new ArgumentException($"waitTimeSeconds must be 0–20. Got: {WaitTimeSeconds}");
         if (MaxNumberOfMessages is < 1 or > 10)
             throw new ArgumentException($"maxNumberOfMessages must be 1–10. Got: {MaxNumberOfMessages}");
-        if (ConcurrentConsumers < 1)
-            throw new ArgumentException($"concurrentConsumers must be at least 1. Got: {ConcurrentConsumers}");
+        _ = ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers"); // loud on garbage
         if (VisibilityTimeout < 0)
             throw new ArgumentException($"visibilityTimeout cannot be negative. Got: {VisibilityTimeout}");
         if (ExtendMessageVisibility && VisibilityTimeout <= 0)

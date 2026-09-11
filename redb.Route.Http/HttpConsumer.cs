@@ -68,7 +68,11 @@ public class HttpConsumer : IConsumer
         _registration = _serverManager.RegisterRoute(
             host, port, path, _options.Methods, HandleRequest,
             ssl, _options.SslCertPath, _options.SslCertPassword,
-            corsOptions, _options.MaxRequestBodySize, _options.Protocol);
+            corsOptions, _options.MaxRequestBodySize, _options.Protocol,
+            concurrencyLimit: ConcurrencyLimitOptions.FromEndpoint(
+                _options.MaxConcurrentRequests, _options.RequestQueueLimit,
+                _options.RejectStatusCode, _options.RetryAfterSeconds,
+                onRejected: _endpoint.RecordRejected));
 
         await _serverManager.EnsureStarted(host, port, ct).ConfigureAwait(false);
 
@@ -120,9 +124,19 @@ public class HttpConsumer : IConsumer
             // Check for exceptions
             if (exchange.Exception is not null && !exchange.ExceptionHandled)
             {
+                // The exception's own text goes to the log, never to the caller: it is written by
+                // whoever threw it and routinely carries a file path, a connection string or the name
+                // of an inner service (BR-4). The caller gets the exchange id to quote instead — the
+                // same id the log line above carries, so an operator can find the real reason.
+                _logger?.LogError(exchange.Exception,
+                    "Route failed for {Method} {Path} (exchange {ExchangeId})",
+                    httpContext.Request.Method, httpContext.Request.Path, exchange.ExchangeId);
+
                 httpContext.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                httpContext.Response.ContentType = "text/plain; charset=utf-8";
                 await httpContext.Response.WriteAsync(
-                    exchange.Exception.Message, httpContext.RequestAborted).ConfigureAwait(false);
+                    $"An unexpected error occurred while processing the request (ref: {exchange.ExchangeId}).",
+                    httpContext.RequestAborted).ConfigureAwait(false);
                 return;
             }
 

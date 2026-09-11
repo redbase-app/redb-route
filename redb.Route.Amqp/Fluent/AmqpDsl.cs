@@ -47,7 +47,7 @@ public sealed class AmqpBuilder
     // Consumer
     private int? _credit;
     private bool? _autoAccept;
-    private int? _concurrentConsumers;
+    private string? _concurrentConsumers;
     private int? _receiveTimeout;
 
     // Producer
@@ -133,7 +133,10 @@ public sealed class AmqpBuilder
     public AmqpBuilder AutoAccept(bool accept = true) { _autoAccept = accept; return this; }
 
     /// <summary>Number of concurrent consumers. Default 1.</summary>
-    public AmqpBuilder ConcurrentConsumers(int count) { _concurrentConsumers = count; return this; }
+    public AmqpBuilder ConcurrentConsumers(int count) { _concurrentConsumers = count.ToString(); return this; }
+
+    /// <summary>Consumer parallelism as a string: a number or "auto" (= max(CPU, 2)).</summary>
+    public AmqpBuilder ConcurrentConsumers(string count) { _concurrentConsumers = count; return this; }
 
     /// <summary>Receive timeout in seconds. Default 60.</summary>
     public AmqpBuilder ReceiveTimeout(int seconds) { _receiveTimeout = seconds; return this; }
@@ -243,7 +246,7 @@ public sealed class AmqpBuilder
         // Consumer
         AppendInt("credit", _credit);
         AppendBoolExplicit("autoAccept", _autoAccept);
-        AppendInt("concurrentConsumers", _concurrentConsumers);
+        AppendIf("concurrentConsumers", _concurrentConsumers);
         AppendInt("receiveTimeout", _receiveTimeout);
 
         // Producer

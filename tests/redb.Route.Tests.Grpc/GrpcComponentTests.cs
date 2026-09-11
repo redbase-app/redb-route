@@ -89,13 +89,18 @@ public class GrpcComponentTests
     }
 
     [Fact]
-    public void CreateEndpoint_SslWithoutCert_Throws()
+    public void CreateEndpoint_SslWithoutCert_DefersToTheBind()
     {
+        // The certificate may come from a named connection factory or from the host default
+        // (HttpHostingOptions.Tls), which an endpoint cannot see. "TLS asked for and nothing
+        // resolves" is enforced once, at the bind, by SharedHttpServerManager — see
+        // SharedHostTlsTests, which asserts the listener refuses to open rather than serving
+        // plaintext under an https:// banner.
         var component = new GrpcComponent();
         var parameters = new Dictionary<string, string> { ["ssl"] = "true" };
         var uri = new EndpointUri("grpc", "/localhost:50051", "grpc:localhost:50051", parameters);
         var act = () => component.CreateEndpoint(uri);
-        act.Should().Throw<ArgumentException>().WithMessage("*SslCertPath*");
+        act.Should().NotThrow();
     }
 
     [Fact]

@@ -190,6 +190,13 @@ public sealed class IbmMqComponent : ComponentBase
         if (!string.IsNullOrEmpty(options.SslCipherSpec))
             props[MQC.SSL_CIPHER_SPEC_PROPERTY] = options.SslCipherSpec;
 
+        // Bytes before the SSL secret key is renegotiated. THIS builder is what runtime
+        // MQ-classes connections actually use - the factory's own BuildConnectionProperties has
+        // no runtime callers, so setting it only there left producers and poll consumers without
+        // key reset (ревью дуги, H5).
+        if (options.SslKeyResetCount > 0)
+            props[MQC.SSL_RESET_COUNT_PROPERTY] = options.SslKeyResetCount;
+
         if (!string.IsNullOrEmpty(options.SslCertLabel))
             props[MQC.SSL_CERT_STORE_PROPERTY] = options.SslCertLabel;
 

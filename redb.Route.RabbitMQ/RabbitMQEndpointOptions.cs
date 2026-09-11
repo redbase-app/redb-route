@@ -78,7 +78,12 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
     /// semaphore. This is the single knob for consumer-side parallelism: <c>ConcurrentConsumers(N)</c>
     /// yields up to N messages processed concurrently on the queue. Default: 1 (serial).
     /// </summary>
-    public int ConcurrentConsumers { get; set; } = 1;
+    // A string so that "auto" binds verbatim instead of silently degrading to the int default
+    // (план лимитов, решение В-7); resolved once via ConcurrencyOption.Resolve.
+    public string? ConcurrentConsumers { get; set; }
+
+    /// <summary>Resolved consumer parallelism: 1 by default, N, or auto = max(CPU, 2).</summary>
+    public int ResolvedConcurrentConsumers => ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers");
 
     /// <summary>Prefetch count per consumer (default: 10). Should be &gt;= <see cref="ConcurrentConsumers"/>
     /// so the broker can keep the parallel slots fed.</summary>
@@ -200,8 +205,7 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
         if (PrefetchCount == 0)
             throw new ArgumentOutOfRangeException(nameof(PrefetchCount), "PrefetchCount must be greater than 0.");
 
-        if (ConcurrentConsumers <= 0)
-            throw new ArgumentOutOfRangeException(nameof(ConcurrentConsumers), "ConcurrentConsumers must be greater than 0.");
+        _ = ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers"); // loud on garbage/zero
 
         if (Timeout <= 0)
             throw new ArgumentOutOfRangeException(nameof(Timeout), "Timeout must be greater than 0.");

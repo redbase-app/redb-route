@@ -47,6 +47,17 @@ public sealed class LlmEndpointOptions : EndpointOptions
     public bool Stream { get; set; }
 
     /// <summary>
+    /// <c>cacheSystemPrompt=true</c> — ask the provider to cache the system prompt so repeated
+    /// turns re-read it instead of re-paying for it.
+    ///
+    /// <para>Set it only when the system prompt is the same bytes every time. Caching matches on
+    /// the rendered prefix, so a prompt carrying a timestamp or a per-user name is written to the
+    /// cache and never read back: cost, no benefit. Verify with
+    /// <c>LlmUsage.CacheReadInputTokens</c> — zero across repeated calls means the prefix moves.</para>
+    /// </summary>
+    public bool CacheSystemPrompt { get; set; }
+
+    /// <summary>
     /// Schedule expression for consumer mode (cron or fixed interval). When set on
     /// a <c>From("llm://...")</c> route, the consumer wakes up on this schedule and
     /// invokes the agent with an empty user message (or with body resolved from

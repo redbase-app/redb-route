@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 using redb.Route.MqttNet.Connection;
 
@@ -29,15 +30,11 @@ public class MqttComponent : ComponentBase
 
         // Resolve the named ConnectionFactory BEFORE Validate(): the factory may be the only
         // source of the broker address and credentials, and Validate() requires a broker.
-        if (!string.IsNullOrEmpty(options.ConnectionFactory) && Context is not null)
+        if (!string.IsNullOrEmpty(options.ConnectionFactory))
         {
-            var factory = Context.GetFromRegistry<MqttConnectionFactory>(options.ConnectionFactory);
-            if (factory is not null)
-                factory.ApplyTo(options, uri);
-            else
-                Logger?.LogWarning(
-                    "MQTT: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
-                    options.ConnectionFactory);
+            // A set-but-unknown name fails loud -- never a silent fallback to URI params (Ф11 Ж-1).
+            var factory = Context.GetRequiredFromRegistry<MqttConnectionFactory>(options.ConnectionFactory);
+            factory.ApplyTo(options, uri);
         }
 
         options.Validate();

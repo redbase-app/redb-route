@@ -31,12 +31,15 @@ public sealed class XsltFileDefinition : ProcessorDefinition
 
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
-        => new XsltProcessor(
-            XslCompiledTransformEngine.FromFile(_stylesheetPath),
+    {
+        var engines = context.GetXsltEngineFactory();
+        return new XsltProcessor(
+            engines.FromFile(_stylesheetPath),
             _output, _failOnNullBody,
             allowTemplateFromHeader: _allowTemplateFromHeader,
-            fileEngineFactory: XslCompiledTransformEngine.FromFile,
-            contentEngineFactory: XslCompiledTransformEngine.FromContent);
+            fileEngineFactory: engines.FromFile,
+            contentEngineFactory: engines.FromContent);
+    }
 }
 
 /// <summary>
@@ -66,10 +69,13 @@ public sealed class XsltContentDefinition : ProcessorDefinition
 
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
-        => new XsltProcessor(
-            XslCompiledTransformEngine.FromContent(_stylesheetXml),
+    {
+        var engines = context.GetXsltEngineFactory();
+        return new XsltProcessor(
+            engines.FromContent(_stylesheetXml),
             _output, _failOnNullBody,
             allowTemplateFromHeader: _allowTemplateFromHeader,
-            fileEngineFactory: XslCompiledTransformEngine.FromFile,
-            contentEngineFactory: XslCompiledTransformEngine.FromContent);
+            fileEngineFactory: engines.FromFile,
+            contentEngineFactory: engines.FromContent);
+    }
 }

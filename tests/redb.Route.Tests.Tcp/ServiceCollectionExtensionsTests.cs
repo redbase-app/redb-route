@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using redb.Route.Core;
+using redb.Route.Extensions;
 using redb.Route.Abstractions;
 using redb.Route.Tcp;
 
@@ -31,18 +33,18 @@ public class ServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddRedbRouteTcp_RegistersWithRouteContext()
+    public async Task AddRedbRouteTcp_RegistersWithRouteContext()
     {
         var services = new ServiceCollection();
-        var context = Substitute.For<IRouteContext>();
-        services.AddSingleton(context);
         services.AddRedbRouteTcp();
-        var sp = services.BuildServiceProvider();
+        await using var sp = services.BuildServiceProvider();
+        await using var context = new RouteContext();
 
-        // Force ITcpComponentRegistrar resolution to trigger AddComponent
-        sp.GetService<ITcpComponentRegistrar>();
+        // The hook RouteHostedService applies at startup
+        foreach (var configurator in sp.GetServices<IRouteContextConfigurator>())
+            configurator.Configure(context);
 
-        context.Received(1).AddComponent(Arg.Is<TcpComponent>(c => c.Scheme == "tcp"));
+        context.HasComponent("tcp").Should().BeTrue();
     }
 
     [Fact]

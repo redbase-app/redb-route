@@ -57,6 +57,22 @@ public class WsEndpointOptions : EndpointOptions
     /// <summary>Maximum reconnect attempts. 0 = unlimited. Default: 0.</summary>
     public int MaxReconnectAttempts { get; set; }
 
+    /// <summary>
+    /// Overall time budget for reconnecting, in milliseconds. 0 = no budget (default, the
+    /// historical behaviour). With <c>reconnect=true</c>, <c>maxReconnectAttempts=0</c> and a
+    /// server that stays down, an exchange would otherwise never come back and dead-letter would
+    /// never fire; set this to make the send fail instead of hanging.
+    /// </summary>
+    public int ReconnectTimeout { get; set; }
+
+    /// <summary>
+    /// Producer mode. <c>Client</c> (default) connects to a remote server with
+    /// <see cref="System.Net.WebSockets.ClientWebSocket"/>. <c>Server</c> pushes into the clients
+    /// of the consumer running on the same URI, so a route can send unsolicited frames
+    /// (quotes, notifications, progress) instead of only answering incoming ones.
+    /// </summary>
+    public WsMode Mode { get; set; } = WsMode.Client;
+
     // ── Consumer (server) ───────────────────────────────
 
     /// <summary>Maximum concurrent WebSocket connections. 0 = unlimited. Default: 0.</summary>
@@ -79,6 +95,13 @@ public class WsEndpointOptions : EndpointOptions
     /// <summary>Password for the PFX certificate.</summary>
     [Sensitive]
     public string? SslCertPassword { get; set; }
+
+    /// <summary>
+    /// Producer only: accept any server certificate on a <c>wss://</c> connection, including a
+    /// self-signed one. Off by default and never implied by another option — turning certificate
+    /// validation off has to be an explicit decision, and it belongs to staging, not production.
+    /// </summary>
+    public bool TrustAllCertificates { get; set; }
 
     /// <summary>
     /// Named <see cref="WsConnectionFactory"/> from the route registry. Lets the TLS certificate
@@ -111,7 +134,32 @@ public class WsEndpointOptions : EndpointOptions
         if (MaxReconnectAttempts < 0)
             throw new ArgumentException("MaxReconnectAttempts must be >= 0.");
 
+        if (ReconnectTimeout < 0)
+            throw new ArgumentException("ReconnectTimeout must be >= 0.");
+
         if (MaxConnections < 0)
             throw new ArgumentException("MaxConnections must be >= 0.");
+
+        // Without this the mistake surfaces as a bare framework ArgumentException from the
+        // consumer's constructor, with no hint which option or which endpoint is at fault.
+        try
+        {
+            System.Text.Encoding.GetEncoding(Encoding);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new ArgumentException(
+                $"Unknown encoding '{Encoding}'. Use a name System.Text.Encoding knows, such as utf-8.", ex);
+        }
     }
+}
+
+/// <summary>Producer mode for the WebSocket component.</summary>
+public enum WsMode
+{
+    /// <summary>Connect to a remote WebSocket server and send frames on it.</summary>
+    Client,
+
+    /// <summary>Push frames into the clients of the local consumer serving the same URI.</summary>
+    Server,
 }

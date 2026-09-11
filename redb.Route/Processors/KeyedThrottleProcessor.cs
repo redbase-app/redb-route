@@ -1,40 +1,34 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
-using redb.Route.Telemetry;
 
 namespace redb.Route.Processors;
 
 /// <summary>
-/// Per-key rate limiter: each key extracted from the exchange gets its own
-/// independent <see cref="SemaphoreSlim"/>-based throttle.
-/// Idle keys are lazily evicted after <c>2 × period</c> of inactivity.
-/// Thread-safe for concurrent pipeline usage.
+/// Throttle per key: each distinct key (customer id, tenant, API key…) gets its own sliding-window gate,
+/// and the limit is read from the message, so key <b>and</b> limit can come from the exchange
+/// ("gold customers 100 per second, others 10, each under its own key").
 /// <para>
-/// Two overflow modes (selected via the <c>rejectOnOverflow</c> constructor flag):
+/// A key's gate <i>is</i> a <see cref="ThrottleProcessor"/> — the same arrival-order-fair,
+/// per-message-limit gate as the plain <c>Throttle</c>, one per key — so both throttles behave
+/// identically, including the two overflow modes (wait, or reject with 429 + <c>Retry-After</c>).
+/// Gates idle for two periods are evicted, at most once per period, so a high-cardinality key space
+/// neither grows without bound nor is scanned on every message.
 /// </para>
-/// <list type="bullet">
-///   <item><c>false</c> (default, legacy) — semaphore-wait until a slot frees; the calling
-///   exchange is blocked but eventually proceeds. Preserves backward compatibility.</item>
-///   <item><c>true</c> (RFC 6585) — reject overflow exchanges immediately with HTTP 429
-///   Too Many Requests and a <c>Retry-After</c> header (RFC 7231 §7.1.3) set to the
-///   current rate-limit period. Strongly recommended for any HTTP-facing endpoint so
-///   the client can back off explicitly instead of seeing what looks like a hung server.</item>
-/// </list>
 /// </summary>
 public sealed class KeyedThrottleProcessor : IProcessor, IDisposable
 {
     private readonly IProcessor _next;
     private readonly Func<IExchange, string> _keyExtractor;
-    private readonly int _maxPerPeriod;
+    private readonly Func<IExchange, int> _maxPerPeriod;
     private readonly TimeSpan _period;
     private readonly bool _rejectOnOverflow;
-    private readonly ConcurrentDictionary<string, KeyBucket> _buckets = new(StringComparer.Ordinal);
-    private readonly CancellationTokenSource _disposeCts = new();
     private readonly ILogger? _logger;
+    private readonly ConcurrentDictionary<string, KeyGate> _gates = new(StringComparer.Ordinal);
+    private long _nextEvictionTicks;
     private int _disposed;
 
-    /// <summary>Creates a keyed throttle processor.</summary>
+    /// <summary>Creates a keyed throttle with a fixed limit per key.</summary>
     /// <param name="next">Next processor in the pipeline.</param>
     /// <param name="keyExtractor">Function extracting the throttle key from the exchange.</param>
     /// <param name="maxPerPeriod">Maximum exchanges per period per key.</param>
@@ -49,12 +43,31 @@ public sealed class KeyedThrottleProcessor : IProcessor, IDisposable
         TimeSpan? period = null,
         bool rejectOnOverflow = false,
         ILogger? logger = null)
+        : this(next, keyExtractor, _ => maxPerPeriod, period, rejectOnOverflow, logger)
+    {
+        if (maxPerPeriod <= 0) throw new ArgumentOutOfRangeException(nameof(maxPerPeriod), "Must be > 0.");
+    }
+
+    /// <summary>Creates a keyed throttle whose limit is evaluated on every message.</summary>
+    /// <param name="next">Next processor in the pipeline.</param>
+    /// <param name="keyExtractor">Function extracting the throttle key from the exchange.</param>
+    /// <param name="maxPerPeriod">Per-message limit for the exchange's key; must return a positive number.</param>
+    /// <param name="period">Time period for the rate limit (default: 1 second).</param>
+    /// <param name="rejectOnOverflow">When <c>true</c>, overflow is rejected with 429 instead of waiting.</param>
+    /// <param name="logger">Optional logger.</param>
+    public KeyedThrottleProcessor(
+        IProcessor next,
+        Func<IExchange, string> keyExtractor,
+        Func<IExchange, int> maxPerPeriod,
+        TimeSpan? period = null,
+        bool rejectOnOverflow = false,
+        ILogger? logger = null)
     {
         _next = next ?? throw new ArgumentNullException(nameof(next));
         _keyExtractor = keyExtractor ?? throw new ArgumentNullException(nameof(keyExtractor));
-        if (maxPerPeriod <= 0) throw new ArgumentOutOfRangeException(nameof(maxPerPeriod), "Must be > 0.");
-        _maxPerPeriod = maxPerPeriod;
+        _maxPerPeriod = maxPerPeriod ?? throw new ArgumentNullException(nameof(maxPerPeriod));
         _period = period ?? TimeSpan.FromSeconds(1);
+        if (_period <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(period), "Must be positive.");
         _rejectOnOverflow = rejectOnOverflow;
         _logger = logger;
     }
@@ -65,89 +78,80 @@ public sealed class KeyedThrottleProcessor : IProcessor, IDisposable
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
 
         var key = _keyExtractor(exchange) ?? string.Empty;
-        var bucket = _buckets.GetOrAdd(key, _ => new KeyBucket(_maxPerPeriod));
-
-        bucket.Touch();
-
-        // Non-blocking probe first so we can choose between rejection and waiting
-        // without holding a slot speculatively.
-        if (!bucket.Semaphore.Wait(0))
-        {
-            ProcessorMetrics.ThrottleDelayed.Add(1);
-            if (_rejectOnOverflow)
-            {
-                _logger?.LogDebug("KeyedThrottle: rejecting overflow for key '{Key}' with 429 (RFC 6585).", key);
-                ThrottleRejection.Apply(exchange, _period);
-                return;
-            }
-            _logger?.LogDebug("KeyedThrottle: exchange delayed for key '{Key}' (all {Max} slots occupied).", key, _maxPerPeriod);
-            await bucket.Semaphore.WaitAsync(ct).ConfigureAwait(false);
-        }
+        var gate = AcquireGate(key);
         try
         {
-            // System.Console.WriteLine(
-            //     $"[Diag-TX-THROTTLE] PRE-INNER key='{key}' " +
-            //     $"ambient={(System.Transactions.Transaction.Current?.TransactionInformation.LocalIdentifier ?? "<null>")} " +
-            //     $"thread={System.Environment.CurrentManagedThreadId}");
-            await _next.Process(exchange, ct).ConfigureAwait(false);
-            // System.Console.WriteLine(
-            //     $"[Diag-TX-THROTTLE] POST-INNER key='{key}' " +
-            //     $"ambient={(System.Transactions.Transaction.Current?.TransactionInformation.LocalIdentifier ?? "<null>")} " +
-            //     $"thread={System.Environment.CurrentManagedThreadId}");
+            await gate.Throttle.Process(exchange, ct).ConfigureAwait(false);
         }
         finally
         {
-            ScheduleSlotRelease(bucket);
             TryEvictStale();
         }
     }
 
-    /// <summary>Cancels pending timers and disposes all per-key semaphores.</summary>
-    public void Dispose()
+    /// <summary>
+    /// The live gate for <paramref name="key"/>, touched under its own lock. Eviction decides under the
+    /// same lock, so a gate a message is about to enter is never retired underneath it; a gate retired
+    /// between the lookup and the lock is skipped and the lookup repeated.
+    /// </summary>
+    private KeyGate AcquireGate(string key)
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        _disposeCts.Cancel();
-        _disposeCts.Dispose();
-        foreach (var kvp in _buckets)
-            kvp.Value.Semaphore.Dispose();
-        _buckets.Clear();
-    }
-
-    private void ScheduleSlotRelease(KeyBucket bucket)
-    {
-        var token = _disposeCts.Token;
-        _ = Task.Delay(_period, token).ContinueWith(_ =>
+        while (true)
         {
-            try { bucket.Semaphore.Release(); }
-            catch (ObjectDisposedException) { /* Shutdown or evicted */ }
-            catch (SemaphoreFullException) { /* Defensive */ }
-        }, CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
-    }
-
-    private void TryEvictStale()
-    {
-        var threshold = Environment.TickCount64 - (long)(_period.TotalMilliseconds * 2);
-        foreach (var kvp in _buckets)
-        {
-            if (kvp.Value.LastUsedTicks < threshold
-                && kvp.Value.Semaphore.CurrentCount == _maxPerPeriod)
+            var gate = _gates.GetOrAdd(key, _ => new KeyGate(new ThrottleProcessor(_next, _maxPerPeriod, _period, _rejectOnOverflow, _logger)));
+            lock (gate.Sync)
             {
-                if (_buckets.TryRemove(kvp.Key, out var removed))
-                    removed.Semaphore.Dispose();
+                if (gate.Retired) continue;
+                gate.Touch();
+                return gate;
             }
         }
     }
 
-    private sealed class KeyBucket
+    /// <inheritdoc />
+    public void Dispose()
     {
-        public readonly SemaphoreSlim Semaphore;
-        private long _lastUsedTicks;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        foreach (var gate in _gates.Values)
+            gate.Throttle.Dispose();
+        _gates.Clear();
+    }
 
-        public KeyBucket(int maxCount)
+    /// <summary>Number of keys currently holding a gate (diagnostics / tests).</summary>
+    public int ActiveKeyCount => _gates.Count;
+
+    /// <summary>Evicts gates idle for two periods; runs at most once per period, whoever's message triggers it.</summary>
+    private void TryEvictStale()
+    {
+        var now = Environment.TickCount64;
+        var next = Volatile.Read(ref _nextEvictionTicks);
+        if (now < next || Interlocked.CompareExchange(ref _nextEvictionTicks, now + (long)_period.TotalMilliseconds, next) != next)
+            return;
+
+        var threshold = now - (long)(_period.TotalMilliseconds * 2);
+        foreach (var (key, gate) in _gates)
         {
-            Semaphore = new SemaphoreSlim(maxCount, maxCount);
-            _lastUsedTicks = Environment.TickCount64;
+            lock (gate.Sync)
+            {
+                if (gate.Retired || gate.LastUsedTicks >= threshold || !gate.Throttle.IsIdle)
+                    continue;
+                gate.Retired = true;
+                _gates.TryRemove(new KeyValuePair<string, KeyGate>(key, gate));
+                gate.Throttle.Dispose();
+            }
         }
+    }
+
+    private sealed class KeyGate(ThrottleProcessor throttle)
+    {
+        private long _lastUsedTicks = Environment.TickCount64;
+
+        public readonly object Sync = new();
+
+        public ThrottleProcessor Throttle { get; } = throttle;
+
+        /// <summary>Set under <see cref="Sync"/> by eviction; a retired gate is disposed and must not be entered.</summary>
+        public bool Retired { get; set; }
 
         public long LastUsedTicks => Volatile.Read(ref _lastUsedTicks);
 

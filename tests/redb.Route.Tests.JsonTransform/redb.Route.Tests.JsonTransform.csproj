@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.JsonTransform\redb.Route.JsonTransform.csproj" />
+    <ProjectReference Include="..\..\redb.Route.TestKit\redb.Route.TestKit.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Transforms\order-to-shipment.jsonata" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
+

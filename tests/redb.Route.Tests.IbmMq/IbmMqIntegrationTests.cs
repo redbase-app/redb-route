@@ -655,4 +655,61 @@ public sealed class IbmMqIntegrationTests
         // MQC.MQPER_PERSISTENT = 1
         captured.In.Headers[IbmMqHeaders.Persistence].Should().Be(1);
     }
+
+    // ── Часть B плана KAFKA_HARDENING_AND_OPTIONS_SWEEP_PLAN: targetClient ──
+
+    [Fact]
+    public async Task TargetClientMq_SendsRawMessageWithoutProperties()
+    {
+        // targetClient=Mq: a legacy MQ app expects raw MQMD+body. Message properties are what
+        // materializes as MQRFH2 on property-aware paths - in Mq mode none may be written.
+        // The option was declared and read by nothing.
+        var queue = "DEV.QUEUE.2";
+        var marker = Guid.NewGuid().ToString("N");
+
+        var endpoint = CreateEndpoint(queue, "targetClient=Mq");
+        var producer = (IbmMqProducer)endpoint.CreateProducer();
+        await producer.Start();
+        var msg = new Message(marker);
+        msg.Headers["X-Custom"] = "must-not-travel";
+        await producer.Process(new Exchange(msg));
+        await producer.Stop();
+
+        // Raw read via MQ classes: the message must carry NO custom properties.
+        var props = new System.Collections.Hashtable
+        {
+            [IBM.WMQ.MQC.HOST_NAME_PROPERTY] = Host,
+            [IBM.WMQ.MQC.PORT_PROPERTY] = Port,
+            [IBM.WMQ.MQC.CHANNEL_PROPERTY] = Channel,
+            [IBM.WMQ.MQC.USER_ID_PROPERTY] = User,
+            [IBM.WMQ.MQC.PASSWORD_PROPERTY] = Password,
+            [IBM.WMQ.MQC.TRANSPORT_PROPERTY] = IBM.WMQ.MQC.TRANSPORT_MQSERIES_MANAGED,
+        };
+        using var qm = new IBM.WMQ.MQQueueManager(QueueManager, props);
+        var q = qm.AccessQueue(queue, IBM.WMQ.MQC.MQOO_INPUT_SHARED | IBM.WMQ.MQC.MQOO_FAIL_IF_QUIESCING);
+        try
+        {
+            var raw = new IBM.WMQ.MQMessage();
+            var gmo = new IBM.WMQ.MQGetMessageOptions { Options = IBM.WMQ.MQC.MQGMO_WAIT, WaitInterval = 10000 };
+            string? body = null;
+            while (body != marker)
+            {
+                raw = new IBM.WMQ.MQMessage();
+                q.Get(raw, gmo);
+                body = raw.ReadString(raw.MessageLength);
+            }
+
+            var catalogue = (string?)null;
+            try { catalogue = raw.GetStringProperty(IbmMqHeaders.HeaderCatalogue); }
+            catch (IBM.WMQ.MQException) { /* property absent - exactly what Mq mode promises */ }
+
+            catalogue.Should().BeNull(
+                "targetClient=Mq обязан отдавать голый MQMD+тело без свойств сообщения");
+        }
+        finally
+        {
+            q.Close();
+            qm.Disconnect();
+        }
+    }
 }

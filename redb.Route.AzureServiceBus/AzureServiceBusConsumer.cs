@@ -43,7 +43,7 @@ internal sealed class AzureServiceBusConsumer : IConsumer
         var processorOptions = new ServiceBusProcessorOptions
         {
             ReceiveMode = _options.ParsedReceiveMode,
-            MaxConcurrentCalls = _options.MaxConcurrentCalls,
+            MaxConcurrentCalls = _options.ResolvedMaxConcurrentCalls,
             PrefetchCount = _options.PrefetchCount,
             MaxAutoLockRenewalDuration = TimeSpan.FromSeconds(_options.MaxAutoLockRenewalDuration),
             AutoCompleteMessages = false
@@ -63,7 +63,7 @@ internal sealed class AzureServiceBusConsumer : IConsumer
         await _processor.StartProcessingAsync(ct).ConfigureAwait(false);
 
         _logger?.LogInformation("ASB consumer started: entity={Entity}, receiveMode={Mode}, concurrent={Concurrent}",
-            _endpoint.EntityName, _options.ReceiveMode, _options.MaxConcurrentCalls);
+            _endpoint.EntityName, _options.ReceiveMode, _options.ResolvedMaxConcurrentCalls);
     }
 
     public async Task Stop(CancellationToken ct = default)
@@ -91,6 +91,7 @@ internal sealed class AzureServiceBusConsumer : IConsumer
     {
         _drain.Increment();
         Exchange? exchange = null;
+        var pipelineFailed = false;
         try
         {
             exchange = CreateExchange(args.Message);
@@ -101,15 +102,22 @@ internal sealed class AzureServiceBusConsumer : IConsumer
                     new AzureServiceBusAckAction(args));
             }
 
-            await _pipeline.Process(exchange, args.CancellationToken).ConfigureAwait(false);
+            // No RecordMessageIn: the core's StatisticsProcessor around From() owns it (ownership audit).
+            try
+            {
+                await _pipeline.Process(exchange, args.CancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                pipelineFailed = true;
+                throw;
+            }
 
             // Acknowledge (PeekLock + non-transacted only)
             if (_options.ParsedReceiveMode == ServiceBusReceiveMode.PeekLock && !_options.Transacted)
             {
                 await AcknowledgeAsync(args, exchange).ConfigureAwait(false);
             }
-
-            _endpoint.RecordMessageIn();
         }
         catch (Exception ex)
         {
@@ -126,7 +134,10 @@ internal sealed class AzureServiceBusConsumer : IConsumer
                 }
             }
 
-            _endpoint.RecordError(ex);
+            // A pipeline failure is already counted by the core; only what the core cannot see
+            // (exchange building, settlement) is the transport's to record (ownership audit).
+            if (!pipelineFailed)
+                _endpoint.RecordError(ex);
             throw;
         }
         finally

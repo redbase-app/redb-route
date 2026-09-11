@@ -21,6 +21,20 @@ public interface IRouteLifecycleListener
     /// <summary>Fired when an exchange times out (per-exchange processing timeout from Phase 5).</summary>
     Task OnExchangeTimedOut(string routeId, string exchangeId, TimeSpan elapsed, CancellationToken ct) => Task.CompletedTask;
 
+    // ── Exchange-level events (NotifyBuilder / test-kit seam) ──
+
+    /// <summary>Fired when an exchange enters a route's pipeline, before any step runs.</summary>
+    Task OnExchangeReceived(string routeId, IExchange exchange, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>
+    /// Fired after an exchange has been fully processed by a route and no exception propagated
+    /// (an error caught and marked handled by error handling counts as completed).
+    /// </summary>
+    Task OnExchangeCompleted(string routeId, IExchange exchange, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>Fired when an exchange escapes a route's pipeline with an exception (error handling declined or rethrew it).</summary>
+    Task OnExchangeFailed(string routeId, IExchange exchange, Exception exception, CancellationToken ct) => Task.CompletedTask;
+
     // ── Context-level events ──
 
     /// <summary>Fired before the context starts compiling and starting routes.</summary>

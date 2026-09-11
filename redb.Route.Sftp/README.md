@@ -58,7 +58,7 @@ From(Sftp.Directory("/data")
 | **Consumer** | `.Delay()`, `.InitialDelay()`, `.Include()`, `.Exclude()`, `.Recursive()`, `.MaxDepth()`, `.MinDepth()`, `.SortBy()`, `.MaxMessagesPerPoll()`, `.MinAge()`, `.MaxAge()` |
 | **Post-process** | `.Noop()`, `.Delete()`, `.MoveTo()`, `.MoveExisting()`, `.PreMove()`, `.MoveFailed()` |
 | **Idempotency** | `.Idempotent()`, `.DoneFileName()` |
-| **Transfer** | `.Binary()`, `.Charset()`, `.StepWise()`, `.Separator()` |
+| **Transfer** | `.Charset()`, `.Separator()` |
 | **Producer** | `.FileExist()`, `.TempPrefix()`, `.TempFileName()`, `.Chmod()`, `.ChmodDirectory()`, `.AutoCreate()`, `.AllowNullBody()`, `.EagerDeleteTargetFile()`, `.KeepLastModified()`, `.Flatten()`, `.JailStartingDirectory()`, `.AppendChars()` |
 
 > Most builder methods accept both constant values and `IExpression` for runtime resolution via the expression engine.
@@ -66,3 +66,19 @@ From(Sftp.Directory("/data")
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new SftpConnectionFactory
+{
+    Host = "sftp.partner.com",
+    Username = "exchange",
+    PrivateKeyPath = "/secrets/id_ed25519",
+});
+// sftp://outbox?connectionFactory=prod
+```

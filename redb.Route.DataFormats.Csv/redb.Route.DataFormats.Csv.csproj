@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.DataFormats.Csv</PackageId>
+    <Description>CSV data format for redb.Route (CsvHelper): Marshal/Unmarshal of POCO collections, dictionaries and raw rows; delimiter, header, quote and culture options; registered as text/csv.</Description>
+    <PackageTags>esb;messaging;csv;dataformat;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="CsvHelper" Version="33.1.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

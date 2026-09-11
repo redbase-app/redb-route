@@ -53,7 +53,21 @@ public class ChoiceDefinition : RouteDefinitionBase<ChoiceDefinition>, IRouteSco
     public WhenDefinition When(IExpression expression)
     {
         ArgumentNullException.ThrowIfNull(expression);
-        return When(e => ConvertToBoolean(expression.Evaluate<object?>(e)));
+        var when = new WhenDefinition(Predicates.PredicateFactory.FromExpression(expression), this);
+        _whens.Add(when);
+        when.SourceExpression = expression;
+        return when;
+    }
+
+    /// <summary>Opens a When branch guarded by an <see cref="IPredicate"/>; the predicate is
+    /// stored as the branch condition and awaited per message.</summary>
+    public WhenDefinition When(IPredicate predicate)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        var when = new WhenDefinition(predicate, this);
+        _whens.Add(when);
+        when.SourcePredicate = predicate;
+        return when;
     }
 
     /// <summary>Apache Camel nested-lambda overload: opens a When branch with the given predicate,
@@ -111,7 +125,7 @@ public class ChoiceDefinition : RouteDefinitionBase<ChoiceDefinition>, IRouteSco
         foreach (var when in _whens)
         {
             IProcessor body = BuildPipeline(when.Outputs, context);
-            choice.When(when.Predicate, body);
+            choice.When(when.Condition, body);
         }
         if (_otherwise != null)
         {
@@ -129,22 +143,30 @@ public class ChoiceDefinition : RouteDefinitionBase<ChoiceDefinition>, IRouteSco
 /// Inherits the leaf DSL from <see cref="RouteDefinitionBase{TSelf}"/>; close with
 /// <see cref="EndWhen"/>, <see cref="Otherwise"/>, or <see cref="EndChoice"/>.
 /// </summary>
-public class WhenDefinition : RouteDefinitionBase<WhenDefinition>, IRouteScope, ICompositeScope
+public class WhenDefinition : RouteDefinitionBase<WhenDefinition>, IRouteScope, ICompositeScope, IConditionSource
 {
-    internal readonly Func<IExchange, bool> Predicate;
+    internal readonly IPredicate Condition;
     private readonly ChoiceDefinition _choice;
 
-    /// <summary>Captured source <see cref="IPredicate"/> when this When branch was built from a predicate instance; null otherwise.</summary>
+    /// <inheritdoc />
     public IPredicate? SourcePredicate { get; internal set; }
 
-    /// <summary>Captured source string template (e.g. <c>"${header.flag}"</c>) when this When branch was built from a Simple expression; null otherwise.</summary>
-    public string? SourceExpression { get; internal set; }
+    /// <inheritdoc />
+    public IExpression? SourceExpression { get; internal set; }
 
-    internal WhenDefinition(Func<IExchange, bool> predicate, ChoiceDefinition choice)
+    /// <inheritdoc />
+    public string? SourceTemplate { get; internal set; }
+
+    internal WhenDefinition(IPredicate condition, ChoiceDefinition choice)
     {
-        Predicate = predicate;
+        Condition = condition ?? throw new ArgumentNullException(nameof(condition));
         _choice = choice;
         Parent = choice;
+    }
+
+    internal WhenDefinition(Func<IExchange, bool> predicate, ChoiceDefinition choice)
+        : this(new Predicates.LambdaPredicate(predicate ?? throw new ArgumentNullException(nameof(predicate))), choice)
+    {
     }
 
     // ── Navigation ────────────────────────────────────────────────────────────
@@ -157,6 +179,9 @@ public class WhenDefinition : RouteDefinitionBase<WhenDefinition>, IRouteScope, 
 
     /// <summary>Opens another When branch with an expression predicate.</summary>
     public WhenDefinition When(IExpression expression) => _choice.When(expression);
+
+    /// <summary>Opens another When branch guarded by an <see cref="IPredicate"/>.</summary>
+    public WhenDefinition When(IPredicate predicate) => _choice.When(predicate);
 
     /// <summary>Opens the Otherwise fallback branch on the parent choice.</summary>
     public OtherwiseDefinition Otherwise() => _choice.Otherwise();

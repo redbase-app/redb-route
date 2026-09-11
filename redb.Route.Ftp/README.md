@@ -292,3 +292,19 @@ services.AddRedbRouteFtp();
 - .NET 8.0 / 9.0 / 10.0
 - `FluentFTP` 54.1.0
 - `redb.Route.GenericFile` (shared file transport abstractions)
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new FtpConnectionFactory
+{
+    Host = "ftp.partner.com",
+    Username = "exchange",
+    Password = secrets.FtpPassword,
+});
+// ftp://inbox?connectionFactory=prod
+```

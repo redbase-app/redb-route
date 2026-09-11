@@ -1,5 +1,6 @@
 using redb.Route.Abstractions;
 using redb.Route.Expressions;
+using redb.Route.Predicates;
 using redb.Route.Processors;
 
 namespace redb.Route.Definitions;
@@ -16,23 +17,28 @@ namespace redb.Route.Definitions;
 /// <see cref="FilterDefinition"/> directly without locally-redeclared overloads.
 /// </para>
 /// </summary>
-public class FilterDefinition : RouteDefinitionBase<FilterDefinition>, IRouteScope, ICompositeScope
+public class FilterDefinition : RouteDefinitionBase<FilterDefinition>, IRouteScope, ICompositeScope, IConditionSource
 {
-    private readonly Func<IExchange, bool> _predicate;
+    private readonly IPredicate _predicate;
 
-    /// <summary>Captured source <see cref="IPredicate"/> when the filter was built from a predicate instance; null otherwise.</summary>
+    /// <inheritdoc />
     public IPredicate? SourcePredicate { get; internal set; }
 
-    /// <summary>Captured source <see cref="IExpression"/> when the filter was built from an expression instance; null otherwise.</summary>
+    /// <inheritdoc />
     public IExpression? SourceExpression { get; internal set; }
 
-    /// <summary>Captured source string template (e.g. <c>"${header.flag}"</c>) when the filter was built from a Simple expression; null otherwise.</summary>
+    /// <inheritdoc />
     public string? SourceTemplate { get; internal set; }
 
-    internal FilterDefinition(Func<IExchange, bool> predicate)
+    internal FilterDefinition(IPredicate predicate)
     {
         ArgumentNullException.ThrowIfNull(predicate);
         _predicate = predicate;
+    }
+
+    internal FilterDefinition(Func<IExchange, bool> predicate)
+        : this(new LambdaPredicate(predicate ?? throw new ArgumentNullException(nameof(predicate))))
+    {
     }
 
     /// <inheritdoc />

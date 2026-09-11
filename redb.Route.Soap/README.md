@@ -324,3 +324,22 @@ Honest boundaries (documented in `../../docs/SOAP_CONNECTOR_PLAN.md`):
   `PasswordDigest` is treated as plaintext. Rare WS-* variants.
 
 Part of the redb.Route connector family.
+
+## Concurrency limits
+
+Kestrel executes as many handlers as requests arrive; without a limit a route has no ceiling.
+The admission limit caps concurrent pipeline executions per endpoint and sheds the overflow
+BEFORE any pipeline work (load shedding, not backpressure):
+
+| Parameter | Default | Description |
+|---|---|---|
+| `maxConcurrentRequests` | `0` (unlimited) | Max concurrent pipeline executions |
+| `requestQueueLimit` | `0` | Requests over the limit that WAIT (FIFO) instead of being rejected |
+| `rejectStatusCode` | `429` | Status for a shed request |
+| `retryAfterSeconds` | `1` | `Retry-After` header value; `0` = do not send |
+
+A shed request is answered before an exchange exists: it appears in the endpoint's `Rejected`
+counter, not in `MessagesIn` or `Errors`. The limit is strictly per endpoint — other routes on
+the same listener keep their own budget. For "slow down but do not drop" semantics use
+`.Threads(n)` in the route instead; the two compose (the limit sheds at the door, Threads
+paces inside).

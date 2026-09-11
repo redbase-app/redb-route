@@ -88,6 +88,39 @@ public class SoapLoopbackTests
     }
 
     [Fact]
+    public async Task Consumer_Honours_The_Fault_Code_A_Route_Chose()
+    {
+        // SoapFaultException carries a FaultCode and SoapEnvelope.BuildFault accepts one, but the consumer
+        // used to drop it and answer soap:Server for everything. A route could describe what went wrong and
+        // not what kind of wrong it was.
+        //
+        // That matters wherever a client branches on the code rather than on prose: WS-Trust clients treat
+        // wst:FailedAuthentication and wst:InvalidRequest as different outcomes, and prose is not a contract.
+        var port = FreePort();
+
+        await using var ctx = new RouteContext();
+        ctx.AddComponent(new SoapComponent());
+        ctx.AddRoutes(r =>
+        {
+            r.From(SoapDsl.Listen("/svc-code").Host("127.0.0.1").Port(port))
+                .Process(_ => throw new SoapFaultException("wst:FailedAuthentication", "bad credentials"));
+            r.From("direct://call-code")
+                .To(SoapDsl.Call($"http://127.0.0.1:{port}/svc-code"));
+        });
+
+        await ctx.Start();
+        var producer = ctx.GetEndpoint("direct://call-code").CreateProducer();
+        await producer.Start();
+
+        var act = async () => await producer.Process(new Exchange(new Message("<Ping/>")));
+
+        var ex = await act.Should().ThrowAsync<SoapFaultException>();
+        ex.Which.FaultCode.Should().Contain("FailedAuthentication",
+            "the code the route chose has to survive to the caller, not be flattened to soap:Server");
+        ex.Which.FaultString.Should().Be("bad credentials");
+    }
+
+    [Fact]
     public async Task Consumer_RouteException_Returns_SoapFault()
     {
         var port = FreePort();
@@ -109,8 +142,12 @@ public class SoapLoopbackTests
         var exchange = new Exchange(new Message("<Ping xmlns=\"urn:test\"/>"));
         var act = async () => await producer.Process(exchange);
 
-        // A route exception on the server side comes back as a SOAP fault the producer surfaces.
-        await act.Should().ThrowAsync<SoapFaultException>().Where(e => e.FaultString!.Contains("route blew up"));
+        // A route exception on the server side comes back as a SOAP fault the producer surfaces — but
+        // BR-4: the exception's own text is not what travels. An unhandled failure yields a generic
+        // faultstring with a reference; a route that wants to say more raises SoapFaultException, whose
+        // FaultString is deliberate and is still sent verbatim (covered by the fault-code tests).
+        await act.Should().ThrowAsync<SoapFaultException>()
+            .Where(e => !e.FaultString!.Contains("route blew up") && e.FaultString!.Contains("ref: "));
     }
 
     [Fact]

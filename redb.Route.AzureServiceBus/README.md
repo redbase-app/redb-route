@@ -364,3 +364,19 @@ All headers use the `redbAsb.` prefix.
 - **Azure Service Bus** or Azure Service Bus Emulator
 - .NET 8.0 / 9.0 / 10.0
 - `Azure.Messaging.ServiceBus` 7.x
+
+## Concurrency
+
+The default is **1** concurrent consumer — the industry norm (Camel, Spring, the Azure SDK all
+ship 1): a single consumer preserves ordering and your handlers need no thread safety.
+Parallelism is an explicit opt-in:
+
+```
+maxConcurrentCalls=4       # a fixed worker count
+maxConcurrentCalls=auto    # max(CPU count, 2) — the NServiceBus formula
+```
+
+Anything else — `0`, a negative, a typo — fails at endpoint creation naming the option (the old
+int-typed option silently fell back to 1). Raising the value trades ordering for throughput:
+messages from the same queue are processed out of order, and your processors must be safe to
+run in parallel.

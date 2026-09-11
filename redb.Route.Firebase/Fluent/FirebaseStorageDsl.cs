@@ -76,6 +76,18 @@ public sealed class FirebaseStorageBuilder
     /// <summary>Named connection factory reference.</summary>
     public FirebaseStorageBuilder ConnectionFactory(string v) => Set("connectionFactory", v);
 
+    /// <summary>Destination object name for the Copy operation.</summary>
+    public FirebaseStorageBuilder DestinationObjectName(string name) => Set("destinationObjectName", name);
+
+    /// <summary>Destination object name from expression.</summary>
+    public FirebaseStorageBuilder DestinationObjectName(IExpression name) => Set("destinationObjectName", name.ToTemplateString());
+
+    /// <summary>Destination bucket for the Copy operation.</summary>
+    public FirebaseStorageBuilder DestinationBucket(string bucket) => Set("destinationBucket", bucket);
+
+    /// <summary>TTL for CreateDownloadLink signed URLs (ms).</summary>
+    public FirebaseStorageBuilder SignedUrlExpiration(long ms) => Set("signedUrlExpiration", ms);
+
     /// <summary>Download as Stream (true) or byte[] (false).</summary>
     public FirebaseStorageBuilder StreamBody(bool v = true) => Set("streamBody", v);
 
@@ -94,8 +106,17 @@ public sealed class FirebaseStorageBuilder
     /// <summary>Move objects to prefix after processing.</summary>
     public FirebaseStorageBuilder MoveAfterRead(string prefix) => Set("moveAfterRead", prefix);
 
+    /// <summary>Quarantine prefix for objects whose processing failed.</summary>
+    public FirebaseStorageBuilder MoveFailed(string prefix) => Set("moveFailed", prefix);
+
     /// <summary>Skip previously processed objects.</summary>
     public FirebaseStorageBuilder Idempotent(bool v = true) => Set("idempotent", v);
+
+    /// <summary>Named IIdempotentRepository from the context registry (survives restarts).</summary>
+    public FirebaseStorageBuilder IdempotentRepository(string name) => Set("idempotentRepository", name);
+
+    /// <summary>Create the bucket on consumer start when missing.</summary>
+    public FirebaseStorageBuilder AutoCreateBucket(bool v = true) => Set("autoCreateBucket", v);
 
     /// <summary>Include glob pattern.</summary>
     public FirebaseStorageBuilder Include(string glob) => Set("include", glob);

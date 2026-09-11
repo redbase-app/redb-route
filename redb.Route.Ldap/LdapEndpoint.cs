@@ -3,6 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging;
 using Novell.Directory.Ldap;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.Ldap;
@@ -45,23 +46,15 @@ public sealed class LdapEndpoint : EndpointBase<LdapEndpointOptions>, IDisposabl
         // URI did not set. This is what lets a route reference `connectionFactory=my-ldap`
         // and keep the service-account credentials out of the URI entirely — so they can
         // never surface in logs, telemetry, or the dashboard.
-        if (!string.IsNullOrEmpty(options.ConnectionFactory) && component.Context is not null)
+        if (!string.IsNullOrEmpty(options.ConnectionFactory))
         {
-            ResolvedFactory = component.Context.GetFromRegistry<LdapConnectionFactory>(options.ConnectionFactory);
-            if (ResolvedFactory is not null)
-            {
-                ResolvedFactory.ApplyTo(options, uri);
-                // Re-validate: the merged values come from the factory, not the URI.
-                options.Validate();
-                Logger?.LogDebug("LDAP: using ConnectionFactory '{Name}' from registry",
-                    options.ConnectionFactory);
-            }
-            else
-            {
-                Logger?.LogWarning(
-                    "LDAP: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
-                    options.ConnectionFactory);
-            }
+            // A set-but-unknown name fails loud — never a silent fallback to URI params (Ф11 Ж-1).
+            ResolvedFactory = component.Context.GetRequiredFromRegistry<LdapConnectionFactory>(options.ConnectionFactory);
+            ResolvedFactory.ApplyTo(options, uri);
+            // Re-validate: the merged values come from the factory, not the URI.
+            options.Validate();
+            Logger?.LogDebug("LDAP: using ConnectionFactory '{Name}' from registry",
+                options.ConnectionFactory);
         }
 
         _semaphore = new SemaphoreSlim(options.MaxConnections, options.MaxConnections);

@@ -59,25 +59,3 @@ public sealed class SetBodyExpressionDefinition : ProcessorDefinition
     public override IProcessor CreateProcessor(IRouteContext context)
         => new ExpressionBodyProcessor(_expression);
 }
-
-/// <summary>
-/// Leaf definition that sets the exchange body using a string template expression.
-/// </summary>
-public sealed class SetBodyStringExpressionDefinition : ProcessorDefinition
-{
-    private readonly string _template;
-
-    /// <summary>The template string used to produce the body value.</summary>
-    public string Template => _template;
-
-    /// <summary>Creates a set-body definition from a string template.</summary>
-    public SetBodyStringExpressionDefinition(string template)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(template);
-        _template = template;
-    }
-
-    /// <inheritdoc />
-    public override IProcessor CreateProcessor(IRouteContext context)
-        => new StringExpressionBodyProcessor(_template);
-}

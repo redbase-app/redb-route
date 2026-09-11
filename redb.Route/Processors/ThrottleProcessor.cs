@@ -23,15 +23,27 @@ namespace redb.Route.Processors;
 public sealed class ThrottleProcessor : IProcessor, IDisposable
 {
     private readonly IProcessor _next;
-    private readonly int _maxPerPeriod;
+    private readonly Func<IExchange, int> _maxPerPeriod;
     private readonly TimeSpan _period;
     private readonly bool _rejectOnOverflow;
-    private readonly SemaphoreSlim _semaphore;
     private readonly CancellationTokenSource _disposeCts = new();
     private readonly ILogger? _logger;
     private int _disposed;
 
-    /// <summary>Creates a throttle processor.</summary>
+    // The gate. A semaphore cannot change capacity per exchange, so the window is tracked by
+    // hand: how many slots are occupied, and who is waiting for one. Waiters are served in
+    // arrival order; each carries the limit its own exchange evaluated to.
+    private readonly object _gate = new();
+    private int _occupied;
+    private readonly Queue<(int Limit, TaskCompletionSource<bool> Slot)> _waiters = new();
+
+    /// <summary>No slot occupied and nobody waiting — a per-key gate in this state can be evicted.</summary>
+    internal bool IsIdle
+    {
+        get { lock (_gate) return _occupied == 0 && _waiters.Count == 0; }
+    }
+
+    /// <summary>Creates a throttle processor with a fixed limit.</summary>
     /// <param name="next">Next processor in the pipeline.</param>
     /// <param name="maxPerPeriod">Maximum number of exchanges allowed in the time period.</param>
     /// <param name="period">Time period for the rate limit (default: 1 second).</param>
@@ -44,13 +56,35 @@ public sealed class ThrottleProcessor : IProcessor, IDisposable
         TimeSpan? period = null,
         bool rejectOnOverflow = false,
         ILogger? logger = null)
+        : this(next, _ => maxPerPeriod, period, rejectOnOverflow, logger)
+    {
+        if (maxPerPeriod <= 0) throw new ArgumentOutOfRangeException(nameof(maxPerPeriod), "Must be > 0.");
+    }
+
+    /// <summary>
+    /// Creates a throttle processor whose limit is computed per exchange. The factory runs on
+    /// every message, so the limit can come from a header, a property or an expression and change
+    /// between messages, as the Apache Camel throttler does with a dynamic expression.
+    /// </summary>
+    /// <param name="next">Next processor in the pipeline.</param>
+    /// <param name="maxPerPeriod">Computes the maximum number of exchanges allowed in the period
+    /// for the given exchange. Must return a positive number; anything else fails that exchange
+    /// loudly rather than silently letting everything through.</param>
+    /// <param name="period">Time period for the rate limit (default: 1 second).</param>
+    /// <param name="rejectOnOverflow">When <c>true</c>, exchanges that exceed the rate limit are
+    /// short-circuited with HTTP 429 + <c>Retry-After</c> instead of waiting.</param>
+    /// <param name="logger">Optional logger.</param>
+    public ThrottleProcessor(
+        IProcessor next,
+        Func<IExchange, int> maxPerPeriod,
+        TimeSpan? period = null,
+        bool rejectOnOverflow = false,
+        ILogger? logger = null)
     {
         _next = next ?? throw new ArgumentNullException(nameof(next));
-        if (maxPerPeriod <= 0) throw new ArgumentOutOfRangeException(nameof(maxPerPeriod), "Must be > 0.");
-        _maxPerPeriod = maxPerPeriod;
+        _maxPerPeriod = maxPerPeriod ?? throw new ArgumentNullException(nameof(maxPerPeriod));
         _period = period ?? TimeSpan.FromSeconds(1);
         _rejectOnOverflow = rejectOnOverflow;
-        _semaphore = new SemaphoreSlim(maxPerPeriod, maxPerPeriod);
         _logger = logger;
     }
 
@@ -59,9 +93,14 @@ public sealed class ThrottleProcessor : IProcessor, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
 
+        var limit = _maxPerPeriod(exchange);
+        if (limit <= 0)
+            throw new InvalidOperationException(
+                $"Throttle limit evaluated to {limit} for this exchange; it must be a positive number.");
+
         // Non-blocking probe so we can choose between rejection and waiting without
         // holding a slot speculatively.
-        if (!_semaphore.Wait(0))
+        if (!TryAcquire(limit))
         {
             ProcessorMetrics.ThrottleDelayed.Add(1);
             if (_rejectOnOverflow)
@@ -70,8 +109,8 @@ public sealed class ThrottleProcessor : IProcessor, IDisposable
                 ThrottleRejection.Apply(exchange, _period);
                 return;
             }
-            _logger?.LogDebug("Throttle: exchange delayed (all {Max} slots occupied).", _maxPerPeriod);
-            await _semaphore.WaitAsync(ct).ConfigureAwait(false);
+            _logger?.LogDebug("Throttle: exchange delayed (all {Max} slots occupied).", limit);
+            await WaitForSlotAsync(limit, ct).ConfigureAwait(false);
         }
         try
         {
@@ -83,23 +122,85 @@ public sealed class ThrottleProcessor : IProcessor, IDisposable
         }
     }
 
-    /// <summary>Cancels pending slot-release timers and disposes the semaphore.</summary>
+    /// <summary>Cancels pending slot-release timers and wakes every waiter with a cancellation.</summary>
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _disposeCts.Cancel();
         _disposeCts.Dispose();
-        _semaphore.Dispose();
+        lock (_gate)
+        {
+            while (_waiters.Count > 0)
+                _waiters.Dequeue().Slot.TrySetCanceled();
+        }
+    }
+
+    private bool TryAcquire(int limit)
+    {
+        lock (_gate)
+        {
+            // Arrival order is honoured: a newcomer does not overtake a queued exchange even if
+            // its own limit would allow it in right now.
+            if (_waiters.Count == 0 && _occupied < limit)
+            {
+                _occupied++;
+                return true;
+            }
+            return false;
+        }
+    }
+
+    private async Task WaitForSlotAsync(int limit, CancellationToken ct)
+    {
+        var slot = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_gate)
+        {
+            _waiters.Enqueue((limit, slot));
+        }
+
+        using var registration = ct.Register(static state => ((TaskCompletionSource<bool>)state!).TrySetCanceled(), slot);
+        try
+        {
+            await slot.Task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // The slot may have been granted just before cancellation won the race; give it back.
+            lock (_gate)
+            {
+                if (slot.Task.IsCompletedSuccessfully)
+                    _occupied--;
+            }
+            throw;
+        }
     }
 
     private void ScheduleSlotRelease()
     {
-        var token = _disposeCts.Token;
-        _ = Task.Delay(_period, token).ContinueWith(_ =>
+        // Disposed while a message was in flight (a keyed gate evicted, a route stopped): there is no
+        // window left to release into, and the token source is gone.
+        if (Volatile.Read(ref _disposed) != 0) return;
+        CancellationToken token;
+        try { token = _disposeCts.Token; }
+        catch (ObjectDisposedException) { return; }
+        _ = Task.Delay(_period, token).ContinueWith(_ => ReleaseSlot(),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+    }
+
+    private void ReleaseSlot()
+    {
+        lock (_gate)
         {
-            try { _semaphore.Release(); }
-            catch (ObjectDisposedException) { /* Shutdown */ }
-            catch (SemaphoreFullException) { /* Defensive: already released */ }
-        }, CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+            _occupied--;
+
+            // Hand the freed capacity to the head of the queue, and keep going while the next
+            // waiter's own limit still has room: after a larger limit arrives several may fit.
+            while (_waiters.Count > 0 && _occupied < _waiters.Peek().Limit)
+            {
+                var (_, slot) = _waiters.Dequeue();
+                if (slot.TrySetResult(true))
+                    _occupied++;
+            }
+        }
     }
 }

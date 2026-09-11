@@ -1,0 +1,5 @@
+{
+  "//": "L4 (in-package): module identity ONLY. Settings and secrets come from the merged context configuration (see config/context.sample.json).",
+  "ContextName": "xmldemo",
+  "AutoStart": true
+}

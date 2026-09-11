@@ -25,7 +25,7 @@ public sealed class RabbitMQEndpointOptionsTests
         opts.Exclusive.Should().BeFalse();
         opts.RoutingKey.Should().BeEmpty();
         opts.ContentType.Should().Be("application/json");
-        opts.ConcurrentConsumers.Should().Be(1);
+        opts.ResolvedConcurrentConsumers.Should().Be(1);
         opts.PrefetchCount.Should().Be(10);
         opts.Transacted.Should().BeFalse();
         opts.ReplyTo.Should().BeFalse();
@@ -48,9 +48,9 @@ public sealed class RabbitMQEndpointOptionsTests
     [Fact]
     public void Validate_ZeroConcurrentConsumers_Throws()
     {
-        var opts = new RabbitMQEndpointOptions { ConcurrentConsumers = 0 };
+        var opts = new RabbitMQEndpointOptions { ConcurrentConsumers = "0" };
         var act = () => opts.Validate();
-        act.Should().Throw<ArgumentOutOfRangeException>().WithMessage("*ConcurrentConsumers*");
+        act.Should().Throw<ArgumentException>().WithMessage("*concurrentConsumers*");
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public sealed class RabbitMQEndpointOptionsTests
         var opts = new RabbitMQEndpointOptions
         {
             PrefetchCount = 20,
-            ConcurrentConsumers = 4,
+            ConcurrentConsumers = "4",
             Timeout = 30
         };
 

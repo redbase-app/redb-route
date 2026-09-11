@@ -147,16 +147,21 @@ Polls S3 bucket using `ListObjectsV2` with automatic pagination.
 
 ### Pipeline
 
-1. **List** — `ListObjectsV2` with `Prefix`, paginated via `ContinuationToken`
-2. **Filter** — glob `Include`/`Exclude` patterns, `MinAge`/`MaxAge`, folder exclusion
+1. **List** — `ListObjectsV2` with `Prefix`. Without `SortBy` the listing streams page by
+   page with an early exit at `MaxMessagesPerPoll`; with `SortBy` the full listing is
+   buffered (sorting honestly needs it — mind the cost on big buckets).
+2. **Filter** — glob `Include`/`Exclude` patterns (matched against the FILE NAME, the last
+   `/`-segment of the key), `MinAge`/`MaxAge`, folder exclusion
 3. **Sort** — `SortBy` (Key, LastModified, Size + Desc variants)
 4. **Limit** — `MaxMessagesPerPoll` (default: 10, 0 = unlimited)
 5. **Per object**:
-   - Done-file check (`DoneFileName` pattern)
+   - Done-file check (`DoneFileName` pattern; `${file:name}` expands to the FULL object key)
    - Idempotency check (in-memory, key = `Key + ETag + Size`)
-   - Download body (or stream, or metadata-only)
+   - Download body (or stream; with `IncludeBody=false` no content is downloaded at all)
    - Process exchange
-   - Post-process: `DeleteAfterRead` (default) or `MoveAfterRead`
+   - Post-process **only when the exchange succeeded**: `DeleteAfterRead` (default) or
+     `MoveAfterRead`. A failed object stays in place and is retried on the next poll; with
+     `Idempotent` enabled, only successfully processed objects are marked as seen.
 
 ### Move After Read
 
@@ -168,6 +173,12 @@ Polls S3 bucket using `ListObjectsV2` with automatic pagination.
 ```
 
 Objects are copied to the destination bucket then deleted from source.
+
+Destination key shaping: `RemovePrefixOnMove` strips the source `Prefix`,
+`DestinationBucketPrefix` is prepended, and `DestinationBucketSuffix` is inserted BEFORE the
+file extension (`report.csv` + suffix `-done` → `report-done.csv`; appended at the end when
+there is no extension). A failed delete after a successful copy logs the duplication and
+moves on — it never fails the poll.
 
 ### Done File Markers
 
@@ -187,7 +198,19 @@ Consumer only processes `report.csv` when `report.csv.done` exists in the same p
     .Idempotent())
 ```
 
-Uses an in-memory `ConcurrentDictionary` keyed by `Key + ETag + Size`. Custom key expression supported via `Idempotent(Expression.Header("myKey"))`.
+Uses an in-memory repository keyed by `Key + ETag + Size` with double-buffer eviction at
+10K entries (up to 2×10K of history is retained). The mark is written only after a
+SUCCESSFUL exchange. For a custom idempotency key use the route-level
+`IdempotentConsumer(...)` EIP with a real expression.
+
+For deduplication that survives restarts and scale-out, use a NAMED repository instead —
+the same `IIdempotentRepository` contract the route-level EIP uses (two-phase
+Add → process → Confirm/Remove, so a concurrent consumer cannot take the same object twice):
+
+```csharp
+context.AddIdempotentRepository("s3-dedup", myRedbIdempotentRepository);
+// s3://data?...&idempotentRepository=s3-dedup
+```
 
 ---
 
@@ -263,26 +286,24 @@ Three SSE modes:
 
 ---
 
-## Streaming Upload
+## Batching many exchanges into one object
 
-Accumulate multiple exchanges into a single S3 object:
+Accumulate-then-write is the route's job, not the transport's: use the core **Aggregate** EIP,
+which completes a batch by count, size or timeout, and hand the result to the plain S3 producer.
 
 ```csharp
-.To(S3.Bucket("logs")
-    .AccessKey("KEY").SecretKey("SECRET")
-    .KeyName("batch/events.jsonl")
-    .StreamingUpload(batchMessages: 100, batchSize: 5_242_880)
-    .StreamingUploadTimeout(30_000)
-    .NamingStrategy(S3NamingStrategy.Progressive))
+From("kafka://events?...")
+    .Aggregate(
+        "all",                                          // one running batch
+        (acc, next) => AppendLine(acc, next),           // e.g. build a JSONL body
+        completionSize: 100,
+        completionTimeout: TimeSpan.FromSeconds(30))
+    .SetHeader(S3Headers.Key, e => $"batch/events-{DateTime.UtcNow:yyyyMMddHHmmss}.jsonl")
+    .To(S3.Bucket("logs").AccessKey("KEY").SecretKey("SECRET"));
 ```
 
-| Option | Default | Description |
-|---|---|---|
-| `BatchMessageNumber` | 10 | Flush after N messages |
-| `BatchSize` | 1 MB | Flush after N bytes |
-| `BufferSize` | 1 MB | Internal buffer size |
-| `StreamingUploadTimeout` | 0 (none) | Flush timeout (ms) |
-| `NamingStrategy` | `Progressive` | `Progressive` (key-1, key-2, ...) or `Random` (key-{guid}) |
+> The former `StreamingUpload`/`NamingStrategy` options promised this at the transport level and
+> were never implemented — they are gone as of the 4.0.0 breaking bundle.
 
 ---
 
@@ -390,17 +411,6 @@ Uses `x-amz-if-none-match` — upload fails if the object key already exists.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `presignedUrlExpiration` | long | `3600000` (1h) | URL expiration (ms) |
-
-### Streaming Upload
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `streamingUploadMode` | bool | `false` | Enable streaming upload |
-| `batchMessageNumber` | int | `10` | Messages per batch |
-| `batchSize` | long | `1048576` (1 MB) | Max batch size (bytes) |
-| `bufferSize` | long | `1048576` (1 MB) | Internal buffer size |
-| `streamingUploadTimeout` | long | `0` | Batch flush timeout (ms) |
-| `namingStrategy` | enum | `Progressive` | `Progressive` or `Random` |
 
 ### Metadata
 
@@ -521,3 +531,20 @@ services.AddRedbRoute(route =>
 ```
 
 Registers the `S3Component` (scheme `s3`).
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new S3ConnectionFactory
+{
+    ServiceUrl = "http://minio.internal:9000",
+    ForcePathStyle = true,
+    AccessKey = "svc",
+    SecretKey = secrets.S3Secret,
+});
+// s3://backups?connectionFactory=prod
+```

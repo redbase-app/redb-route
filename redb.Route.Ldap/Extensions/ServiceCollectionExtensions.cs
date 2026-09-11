@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Ldap;
 
@@ -22,22 +22,11 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddRedbRouteLdap(this IServiceCollection services)
     {
-        services.AddSingleton<LdapComponent>();
-
-        services.AddSingleton<ILdapComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            var component = sp.GetRequiredService<LdapComponent>();
-            context.AddComponent(component);
-            return new LdapComponentRegistrar();
-        });
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteComponent<LdapComponent>();
 
         return services;
     }
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface ILdapComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class LdapComponentRegistrar : ILdapComponentRegistrar;

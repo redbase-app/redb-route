@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Controllers.Attributes;
 
@@ -31,6 +32,7 @@ public sealed class ControllerDispatcherProcessor : IProcessor
     private readonly ControllerRegistry _registry;
     private readonly IRouteContext _context;
     private readonly IReadOnlyList<IControllerActionFilter> _filters;
+    private readonly ILogger? _logger;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -64,6 +66,7 @@ public sealed class ControllerDispatcherProcessor : IProcessor
         _filters = (filters ?? Array.Empty<IControllerActionFilter>())
             .OrderBy(f => f.Order)
             .ToArray();
+        _logger = ControllerErrorReporting.CreateLogger<ControllerDispatcherProcessor>(context);
     }
 
     /// <inheritdoc />
@@ -95,7 +98,7 @@ public sealed class ControllerDispatcherProcessor : IProcessor
             for (var i = 0; i < _filters.Count; i++)
             {
                 try { await _filters[i].BeforeAsync(filterContext, ct); }
-                catch { /* Filters must not break dispatch. */ }
+                catch (Exception ex) { LogFilterFailure(ex, _filters[i], nameof(IControllerActionFilter.BeforeAsync)); }
             }
         }
 
@@ -127,12 +130,12 @@ public sealed class ControllerDispatcherProcessor : IProcessor
             // Async methods return a faulted Task; `await` re-throws the original exception (no TIE).
             // Only unwrap TIE — never blindly deref .InnerException on arbitrary exceptions.
             if (filterContext is not null) filterContext.Exception = tie.InnerException;
-            WriteError(exchange, 500, "InternalError", tie.InnerException.Message);
+            WriteUnhandled(exchange, tie.InnerException, path, method);
         }
         catch (Exception ex)
         {
             if (filterContext is not null) filterContext.Exception = ex;
-            WriteError(exchange, 500, "InternalError", ex.Message);
+            WriteUnhandled(exchange, ex, path, method);
         }
         finally
         {
@@ -146,7 +149,7 @@ public sealed class ControllerDispatcherProcessor : IProcessor
                 for (var i = _filters.Count - 1; i >= 0; i--)
                 {
                     try { await _filters[i].AfterAsync(filterContext, ct); }
-                    catch { /* Filters must not break dispatch. */ }
+                    catch (Exception ex) { LogFilterFailure(ex, _filters[i], nameof(IControllerActionFilter.AfterAsync)); }
                 }
             }
         }
@@ -169,6 +172,19 @@ public sealed class ControllerDispatcherProcessor : IProcessor
         if (result is not null && !exchange.Out.Headers.ContainsKey("Content-Type"))
             exchange.Out.setHeader("Content-Type", "application/json");
     }
+
+    /// <summary>
+    /// A filter threw. It never breaks dispatch, but it is logged: <see cref="IControllerActionFilter"/>
+    /// documents exactly that, and a swallowed throw made an audit filter that fails on every request
+    /// indistinguishable from one that works.
+    /// </summary>
+    private void LogFilterFailure(Exception exception, IControllerActionFilter filter, string stage)
+        => _logger?.LogError(exception, "Controller action filter {Filter} threw in {Stage}; dispatch continues", filter.GetType().FullName, stage);
+
+    /// <summary>An action failed: generic message out, the exception to the log (see <see cref="ControllerErrorReporting"/>).</summary>
+    private void WriteUnhandled(IExchange exchange, Exception exception, string? path, string? method)
+        => WriteError(exchange, 500, ControllerErrorReporting.ErrorCode,
+            ControllerErrorReporting.Report(_logger, exception, exchange, $"{method} {path}"));
 
     private static void WriteError(IExchange exchange, int statusCode, string error, string message)
     {

@@ -39,6 +39,7 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     private bool _cluster;
     private bool? _messageHistory;
     private IRoutePolicy? _routePolicy;
+    private string? _routePolicyName;
     internal IRouteContext? _context;
 
     /// <summary>Route context captured during compile (null until the route is added to a context).</summary>
@@ -77,6 +78,121 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
 
     /// <inheritdoc />
     public string? GetRouteId() => _routeId;
+
+    /// <inheritdoc />
+    public TSelf Id(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        if (Outputs.Count == 0)
+            return RouteId(id);
+        if (Outputs[^1] is ProcessorDefinition step)
+            step.StepId = id;
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Description(string description)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(description);
+        if (Outputs.Count == 0)
+        {
+            StepDescription = description;
+            return Self;
+        }
+        if (Outputs[^1] is ProcessorDefinition step)
+            step.StepDescription = description;
+        return Self;
+    }
+
+    // ── Interception / completion: registered on the root route, applied at compile ──────────
+
+    /// <inheritdoc />
+    public InterceptDefinition Intercept() => RegisterIntercept(new InterceptDefinition(InterceptKind.EveryStep, null));
+
+    /// <inheritdoc />
+    public InterceptDefinition InterceptFrom(string? uriPattern = null) => RegisterIntercept(new InterceptDefinition(InterceptKind.From, uriPattern));
+
+    /// <inheritdoc />
+    public InterceptDefinition InterceptSendToEndpoint(string uriPattern) => RegisterIntercept(new InterceptDefinition(InterceptKind.SendToEndpoint, uriPattern));
+
+    /// <inheritdoc />
+    public OnCompletionDefinition OnCompletion()
+    {
+        var def = new OnCompletionDefinition { Parent = this };
+        RootRoute("OnCompletion()").OnCompletions.Add(def);
+        return def;
+    }
+
+    private InterceptDefinition RegisterIntercept(InterceptDefinition def)
+    {
+        def.Parent = this;
+        var verb = def.Kind switch
+        {
+            InterceptKind.From => "InterceptFrom()",
+            InterceptKind.SendToEndpoint => "InterceptSendToEndpoint()",
+            _ => "Intercept()",
+        };
+        RootRoute(verb).Intercepts.Add(def);
+        return def;
+    }
+
+    /// <summary>The root <see cref="RouteDefinition"/> this scope belongs to; intercepts and completions are route-wide, so they live there.</summary>
+    private RouteDefinition RootRoute(string verb)
+    {
+        for (IProcessorDefinition? node = this; node is not null; node = node.Parent)
+            if (node is RouteDefinition root) return root;
+        throw new InvalidOperationException($"{verb} must be declared on a route (From(...)) or on the RouteBuilder for all its routes.");
+    }
+
+    // ── Header / property / body sugar ────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf SetHeaders(params (string Name, object? Value)[] headers)
+    {
+        AddOutput(new SetHeadersDefinition(headers));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf RemoveHeaders(string pattern, params string[] except)
+    {
+        AddOutput(new RemoveByMaskDefinition(RemoveTarget.Headers, pattern, except ?? []));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf RemoveProperties(string pattern, params string[] except)
+    {
+        AddOutput(new RemoveByMaskDefinition(RemoveTarget.Properties, pattern, except ?? []));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Sort(string collectionExpression, string? keyExpression = null, bool descending = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(collectionExpression);
+        var collection = new StringExpression(collectionExpression);
+        var key = keyExpression is null ? null : new StringExpression(keyExpression);
+        AddOutput(new SortDefinition(
+            exchange => collection.Evaluate<object>(exchange) as System.Collections.IEnumerable,
+            key is null ? null : item => key.Evaluate<object>(Exchange.Create(new Message(item), null)),
+            comparer: null,
+            descending));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Sort<T>(Func<IExchange, IEnumerable<T>> source, Func<T, object?>? key = null, bool descending = false, IComparer<object?>? comparer = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        AddOutput(new SortDefinition(
+            exchange => source(exchange),
+            key is null ? null : item => key((T)item!),
+            comparer,
+            descending,
+            items => items.Cast<T>().ToList()));
+        return Self;
+    }
 
     /// <inheritdoc />
     public TSelf AutoStart(bool value = true) { _autoStart = value; return Self; }
@@ -186,13 +302,6 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     }
 
     /// <inheritdoc />
-    public TSelf SetBodyExpression(string template)
-    {
-        AddOutput(new SetBodyStringExpressionDefinition(template));
-        return Self;
-    }
-
-    /// <inheritdoc />
     public TSelf Transform(Func<IExchange, object?> transform)
     {
         AddOutput(new TransformDefinition(transform));
@@ -236,12 +345,6 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         return Self;
     }
 
-    /// <inheritdoc />
-    public TSelf SetHeaderExpression(string name, string template)
-    {
-        AddOutput(new SetHeaderStringExpressionDefinition(name, template));
-        return Self;
-    }
 
     /// <inheritdoc />
     public TSelf RemoveHeader(string key)
@@ -270,13 +373,6 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     public TSelf SetProperty(string key, IExpression expression)
     {
         AddOutput(new SetPropertyExpressionDefinition(key, expression));
-        return Self;
-    }
-
-    /// <inheritdoc />
-    public TSelf SetPropertyExpression(string key, string template)
-    {
-        AddOutput(new SetPropertyStringExpressionDefinition(key, template));
         return Self;
     }
 
@@ -364,6 +460,14 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     }
 
     /// <inheritdoc />
+    public TSelf Delay(string durationExpression)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(durationExpression);
+        var expression = new StringExpression(durationExpression);
+        return Delay(exchange => DelayExpressionDefinition.ConvertToTimeSpan(expression.Evaluate<object>(exchange)));
+    }
+
+    /// <inheritdoc />
     public TSelf Sample(long messageFrequency)
     {
         AddOutput(new SampleCountDefinition(messageFrequency));
@@ -398,6 +502,14 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     /// <inheritdoc />
     public TSelf Validate(Func<IExchange, bool> predicate, string errorMessage = "Validation failed", bool throwOnFailure = true)
     {
+        AddOutput(new ValidatePredicateDefinition(predicate, errorMessage, throwOnFailure));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Validate(IPredicate predicate, string errorMessage = "Validation failed", bool throwOnFailure = true)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
         AddOutput(new ValidatePredicateDefinition(predicate, errorMessage, throwOnFailure));
         return Self;
     }
@@ -502,6 +614,48 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     public TSelf Unmarshal<TSerializer, TTarget>() where TSerializer : class
     {
         AddOutput(new UnmarshalDefinition(typeof(TSerializer), typeof(TTarget)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Marshal(string contentType)
+    {
+        AddOutput(new MarshalDefinition(contentType));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Marshal(IMessageSerializer serializer)
+    {
+        AddOutput(new MarshalDefinition(serializer));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Unmarshal<T>(string contentType)
+    {
+        AddOutput(new UnmarshalDefinition(contentType, typeof(T)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Unmarshal(string contentType, Type targetType)
+    {
+        AddOutput(new UnmarshalDefinition(contentType, targetType));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Unmarshal<T>(IMessageSerializer serializer)
+    {
+        AddOutput(new UnmarshalDefinition(serializer, typeof(T)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Unmarshal(IMessageSerializer serializer, Type targetType)
+    {
+        AddOutput(new UnmarshalDefinition(serializer, targetType));
         return Self;
     }
 
@@ -794,6 +948,38 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         return Self;
     }
 
+    /// <inheritdoc />
+    public TSelf Enrich(string resourceUri) => Enrich(resourceUri, Aggregation.AggregationStrategies.UseLatest());
+
+    /// <inheritdoc />
+    public TSelf Enrich(Func<IExchange, string> uriFactory) => Enrich(uriFactory, Aggregation.AggregationStrategies.UseLatest());
+
+    /// <inheritdoc />
+    public TSelf Enrich(IExpression uri, Func<IExchange, IExchange, IExchange> mergeStrategy)
+        => Enrich(Expressions.ExpressionValues.Required(uri, nameof(Enrich)), mergeStrategy);
+
+    /// <inheritdoc />
+    public TSelf Enrich(IExpression uri) => Enrich(uri, Aggregation.AggregationStrategies.UseLatest());
+
+    /// <inheritdoc />
+    public TSelf PollEnrich(string resourceUri, TimeSpan? timeout = null)
+        => PollEnrich(resourceUri, static (original, polled) => polled ?? original, timeout);
+
+    /// <inheritdoc />
+    public TSelf PollEnrich(Func<IExchange, string> uriFactory, TimeSpan? timeout = null)
+        => PollEnrich(uriFactory, static (original, polled) => polled ?? original, timeout);
+
+    /// <inheritdoc />
+    public TSelf PollEnrich(
+        IExpression uri,
+        Func<IExchange, IExchange?, IExchange> mergeStrategy,
+        TimeSpan? timeout = null)
+        => PollEnrich(Expressions.ExpressionValues.Required(uri, nameof(PollEnrich)), mergeStrategy, timeout);
+
+    /// <inheritdoc />
+    public TSelf PollEnrich(IExpression uri, TimeSpan? timeout = null)
+        => PollEnrich(uri, static (original, polled) => polled ?? original, timeout);
+
     /// <summary>Apache Camel parity: route to a list of recipient URIs computed at runtime.</summary>
     public TSelf RecipientList(
         Func<IExchange, IEnumerable<string>> recipientListFactory,
@@ -806,12 +992,29 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         return Self;
     }
 
+    /// <inheritdoc />
+    public TSelf RecipientList(
+        IExpression recipients,
+        bool parallelProcessing = false,
+        bool stopOnException = false,
+        Func<IExchange, IExchange, IExchange>? aggregationStrategy = null,
+        string uriDelimiter = ",")
+        => RecipientList(
+            Expressions.ExpressionValues.UriList(recipients, uriDelimiter),
+            parallelProcessing,
+            stopOnException,
+            aggregationStrategy);
+
     /// <summary>Apache Camel parity: iteratively route to URIs returned by a routing function.</summary>
     public TSelf DynamicRouter(Func<IExchange, string?> routingFunction)
     {
         AddOutput(new DynamicRouterDefinition(routingFunction));
         return Self;
     }
+
+    /// <inheritdoc />
+    public TSelf DynamicRouter(IExpression routingExpression)
+        => DynamicRouter(Expressions.ExpressionValues.Optional(routingExpression));
 
     /// <summary>
     /// Apache Camel parity: Routing Slip — pipe the exchange through a list of endpoints computed
@@ -872,9 +1075,21 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     public FilterDefinition Filter(IExpression expression)
     {
         ArgumentNullException.ThrowIfNull(expression);
-        var def = new FilterDefinition(e => ConvertToBoolean(expression.Evaluate<object?>(e)))
+        var def = new FilterDefinition(Predicates.PredicateFactory.FromExpression(expression))
         {
             SourceExpression = expression,
+        };
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public FilterDefinition Filter(IPredicate predicate)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        var def = new FilterDefinition(predicate)
+        {
+            SourcePredicate = predicate,
         };
         AddOutput(def);
         return def;
@@ -904,6 +1119,26 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         AddOutput(def);
         return def;
     }
+
+    /// <inheritdoc />
+    public IdempotentConsumerDefinition IdempotentConsumer(
+        IIdempotentRepository repository,
+        IExpression messageId,
+        bool skipDuplicate = true)
+        => IdempotentConsumer(
+            repository,
+            Expressions.ExpressionValues.Required(messageId, nameof(IdempotentConsumer)),
+            skipDuplicate);
+
+    /// <inheritdoc cref="IdempotentConsumer(Func{IExchange, string}, string, bool)"/>
+    public IdempotentConsumerDefinition IdempotentConsumer(
+        IExpression messageId,
+        string repositoryName,
+        bool skipDuplicate = true)
+        => IdempotentConsumer(
+            Expressions.ExpressionValues.Required(messageId, nameof(IdempotentConsumer)),
+            repositoryName,
+            skipDuplicate);
 
     /// <inheritdoc />
     public TSelf ClaimCheck(
@@ -1004,11 +1239,38 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     }
 
     /// <inheritdoc />
+    public AggregateDefinition Aggregate(
+        IExpression correlationKey,
+        Func<IExchange, IExchange, IExchange> aggregationStrategy,
+        Func<IExchange, bool> completionPredicate)
+        => Aggregate(
+            Expressions.ExpressionValues.Required(correlationKey, nameof(Aggregate)),
+            aggregationStrategy,
+            completionPredicate);
+
+    /// <inheritdoc />
     public ThrottleDefinition Throttle(int maxPerPeriod)
     {
         var def = new ThrottleDefinition(maxPerPeriod);
         AddOutput(def);
         return def;
+    }
+
+    /// <inheritdoc />
+    public ThrottleDefinition Throttle(Func<IExchange, int> maxPerPeriodFactory)
+    {
+        var def = new ThrottleDefinition(maxPerPeriodFactory);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public ThrottleDefinition Throttle(string maxPerPeriodExpression, TimeSpan? period = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(maxPerPeriodExpression);
+        var expression = new StringExpression(maxPerPeriodExpression);
+        var def = Throttle(exchange => expression.Evaluate<int>(exchange));
+        return period is null ? def : def.Period(period.Value);
     }
 
     /// <inheritdoc />
@@ -1020,6 +1282,33 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         var def = new KeyedThrottleDefinition(keyExtractor, maxPerPeriod, period);
         AddOutput(def);
         return def;
+    }
+
+    /// <inheritdoc />
+    public KeyedThrottleDefinition Throttle(
+        Func<IExchange, string> keyExtractor,
+        Func<IExchange, int> maxPerPeriodFactory,
+        TimeSpan? period = null)
+    {
+        var def = new KeyedThrottleDefinition(keyExtractor, maxPerPeriodFactory, period);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public KeyedThrottleDefinition Throttle(
+        string keyExpression,
+        string maxPerPeriodExpression,
+        TimeSpan? period = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyExpression);
+        ArgumentException.ThrowIfNullOrWhiteSpace(maxPerPeriodExpression);
+        var key = new StringExpression(keyExpression);
+        var limit = new StringExpression(maxPerPeriodExpression);
+        return Throttle(
+            e => key.Evaluate<object>(e)?.ToString() ?? string.Empty,
+            e => limit.Evaluate<int>(e),
+            period);
     }
 
     /// <inheritdoc />
@@ -1055,11 +1344,28 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     }
 
     /// <inheritdoc />
+    public LoopDefinition Loop(IPredicate condition, bool copy = false, bool shareScope = true)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        var def = new LoopDefinition(condition, copy, shareScope);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
     public LoopDefinition Loop(Func<IExchange, int> countFactory, bool copy = false, bool shareScope = true)
     {
         var def = new LoopDefinition(countFactory, copy, shareScope);
         AddOutput(def);
         return def;
+    }
+
+    /// <inheritdoc />
+    public LoopDefinition Loop(string countExpression, bool copy = false, bool shareScope = true)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(countExpression);
+        var expression = new StringExpression(countExpression);
+        return Loop(exchange => expression.Evaluate<int>(exchange), copy, shareScope);
     }
 
     // ── Bean / Service Activator ──────────────────────────────────────────────
@@ -1261,9 +1567,23 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     }
 
     /// <inheritdoc />
+    public TSelf RoutePolicy(string policyName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(policyName);
+        _routePolicyName = policyName.TrimStart('#');
+        return Self;
+    }
+
+    /// <inheritdoc />
     public IRoutePolicy? GetRoutePolicy() => _routePolicy;
 
+    /// <inheritdoc />
+    public string? GetRoutePolicyName() => _routePolicyName;
+
     // ── Rich logging scope ────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public RichLogScopeDefinition Log() => Log(LogLevel.Information);
 
     /// <inheritdoc />
     public RichLogScopeDefinition Log(LogLevel level)
@@ -1273,11 +1593,10 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         return def;
     }
 
-    private protected static bool ConvertToBoolean(object? value) => value switch
-    {
-        bool b => b,
-        string s => bool.TryParse(s, out var result) ? result : !string.IsNullOrEmpty(s),
-        null => false,
-        _ => true
-    };
+    /// <summary>
+    /// The DSL truthiness rule, shared with every string-condition path through
+    /// <see cref="Predicates.RouteTruthiness"/>.
+    /// </summary>
+    private protected static bool ConvertToBoolean(object? value)
+        => Predicates.RouteTruthiness.ToBoolean(value);
 }

@@ -314,12 +314,12 @@ internal sealed class DataObservabilityRoutes : RouteBuilder
 
         // ── Route 5: String expressions — Filter(string) & When(string) ─
         //
-        //  LogicalPredicate compiles "${header.x}" expressions at runtime.
-        //  This is the purely declarative way: no lambdas, just strings.
+        //  A condition string ("${header.x}" or "header.x == 'y'") is compiled into a predicate
+        //  while the route is built. This is the purely declarative way: no lambdas, just strings.
         //
         From("direct://demo-predicates-string-expr")
             .RouteId("demo-predicates-string-expr")
-            .Log("[PRED] ▶ String expression predicates (LogicalPredicate)")
+            .Log("[PRED] ▶ String expression predicates (condition strings)")
 
             .SetHeader("status", "active")
             .SetHeader("count", "42")

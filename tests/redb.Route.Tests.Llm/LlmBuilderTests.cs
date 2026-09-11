@@ -80,6 +80,31 @@ public sealed class LlmBuilderTests
     }
 
     [Fact]
+    public void CacheSystemPrompt_SetsParam_AndBindsToTheOption()
+    {
+        LlmDsl.Factory("c").CacheSystemPrompt().AsUri().Should().Contain("cacheSystemPrompt=true");
+
+        // The URI is only half the contract: the parameter has to land on the option the
+        // producer reads, or the flag would be a string nobody acts on.
+        var options = new LlmEndpointOptions();
+        options.BindFromUri(EndpointUriParser.Parse(
+            LlmDsl.Factory("c").CacheSystemPrompt().AsUri()).RawParameters);
+
+        options.CacheSystemPrompt.Should().BeTrue();
+    }
+
+    [Fact]
+    public void CacheSystemPrompt_IsAbsentUnlessAskedFor()
+    {
+        // Off by default and absent from the URI entirely: an address that says nothing about
+        // caching must behave exactly as it did before the option existed.
+        LlmDsl.Factory("c").MaxIterations(4).AsUri()
+            .Should().NotContain("cacheSystemPrompt");
+
+        new LlmEndpointOptions().CacheSystemPrompt.Should().BeFalse();
+    }
+
+    [Fact]
     public void Combined_ProducesMultipleParams()
     {
         var uri = LlmDsl.Factory("claude")

@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Quartz;
 
@@ -26,17 +26,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<CronComponent>();
         services.AddSingleton<QuartzTimerComponent>();
 
-        services.AddSingleton<IQuartzComponentRegistrar>(sp =>
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteContextConfigurator((sp, context) =>
         {
-            var context = sp.GetRequiredService<IRouteContext>();
-
-            var cron = sp.GetRequiredService<CronComponent>();
-            context.AddComponent(cron);
-
-            var qtimer = sp.GetRequiredService<QuartzTimerComponent>();
-            context.AddComponent(qtimer);
-
-            return new QuartzComponentRegistrar();
+            context.AddComponent(sp.GetRequiredService<CronComponent>());
+            context.AddComponent(sp.GetRequiredService<QuartzTimerComponent>());
         });
 
         return services;
@@ -48,15 +43,7 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddRedbRouteCron(this IServiceCollection services)
     {
-        services.AddSingleton<CronComponent>();
-
-        services.AddSingleton<ICronComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            var component = sp.GetRequiredService<CronComponent>();
-            context.AddComponent(component);
-            return new CronComponentRegistrar();
-        });
+        services.AddRouteComponent<CronComponent>();
 
         return services;
     }
@@ -67,34 +54,9 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddRedbRouteQuartzTimer(this IServiceCollection services)
     {
-        services.AddSingleton<QuartzTimerComponent>();
-
-        services.AddSingleton<IQuartzTimerComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            var component = sp.GetRequiredService<QuartzTimerComponent>();
-            context.AddComponent(component);
-            return new QuartzTimerComponentRegistrar();
-        });
+        services.AddRouteComponent<QuartzTimerComponent>();
 
         return services;
     }
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IQuartzComponentRegistrar;
-
-/// <summary>Marker interface for DI registration.</summary>
-internal interface ICronComponentRegistrar;
-
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IQuartzTimerComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class QuartzComponentRegistrar : IQuartzComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class CronComponentRegistrar : ICronComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class QuartzTimerComponentRegistrar : IQuartzTimerComponentRegistrar;

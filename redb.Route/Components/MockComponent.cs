@@ -56,7 +56,7 @@ public class MockEndpointOptions : EndpointOptions
 /// <summary>
 /// Mock endpoint. Captures received exchanges for testing.
 /// </summary>
-public class MockEndpoint : EndpointBase<MockEndpointOptions>
+public partial class MockEndpoint : EndpointBase<MockEndpointOptions>
 {
     private readonly ConcurrentQueue<IExchange> _received = new();
     private readonly SemaphoreSlim _latch = new(0);
@@ -106,13 +106,14 @@ public class MockEndpoint : EndpointBase<MockEndpointOptions>
         }
     }
 
-    /// <summary>Resets all captured exchanges and the latch counter.</summary>
+    /// <summary>Resets all captured exchanges, the latch counter, expectations and scripted responses.</summary>
     public void Reset()
     {
         while (_received.TryDequeue(out _)) { }
         // Drain semaphore
         while (_latch.CurrentCount > 0)
             _latch.Wait(0);
+        ResetExpectations();
     }
 
     /// <summary>Records an exchange (called by MockProducer/MockConsumer).</summary>
@@ -150,10 +151,7 @@ public class MockProducer : IProducer
 
     /// <inheritdoc />
     public Task Process(IExchange exchange, CancellationToken ct = default)
-    {
-        _endpoint.RecordExchange(exchange);
-        return Task.CompletedTask;
-    }
+        => _endpoint.OnMessageAsync(exchange, ct);
 
     /// <inheritdoc />
     public Task Start(CancellationToken ct = default)

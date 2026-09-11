@@ -42,6 +42,13 @@ public class Exchange : IExchange
     public string? RouteId { get; set; }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Set by the route wrapper on entry and restored on exit; the setter is internal so only the
+    /// pipeline stamps it.
+    /// </remarks>
+    public IRouteContext? Context { get; internal set; }
+
+    /// <inheritdoc />
     public string ExchangeId { get; private set; } = Guid.NewGuid().ToString("N");
 
     /// <inheritdoc />
@@ -105,6 +112,7 @@ public class Exchange : IExchange
         {
             Pattern = Pattern,
             RouteId = RouteId,
+            Context = Context,
             Exception = Exception,
             ExceptionHandled = ExceptionHandled
         };
@@ -131,16 +139,6 @@ public class Exchange : IExchange
         return clone;
     }
 
-    /// <summary>
-    /// Re-arms <see cref="ReleaseScopes"/> so it runs again on a snapshot that is about to be
-    /// replayed. A replay runs the tail directly (bypassing the normal consumer→dispose lifecycle),
-    /// and the tail resolves its own scoped SQL/redb services — fresh connections cached in
-    /// <c>__redb_scope:*</c> properties — from the context provider. Those must be released after the
-    /// tail, or each replay leaks a connection; this lets <see cref="ReleaseScopes"/> do it even if
-    /// this exchange instance was released before.
-    /// </summary>
-    internal void PrepareForReplay() => Interlocked.Exchange(ref _scopesReleased, 0);
-
     /// <inheritdoc />
     public IExchange Snapshot()
     {
@@ -150,6 +148,7 @@ public class Exchange : IExchange
         {
             Pattern = Pattern,
             RouteId = RouteId,
+            Context = Context,
             Exception = Exception,
             ExceptionHandled = ExceptionHandled
         };
@@ -185,7 +184,8 @@ public class Exchange : IExchange
         var child = new Exchange(message)
         {
             Pattern = Pattern,
-            RouteId = RouteId
+            RouteId = RouteId,
+            Context = Context
         };
 
         foreach (var kvp in _properties)
@@ -213,6 +213,7 @@ public class Exchange : IExchange
         {
             Pattern = Pattern,
             RouteId = RouteId,
+            Context = Context,
             _ownsScope = false,
             _scope = _scope,
             _scopeFactory = _scopeFactory
@@ -235,6 +236,7 @@ public class Exchange : IExchange
         {
             Pattern = Pattern,
             RouteId = RouteId,
+            Context = Context,
             Exception = Exception,
             ExceptionHandled = ExceptionHandled,
             _ownsScope = false,
@@ -260,8 +262,29 @@ public class Exchange : IExchange
     /// <inheritdoc />
     public async ValueTask ReleaseScopes()
     {
+        // In-progress guard, not a one-shot latch. This method is public API and downstream code
+        // calls it manually in error handlers; a latch spent on that call would leave any scope
+        // cached on the exchange AFTERWARDS — an error handler's tail touching redb again does
+        // exactly that — invisible to DisposeAsync forever. Re-arming after each sweep keeps every
+        // guarantee the latch gave (concurrent calls don't double-sweep, nothing is disposed
+        // twice — entries leave the property bag as they are released and the owned scope nulls
+        // out) without the mine.
         if (Interlocked.CompareExchange(ref _scopesReleased, 1, 0) != 0) return;
 
+        try
+        {
+            await ReleaseScopesCore().ConfigureAwait(false);
+        }
+        finally
+        {
+            // The re-arm lives in a finally so that a throw mid-sweep cannot leave the guard
+            // stuck — that would be this method's old defect made permanent.
+            Interlocked.Exchange(ref _scopesReleased, 0);
+        }
+    }
+
+    private async ValueTask ReleaseScopesCore()
+    {
         // Grab a logger up front — ILoggerFactory is a singleton, so it survives disposing the scope
         // it's resolved from. A dispose fault below (e.g. a broken DB transaction that throws when
         // disposed) must be observable — logged, not silently eaten — and must NOT abort disposal of

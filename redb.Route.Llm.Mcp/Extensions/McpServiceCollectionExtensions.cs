@@ -1,6 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Llm.Abstractions.Tools;
 using redb.Route.Llm.Mcp.Transport;
 
@@ -31,14 +31,10 @@ public static class McpServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.TryAddSingleton<IMcpRegistry, McpRegistry>();
-        services.AddSingleton<McpComponent>();
 
-        services.AddSingleton<IMcpComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            context.AddComponent(sp.GetRequiredService<McpComponent>());
-            return new McpComponentRegistrar();
-        });
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteComponent<McpComponent>();
 
         // Tool descriptor registry is owned by redb.Route.Llm; don't add a duplicate here.
         // If the consumer hasn't called AddRedbRouteLlm() the discovery service will
@@ -113,8 +109,3 @@ public sealed class McpServerOptionsBuilder
     };
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IMcpComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class McpComponentRegistrar : IMcpComponentRegistrar;

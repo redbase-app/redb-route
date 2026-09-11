@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Mail;
 
@@ -26,22 +26,16 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SmtpComponent>();
         services.AddSingleton<ImapComponent>();
         services.AddSingleton<Pop3Component>();
-
-        services.AddSingleton<IMailComponentRegistrar>(sp =>
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteContextConfigurator((sp, context) =>
         {
-            var context = sp.GetRequiredService<IRouteContext>();
             context.AddComponent(sp.GetRequiredService<SmtpComponent>());
             context.AddComponent(sp.GetRequiredService<ImapComponent>());
             context.AddComponent(sp.GetRequiredService<Pop3Component>());
-            return new MailComponentRegistrar();
         });
 
         return services;
     }
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IMailComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class MailComponentRegistrar : IMailComponentRegistrar;

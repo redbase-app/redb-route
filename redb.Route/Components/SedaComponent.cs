@@ -36,8 +36,12 @@ public class SedaComponent : ComponentBase
 /// </summary>
 public class SedaEndpointOptions : EndpointOptions
 {
-    /// <summary>Number of concurrent consumer workers (default: 1).</summary>
-    public int ConcurrentConsumers { get; set; } = 1;
+    /// <summary>Concurrent consumer workers: a number or "auto" (= max(CPU, 2)). Default 1.</summary>
+    // A string so "auto" binds verbatim instead of silently degrading to the int default (В-7).
+    public string? ConcurrentConsumers { get; set; }
+
+    /// <summary>Resolved worker count (see <see cref="ConcurrencyOption"/>).</summary>
+    public int ResolvedConcurrentConsumers => ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers");
 
     /// <summary>Maximum queue size. 0 = unbounded (default: 0).</summary>
     public int Size { get; set; }
@@ -48,9 +52,7 @@ public class SedaEndpointOptions : EndpointOptions
     /// <inheritdoc />
     public override void Validate()
     {
-        if (ConcurrentConsumers < 1)
-            throw new ArgumentOutOfRangeException(nameof(ConcurrentConsumers), ConcurrentConsumers,
-                "ConcurrentConsumers must be at least 1.");
+        _ = ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers"); // loud on garbage
         if (Size < 0)
             throw new ArgumentOutOfRangeException(nameof(Size), Size, "Size cannot be negative.");
     }
@@ -71,12 +73,12 @@ public class SedaEndpoint : EndpointBase<SedaEndpointOptions>
             ? Channel.CreateBounded<IExchange>(new BoundedChannelOptions(options.Size)
             {
                 FullMode = BoundedChannelFullMode.Wait,
-                SingleReader = options.ConcurrentConsumers == 1,
+                SingleReader = options.ResolvedConcurrentConsumers == 1,
                 SingleWriter = false
             })
             : Channel.CreateUnbounded<IExchange>(new UnboundedChannelOptions
             {
-                SingleReader = options.ConcurrentConsumers == 1,
+                SingleReader = options.ResolvedConcurrentConsumers == 1,
                 SingleWriter = false
             });
     }
@@ -176,8 +178,8 @@ public class SedaConsumer : DrainableConsumer
     /// <inheritdoc />
     protected override Task RunAsync(CancellationToken pollCt, CancellationToken processingCt)
     {
-        _workers = new Task[_options.ConcurrentConsumers];
-        for (var i = 0; i < _options.ConcurrentConsumers; i++)
+        _workers = new Task[_options.ResolvedConcurrentConsumers];
+        for (var i = 0; i < _options.ResolvedConcurrentConsumers; i++)
             _workers[i] = WorkerLoop(pollCt, processingCt);
         return Task.CompletedTask;
     }

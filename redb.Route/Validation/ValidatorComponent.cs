@@ -35,7 +35,12 @@ public sealed class ValidatorComponent : ComponentBase
         ArgumentNullException.ThrowIfNull(uri);
         var options = new ValidatorEndpointOptions();
         options.BindFromUri(uri.RawParameters);
-        options.SchemaPath = uri.Path;
+        // Route-XML Ф1.4: the schema path resolves through the context's resource resolver
+        // (absolute → ResourceRoot → AppContext.BaseDirectory → working directory), so a schema
+        // inside an unpacked package is found wherever the worker process happens to run from.
+        options.SchemaPath = string.IsNullOrWhiteSpace(uri.Path)
+            ? uri.Path
+            : ResourceResolution.Resolve(Context, uri.Path, "Schema file");
         options.Validate();
         return new ValidatorEndpoint(uri, this, options);
     }

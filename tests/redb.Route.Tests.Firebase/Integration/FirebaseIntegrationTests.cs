@@ -30,19 +30,25 @@ public sealed class FirebaseIntegrationTests : IAsyncLifetime
     private const string ProjectId = "demo-redb";
     private const string FirestoreHost = "localhost:8086";
     private const string GcsEndpoint = "http://localhost:4443/storage/v1/";
-    private const string GcsBaseUri = "http://localhost:4443";
-    private const string TestBucket = "integration-test-bucket";
+
+    // Bucket per TFM: three test assemblies (net8/9/10) run in parallel against the same
+    // fake-gcs, and one assembly's cleanup must not delete another's freshly seeded objects.
+    private static readonly string TestBucket = $"integration-test-bucket-net{Environment.Version.Major}";
 
     private readonly ITestOutputHelper _output;
     private StorageClient? _rawGcs;
     private FirestoreDb? _rawFirestore;
+    private FirebaseCredentialProvider? _prodProvider;
 
     public FirebaseIntegrationTests(ITestOutputHelper output) => _output = output;
 
     public async Task InitializeAsync()
     {
-        // Firestore emulator is auto-detected via env var
+        // Emulator env vars BEFORE the production provider builds any client:
+        // the connector path under test detects the emulators through these.
         Environment.SetEnvironmentVariable("FIRESTORE_EMULATOR_HOST", FirestoreHost);
+        Environment.SetEnvironmentVariable("STORAGE_EMULATOR_HOST", GcsEndpoint);
+        _prodProvider = new FirebaseCredentialProvider();
         _rawFirestore = new FirestoreDbBuilder
         {
             ProjectId = ProjectId,
@@ -66,6 +72,8 @@ public sealed class FirebaseIntegrationTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        _prodProvider?.Dispose();
+
         // Cleanup GCS objects
         if (_rawGcs is not null)
         {
@@ -83,8 +91,8 @@ public sealed class FirebaseIntegrationTests : IAsyncLifetime
 
     private FirestoreComponent CreateFirestoreComponent()
     {
-        var cred = new EmulatorCredentialProvider(_rawFirestore!, _rawGcs!);
-        var component = new FirestoreComponent { CredentialProvider = cred };
+        // Production credential provider — the same path a real host runs.
+        var component = new FirestoreComponent { CredentialProvider = _prodProvider! };
         return component;
     }
 
@@ -101,15 +109,13 @@ public sealed class FirebaseIntegrationTests : IAsyncLifetime
 
     private FirebaseStorageComponent CreateStorageComponent()
     {
-        var cred = new EmulatorCredentialProvider(_rawFirestore!, _rawGcs!);
-        var component = new FirebaseStorageComponent { CredentialProvider = cred };
+        // Production credential provider — the same path a real host runs.
+        var component = new FirebaseStorageComponent { CredentialProvider = _prodProvider! };
         return component;
     }
 
     private FirebaseStorageEndpoint CreateStorageEndpoint(string bucket, string? extraParams = null)
     {
-        // Set env var so Validate() passes
-        Environment.SetEnvironmentVariable("FIREBASE_STORAGE_EMULATOR_HOST", GcsBaseUri);
         var qs = extraParams ?? "";
         var uri = EndpointUriParser.Parse(string.IsNullOrEmpty(qs)
             ? $"fbstorage://{bucket}"
@@ -555,7 +561,8 @@ public sealed class FirebaseIntegrationTests : IAsyncLifetime
         var activity = activities.First();
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
         activity.Kind.Should().Be(System.Diagnostics.ActivityKind.Client);
-        activity.GetTagItem("db.system").Should().Be("gcs");
+        // redb.system — дом-конвенция для object storage (решение В1 Ф11, выровнено с S3)
+        activity.GetTagItem("redb.system").Should().Be("gcs");
         activity.GetTagItem("messaging.destination.name").Should().Be(TestBucket);
         activity.GetTagItem("redb.route.endpoint").Should().NotBeNull();
     }
@@ -578,24 +585,6 @@ public sealed class FirebaseIntegrationTests : IAsyncLifetime
     /// <summary>
     /// Credential provider wired to emulators — returns pre-created clients.
     /// </summary>
-    private sealed class EmulatorCredentialProvider : IFirebaseCredentialProvider
-    {
-        private readonly FirestoreDb _firestoreDb;
-        private readonly StorageClient _storageClient;
-
-        internal EmulatorCredentialProvider(FirestoreDb firestoreDb, StorageClient storageClient)
-        {
-            _firestoreDb = firestoreDb;
-            _storageClient = storageClient;
-        }
-
-        public FirebaseAdmin.FirebaseApp GetOrCreateApp(string? credentialPath = null, string? projectId = null)
-            => throw new NotSupportedException("Emulator tests don't use FirebaseApp");
-
-        public FirestoreDb GetFirestoreDb(string? projectId = null) => _firestoreDb;
-        public StorageClient GetStorageClient() => _storageClient;
-    }
-
     /// <summary>
     /// Collects exchanges and signals when expected count is reached.
     /// </summary>

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using redb.Core;
 using redb.Core.Models.Contracts;
+using redb.Core.Models.Entities;
 using redb.Route.RedbCore.Models;
 using redb.Route.RedbCore.Repositories;
 
@@ -186,6 +187,85 @@ public abstract class RedbIdempotentRepositoryIntegrationTests : IAsyncLifetime
         await repo1.Clear();
 
         (await repo2.Contains("y")).Should().BeTrue();
+    }
+
+    // ─── Concurrency: one key, one winner ─────────────────
+
+    [Fact]
+    public async Task Add_ParallelSameKey_ExactlyOneWins_SingleRowStored()
+    {
+        var repo = CreateRepository("race-proc");
+        // Prime the scheme outside the measured races so scheme sync doesn't add noise.
+        await repo.Add("race-warmup");
+
+        for (var i = 0; i < 10; i++)
+        {
+            var key = $"race-key-{i}";
+            var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => repo.Add(key)));
+
+            results.Count(r => r).Should().Be(1,
+                $"exactly one of the concurrent Add('{key}') calls may claim the key");
+
+            var entryName = RedbIdempotentRepository.ComposeEntryName(P("race-proc"), key);
+            var rows = await _redb.Query<IdempotentEntryProps>()
+                .WhereRedb(x => x.Name == entryName)
+                .ToListAsync();
+            rows.Should().ContainSingle(
+                $"the unique index must let exactly one row through for '{key}'");
+        }
+    }
+
+    [Fact]
+    public async Task Add_UniqueKeyAlreadyCommittedByRaceWinner_ReturnsFalse()
+    {
+        // Deterministic replay of the TOCTOU window: the winner's row is already committed
+        // with our unique key, but under a name the Add lookup does not see. The insert must
+        // hit UIX__objects__scheme_unique and come back as a calm "duplicate" — no exception.
+        var repo = CreateRepository("toctou-proc");
+        await repo.Add("toctou-warmup");
+
+        const string key = "toctou-key";
+        var procName = P("toctou-proc");
+        var entryName = RedbIdempotentRepository.ComposeEntryName(procName, key);
+
+        var winner = new RedbObject<IdempotentEntryProps>
+        {
+            name = P("toctou-winner-row"),
+            ValueUnique = entryName,
+            Props = new IdempotentEntryProps
+            {
+                ProcessorName = procName,
+                MessageKey = key,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Confirmed = false
+            }
+        };
+        await _redb.SaveAsync(winner);
+
+        var result = await repo.Add(key);
+
+        result.Should().BeFalse("the key is already claimed by the committed row");
+    }
+
+    // ─── Long client keys ─────────────────────────────────
+
+    [Fact]
+    public async Task Add_LongKey_NormalizedAndStillIdempotent()
+    {
+        var repo = CreateRepository("long-proc");
+
+        var prefix = new string('k', 600);
+        var key1 = prefix + "-first";
+        var key2 = prefix + "-second";
+
+        (await repo.Add(key1)).Should().BeTrue();
+        (await repo.Add(key1)).Should().BeFalse("the same long key must be recognized as a duplicate");
+        (await repo.Add(key2)).Should().BeTrue("a long key differing only past the readable prefix is distinct");
+
+        (await repo.Contains(key1)).Should().BeTrue();
+        await repo.Remove(key1);
+        (await repo.Contains(key1)).Should().BeFalse();
+        (await repo.Contains(key2)).Should().BeTrue();
     }
 
     // ─── TTL cleanup ───────────────────────────────────────

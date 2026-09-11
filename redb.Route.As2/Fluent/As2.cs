@@ -50,6 +50,13 @@ public sealed class As2Builder
     private string? _host;
     private int? _port;
     private string? _connectionFactory;
+    private bool _useTls;
+    private string? _sslCertPath;
+    private string? _sslCertPassword;
+    private int _maxConcurrentRequests;
+    private int _requestQueueLimit;
+    private int? _rejectStatusCode;
+    private int? _retryAfterSeconds;
 
     /// <summary>When set, this receive endpoint accepts async MDN receipts (<c>mode=mdn</c>).</summary>
     internal bool AsMdnReceiver { get; init; }
@@ -69,6 +76,38 @@ public sealed class As2Builder
     /// <summary>Reference a named <see cref="As2ConnectionFactory"/> from the registry instead of inline config.</summary>
     public As2Builder ConnectionFactory(string name) { _connectionFactory = name; return this; }
 
+    /// <summary>
+    /// Serve the receive endpoint over TLS. The certificate is the one presented to the trading
+    /// partner on the connection — not the S/MIME key that signs the payload. Omit it here to take
+    /// the certificate from the named connection factory or from the host default; a TLS receiver
+    /// that finds none anywhere refuses to bind.
+    /// </summary>
+    public As2Builder Tls(string? certPath = null, string? certPassword = null)
+    {
+        _useTls = true;
+        _sslCertPath = certPath;
+        _sslCertPassword = certPassword;
+        return this;
+    }
+
+    /// <summary>
+    /// Admission limit (receive endpoint): at most <paramref name="max"/> concurrent pipeline
+    /// executions; overflow beyond the optional FIFO <paramref name="queue"/> is shed with
+    /// 429 + Retry-After before any MIME/crypto work.
+    /// </summary>
+    public As2Builder MaxConcurrentRequests(int max, int queue = 0)
+    {
+        _maxConcurrentRequests = max;
+        _requestQueueLimit = queue;
+        return this;
+    }
+
+    /// <summary>Status code for a shed request (default 429).</summary>
+    public As2Builder RejectStatusCode(int statusCode) { _rejectStatusCode = statusCode; return this; }
+
+    /// <summary>Retry-After value for a shed request in seconds; 0 = do not send (default 1).</summary>
+    public As2Builder RetryAfterSeconds(int seconds) { _retryAfterSeconds = seconds; return this; }
+
     /// <summary>Builds the AS2 URI string.</summary>
     public string Build() => _mode == As2Mode.Receive ? BuildReceive() : BuildSend();
 
@@ -84,6 +123,13 @@ public sealed class As2Builder
         if (_host is not null) Add("host", _host);
         if (_port is not null) Add("port", _port.Value.ToString());
         if (_connectionFactory is not null) Add("connectionFactory", _connectionFactory);
+        if (_useTls) Add("useTls", "true");
+        if (_sslCertPath is not null) Add("sslCertPath", _sslCertPath);
+        if (_sslCertPassword is not null) Add("sslCertPassword", _sslCertPassword);
+        if (_maxConcurrentRequests > 0) Add("maxConcurrentRequests", _maxConcurrentRequests.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (_requestQueueLimit > 0) Add("requestQueueLimit", _requestQueueLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (_rejectStatusCode is { } rsc) Add("rejectStatusCode", rsc.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (_retryAfterSeconds is { } ras) Add("retryAfterSeconds", ras.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (AsMdnReceiver) Add("mode", "mdn");
         return sb.ToString();
     }

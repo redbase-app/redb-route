@@ -1,3 +1,4 @@
+using redb.Route.Http;
 using redb.Route.Core;
 
 namespace redb.Route.As2;
@@ -23,6 +24,38 @@ public sealed class As2EndpointOptions : EndpointOptions
 
     /// <summary>Use HTTPS/TLS. Set automatically when the URI scheme is <c>as2s</c>.</summary>
     public bool UseTls { get; set; }
+
+    // ── Admission limit (HTTP_CONCURRENCY_LIMITS_PLAN) ──
+
+    /// <summary>
+    /// Maximum concurrent executions of this receiver's pipeline. 0 (default) = unlimited.
+    /// Overflow beyond the limit and <see cref="RequestQueueLimit"/> is shed with
+    /// <see cref="RejectStatusCode"/> before any MIME/crypto work; AS2 partners retry on their
+    /// own MDN timeouts, which makes early shedding cheaper than a saturated receiver.
+    /// </summary>
+    public int MaxConcurrentRequests { get; set; }
+
+    /// <summary>Requests over the limit that WAIT for a permit (FIFO). 0 (default) = reject immediately.</summary>
+    public int RequestQueueLimit { get; set; }
+
+    /// <summary>Status code for a shed request. Default 429 Too Many Requests.</summary>
+    public int RejectStatusCode { get; set; } = 429;
+
+    /// <summary>Value of the <c>Retry-After</c> header on a shed request; 0 = do not send it. Default 1.</summary>
+    public int RetryAfterSeconds { get; set; } = 1;
+
+    /// <summary>
+    /// PFX certificate the receive server presents to the trading partner. This is the TLS server
+    /// certificate, a different thing from <see cref="As2ConnectionFactory.OurCertificate"/>, which
+    /// signs and decrypts the S/MIME payload. May be left unset when the host carries a default
+    /// (<c>AddRedbRouteHttpHosting(o =&gt; o.Tls.DefaultCertificatePath = ...)</c>); a receive
+    /// endpoint with TLS and no certificate in either place refuses to bind.
+    /// </summary>
+    public string? SslCertPath { get; set; }
+
+    /// <summary>Password for <see cref="SslCertPath"/>.</summary>
+    [Sensitive]
+    public string? SslCertPassword { get; set; }
 
     /// <summary>Per-request timeout in milliseconds (producer). Default 30000.</summary>
     public int Timeout { get; set; } = 30000;
@@ -80,6 +113,7 @@ public sealed class As2EndpointOptions : EndpointOptions
             throw new ArgumentOutOfRangeException(nameof(Port), Port, "AS2 port must be between 1 and 65535.");
         if (Timeout < 0)
             throw new ArgumentOutOfRangeException(nameof(Timeout), Timeout, "AS2 timeout must be non-negative.");
+        ConcurrencyLimitOptions.ValidateShape(MaxConcurrentRequests, RequestQueueLimit, RejectStatusCode, RetryAfterSeconds);
         if (MdnMode == As2MdnMode.Async && string.IsNullOrEmpty(AsyncMdnUrl) && string.IsNullOrEmpty(ConnectionFactory))
             throw new ArgumentException("Async MDN requires 'asyncMdnUrl' or a 'connectionFactory' that provides it.");
         if (Sign && !Crypto.As2CryptoEngine.IsSupportedDigest(SignAlg))

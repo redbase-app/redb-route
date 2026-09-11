@@ -1,5 +1,6 @@
 using Google.Cloud.Firestore;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.Firebase;
@@ -61,7 +62,7 @@ internal sealed class FirestoreEndpoint : EndpointBase<FirestoreEndpointOptions>
             if (_db is not null) return _db;
 
             var provider = ResolveCredentialProvider();
-            _db = provider.GetFirestoreDb(Options.ProjectId);
+            _db = provider.GetFirestoreDb(Options.ProjectId, Options.CredentialPath, Options.DatabaseId);
             return _db;
         }
         finally
@@ -78,7 +79,17 @@ internal sealed class FirestoreEndpoint : EndpointBase<FirestoreEndpointOptions>
     public override IConsumer CreateConsumer(IProcessor processor)
     {
         ArgumentNullException.ThrowIfNull(processor);
-        return new FirestoreConsumer(this, processor, Options);
+
+        // ${...} in Where is producer-Query-only (Г6): the consumer query is built once per
+        // subscription/poll loop — there is no exchange to resolve the template against.
+        if (Options.Where?.Contains("${") == true)
+            throw new InvalidOperationException(
+                "Where with ${...} expressions is supported only on the producer Query operation: " +
+                "the consumer query is built once per subscription, there is no exchange to resolve against.");
+
+        return Options.Realtime
+            ? new FirestoreConsumer(this, processor, Options)
+            : new FirestorePollingConsumer(this, processor, Options);
     }
 
     /// <inheritdoc />
@@ -89,12 +100,10 @@ internal sealed class FirestoreEndpoint : EndpointBase<FirestoreEndpointOptions>
 
     private IFirebaseCredentialProvider ResolveCredentialProvider()
     {
+        // A set-but-unknown name fails loud — never a silent fallback (Ф11 Ж-1).
         if (!string.IsNullOrEmpty(Options.ConnectionFactory))
-        {
-            var fromRegistry = FirestoreComponent.Context?
-                .GetFromRegistry<IFirebaseCredentialProvider>(Options.ConnectionFactory);
-            if (fromRegistry is not null) return fromRegistry;
-        }
+            return FirestoreComponent.Context
+                .GetRequiredFromRegistry<IFirebaseCredentialProvider>(Options.ConnectionFactory);
 
         return FirestoreComponent.CredentialProvider
                ?? throw new InvalidOperationException(

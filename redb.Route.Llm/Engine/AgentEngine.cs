@@ -99,7 +99,9 @@ public sealed class AgentEngine : IAgentEngine
 
         var retryCount = ReadRetryCount(request.Exchange);
 
-        var transcript = new List<LlmMessage>();
+        // The preamble opens the transcript and stays out of the store: it is part of how the
+        // assistant is assembled, not something said in this dialog (see AgentRequest.Preamble).
+        var transcript = new List<LlmMessage>(request.Preamble);
         string? attachUnderId = request.ConversationParentMessageId;
 
         if (_conversation is not null && request.ConversationId is { } convIdToLoad)
@@ -170,6 +172,15 @@ public sealed class AgentEngine : IAgentEngine
 
         var iter = 0;
         var totalUsage = AgentUsage.Zero;
+
+        // Cache counters ride alongside AgentUsage rather than inside it. AgentUsage is the
+        // BUDGET currency — what the run is allowed to spend — and cache reads/writes are not
+        // billable input; folding them in would make every budget silently wrong. But dropping
+        // them was worse: the run's own answer to "is the prompt cache working?" is these two
+        // numbers, and until now RunAsync summed them per iteration and then threw them away.
+        var cacheWrite = 0;
+        var cacheRead = 0;
+
         LlmResponse? last = null;
         Exception? terminalException = null;
         var cancelled = false;
@@ -198,6 +209,9 @@ public sealed class AgentEngine : IAgentEngine
                 {
                     ModelId = request.Factory.ModelId,
                     SystemPrompt = request.SystemPrompt,
+                    // Every iteration of the tool loop resends the same system prompt, so the
+                    // flag rides along — the second turn onward is where the cache pays off.
+                    CacheSystemPrompt = request.CacheSystemPrompt,
                     Messages = transcript,
                     Tools = capabilities,
                     Temperature = effectiveTemperature,
@@ -232,6 +246,9 @@ public sealed class AgentEngine : IAgentEngine
 
                 var iterUsage = new AgentUsage(last.Usage.InputTokens, last.Usage.OutputTokens, 0m);
                 totalUsage = totalUsage.Add(iterUsage);
+
+                cacheWrite += last.Usage.CacheCreationInputTokens;
+                cacheRead += last.Usage.CacheReadInputTokens;
 
                 await _observer.OnIterationCompletedAsync(new AgentIterationContext
                 {
@@ -309,7 +326,8 @@ public sealed class AgentEngine : IAgentEngine
             {
                 Run = runCtx,
                 Iterations = iter,
-                TotalUsage = new LlmUsage(totalUsage.InputTokens, totalUsage.OutputTokens),
+                TotalUsage = new LlmUsage(
+                    totalUsage.InputTokens, totalUsage.OutputTokens, cacheWrite, cacheRead),
                 StopReason = last?.StopReason ?? LlmStopReason.Other,
                 Exception = terminalException,
                 Cancelled = cancelled
@@ -319,14 +337,18 @@ public sealed class AgentEngine : IAgentEngine
         // Return the last ASSISTANT content, not transcript[^1]: when the loop stops mid-round (MaxIterations
         // or budget) the tail is a tool-results user message with no text, which would surface as an empty
         // answer. The last assistant message carries the model's actual output.
+        // ...and never the preamble's assistant turn: a run that stopped before its first call
+        // (budget pre-check, MaxIterations=0) has no answer, and the fixed opening line must not
+        // be handed back as if the model had just said it.
         LlmMessage? lastAssistant = null;
-        for (var i = transcript.Count - 1; i >= 0; i--)
+        for (var i = transcript.Count - 1; i >= request.Preamble.Count; i--)
             if (transcript[i].Role == "assistant") { lastAssistant = transcript[i]; break; }
 
         return new AgentResponse
         {
             Content = (lastAssistant ?? transcript[^1]).Content,
-            Usage = new LlmUsage(totalUsage.InputTokens, totalUsage.OutputTokens),
+            Usage = new LlmUsage(
+                totalUsage.InputTokens, totalUsage.OutputTokens, cacheWrite, cacheRead),
             Iterations = iter,
             StopReason = last?.StopReason ?? LlmStopReason.Other
         };

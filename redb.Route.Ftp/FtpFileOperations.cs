@@ -54,6 +54,12 @@ internal sealed class FtpFileOperations : IRemoteFileOperations
 
         _client.Config.TransferChunkSize = 65536;
 
+        // transferType: Ascii asks the server for line-ending conversion, Binary moves raw bytes.
+        // Declared and documented from day one, wired to nothing until часть B of the options sweep.
+        var dataType = _options.TransferType == FtpTransferType.Ascii ? FtpDataType.ASCII : FtpDataType.Binary;
+        _client.Config.UploadDataType = dataType;
+        _client.Config.DownloadDataType = dataType;
+
         if (_options.UseFtps)
         {
             _client.Config.EncryptionMode = FtpEncryptionMode.Explicit;

@@ -21,6 +21,13 @@ public interface IMessageSerializer
     /// </remarks>
     IReadOnlyCollection<string> MediaTypes => new[] { ContentType };
 
+    /// <summary>
+    /// <c>true</c> for a format whose input is raw bytes rather than an object model (Base64, GZip, Zip):
+    /// a <c>byte[]</c> body is the payload to wrap, not an already-marshalled result, so <c>Marshal</c>
+    /// must not pass it through. Default <c>false</c>.
+    /// </summary>
+    bool WrapsBytes => false;
+
     /// <summary>Serializes a value to a byte array.</summary>
     /// <typeparam name="T">Value type.</typeparam>
     /// <param name="value">Value to serialize.</param>

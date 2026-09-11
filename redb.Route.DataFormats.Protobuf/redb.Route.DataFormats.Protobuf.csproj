@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.DataFormats.Protobuf</PackageId>
+    <Description>Protocol Buffers data format for redb.Route (Google.Protobuf): Marshal/Unmarshal of IMessage types, optional Confluent Schema Registry wire framing; registered as application/x-protobuf.</Description>
+    <PackageTags>esb;messaging;protobuf;kafka;dataformat;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.31.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

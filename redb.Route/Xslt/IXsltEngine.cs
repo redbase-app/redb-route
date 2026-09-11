@@ -21,9 +21,14 @@ public enum XsltOutput
 /// stylesheet and reused (the compiled template is the expensive part, so it is cached in the engine).
 /// <para>
 /// The built-in <see cref="XslCompiledTransformEngine"/> uses the BCL (<c>System.Xml.Xsl</c>,
-/// <b>XSLT 1.0</b>) with zero external dependencies — matching Apache Camel's default JAXP engine. A
-/// Saxon-backed engine (XSLT 2.0/3.0) can be added later as another <see cref="IXsltEngine"/> in an
-/// adapter package, exactly as third-party validators live in <c>redb.Route.Validation.Adapters</c>.
+/// <b>XSLT 1.0</b>) with zero external dependencies — matching Apache Camel's default JAXP engine.
+/// </para>
+/// <para>
+/// To substitute a different processor — Saxon for XSLT 2.0/3.0, say — implement
+/// <see cref="IXsltEngineFactory"/> and register it with <c>context.UseXsltEngine(...)</c> or
+/// <c>services.AddXsltEngine(...)</c>. Implementing this interface alone is not enough and never
+/// was: until 2026-09-03 every construction site named the built-in engine directly, so the
+/// substitution this paragraph promised could not actually be made.
 /// </para>
 /// </summary>
 public interface IXsltEngine

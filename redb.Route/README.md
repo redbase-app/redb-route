@@ -337,6 +337,28 @@ From("amqp://broker:{{amqp.port:5672}}/orders");  // default used when the key i
 Because `IConfiguration` already layers environment, files and secrets, no `env:`/`sys:` prefix
 functions are needed. Keeps secrets out of source and lets one route run unchanged across environments.
 
+### Named connection factories
+
+Every transport that opens a connection accepts `connectionFactory=<name>` on the endpoint URI,
+resolved from the context registry — the canonical way to keep credentials out of URIs:
+
+```csharp
+context.AddToRegistry("prod-kafka", new KafkaConnectionFactory { Brokers = "b1:9092,b2:9092" });
+// kafka://orders?connectionFactory=prod-kafka
+```
+
+The resolution contract, uniform across connectors:
+
+1. **Explicit name** — resolved from the registry; a set-but-unknown name FAILS LOUD at
+   startup (never a silent fallback: a typo and a working configuration must be
+   distinguishable). Resolution happens BEFORE option validation, so the factory may be the
+   only source of required values (brokers, tokens, credentials).
+2. **URI options** — inline parameters when no name is set.
+3. **Component/provider defaults** — where the connector has them (e.g. Firebase's
+   `DefaultProjectId`/`DefaultCredentialPath`).
+4. **Environment** — provider chains such as `GOOGLE_APPLICATION_CREDENTIALS` or the AWS
+   default credentials chain.
+
 ## Telemetry
 
 Built-in OpenTelemetry — distributed tracing + metrics per route and step:

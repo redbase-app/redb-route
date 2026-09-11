@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Mail;
 
@@ -108,15 +109,11 @@ public sealed class MailConnectionFactory
         IRouteContext? context, MailEndpointOptions options, EndpointUri uri,
         ILogger? logger, string protocol)
     {
-        if (string.IsNullOrEmpty(options.ConnectionFactory) || context is null)
+        if (string.IsNullOrEmpty(options.ConnectionFactory))
             return;
 
-        var factory = context.GetFromRegistry<MailConnectionFactory>(options.ConnectionFactory);
-        if (factory is not null)
-            factory.ApplyTo(options, uri);
-        else
-            logger?.LogWarning(
-                "{Protocol}: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
-                protocol, options.ConnectionFactory);
+        // A set-but-unknown name fails loud — never a silent fallback to URI params (Ф11 Ж-1).
+        var factory = context.GetRequiredFromRegistry<MailConnectionFactory>(options.ConnectionFactory);
+        factory.ApplyTo(options, uri);
     }
 }

@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Elasticsearch;
 
@@ -23,24 +23,11 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddRedbRouteElasticsearch(this IServiceCollection services)
     {
-        services.AddSingleton<ElasticsearchComponent>();
-
-        // Post-configure: register "elasticsearch" + "es" (via AlternateSchemes)
-        services.AddSingleton<IElasticsearchComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            var component = sp.GetRequiredService<ElasticsearchComponent>();
-            context.AddComponent(component);
-
-            return new ElasticsearchComponentRegistrar();
-        });
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteComponent<ElasticsearchComponent>();
 
         return services;
     }
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IElasticsearchComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class ElasticsearchComponentRegistrar : IElasticsearchComponentRegistrar;

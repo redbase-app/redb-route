@@ -63,7 +63,7 @@ public sealed class SftpConnectionFactoryTests
     }
 
     [Fact]
-    public void MissingFactory_FallsBackToUriParameters()
+    public void MissingFactory_FailsLoud()
     {
         var context = new RouteContext();
         var component = new SftpComponent();
@@ -74,7 +74,9 @@ public sealed class SftpConnectionFactoryTests
             "sftp://inbox?connectionFactory=absent&host=direct&username=u&password=p");
         var act = () => component.CreateEndpoint(uri);
 
-        act.Should().NotThrow();
+        // Ф11 Ж-1: опечатка в connectionFactory обязана падать громко, а не молча фолбэчиться
+        act.Should().Throw<InvalidOperationException>()
+            .Which.Message.Should().Contain("absent");
     }
 
     [Fact]

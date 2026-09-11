@@ -24,7 +24,7 @@ public sealed class AmqpEndpointOptionsTests
         opts.ReceiverSettleMode.Should().Be(0);
         opts.Credit.Should().Be(100);
         opts.AutoAccept.Should().BeTrue();
-        opts.ConcurrentConsumers.Should().Be(1);
+        opts.ResolvedConcurrentConsumers.Should().Be(1);
         opts.ReceiveTimeout.Should().Be(60);
         opts.MessageDurable.Should().BeTrue();
         opts.MessagePriority.Should().Be(4);
@@ -66,7 +66,7 @@ public sealed class AmqpEndpointOptionsTests
     [Fact]
     public void Validate_ZeroConcurrentConsumers_Throws()
     {
-        var opts = new AmqpEndpointOptions { ConcurrentConsumers = 0 };
+        var opts = new AmqpEndpointOptions { ConcurrentConsumers = "0" };
         var act = () => opts.Validate();
         act.Should().Throw<ArgumentException>().WithMessage("*concurrentConsumers*");
     }
@@ -102,7 +102,7 @@ public sealed class AmqpEndpointOptionsTests
         {
             Port = 5673,
             Credit = 50,
-            ConcurrentConsumers = 4,
+            ConcurrentConsumers = "4",
             SenderSettleMode = 1,
             ReceiverSettleMode = 1,
             Durable = 2,
@@ -178,9 +178,15 @@ public sealed class AmqpEndpointOptionsTests
     }
 
     [Fact]
-    public void ResolveExpiryPolicy_Unknown_FallsBackToSessionEnd()
+    public void ExpiryPolicy_Typo_FailsLoud_AtValidation()
     {
+        // The silent session-end fallback meant a durable subscription with expiryPolicy=nevr
+        // quietly lost messages between restarts (ревью дуги, M12; принцип A1 свипа).
         var opts = new AmqpEndpointOptions { ExpiryPolicy = "garbage" };
-        opts.ResolveExpiryPolicy().ToString().Should().Be("session-end");
+
+        var act = () => opts.Validate();
+        act.Should().Throw<ArgumentException>()
+            .WithMessage("*expiryPolicy*", "ошибка обязана называть опцию")
+            .WithMessage("*link-detach*", "и перечислять валидные значения");
     }
 }

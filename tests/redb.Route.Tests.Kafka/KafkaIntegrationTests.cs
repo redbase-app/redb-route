@@ -360,11 +360,25 @@ public sealed class KafkaIntegrationTests
         using var consumer = new ConsumerBuilder<string, string>(config).Build();
         consumer.Subscribe(topic);
 
+        // Same UnknownTopicOrPart retry the file's own ConsumeOneMessage helper uses: the topic is
+        // auto-created by the produce above, and its metadata may lag under cluster load.
         using var cts = new CancellationTokenSource(15000);
-        var result = consumer.Consume(cts.Token);
+        ConsumeResult<string, string>? result = null;
+        while (result is null && !cts.Token.IsCancellationRequested)
+        {
+            try
+            {
+                result = consumer.Consume(cts.Token);
+            }
+            catch (ConsumeException ex) when (ex.Error.Code == ErrorCode.UnknownTopicOrPart)
+            {
+                await Task.Delay(500, cts.Token);
+            }
+        }
         consumer.Close();
 
-        result.Message.Key.Should().Be("ORD-12345");
+        result.Should().NotBeNull();
+        result!.Message.Key.Should().Be("ORD-12345");
         result.Message.Value.Should().Be("order-data");
     }
 

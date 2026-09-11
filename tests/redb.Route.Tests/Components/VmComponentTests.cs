@@ -241,16 +241,16 @@ public class VmComponentTests : IAsyncDisposable
     public void Options_DefaultValues()
     {
         var opts = new VmEndpointOptions();
-        opts.ConcurrentConsumers.Should().Be(1);
+        opts.ResolvedConcurrentConsumers.Should().Be(1, "дефолт остаётся 1 (В-7)");
         opts.Size.Should().Be(0);
     }
 
     [Fact]
     public void Options_Validate_ThrowsOnInvalidConcurrentConsumers()
     {
-        var opts = new VmEndpointOptions { ConcurrentConsumers = 0 };
+        var opts = new VmEndpointOptions { ConcurrentConsumers = "0" };
         var act = () => opts.Validate();
-        act.Should().Throw<ArgumentOutOfRangeException>();
+        act.Should().Throw<ArgumentException>().WithMessage("*concurrentConsumers*");
     }
 
     [Fact]

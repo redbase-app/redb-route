@@ -2,6 +2,7 @@ using Amazon.SimpleNotificationService;
 using Amazon.SimpleNotificationService.Model;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.Sqs;
@@ -83,10 +84,11 @@ public sealed class SnsEndpoint : EndpointBase<SnsEndpointOptions>, IDisposable
         {
             if (_client is not null) return _client;
 
-            if (!string.IsNullOrEmpty(Options.ConnectionFactory)
-                && (Component as SnsComponent)?.Context?.GetFromRegistry<AwsConnectionFactory>(Options.ConnectionFactory) is { } factory)
+            if (!string.IsNullOrEmpty(Options.ConnectionFactory))
             {
-                _client = factory.BuildSns();
+                // A set-but-unknown name fails loud — never a silent fallback (Ф11 Ж-1).
+                var context = (Component as SnsComponent)?.Context;
+                _client = context.GetRequiredFromRegistry<AwsConnectionFactory>(Options.ConnectionFactory).BuildSns();
             }
             else
             {

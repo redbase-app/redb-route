@@ -9,7 +9,10 @@ namespace redb.Route.Processors;
 public class WhenClause
 {
     /// <summary>Predicate to evaluate against the exchange.</summary>
-    public Func<IExchange, bool> Predicate { get; }
+    public Func<IExchange, bool> Predicate => Condition.Matches;
+
+    /// <summary>The condition of this branch, awaited through <see cref="IPredicate.MatchesAsync"/>.</summary>
+    public IPredicate Condition { get; }
 
     /// <summary>Processor to execute when the predicate is true.</summary>
     public IProcessor Processor { get; }
@@ -17,10 +20,16 @@ public class WhenClause
     /// <summary>Creates a when clause with a predicate and action.</summary>
     /// <param name="predicate">The condition to check.</param>
     /// <param name="processor">The processor to run when condition is met.</param>
-    public WhenClause(Func<IExchange, bool> predicate, IProcessor processor)
+    public WhenClause(IPredicate condition, IProcessor processor)
     {
-        Predicate = predicate ?? throw new ArgumentNullException(nameof(predicate));
+        Condition = condition ?? throw new ArgumentNullException(nameof(condition));
         Processor = processor ?? throw new ArgumentNullException(nameof(processor));
+    }
+
+    /// <summary>Creates a clause from a delegate, wrapped as a <see cref="Predicates.LambdaPredicate"/>.</summary>
+    public WhenClause(Func<IExchange, bool> predicate, IProcessor processor)
+        : this(new Predicates.LambdaPredicate(predicate ?? throw new ArgumentNullException(nameof(predicate))), processor)
+    {
     }
 }
 
@@ -49,6 +58,16 @@ public class ChoiceProcessor : IProcessor
         return this;
     }
 
+    /// <summary>Adds a When branch guarded by a predicate instance.</summary>
+    /// <param name="condition">The condition of the branch.</param>
+    /// <param name="processor">The processor to run when the condition holds.</param>
+    /// <returns>This processor for fluent chaining.</returns>
+    public ChoiceProcessor When(IPredicate condition, IProcessor processor)
+    {
+        _whenClauses.Add(new WhenClause(condition, processor));
+        return this;
+    }
+
     /// <summary>Sets the otherwise (fallback) processor.</summary>
     /// <param name="processor">Fallback processor.</param>
     /// <returns>This instance for fluent chaining.</returns>
@@ -63,7 +82,7 @@ public class ChoiceProcessor : IProcessor
     {
         foreach (var clause in _whenClauses)
         {
-            if (clause.Predicate(exchange))
+            if (await clause.Condition.MatchesAsync(exchange).ConfigureAwait(false))
             {
                 await clause.Processor.Process(exchange, ct).ConfigureAwait(false);
                 return;

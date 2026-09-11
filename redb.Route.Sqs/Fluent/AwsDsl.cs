@@ -52,6 +52,9 @@ public sealed class SqsBuilder
     public SqsBuilder VisibilityTimeout(int seconds) => Set("visibilityTimeout", seconds.ToString());
     /// <summary>Number of concurrent receive loops.</summary>
     public SqsBuilder ConcurrentConsumers(int count) => Set("concurrentConsumers", count.ToString());
+
+    /// <summary>Consumer parallelism as a string: a number or "auto" (= max(CPU, 2)).</summary>
+    public SqsBuilder ConcurrentConsumers(string count) => Set("concurrentConsumers", count);
     /// <summary>Keep extending visibility while a message is processing (requires visibilityTimeout &gt; 0).</summary>
     public SqsBuilder ExtendMessageVisibility(bool value = true) => Set("extendMessageVisibility", value ? "true" : "false");
     /// <summary>Delete a message after successful processing.</summary>

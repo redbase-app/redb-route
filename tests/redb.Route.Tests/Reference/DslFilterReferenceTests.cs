@@ -1,6 +1,7 @@
 using FluentAssertions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.TestKit;
 
 namespace redb.Route.Tests.Reference;
 
@@ -49,10 +50,8 @@ public class DslFilterReferenceTests
         });
         await context.Start();
 
-        var producer = context.GetEndpoint("direct://leaf-flt").CreateProducer();
-        await producer.Start();
-        foreach (var i in new[] { 5, 10, 7, 15, 20, 1 })
-            await producer.Process(new Exchange(new Message(i)));
+                foreach (var i in new[] { 5, 10, 7, 15, 20, 1 })
+            await context.SendBody("direct://leaf-flt", i);
 
         passed.Should().Equal(10, 15, 20);
     }
@@ -80,10 +79,8 @@ public class DslFilterReferenceTests
         });
         await context.Start();
 
-        var producer = context.GetEndpoint("direct://flt-endflt").CreateProducer();
-        await producer.Start();
-        foreach (var i in new[] { 1, 2, 3, 4 })
-            await producer.Process(new Exchange(new Message(i)));
+                foreach (var i in new[] { 1, 2, 3, 4 })
+            await context.SendBody("direct://flt-endflt", i);
 
         inside.Should().Equal(2, 4);
         // EndFilter() pops the Filter scope and restores the parent (route) scope,
@@ -114,10 +111,8 @@ public class DslFilterReferenceTests
         });
         await context.Start();
 
-        var producer = context.GetEndpoint("direct://flt-action").CreateProducer();
-        await producer.Start();
-        foreach (var i in new[] { -1, 0, 1, 2, -3, 5 })
-            await producer.Process(new Exchange(new Message(i)));
+                foreach (var i in new[] { -1, 0, 1, 2, -3, 5 })
+            await context.SendBody("direct://flt-action", i);
 
         inside.Should().Equal(1, 2, 5);
         tail.Should().Equal(-1, 0, 1, 2, -3, 5);
@@ -147,15 +142,8 @@ public class DslFilterReferenceTests
         });
         await context.Start();
 
-        var producer = context.GetEndpoint("direct://choice-flt-nested").CreateProducer();
-        await producer.Start();
-
-        async Task Send(decimal v, string type) =>
-            await producer.Process(new Exchange(new Message
-            {
-                Body = v,
-                Headers = { ["type"] = type }
-            }));
+        Task Send(decimal v, string type) =>
+            context.SendBodyAndHeader("direct://choice-flt-nested", v, "type", type);
 
         await Send(50m, "order");
         await Send(150m, "order");
@@ -189,9 +177,7 @@ public class DslFilterReferenceTests
         });
         await context.Start();
 
-        var producer = context.GetEndpoint("direct://split-flt").CreateProducer();
-        await producer.Start();
-        await producer.Process(new Exchange(new Message(new object?[] { 1, 2, 3, 4, 6, 7, 9 })));
+        await context.SendBody("direct://split-flt", new object?[] { 1, 2, 3, 4, 6, 7, 9 });
 
         kept.Should().Equal(3, 6, 9);
         seen.Should().Equal(1, 2, 3, 4, 6, 7, 9);
@@ -221,9 +207,7 @@ public class DslFilterReferenceTests
         });
         await context.Start();
 
-        var producer = context.GetEndpoint("direct://loop-flt").CreateProducer();
-        await producer.Start();
-        await producer.Process(new Exchange(new Message("go")));
+        await context.SendBody("direct://loop-flt", "go");
 
         counter.Should().Be(6);
         evens.Should().Be(3);       // iterations 2,4,6
@@ -251,10 +235,8 @@ public class DslFilterReferenceTests
         });
         await context.Start();
 
-        var producer = context.GetEndpoint("direct://flt-and").CreateProducer();
-        await producer.Start();
-        foreach (var i in new[] { -2, -1, 0, 1, 2, 3, 4, 5, 6 })
-            await producer.Process(new Exchange(new Message(i)));
+                foreach (var i in new[] { -2, -1, 0, 1, 2, 3, 4, 5, 6 })
+            await context.SendBody("direct://flt-and", i);
 
         passed.Should().Equal(2, 4, 6);
     }
@@ -283,10 +265,8 @@ public class DslFilterReferenceTests
         });
         await context.Start();
 
-        var producer = context.GetEndpoint("direct://flt-try").CreateProducer();
-        await producer.Start();
-        foreach (var i in new[] { 1, 10, 5, 20, 8, 100 })
-            await producer.Process(new Exchange(new Message(i)));
+                foreach (var i in new[] { 1, 10, 5, 20, 8, 100 })
+            await context.SendBody("direct://flt-try", i);
 
         caught.Should().Equal(10, 20, 100);
     }
@@ -316,10 +296,8 @@ public class DslFilterReferenceTests
         });
         await context.Start();
 
-        var producer = context.GetEndpoint("direct://orders-in").CreateProducer();
-        await producer.Start();
         foreach (var amount in new[] { 50m, 1500m, 200m, 9999m, 999m })
-            await producer.Process(new Exchange(new Message(amount)));
+            await context.SendBody("direct://orders-in", amount);
 
         audit.Should().Equal("audit:50", "audit:1500", "audit:200", "audit:9999", "audit:999");
         priority.Should().Equal("prio:1500:HIGH", "prio:9999:HIGH");
@@ -359,15 +337,9 @@ public class DslFilterReferenceTests
         });
         await context.Start();
 
-        var producer = context.GetEndpoint("direct://route-composite-filter").CreateProducer();
-        await producer.Start();
-
-        async Task Send(string currency, decimal amount, string country) =>
-            await producer.Process(new Exchange(new Message
-            {
-                Body = amount,
-                Headers = { ["currency"] = currency, ["country"] = country }
-            }));
+        Task Send(string currency, decimal amount, string country) =>
+            context.SendBodyAndHeaders("direct://route-composite-filter", amount,
+                new Dictionary<string, object?> { ["currency"] = currency, ["country"] = country });
 
         await Send("EUR", 100m, "DE");   // passes all 3 gates
         await Send("GBP", 100m, "DE");   // stops at currency gate
@@ -432,15 +404,9 @@ public class DslFilterReferenceTests
         });
         await context.Start();
 
-        var producer = context.GetEndpoint("direct://route-composite-filter-chained").CreateProducer();
-        await producer.Start();
-
-        async Task Send(string currency, decimal amount, string country) =>
-            await producer.Process(new Exchange(new Message
-            {
-                Body = amount,
-                Headers = { ["currency"] = currency, ["country"] = country }
-            }));
+        Task Send(string currency, decimal amount, string country) =>
+            context.SendBodyAndHeaders("direct://route-composite-filter-chained", amount,
+                new Dictionary<string, object?> { ["currency"] = currency, ["country"] = country });
 
         await Send("EUR", 100m, "DE");
         await Send("GBP", 100m, "DE");

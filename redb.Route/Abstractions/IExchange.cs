@@ -46,6 +46,19 @@ public interface IExchange : IAsyncDisposable
     /// <summary>Identifier of the route this exchange belongs to.</summary>
     string? RouteId { get; set; }
 
+    /// <summary>
+    /// The route context currently processing this exchange (Apache Camel's
+    /// <c>exchange.getContext()</c>). <c>null</c> for an exchange that was never handed to a route.
+    /// </summary>
+    /// <remarks>
+    /// Stamped by the route wrapper on entry and restored on exit, so inside a <c>direct:</c> or
+    /// <c>vm:</c> sub-route it is the <em>inner</em> route's context — Camel's reading of
+    /// "current" — and after the sub-route returns, the caller sees its own context again. This is
+    /// what lets a processor reach measurements and services without capturing the context into a
+    /// lambda: <c>(IEndpointStatistics)e.Context.GetEndpoint("direct:x")</c>.
+    /// </remarks>
+    IRouteContext? Context => null;
+
     /// <summary>Unique identifier of this exchange instance, generated at creation.</summary>
     string ExchangeId { get; }
 

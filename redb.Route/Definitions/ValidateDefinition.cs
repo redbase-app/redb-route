@@ -38,7 +38,7 @@ public sealed class ValidateInstanceDefinition : ProcessorDefinition
 /// </summary>
 public sealed class ValidatePredicateDefinition : ProcessorDefinition
 {
-    private readonly Func<IExchange, bool> _predicate;
+    private readonly IPredicate _predicate;
     private readonly string _errorMessage;
     private readonly bool _throwOnFailure;
 
@@ -49,13 +49,19 @@ public sealed class ValidatePredicateDefinition : ProcessorDefinition
     public bool ThrowOnFailure => _throwOnFailure;
 
     /// <summary>Creates a validate definition from a predicate.</summary>
-    public ValidatePredicateDefinition(Func<IExchange, bool> predicate, string errorMessage, bool throwOnFailure = true)
+    public ValidatePredicateDefinition(IPredicate predicate, string errorMessage, bool throwOnFailure = true)
     {
         ArgumentNullException.ThrowIfNull(predicate);
         ArgumentException.ThrowIfNullOrWhiteSpace(errorMessage);
         _predicate = predicate;
         _errorMessage = errorMessage;
         _throwOnFailure = throwOnFailure;
+    }
+
+    /// <summary>Creates a validate definition from a delegate, wrapped as a <see cref="Predicates.LambdaPredicate"/>.</summary>
+    public ValidatePredicateDefinition(Func<IExchange, bool> predicate, string errorMessage, bool throwOnFailure = true)
+        : this(new Predicates.LambdaPredicate(predicate ?? throw new ArgumentNullException(nameof(predicate))), errorMessage, throwOnFailure)
+    {
     }
 
     /// <inheritdoc />

@@ -92,7 +92,7 @@ internal sealed class FirestoreProducer : ConnectableProducer
         exchange.In.Headers[FirestoreHeaders.DocumentId] = docRef.Id;
         exchange.In.Headers[FirestoreHeaders.DocumentPath] = docRef.Path;
         exchange.In.Headers[FirestoreHeaders.WriteTime] = writeResult.UpdateTime;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     private async Task ProcessGet(IExchange exchange, CollectionReference collection, CancellationToken ct)
@@ -130,7 +130,7 @@ internal sealed class FirestoreProducer : ConnectableProducer
         var writeResult = await collection.Document(docId).UpdateAsync(data, cancellationToken: ct).ConfigureAwait(false);
 
         exchange.In.Headers[FirestoreHeaders.WriteTime] = writeResult.UpdateTime;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     private async Task ProcessDelete(IExchange exchange, CollectionReference collection, CancellationToken ct)
@@ -141,15 +141,18 @@ internal sealed class FirestoreProducer : ConnectableProducer
         var writeResult = await collection.Document(docId).DeleteAsync(cancellationToken: ct).ConfigureAwait(false);
 
         exchange.In.Headers[FirestoreHeaders.WriteTime] = writeResult.UpdateTime;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     private async Task ProcessQuery(IExchange exchange, CollectionReference collection, CancellationToken ct)
     {
         Google.Cloud.Firestore.Query query = collection;
 
-        if (_options.Where is not null)
-            query = FirestoreQueryHelper.ApplyWhereFilters(query, _options.Where);
+        // ${...} in Where is producer-Query-only (Г6): the query is built per exchange here,
+        // so the template resolves against the current message.
+        var where = _options.ResolveOption(_options.Where, exchange);
+        if (where is not null)
+            query = FirestoreQueryHelper.ApplyWhereFilters(query, where);
         if (_options.OrderBy is not null)
             query = FirestoreQueryHelper.ApplyOrderBy(query, _options.OrderBy);
         if (_options.Offset is not null)
@@ -183,11 +186,28 @@ internal sealed class FirestoreProducer : ConnectableProducer
         foreach (var item in items)
         {
             batch ??= _db!.StartBatch();
-            var docRef = collection.Document(); // auto-ID
-            if (_options.Merge)
-                batch.Set(docRef, item, SetOptions.MergeAll);
+
+            DocumentReference docRef;
+            var data = item;
+            if (_options.DocumentIdField is not null)
+            {
+                if (!item.TryGetValue(_options.DocumentIdField, out var idValue) || idValue is null)
+                    throw new InvalidOperationException(
+                        $"BatchWrite item is missing the '{_options.DocumentIdField}' field required by DocumentIdField");
+                docRef = collection.Document(idValue.ToString());
+                // The id source field is identity, not data — do not write it into the document.
+                data = new Dictionary<string, object?>(item);
+                data.Remove(_options.DocumentIdField);
+            }
             else
-                batch.Set(docRef, item);
+            {
+                docRef = collection.Document(); // auto-ID
+            }
+
+            if (_options.Merge)
+                batch.Set(docRef, data, SetOptions.MergeAll);
+            else
+                batch.Set(docRef, data);
             totalCount++;
             batchCount++;
 
@@ -203,7 +223,7 @@ internal sealed class FirestoreProducer : ConnectableProducer
             await batch.CommitAsync(ct).ConfigureAwait(false);
 
         exchange.In.Headers[FirestoreHeaders.DocumentCount] = totalCount;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     // ── Helpers ──

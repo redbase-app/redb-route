@@ -12,12 +12,12 @@ namespace redb.Route.Tests.Llm.Storage;
 /// <see cref="ToolAuditProps"/> row per <c>OnToolInvokedAsync</c> call with
 /// outcome classification (success / error / denied / skipped).
 /// </summary>
-[Collection("PostgresPro")]
+[Collection("StoragePro")]
 public sealed class RedbAuditObserverTests
 {
-    private readonly PostgresProFixture _fx;
+    private readonly StorageProFixture _fx;
 
-    public RedbAuditObserverTests(PostgresProFixture fx) => _fx = fx;
+    public RedbAuditObserverTests(StorageProFixture fx) => _fx = fx;
 
     private static AgentToolInvocationContext MakeCtx(
         string convId, string toolName, string toolUseId,

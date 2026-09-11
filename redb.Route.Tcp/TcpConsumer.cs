@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -31,6 +32,7 @@ public sealed class TcpConsumer : IConsumer
     private readonly ConcurrentDictionary<string, Task> _clientTasks = new();
     private readonly SemaphoreSlim? _connectionSemaphore;
     private readonly InflightDrainGuard _drain = new();
+    private X509Certificate2? _serverCertificate;
 
     private ILogger? _logger;
 
@@ -56,12 +58,90 @@ public sealed class TcpConsumer : IConsumer
     /// <summary>The local endpoint the server is listening on. Available after Start().</summary>
     public IPEndPoint? LocalEndPoint => _listener?.LocalEndpoint as IPEndPoint;
 
+    /// <summary>
+    /// Turns the host of the endpoint URI into an address to bind. Plain <c>IPAddress.Parse</c>
+    /// threw a bare <c>FormatException</c> on any name — including <c>localhost</c>, which the
+    /// producer side of this very connector resolves without complaint, so the same URI worked as
+    /// a client and crashed as a server.
+    /// <para>
+    /// A <see cref="TcpListener"/> binds one address, so <c>localhost</c> means the IPv4 loopback
+    /// here; a client that dials <c>[::1]</c> explicitly needs <c>::1</c> in the URI. (The shared
+    /// HTTP host binds both, because Kestrel opens two listeners for it.) This helper is
+    /// deliberately a local twin of the one in <c>SharedHttpServerManager</c>: a raw TCP transport
+    /// should not take a dependency on the HTTP hosting package for fifteen lines.
+    /// </para>
+    /// </summary>
+    private static IPAddress ResolveBindAddress(string host)
+    {
+        if (IPAddress.TryParse(host, out var parsed))
+            return parsed;
+
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+            return IPAddress.Loopback;
+
+        if (string.IsNullOrWhiteSpace(host) || host == "*" || host == "+")
+            return IPAddress.Any;
+
+        try
+        {
+            var resolved = Dns.GetHostAddresses(host);
+            if (resolved.Length > 0)
+                return resolved[0];
+        }
+        catch (Exception ex) when (ex is SocketException or ArgumentException)
+        {
+            throw new ArgumentException(
+                $"Cannot bind a TCP listener to host '{host}': it is neither an IP address nor a resolvable name. " +
+                "Use an address the machine owns, 0.0.0.0 for every interface, or localhost.", ex);
+        }
+
+        throw new ArgumentException(
+            $"Cannot bind a TCP listener to host '{host}': the name resolved to no addresses.");
+    }
+
+    /// <summary>
+    /// Loads the TLS certificate the server presents. The path arrives on the endpoint or through a
+    /// named <see cref="TcpConnectionFactory"/>, which applies it to the options before validation;
+    /// nothing means the listener must not open at all.
+    /// </summary>
+    private X509Certificate2 LoadServerCertificate()
+    {
+        if (string.IsNullOrEmpty(_options.SslCertPath))
+            throw new InvalidOperationException(
+                $"TCP listener on {_options.Host}:{_options.Port} is configured with ssl=true but no server " +
+                "certificate. Set sslCertPath (and sslCertPassword), or use a named connectionFactory that " +
+                "carries them. Refusing to start, because every accepted connection would fail the handshake.");
+
+        try
+        {
+#if NET9_0_OR_GREATER
+            return X509CertificateLoader.LoadPkcs12FromFile(_options.SslCertPath, _options.SslCertPassword);
+#else
+            return new X509Certificate2(_options.SslCertPath, _options.SslCertPassword);
+#endif
+        }
+        catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException)
+        {
+            // A bad path or a wrong password is a startup error too, not something to rediscover on
+            // every connection.
+            throw new InvalidOperationException(
+                $"TCP listener on {_options.Host}:{_options.Port} could not load its server certificate from " +
+                $"'{_options.SslCertPath}': {ex.Message}", ex);
+        }
+    }
+
     /// <inheritdoc />
     public Task Start(CancellationToken ct = default)
     {
+        // The certificate is resolved and loaded ONCE, before the socket opens. It used to be read
+        // from disk on every accepted connection through a null-forgiven SslCertPath!, so a missing
+        // certificate surfaced as an ArgumentNullException per connection — a type this consumer's
+        // catch list does not even cover — while the port sat there accepting.
+        _serverCertificate = _options.Ssl ? LoadServerCertificate() : null;
+
         try
         {
-            var ip = IPAddress.Parse(_options.Host);
+            var ip = ResolveBindAddress(_options.Host);
             _listener = new TcpListener(ip, _options.Port);
             _listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             _listener.Start(_options.Backlog);
@@ -76,6 +156,7 @@ public sealed class TcpConsumer : IConsumer
             _listener?.Stop(); _listener = null;
             _cts?.Dispose(); _cts = null;
             _drain.Dispose();
+            _serverCertificate?.Dispose(); _serverCertificate = null;
             throw;
         }
 
@@ -119,6 +200,10 @@ public sealed class TcpConsumer : IConsumer
         _cts?.Dispose();
         _cts = null;
         _drain.Dispose();
+        // Loaded once at Start, so it is released once here — it used to be a per-connection
+        // X509Certificate2 that nobody disposed at all.
+        _serverCertificate?.Dispose();
+        _serverCertificate = null;
         _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
         _logger?.LogInformation("TCP consumer stopped: {Host}:{Port}", _options.Host, _options.Port);
     }
@@ -156,15 +241,10 @@ public sealed class TcpConsumer : IConsumer
         {
             Stream stream = client.GetStream();
 
-            if (_options.Ssl)
+            if (_serverCertificate is not null)
             {
                 var sslStream = new SslStream(stream, leaveInnerStreamOpen: false);
-#if NET9_0_OR_GREATER
-                var cert = X509CertificateLoader.LoadPkcs12FromFile(_options.SslCertPath!, _options.SslCertPassword);
-#else
-                var cert = new X509Certificate2(_options.SslCertPath!, _options.SslCertPassword);
-#endif
-                await sslStream.AuthenticateAsServerAsync(cert).ConfigureAwait(false);
+                await sslStream.AuthenticateAsServerAsync(_serverCertificate).ConfigureAwait(false);
                 stream = sslStream;
             }
 

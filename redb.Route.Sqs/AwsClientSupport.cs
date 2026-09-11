@@ -19,9 +19,8 @@ internal static class AwsClientSupport
     public static AWSCredentials ResolveCredentials(AwsEndpointOptions o)
     {
         if (o.UseDefaultCredentialsProvider)
-#pragma warning disable CS0618 // FallbackCredentialsFactory is deprecated but still functional
-            return FallbackCredentialsFactory.GetCredentials();
-#pragma warning restore CS0618
+            // SDK v4: the non-deprecated default-chain resolver (env -> profile -> IMDS etc.)
+            return Amazon.Runtime.Credentials.DefaultAWSCredentialsIdentityResolver.GetCredentials();
 
         if (!string.IsNullOrEmpty(o.ProfileName))
         {

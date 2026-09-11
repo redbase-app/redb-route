@@ -135,6 +135,68 @@ public sealed class RedbIdempotentRepositoryTests
         await _redb.Received(1).SyncSchemeAsync<IdempotentEntryProps>();
     }
 
+    // ── Add: unique-key race barrier ────────────────────────────────
+
+    [Fact]
+    public async Task Add_SaveHitsUniqueViolation_ReturnsFalseInsteadOfThrowing()
+    {
+        // The lookup saw nothing, but a concurrent Add committed the key before our insert:
+        // the per-scheme unique index rejects the row and the loser must report "duplicate".
+        SetupQuery([]);
+        _redb.SaveAsync(Arg.Any<IRedbObject<IdempotentEntryProps>>())
+            .Returns(Task.FromException<long>(new redb.Core.Exceptions.RedbUniqueViolationException(
+                null, null, null, null, "UIX__objects__scheme_unique", null, new InvalidOperationException("23505"))));
+
+        var sut = CreateSut();
+        var result = await sut.Add("msg-race");
+
+        result.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Add_StampsValueUnique_WithCompositeName()
+    {
+        SetupQuery([]);
+        RedbObject<IdempotentEntryProps>? saved = null;
+        _redb.SaveAsync(Arg.Do<IRedbObject<IdempotentEntryProps>>(o => saved = (RedbObject<IdempotentEntryProps>)o))
+            .Returns(1L);
+
+        var sut = CreateSut();
+        await sut.Add("msg-001");
+
+        saved.Should().NotBeNull();
+        saved!.ValueUnique.Should().Be("test-route:msg-001");
+        saved.name.Should().Be(saved.ValueUnique);
+    }
+
+    // ── ComposeEntryName normalization ──────────────────────────────
+
+    [Fact]
+    public void ComposeEntryName_ShortComposite_IsRawAndReadable()
+    {
+        RedbIdempotentRepository.ComposeEntryName("proc", "key-1")
+            .Should().Be("proc:key-1");
+    }
+
+    [Fact]
+    public void ComposeEntryName_LongComposite_FitsLimitAndStaysDistinct()
+    {
+        var prefix = new string('a', 500);
+        var name1 = RedbIdempotentRepository.ComposeEntryName("proc", prefix + "-tail-1");
+        var name2 = RedbIdempotentRepository.ComposeEntryName("proc", prefix + "-tail-2");
+
+        // Fits _objects._value_unique (varchar(440)) and MSSQL _objects._name (nvarchar(450)).
+        name1.Length.Should().Be(440);
+        name1.Should().StartWith("proc:aaaa");
+
+        // Keys differing only past the readable prefix still map to distinct identities.
+        name1.Should().NotBe(name2);
+        name1[..375].Should().Be(name2[..375]);
+
+        // Deterministic: the same composite always maps to the same identity.
+        RedbIdempotentRepository.ComposeEntryName("proc", prefix + "-tail-1").Should().Be(name1);
+    }
+
     // ── Add with TTL cleanup ────────────────────────────────────────
 
     [Fact]

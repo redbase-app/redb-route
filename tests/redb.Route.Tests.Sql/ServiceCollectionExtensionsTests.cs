@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using redb.Route.Core;
+using redb.Route.Extensions;
 using redb.Route.Abstractions;
 using redb.Route.Sql;
 using redb.Route.Sql.Connection;
@@ -35,40 +37,38 @@ public class ServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddDataSource_RegistersFactoryInContextRegistry()
+    public async Task AddDataSource_RegistersFactoryInContextRegistry()
     {
-        var mockContext = Substitute.For<IRouteContext>();
         var services = new ServiceCollection();
-        services.AddSingleton(mockContext);
-
         services.AddRedbRouteSql(sql =>
         {
             sql.AddDataSource("test", Substitute.For<ISqlConnectionFactory>());
         });
 
-        var sp = services.BuildServiceProvider();
-        sp.GetService<ISqlComponentRegistrar>(); // trigger registrar
+        await using var sp = services.BuildServiceProvider();
+        await using var context = new RouteContext();
+        foreach (var configurator in sp.GetServices<IRouteContextConfigurator>())
+            configurator.Configure(context);
 
-        mockContext.Received(1).AddToRegistry("test", Arg.Any<object>());
+        context.GetFromRegistry<ISqlConnectionFactory>("test").Should().NotBeNull();
     }
 
     [Fact]
-    public void AddDataSource_WithFactory_RegistersInContextRegistry()
+    public async Task AddDataSource_WithFactory_RegistersInContextRegistry()
     {
         var mockFactory = Substitute.For<ISqlConnectionFactory>();
-        var mockContext = Substitute.For<IRouteContext>();
         var services = new ServiceCollection();
-        services.AddSingleton(mockContext);
-
         services.AddRedbRouteSql(sql =>
         {
             sql.AddDataSource("custom", mockFactory);
         });
 
-        var sp = services.BuildServiceProvider();
-        sp.GetService<ISqlComponentRegistrar>(); // trigger registrar
+        await using var sp = services.BuildServiceProvider();
+        await using var context = new RouteContext();
+        foreach (var configurator in sp.GetServices<IRouteContextConfigurator>())
+            configurator.Configure(context);
 
-        mockContext.Received(1).AddToRegistry("custom", mockFactory);
+        context.GetFromRegistry<ISqlConnectionFactory>("custom").Should().BeSameAs(mockFactory);
     }
 
     [Fact]
@@ -88,23 +88,22 @@ public class ServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddMultipleDataSources_AllRegisteredInContext()
+    public async Task AddMultipleDataSources_AllRegisteredInContext()
     {
-        var mockContext = Substitute.For<IRouteContext>();
         var services = new ServiceCollection();
-        services.AddSingleton(mockContext);
-
         services.AddRedbRouteSql(sql =>
         {
             sql.AddDataSource("db1", Substitute.For<ISqlConnectionFactory>());
             sql.AddDataSource("db2", Substitute.For<ISqlConnectionFactory>());
         });
 
-        var sp = services.BuildServiceProvider();
-        sp.GetService<ISqlComponentRegistrar>(); // trigger registrar
+        await using var sp = services.BuildServiceProvider();
+        await using var context = new RouteContext();
+        foreach (var configurator in sp.GetServices<IRouteContextConfigurator>())
+            configurator.Configure(context);
 
-        mockContext.Received(1).AddToRegistry("db1", Arg.Any<object>());
-        mockContext.Received(1).AddToRegistry("db2", Arg.Any<object>());
+        context.GetFromRegistry<ISqlConnectionFactory>("db1").Should().NotBeNull();
+        context.GetFromRegistry<ISqlConnectionFactory>("db2").Should().NotBeNull();
     }
 
     [Fact]
@@ -125,18 +124,15 @@ public class ServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void RegistrarMarker_IsRegistered()
+    public void Configurator_IsRegistered()
     {
         var services = new ServiceCollection();
-        var mockContext = Substitute.For<IRouteContext>();
-        services.AddSingleton(mockContext);
-
         services.AddRedbRouteSql();
 
-        var sp = services.BuildServiceProvider();
-        // ISqlComponentRegistrar should be registered as singleton factory
-        var descriptor = services.FirstOrDefault(d => d.ServiceType.Name == "ISqlComponentRegistrar");
+        // The startup hook RouteHostedService applies must be present
+        var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(IRouteContextConfigurator));
         descriptor.Should().NotBeNull();
+        descriptor!.Lifetime.Should().Be(ServiceLifetime.Singleton);
     }
 
     [Fact]
@@ -165,24 +161,19 @@ public class ServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void Registrar_AddsComponentToContext()
+    public async Task Configurator_AddsComponentToContext()
     {
-        var mockContext = Substitute.For<IRouteContext>();
         var services = new ServiceCollection();
-        services.AddSingleton(mockContext);
-
         services.AddRedbRouteSql(sql =>
         {
             sql.AddDataSource("main", Substitute.For<ISqlConnectionFactory>());
         });
 
-        var sp = services.BuildServiceProvider();
+        await using var sp = services.BuildServiceProvider();
+        await using var context = new RouteContext();
+        foreach (var configurator in sp.GetServices<IRouteContextConfigurator>())
+            configurator.Configure(context);
 
-        // Trigger the registrar factory
-        var registrar = sp.GetService<ISqlComponentRegistrar>();
-        registrar.Should().NotBeNull();
-
-        // Verify AddComponent was called with a SqlComponent
-        mockContext.Received(1).AddComponent(Arg.Is<SqlComponent>(c => c.Scheme == "sql"));
+        context.HasComponent("sql").Should().BeTrue();
     }
 }

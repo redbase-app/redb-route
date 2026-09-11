@@ -68,7 +68,8 @@ public class FilterProcessorTests
     [Fact]
     public void Constructor_NullPredicate_Throws()
     {
-        var act = () => new FilterProcessor(null!, new DelegateProcessor(_ => { }));
+        // The cast only picks the overload: both the predicate and the delegate constructors reject null.
+        var act = () => new FilterProcessor((redb.Route.Abstractions.IPredicate)null!, new DelegateProcessor(_ => { }));
         act.Should().Throw<ArgumentNullException>();
     }
 

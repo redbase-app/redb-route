@@ -60,6 +60,9 @@ public sealed class AzureServiceBusBuilder
     /// <summary>Sets maximum concurrent message handler calls.</summary>
     public AzureServiceBusBuilder MaxConcurrentCalls(int n) => Set("maxConcurrentCalls", n);
 
+    /// <summary>Handler parallelism as a string: a number or "auto" (= max(CPU, 2)).</summary>
+    public AzureServiceBusBuilder MaxConcurrentCalls(string n) => Set("maxConcurrentCalls", n);
+
     /// <summary>Sets message pre-fetch count.</summary>
     public AzureServiceBusBuilder PrefetchCount(int n) => Set("prefetchCount", n);
 

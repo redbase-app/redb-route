@@ -97,8 +97,12 @@ public sealed class AmqpEndpointOptions : EndpointOptions
     /// <summary>Auto-accept (settle) messages after processing. (default: true)</summary>
     public bool AutoAccept { get; set; } = true;
 
-    /// <summary>Number of concurrent consumer processors. (default: 1)</summary>
-    public int ConcurrentConsumers { get; set; } = 1;
+    /// <summary>Concurrent consumer workers: a number or "auto" (= max(CPU, 2)). Default 1 (serial, ordering preserved).</summary>
+    // A string so "auto" binds verbatim instead of silently degrading to the int default (В-7).
+    public string? ConcurrentConsumers { get; set; }
+
+    /// <summary>Resolved consumer parallelism (see <see cref="ConcurrencyOption"/>).</summary>
+    public int ResolvedConcurrentConsumers => ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers");
 
     /// <summary>Consumer receive timeout in seconds. 0 = infinite wait. (default: 60)</summary>
     public int ReceiveTimeout { get; set; } = 60;
@@ -170,8 +174,7 @@ public sealed class AmqpEndpointOptions : EndpointOptions
         if (Credit < 0)
             throw new ArgumentException($"AMQP credit (prefetch) must be >= 0, got: {Credit}");
 
-        if (ConcurrentConsumers < 1)
-            throw new ArgumentException($"AMQP concurrentConsumers must be >= 1, got: {ConcurrentConsumers}");
+        _ = ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers"); // loud on garbage
 
         if (SenderSettleMode is < 0 or > 2)
             throw new ArgumentException($"SenderSettleMode must be 0–2, got: {SenderSettleMode}");
@@ -181,6 +184,9 @@ public sealed class AmqpEndpointOptions : EndpointOptions
 
         if (Durable > 2)
             throw new ArgumentException($"Durable must be 0–2, got: {Durable}");
+
+        // A typo must fail at endpoint creation, not silently at terminus build time.
+        ResolveExpiryPolicy();
     }
 
     /// <summary>
@@ -214,7 +220,9 @@ public sealed class AmqpEndpointOptions : EndpointOptions
     }
 
     /// <summary>
-    /// Maps the ExpiryPolicy string to the AMQP symbol value.
+    /// Maps the ExpiryPolicy string to the AMQP symbol value. A typo throws instead of silently
+    /// becoming session-end — on a durable subscription that silent fallback meant the broker
+    /// dropped the subscription between restarts (принцип A1 свипа; ревью дуги, M12).
     /// </summary>
     internal AmqpSymbol ResolveExpiryPolicy()
     {
@@ -224,7 +232,9 @@ public sealed class AmqpEndpointOptions : EndpointOptions
             "session-end" => new AmqpSymbol("session-end"),
             "connection-close" => new AmqpSymbol("connection-close"),
             "never" => new AmqpSymbol("never"),
-            _ => new AmqpSymbol("session-end")
+            _ => throw new ArgumentException(
+                $"Invalid value '{ExpiryPolicy}' for option 'expiryPolicy'. " +
+                "Valid values: link-detach, session-end, connection-close, never.")
         };
     }
 }

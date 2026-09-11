@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.JsonTransform</PackageId>
+    <Description>Declarative JSON-to-JSON transformation for redb.Route (JSONata, native .NET engine): TransformJson("spec.jsonata") compiles once, applies per message; headers and properties bound as $headers / $properties.</Description>
+    <PackageTags>esb;messaging;json;jsonata;transform;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.JsonTransform" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.Xml\redb.Route.Xml.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Jsonata.Net.Native" Version="3.0.0" />
+    <PackageReference Include="Jsonata.Net.Native.SystemTextJson" Version="3.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

@@ -21,7 +21,7 @@ namespace redb.Route.Definitions;
 /// the builders walk is built entirely by the fluent API and its <c>End*</c> closers.
 /// </para>
 /// </summary>
-internal static class NodePipeline
+public static class NodePipeline
 {
     /// <summary>
     /// Compiles one child definition into its runtime processor — the per-node seam. Routes through

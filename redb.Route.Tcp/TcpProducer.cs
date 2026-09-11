@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
@@ -22,6 +24,7 @@ public sealed class TcpProducer : ConnectableProducer
     private readonly Encoding _encoding;
     private TcpClient? _client;
     private Stream? _stream;
+    private X509Certificate2? _clientCertificate;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     /// <summary>Creates a TCP producer.</summary>
@@ -41,6 +44,10 @@ public sealed class TcpProducer : ConnectableProducer
     /// <inheritdoc />
     protected override async Task ConnectAsync(CancellationToken ct)
     {
+        // Loaded once here rather than per connection, so a reconnect loop does not re-read the
+        // PFX from disk and a bad path or password is a start-time error.
+        _clientCertificate ??= LoadClientCertificate();
+
         await ConnectTcpAsync(ct).ConfigureAwait(false);
     }
 
@@ -54,6 +61,32 @@ public sealed class TcpProducer : ConnectableProducer
         }
         _client?.Dispose();
         _client = null;
+        _clientCertificate?.Dispose();
+        _clientCertificate = null;
+    }
+
+    /// <summary>
+    /// Loads the client certificate presented to a server that requires mTLS, if one is configured.
+    /// </summary>
+    private X509Certificate2? LoadClientCertificate()
+    {
+        if (string.IsNullOrEmpty(_options.ClientCertPath))
+            return null;
+
+        try
+        {
+#if NET9_0_OR_GREATER
+            return X509CertificateLoader.LoadPkcs12FromFile(_options.ClientCertPath, _options.ClientCertPassword);
+#else
+            return new X509Certificate2(_options.ClientCertPath, _options.ClientCertPassword);
+#endif
+        }
+        catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(
+                $"TCP producer for {_options.Host}:{_options.Port} could not load its client certificate from " +
+                $"'{_options.ClientCertPath}': {ex.Message}", ex);
+        }
     }
 
     /// <inheritdoc />
@@ -114,6 +147,10 @@ public sealed class TcpProducer : ConnectableProducer
         await TcpCodec.WriteMessageAsync(_stream!, data, _options.Framing, _options.Delimiter, _encoding, ct)
             .ConfigureAwait(false);
 
+        // Ownership audit: MessagesOut is the core's (ToProcessor / the template); the
+        // connector records only the wire bytes the core cannot see.
+        _endpoint.RecordBytesOut(data.Length);
+
         // InOut: read response
         if (_options.InOut)
         {
@@ -123,6 +160,7 @@ public sealed class TcpProducer : ConnectableProducer
 
             if (response is not null)
             {
+                _endpoint.RecordBytesIn(response.Length);
                 var outMsg = new Message(_options.Framing == TcpFraming.TextLine
                     ? _encoding.GetString(response)
                     : (object)response);
@@ -202,9 +240,22 @@ public sealed class TcpProducer : ConnectableProducer
 
         if (_options.Ssl)
         {
-            var sslStream = new SslStream(netStream, leaveInnerStreamOpen: false);
-            var host = _options.SslTargetHost ?? _options.Host;
-            await sslStream.AuthenticateAsClientAsync(host).ConfigureAwait(false);
+            // Explicit, never implied: without trustAllCertificates the default chain validation
+            // applies, which is what makes a self-signed staging server unreachable by design.
+            var sslStream = _options.TrustAllCertificates
+                ? new SslStream(netStream, leaveInnerStreamOpen: false, (_, _, _, _) => true)
+                : new SslStream(netStream, leaveInnerStreamOpen: false);
+
+            var authOptions = new SslClientAuthenticationOptions
+            {
+                TargetHost = _options.SslTargetHost ?? _options.Host,
+            };
+
+            // Loaded once in Start, so a reconnect does not re-read the PFX from disk.
+            if (_clientCertificate is not null)
+                authOptions.ClientCertificates = [_clientCertificate];
+
+            await sslStream.AuthenticateAsClientAsync(authOptions, ct).ConfigureAwait(false);
             netStream = sslStream;
         }
 

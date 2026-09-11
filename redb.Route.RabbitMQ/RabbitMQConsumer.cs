@@ -61,7 +61,7 @@ public sealed class RabbitMQConsumer : IConsumer
         _processor = processor ?? throw new ArgumentNullException(nameof(processor));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = endpoint.Logger;
-        _semaphore = new SemaphoreSlim(options.ConcurrentConsumers);
+        _semaphore = new SemaphoreSlim(options.ResolvedConcurrentConsumers);
     }
 
     /// <inheritdoc />
@@ -81,7 +81,7 @@ public sealed class RabbitMQConsumer : IConsumer
         // Without the explicit dispatch value the channel would pin to 1 (ctor default) and every
         // message would be handled serially regardless of ConcurrentConsumers — the RabbitMQ.Client
         // 7.x trap this fixes.
-        var dispatchConcurrency = (ushort)Math.Clamp(_options.ConcurrentConsumers, 1, ushort.MaxValue);
+        var dispatchConcurrency = (ushort)Math.Clamp(_options.ResolvedConcurrentConsumers, 1, ushort.MaxValue);
         _channel = await _endpoint.CreateChannelAsync(
             publisherConfirms: false,
             consumerDispatchConcurrency: dispatchConcurrency,
@@ -139,7 +139,7 @@ public sealed class RabbitMQConsumer : IConsumer
         _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
         _logger?.LogInformation(
             "RabbitMQ consumer started: queue={Queue}, exchange={Exchange}, routingKey={RoutingKey}, prefetch={Prefetch}, concurrent={Concurrent}",
-            _actualQueueName, _options.Exchange, _options.RoutingKey, _options.PrefetchCount, _options.ConcurrentConsumers);
+            _actualQueueName, _options.Exchange, _options.RoutingKey, _options.PrefetchCount, _options.ResolvedConcurrentConsumers);
     }
 
     /// <inheritdoc />
@@ -237,9 +237,18 @@ public sealed class RabbitMQConsumer : IConsumer
                 RegisterTransactedAction(exchange, $"rabbitmq-ack-{ea.DeliveryTag}", ackAction);
             }
 
+            var pipelineFailed = false;
             try
             {
-                await _processor.Process(exchange, _drain.ProcessingToken).ConfigureAwait(false);
+                try
+                {
+                    await _processor.Process(exchange, _drain.ProcessingToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    pipelineFailed = true;
+                    throw;
+                }
 
                 // RPC reply: if incoming message has ReplyTo, send response.
                 // SendReplyAsync swallows its own errors so a dead reply queue does NOT
@@ -265,6 +274,11 @@ public sealed class RabbitMQConsumer : IConsumer
             }
             catch (Exception ex)
             {
+                // A pipeline failure is already counted by the core's StatisticsProcessor; an ack
+                // failure AFTER a successful pipeline (channel died at settle) is invisible to the
+                // core, so the transport records it (ревью дуги, M13).
+                if (!pipelineFailed)
+                    _endpoint.RecordError(ex);
                 _logger?.LogError(ex, "RabbitMQ message processing error: deliveryTag={DeliveryTag}", ea.DeliveryTag);
 
                 // Nack (with TxRollback when the endpoint is transacted) via the ack action —
@@ -285,6 +299,10 @@ public sealed class RabbitMQConsumer : IConsumer
         }
         catch (Exception ex)
         {
+            // Transport-level failure (settle/channel trouble outside the pipeline) - invisible
+            // to the core's statistics wrappers, so the endpoint records it itself. Pipeline
+            // errors are counted by the core's StatisticsProcessor - not here, that would double.
+            _endpoint.RecordError(ex);
             _logger?.LogError(ex, "Fatal error in RabbitMQ message handler");
 
             // Last-resort nack — only if neither path above settled the delivery.

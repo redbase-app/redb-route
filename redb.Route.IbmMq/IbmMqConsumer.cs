@@ -75,7 +75,7 @@ public sealed class IbmMqConsumer : IConsumer
         }
 
         var isTopic = _options.DestinationType == IbmMqDestinationType.Topic;
-        var workerCount = Math.Max(1, _options.ConcurrentConsumers);
+        var workerCount = Math.Max(1, _options.ResolvedConcurrentConsumers);
 
         // Topics can't be load-balanced across competing subscribers: each managed non-durable
         // subscription gets its OWN copy of every message, so N subscriptions would DUPLICATE
@@ -468,9 +468,14 @@ public sealed class IbmMqConsumer : IConsumer
             reply.CorrelationId = originalMsg.MessageId;
             reply.MessageType = MQC.MQMT_REPLY;
 
-            // Round-trip user headers via RFH2 (matches producer-side BuildOutgoingMessage)
-            var headerSource = exchange.HasOut ? exchange.Out! : exchange.In;
-            IbmMqMessageHelper.CopyHeadersToRfh2(reply, headerSource);
+            // Round-trip user headers via RFH2 (matches producer-side BuildOutgoingMessage).
+            // targetClient=Mq promises raw MQMD+body on EVERY leg: a legacy requester that asked
+            // for no properties must not get an RFH2 on the reply either (ревью дуги, M11).
+            if (_options.TargetClient != IbmMqTargetClient.Mq)
+            {
+                var headerSource = exchange.HasOut ? exchange.Out! : exchange.In;
+                IbmMqMessageHelper.CopyHeadersToRfh2(reply, headerSource);
+            }
 
             var replyQueueName = originalMsg.ReplyToQueueName.Trim();
             var replyQmName = originalMsg.ReplyToQueueManagerName?.Trim();

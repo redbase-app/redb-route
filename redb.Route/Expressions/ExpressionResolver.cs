@@ -8,8 +8,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using redb.Route.Abstractions;
 using redb.Route.Expressions.Ast;
 using SysExpression = System.Linq.Expressions.Expression;
@@ -29,7 +27,6 @@ public static partial class ExpressionResolver
     // Caches for compiled expressions
     private static readonly ConcurrentDictionary<string, Func<IExchange, string>> _templateCache = new();
     private static readonly ConcurrentDictionary<string, Func<object?, string, object?>> _propertyResolverCache = new();
-    private static readonly ConcurrentDictionary<string, Func<IExchange, bool>> _logicalExpressionCache = new();
     private static readonly ConcurrentDictionary<string, Func<IExchange, object?>> _valueExpressionCache = new();
 
     /// <summary>
@@ -41,8 +38,6 @@ public static partial class ExpressionResolver
 
     // Regular expressions for parsing
     private static readonly Regex TemplateRegex = new(@"\$\{([^}]+)\}", RegexOptions.Compiled);
-    private static readonly Regex LogicalExpressionRegex = new(@"^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+?)(?:\s+(AND|OR|XOR)\s+(.+))?$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex LogicalFunctionRegex = new(@"logical\((.+)\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex UnaryOperationRegex = new(@"^([!+\-])(.+)$", RegexOptions.Compiled);
     
     // Regular expression for prefix increment/decrement
@@ -86,13 +81,24 @@ public static partial class ExpressionResolver
     public static void SetLoggerFactory(ILoggerFactory? factory)
         => _logger = factory?.CreateLogger("redb.Route.Expressions");
 
+    /// <summary>
+    /// Reports whether a string is a <c>${...}</c> template rather than a bare expression.
+    /// The two are different positions in the language: a template is interpolated into a string,
+    /// while a bare expression is compiled and evaluated.
+    /// </summary>
+    /// <param name="expression">The string to inspect.</param>
+    /// <returns><c>true</c> when the string contains at least one <c>${...}</c> placeholder.</returns>
+    public static bool IsTemplate(string expression)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        return TemplateRegex.IsMatch(expression);
+    }
+
     // Counters for caching metrics
     private static long _templateHits = 0;
     private static long _templateMisses = 0;
     private static long _propertyResolverHits = 0;
     private static long _propertyResolverMisses = 0;
-    private static long _logicalExpressionHits = 0;
-    private static long _logicalExpressionMisses = 0;
     private static long _valueExpressionHits = 0;
     private static long _valueExpressionMisses = 0;
 
@@ -257,7 +263,7 @@ public static partial class ExpressionResolver
         
         System.Threading.Interlocked.Increment(ref _templateMisses);
         DebugLog($" Compiling new template: '{template}'");
-        var compiled = _templateCache.GetOrAdd(cacheKey, _ => CompileTemplate(template));
+        var compiled = _templateCache.GetOrAdd(cacheKey, _ => CompileTemplateString(template));
         DebugLog($" Template compiled and added to cache: '{cacheKey}'");
         
         return compiled;
@@ -287,34 +293,6 @@ public static partial class ExpressionResolver
         DebugLog($" Compiling new property resolver: '{expression}'");
         var compiled = _propertyResolverCache.GetOrAdd(cacheKey, _ => CompilePropertyResolver(expression));
         DebugLog($" Property resolver compiled and added to cache: '{cacheKey}'");
-        
-        return compiled;
-    }
-
-    /// <summary>
-    /// Gets a compiled delegate for logical expressions.
-    /// </summary>
-    /// <param name="expression">The logical expression string (e.g. <c>"header.status == 200"</c>).</param>
-    /// <param name="contextId">Optional context identifier for cache isolation.</param>
-    /// <returns>A compiled predicate that evaluates the logical expression against an <see cref="IExchange"/>.</returns>
-    public static Func<IExchange, bool> GetCompiledLogicalExpression(string expression, string? contextId = null)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(expression, nameof(expression));
-        
-        var cacheKey = BuildCacheKey(contextId, expression);
-        DebugLog($"Requesting compiled logical expression: '{expression}' (key: '{cacheKey}')");
-        
-        if (_logicalExpressionCache.TryGetValue(cacheKey, out var cached))
-        {
-            System.Threading.Interlocked.Increment(ref _logicalExpressionHits);
-            DebugLog($" Logical expression found in cache: '{cacheKey}'");
-            return cached;
-        }
-        
-        System.Threading.Interlocked.Increment(ref _logicalExpressionMisses);
-        DebugLog($" Compiling new logical expression: '{expression}'");
-        var compiled = _logicalExpressionCache.GetOrAdd(cacheKey, _ => CompileLogicalExpression(expression));
-        DebugLog($" Logical expression compiled and added to cache: '{cacheKey}'");
         
         return compiled;
     }
@@ -413,7 +391,7 @@ public static partial class ExpressionResolver
             DebugLog($"Template processing result: '{result}'");
             return result;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not ExpressionSandboxViolationException)
         {
             // Runtime resolution error — log and rethrow so ErrorHandler can handle it
             _logger?.LogWarning(ex, "Expression resolution error in template '{Template}'", template);
@@ -435,53 +413,14 @@ public static partial class ExpressionResolver
         if (string.IsNullOrEmpty(template))
             return null;
 
-        if (template.StartsWith("${") && template.EndsWith("}") && template.IndexOf('}') == template.Length - 1)
+        if (TryGetSinglePlaceholder(template, out var placeholder))
         {
-            var expr = template[2..^1];
-            return ResolveExpression(expr, exchange);
+            // A whole-string placeholder keeps the CLR type of its value; the shared placeholder
+            // pipeline replaced the private ResolveExpression ladder here on 2026-08-28.
+            return GetCompiledPlaceholder(placeholder)(exchange);
         }
 
         return ProcessTemplate(template, exchange);
-    }
-
-    /// <summary>
-    /// Evaluates a logical expression using a cached compiled delegate.
-    /// </summary>
-    /// <param name="expression">The logical expression string.</param>
-    /// <param name="exchange">The exchange to evaluate against.</param>
-    /// <param name="contextId">Optional context identifier for cache isolation. If <c>null</c>, uses <c>exchange.RouteId</c> when available.</param>
-    /// <returns><c>true</c> if the expression evaluates to true; otherwise <c>false</c>.</returns>
-    public static bool EvaluateLogicalExpression(string expression, IExchange exchange, string? contextId = null)
-    {
-        ArgumentNullException.ThrowIfNull(exchange, nameof(exchange));
-        ArgumentException.ThrowIfNullOrEmpty(expression, nameof(expression));
-        
-        contextId ??= exchange.RouteId;
-        
-        DebugLog($"Evaluating logical expression: '{expression}'");
-        var compiledExpression = GetCompiledLogicalExpression(expression, contextId);
-        var result = compiledExpression(exchange);
-        DebugLog($"Logical expression result: {result}");
-        return result;
-    }
-
-    /// <summary>
-    /// Compiles a logical expression into a predicate for use in <c>LogicalPredicate</c>.
-    /// </summary>
-    /// <param name="expression">The logical expression string.</param>
-    /// <param name="contextId">Optional context identifier for cache isolation.</param>
-    /// <returns>A compiled predicate function.</returns>
-    public static Func<IExchange, bool> CompileLogicalPredicate(string expression, string? contextId = null)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(expression, nameof(expression));
-        
-        DebugLog($"Compiling logical predicate: '{expression}'");
-        
-        // Use existing logical expression compilation method
-        var compiledExpression = GetCompiledLogicalExpression(expression, contextId);
-        
-        DebugLog($"Logical predicate compiled successfully: '{expression}'");
-        return compiledExpression;
     }
 
     #endregion
@@ -495,7 +434,6 @@ public static partial class ExpressionResolver
     {
         _templateCache.Clear();
         _propertyResolverCache.Clear();
-        _logicalExpressionCache.Clear();
         _valueExpressionCache.Clear();
         
         // Reset counters
@@ -503,8 +441,6 @@ public static partial class ExpressionResolver
         System.Threading.Interlocked.Exchange(ref _templateMisses, 0);
         System.Threading.Interlocked.Exchange(ref _propertyResolverHits, 0);
         System.Threading.Interlocked.Exchange(ref _propertyResolverMisses, 0);
-        System.Threading.Interlocked.Exchange(ref _logicalExpressionHits, 0);
-        System.Threading.Interlocked.Exchange(ref _logicalExpressionMisses, 0);
         System.Threading.Interlocked.Exchange(ref _valueExpressionHits, 0);
         System.Threading.Interlocked.Exchange(ref _valueExpressionMisses, 0);
     }
@@ -515,14 +451,6 @@ public static partial class ExpressionResolver
     public static void ClearTemplateCache()
     {
         _templateCache.Clear();
-    }
-
-    /// <summary>
-    /// Clears the logical expression cache.
-    /// </summary>
-    public static void ClearLogicalExpressionCache()
-    {
-        _logicalExpressionCache.Clear();
     }
 
     /// <summary>
@@ -553,7 +481,6 @@ public static partial class ExpressionResolver
         var prefix = contextId + ":";
         RemoveByPrefix(_templateCache, prefix);
         RemoveByPrefix(_propertyResolverCache, prefix);
-        RemoveByPrefix(_logicalExpressionCache, prefix);
         RemoveByPrefix(_valueExpressionCache, prefix);
     }
 
@@ -581,10 +508,6 @@ public static partial class ExpressionResolver
             PropertyResolverCount = _propertyResolverCache.Count,
             PropertyResolverHits = System.Threading.Interlocked.Read(ref _propertyResolverHits),
             PropertyResolverMisses = System.Threading.Interlocked.Read(ref _propertyResolverMisses),
-            
-            LogicalExpressionCount = _logicalExpressionCache.Count,
-            LogicalExpressionHits = System.Threading.Interlocked.Read(ref _logicalExpressionHits),
-            LogicalExpressionMisses = System.Threading.Interlocked.Read(ref _logicalExpressionMisses),
             
             ValueExpressionCount = _valueExpressionCache.Count,
             ValueExpressionHits = System.Threading.Interlocked.Read(ref _valueExpressionHits),
@@ -652,20 +575,6 @@ public record CacheStatistics
         ? (double)PropertyResolverHits / (PropertyResolverHits + PropertyResolverMisses) * 100 
         : 0;
     
-    /// <summary>Number of entries in the logical expression cache.</summary>
-    public int LogicalExpressionCount { get; init; }
-
-    /// <summary>Number of logical expression cache hits.</summary>
-    public long LogicalExpressionHits { get; init; }
-
-    /// <summary>Number of logical expression cache misses.</summary>
-    public long LogicalExpressionMisses { get; init; }
-
-    /// <summary>Logical expression cache hit rate as a percentage.</summary>
-    public double LogicalExpressionHitRate => LogicalExpressionHits + LogicalExpressionMisses > 0 
-        ? (double)LogicalExpressionHits / (LogicalExpressionHits + LogicalExpressionMisses) * 100 
-        : 0;
-    
     /// <summary>Number of entries in the value expression cache.</summary>
     public int ValueExpressionCount { get; init; }
 
@@ -681,13 +590,13 @@ public record CacheStatistics
         : 0;
     
     /// <summary>Total number of entries across all caches.</summary>
-    public int TotalCount => TemplateCount + PropertyResolverCount + LogicalExpressionCount + ValueExpressionCount;
+    public int TotalCount => TemplateCount + PropertyResolverCount + ValueExpressionCount;
 
     /// <summary>Total number of cache hits across all caches.</summary>
-    public long TotalHits => TemplateHits + PropertyResolverHits + LogicalExpressionHits + ValueExpressionHits;
+    public long TotalHits => TemplateHits + PropertyResolverHits + ValueExpressionHits;
 
     /// <summary>Total number of cache misses across all caches.</summary>
-    public long TotalMisses => TemplateMisses + PropertyResolverMisses + LogicalExpressionMisses + ValueExpressionMisses;
+    public long TotalMisses => TemplateMisses + PropertyResolverMisses + ValueExpressionMisses;
 
     /// <summary>Overall cache hit rate as a percentage.</summary>
     public double TotalHitRate => TotalHits + TotalMisses > 0 

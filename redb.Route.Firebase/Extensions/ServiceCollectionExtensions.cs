@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Firebase;
 
@@ -29,7 +29,12 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IFirebaseCredentialProvider>(sp =>
         {
-            var provider = new FirebaseCredentialProvider();
+            var provider = new FirebaseCredentialProvider
+            {
+                DefaultProjectId = options.ProjectId,
+                DefaultCredentialPath = options.CredentialPath,
+            };
+            // Fail fast on an unreadable credential file at registration time.
             if (options.CredentialPath is not null)
                 provider.GetOrCreateApp(options.CredentialPath, options.ProjectId);
             return provider;
@@ -39,10 +44,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<FirestoreComponent>();
         services.AddSingleton<FirebaseStorageComponent>();
 
-        services.AddSingleton<IFirebaseComponentRegistrar>(sp =>
+        // IRouteContextConfigurator is applied by RouteHostedService at startup —
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteContextConfigurator((sp, context) =>
         {
             var credProvider = sp.GetRequiredService<IFirebaseCredentialProvider>();
-            var context = sp.GetRequiredService<IRouteContext>();
 
             var fcm = sp.GetRequiredService<FcmComponent>();
             fcm.CredentialProvider = credProvider;
@@ -55,8 +61,6 @@ public static class ServiceCollectionExtensions
             var storage = sp.GetRequiredService<FirebaseStorageComponent>();
             storage.CredentialProvider = credProvider;
             context.AddComponent(storage);
-
-            return new FirebaseComponentRegistrar();
         });
 
         return services;
@@ -74,9 +78,3 @@ public sealed class FirebaseOptions
     /// <summary>Firebase/GCP project ID.</summary>
     public string? ProjectId { get; set; }
 }
-
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IFirebaseComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class FirebaseComponentRegistrar : IFirebaseComponentRegistrar;

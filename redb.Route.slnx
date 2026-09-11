@@ -37,6 +37,15 @@
     <Project Path="redb.Route.Ldap/redb.Route.Ldap.csproj" />
     <Project Path="redb.Route.S3/redb.Route.S3.csproj" />
     <Project Path="redb.Route.Validation.Adapters/redb.Route.Validation.Adapters.csproj" />
+    <Project Path="redb.Route.TestKit/redb.Route.TestKit.csproj" />
+    <Project Path="redb.Route.Templates/redb.Route.Templates.csproj" />
+    <Project Path="redb.Route.XPath2/redb.Route.XPath2.csproj" />
+    <Project Path="redb.Route.DataFormats.Csv/redb.Route.DataFormats.Csv.csproj" />
+    <Project Path="redb.Route.DataFormats.Protobuf/redb.Route.DataFormats.Protobuf.csproj" />
+    <Project Path="redb.Route.DataFormats.Avro/redb.Route.DataFormats.Avro.csproj" />
+    <Project Path="redb.Route.DataFormats.Yaml/redb.Route.DataFormats.Yaml.csproj" />
+    <Project Path="redb.Route.JsonTransform/redb.Route.JsonTransform.csproj" />
+    <Project Path="redb.Route.Cache/redb.Route.Cache.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/redb.Route.Tests.As2/redb.Route.Tests.As2.csproj" />
@@ -73,6 +82,12 @@
     <Project Path="tests/redb.Route.Tests.Ldap/redb.Route.Tests.Ldap.csproj" />
     <Project Path="tests/redb.Route.Tests.S3/redb.Route.Tests.S3.csproj" />
     <Project Path="tests/redb.Route.Validation.Adapters.Tests/redb.Route.Validation.Adapters.Tests.csproj" />
+    <Project Path="tests/redb.Route.Tests.TestKit/redb.Route.Tests.TestKit.csproj" />
+    <Project Path="tests/redb.Route.Tests.Templates/redb.Route.Tests.Templates.csproj" />
+    <Project Path="tests/redb.Route.Tests.XPath2/redb.Route.Tests.XPath2.csproj" />
+    <Project Path="tests/redb.Route.Tests.DataFormats/redb.Route.Tests.DataFormats.csproj" />
+    <Project Path="tests/redb.Route.Tests.JsonTransform/redb.Route.Tests.JsonTransform.csproj" />
+    <Project Path="tests/redb.Route.Tests.Cache/redb.Route.Tests.Cache.csproj" />
   </Folder>
 </Solution>
 

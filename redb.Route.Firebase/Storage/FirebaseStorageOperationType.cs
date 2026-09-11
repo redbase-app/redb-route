@@ -19,5 +19,20 @@ public enum FirebaseStorageOperationType
     List,
 
     /// <summary>Get object metadata without downloading the body.</summary>
-    GetMetadata
+    GetMetadata,
+
+    /// <summary>Copy an object server-side (no download) to another name/bucket.</summary>
+    Copy,
+
+    /// <summary>Create a signed download URL with a TTL (requires service-account credentials).</summary>
+    CreateDownloadLink,
+
+    /// <summary>Create a bucket.</summary>
+    CreateBucket,
+
+    /// <summary>Delete a bucket (must be empty).</summary>
+    DeleteBucket,
+
+    /// <summary>List buckets of the project.</summary>
+    ListBuckets
 }

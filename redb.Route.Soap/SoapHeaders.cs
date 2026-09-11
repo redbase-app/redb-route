@@ -48,6 +48,21 @@ public static class SoapHeaders
     /// <summary>Whether an inbound WS-Security Body signature verified (bool).</summary>
     public const string SignatureValid = "redbSoap.signatureValid";
 
+    /// <summary>Caller's IP address, from the connection rather than from anything the caller sent.</summary>
+    public const string RemoteAddress = "redbSoap.remoteAddress";
+
+    /// <summary>Caller's source port.</summary>
+    public const string RemotePort = "redbSoap.remotePort";
+
+    /// <summary>Thumbprint of the TLS client certificate, when the handshake presented one (mTLS).</summary>
+    public const string ClientCertThumbprint = "redbSoap.clientCertThumbprint";
+
+    /// <summary>Subject of the TLS client certificate.</summary>
+    public const string ClientCertSubject = "redbSoap.clientCertSubject";
+
+    /// <summary>Expiry of the TLS client certificate, ISO-8601 UTC.</summary>
+    public const string ClientCertNotAfter = "redbSoap.clientCertNotAfter";
+
     /// <summary>Pojo mode: per-message override of the response CLR <see cref="System.Type"/> to deserialize into.</summary>
     public const string ResponseType = "redbSoap.responseType";
 

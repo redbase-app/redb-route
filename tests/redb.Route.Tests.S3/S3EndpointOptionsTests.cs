@@ -118,18 +118,6 @@ public sealed class S3EndpointOptionsTests
     }
 
     [Fact]
-    public void Validate_StreamingUploadZeroBatch_Throws()
-    {
-        var opts = new S3EndpointOptions
-        {
-            AccessKey = "key", SecretKey = "secret",
-            StreamingUploadMode = true, BatchMessageNumber = 0
-        };
-        var act = () => opts.Validate();
-        act.Should().Throw<ArgumentOutOfRangeException>();
-    }
-
-    [Fact]
     public void BindFromUri_ParsesAllCoreProperties()
     {
         var opts = new S3EndpointOptions();

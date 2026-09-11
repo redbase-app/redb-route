@@ -42,9 +42,11 @@ internal sealed class FirebaseStorageProducer : ConnectableProducer
     {
         EnsureStarted();
 
+        // redb.system: house attribute for object storage — OTel defines no db.system value
+        // for GCS/S3, and the S3 sibling already ships "redb.system" (решение В1, Ф11).
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
             $"gcs {_options.Operation}", ActivityKind.Client,
-            "db.system", "gcs",
+            "redb.system", "gcs",
             _endpoint.Uri.NormalizedKey,
             destination: _endpoint.BucketName,
             operation: _options.Operation.ToString());
@@ -65,6 +67,21 @@ internal sealed class FirebaseStorageProducer : ConnectableProducer
                 break;
             case FirebaseStorageOperationType.GetMetadata:
                 await ProcessGetMetadata(exchange, ct).ConfigureAwait(false);
+                break;
+            case FirebaseStorageOperationType.Copy:
+                await ProcessCopy(exchange, ct).ConfigureAwait(false);
+                break;
+            case FirebaseStorageOperationType.CreateDownloadLink:
+                ProcessCreateDownloadLink(exchange);
+                break;
+            case FirebaseStorageOperationType.CreateBucket:
+                await ProcessCreateBucket(exchange, ct).ConfigureAwait(false);
+                break;
+            case FirebaseStorageOperationType.DeleteBucket:
+                await ProcessDeleteBucket(exchange, ct).ConfigureAwait(false);
+                break;
+            case FirebaseStorageOperationType.ListBuckets:
+                await ProcessListBuckets(exchange, ct).ConfigureAwait(false);
                 break;
             default:
                 throw new InvalidOperationException($"Unknown Storage operation: {_options.Operation}");
@@ -102,7 +119,7 @@ internal sealed class FirebaseStorageProducer : ConnectableProducer
             exchange.In.Headers[FirebaseStorageHeaders.Md5Hash] = obj.Md5Hash;
             exchange.In.Headers[FirebaseStorageHeaders.Generation] = obj.Generation;
             exchange.In.Headers[FirebaseStorageHeaders.MediaLink] = obj.MediaLink;
-            _endpoint.RecordMessageOut();
+            // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
         }
         finally
         {
@@ -118,6 +135,45 @@ internal sealed class FirebaseStorageProducer : ConnectableProducer
                          ?? ResolveObjectName(exchange)
                          ?? throw new InvalidOperationException("ObjectName header or option is required for Download");
 
+        if (_options.StreamBody)
+        {
+            // True streaming (Д8): the download is pumped into a Pipe in the background and
+            // the exchange gets the reader side — nothing is buffered whole in memory.
+            // The exchange owns the stream; disposing it (Exchange.DisposeAsync) tears the
+            // pipe down and aborts a still-running download.
+            var meta = await _client!.GetObjectAsync(
+                _endpoint.BucketName, objectName, cancellationToken: ct).ConfigureAwait(false);
+
+            var pipe = new System.IO.Pipelines.Pipe();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var writerStream = pipe.Writer.AsStream(leaveOpen: true);
+                    await using (writerStream.ConfigureAwait(false))
+                    {
+                        await _client.DownloadObjectAsync(
+                                _endpoint.BucketName, objectName, writerStream,
+                                cancellationToken: CancellationToken.None)
+                            .ConfigureAwait(false);
+                    }
+                    await pipe.Writer.CompleteAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // Surfaces to the consumer of the reader stream on its next read.
+                    await pipe.Writer.CompleteAsync(ex).ConfigureAwait(false);
+                }
+            }, CancellationToken.None);
+
+            exchange.Out = new Message(pipe.Reader.AsStream());
+            SetMetadataHeaders(exchange.Out, meta);
+            exchange.Pattern = ExchangePattern.InOut;
+            _endpoint.RecordBytesIn((long)(meta.Size ?? 0UL));
+            _endpoint.RecordMessageIn();
+            return;
+        }
+
         var ms = new MemoryStream();
         try
         {
@@ -128,16 +184,8 @@ internal sealed class FirebaseStorageProducer : ConnectableProducer
                 _endpoint.BucketName, objectName, cancellationToken: ct);
             await Task.WhenAll(downloadTask, metaTask).ConfigureAwait(false);
 
-            if (_options.StreamBody)
-            {
-                ms.Position = 0;
-                exchange.Out = new Message(ms);
-                ms = null!; // Transfer ownership to exchange
-            }
-            else
-            {
-                exchange.Out = new Message(ms.ToArray());
-            }
+            _endpoint.RecordBytesIn(ms.Length);
+            exchange.Out = new Message(ms.ToArray());
 
             SetMetadataHeaders(exchange.Out, metaTask.Result);
             exchange.Pattern = ExchangePattern.InOut;
@@ -145,8 +193,32 @@ internal sealed class FirebaseStorageProducer : ConnectableProducer
         }
         finally
         {
-            ms?.Dispose();
+            ms.Dispose();
         }
+    }
+
+    private async Task ProcessCopy(IExchange exchange, CancellationToken ct)
+    {
+        var sourceName = exchange.In.GetHeader<string>(FirebaseStorageHeaders.ObjectName)
+                         ?? ResolveObjectName(exchange)
+                         ?? throw new InvalidOperationException("ObjectName header or option is required for Copy");
+        var destName = exchange.In.GetHeader<string>(FirebaseStorageHeaders.DestinationObjectName)
+                       ?? _options.DestinationObjectName?.Resolve(exchange)
+                       ?? throw new InvalidOperationException(
+                           "DestinationObjectName header or option is required for Copy");
+        var destBucket = exchange.In.GetHeader<string>(FirebaseStorageHeaders.DestinationBucket)
+                         ?? _options.DestinationBucket
+                         ?? _endpoint.BucketName;
+
+        var copied = await _client!.CopyObjectAsync(
+            _endpoint.BucketName, sourceName, destBucket, destName,
+            cancellationToken: ct).ConfigureAwait(false);
+
+        exchange.In.Headers[FirebaseStorageHeaders.ObjectName] = copied.Name;
+        exchange.In.Headers[FirebaseStorageHeaders.BucketName] = copied.Bucket;
+        exchange.In.Headers[FirebaseStorageHeaders.Generation] = copied.Generation;
+        exchange.In.Headers[FirebaseStorageHeaders.MediaLink] = copied.MediaLink;
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     private async Task ProcessDelete(IExchange exchange, CancellationToken ct)
@@ -157,7 +229,7 @@ internal sealed class FirebaseStorageProducer : ConnectableProducer
 
         await _client!.DeleteObjectAsync(_endpoint.BucketName, objectName,
             cancellationToken: ct).ConfigureAwait(false);
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     private async Task ProcessList(IExchange exchange, CancellationToken ct)
@@ -195,6 +267,60 @@ internal sealed class FirebaseStorageProducer : ConnectableProducer
 
         exchange.Out = new Message(meta.Metadata);
         SetMetadataHeaders(exchange.Out, meta);
+        exchange.Pattern = ExchangePattern.InOut;
+        _endpoint.RecordMessageIn();
+    }
+
+    private void ProcessCreateDownloadLink(IExchange exchange)
+    {
+        var objectName = exchange.In.GetHeader<string>(FirebaseStorageHeaders.ObjectName)
+                         ?? ResolveObjectName(exchange)
+                         ?? throw new InvalidOperationException(
+                             "ObjectName header or option is required for CreateDownloadLink");
+
+        var signer = _endpoint.GetUrlSigner();
+        var url = signer.Sign(_endpoint.BucketName, objectName,
+            TimeSpan.FromMilliseconds(_options.SignedUrlExpiration), HttpMethod.Get);
+
+        exchange.Out = new Message(url);
+        exchange.Out.Headers[FirebaseStorageHeaders.DownloadUrl] = url;
+        exchange.Out.Headers[FirebaseStorageHeaders.ObjectName] = objectName;
+        exchange.Out.Headers[FirebaseStorageHeaders.BucketName] = _endpoint.BucketName;
+        exchange.Pattern = ExchangePattern.InOut;
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
+    }
+
+    private async Task ProcessCreateBucket(IExchange exchange, CancellationToken ct)
+    {
+        var bucket = await _client!.CreateBucketAsync(
+            _endpoint.RequireProjectId(), _endpoint.BucketName,
+            cancellationToken: ct).ConfigureAwait(false);
+
+        exchange.In.Headers[FirebaseStorageHeaders.BucketName] = bucket.Name;
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
+    }
+
+    private async Task ProcessDeleteBucket(IExchange exchange, CancellationToken ct)
+    {
+        await _client!.DeleteBucketAsync(_endpoint.BucketName, cancellationToken: ct)
+            .ConfigureAwait(false);
+
+        exchange.In.Headers[FirebaseStorageHeaders.BucketName] = _endpoint.BucketName;
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
+    }
+
+    private async Task ProcessListBuckets(IExchange exchange, CancellationToken ct)
+    {
+        var names = new List<string>();
+        await foreach (var bucket in _client!.ListBucketsAsync(_endpoint.RequireProjectId())
+                           .ConfigureAwait(false))
+        {
+            ct.ThrowIfCancellationRequested();
+            names.Add(bucket.Name);
+        }
+
+        exchange.Out = new Message(names);
+        exchange.Out.Headers[FirebaseStorageHeaders.BucketCount] = names.Count;
         exchange.Pattern = ExchangePattern.InOut;
         _endpoint.RecordMessageIn();
     }

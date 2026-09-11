@@ -221,4 +221,22 @@ public class FileBuilderTests
         parsed.RawParameters["include"].Should().Be("*.csv");
         parsed.RawParameters["delay"].Should().Be("5000");
     }
+
+    // ── A string is a string ────────────────────────────────────────
+
+    /// <summary>
+    /// The string overloads store the string. A dash used to be read as a subtraction and a
+    /// slash as a division by the expression compiler the value passed through for nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("my-file.txt")]
+    [InlineData("archive/2026/data.txt")]
+    [InlineData("report(1).txt")]
+    public void StringOverloads_KeepAnyStringLiteral(string value)
+    {
+        var act = () => FileDsl.Read("/in").FileName(value).MoveTo(value).Build();
+
+        act.Should().NotThrow();
+        Uri.UnescapeDataString(act()).Should().Contain("fileName=" + value);
+    }
 }

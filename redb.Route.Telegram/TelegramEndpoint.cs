@@ -13,10 +13,12 @@ namespace redb.Route.Telegram;
 ///   "answer"   — producer: answer a callback query (no chatId needed)
 ///   "edit"     — producer: edit an existing message
 ///   "delete"   — producer: delete a message
+///   "download" — producer: fetch a file the user sent (no chatId needed);
+///                the bytes land in Out.Body
 /// </summary>
 public sealed class TelegramEndpoint : EndpointBase<TelegramEndpointOptions>
 {
-    /// <summary>Mode parsed from URI path: receive | send | document | photo.</summary>
+    /// <summary>Mode parsed from URI path: receive | send | document | photo | answer | edit | delete | download.</summary>
     public string Mode { get; }
 
     /// <summary>Creates a Telegram endpoint.</summary>
@@ -32,8 +34,9 @@ public sealed class TelegramEndpoint : EndpointBase<TelegramEndpointOptions>
             "answer"   => "answer",
             "edit"     => "edit",
             "delete"   => "delete",
+            "download" => "download",
             var other  => throw new ArgumentException(
-                $"Unknown Telegram mode '{other}'. Expected: receive | send | document | photo | answer | edit | delete.",
+                $"Unknown Telegram mode '{other}'. Expected: receive | send | document | photo | answer | edit | delete | download.",
                 nameof(uri))
         };
     }

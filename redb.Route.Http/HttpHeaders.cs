@@ -72,6 +72,10 @@ public static class HttpHeaders
         // Hop-by-hop HTTP headers
         "Connection", "Keep-Alive", "Transfer-Encoding", "TE",
         "Trailer", "Upgrade", "Proxy-Authorization", "Proxy-Authenticate",
+        // Host names THIS hop's target. Bridging it verbatim turned every proxy route into an
+        // accidental preserve-host proxy; the explicit preserveHostHeader=true is the one way
+        // to carry the original through (часть B плана KAFKA_HARDENING_AND_OPTIONS_SWEEP_PLAN).
+        "Host",
         // Content headers managed by HttpClient
         ContentType, ContentLength, "Content-Encoding", "Content-Language",
         "Content-Disposition", "Content-Range"

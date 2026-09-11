@@ -733,4 +733,24 @@ public sealed class LdapIntegrationTests
         await deleteProducer.Stop();
         _output.WriteLine("Cleanup: deleted renamed entry");
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  Statistics ownership (audit follow-up)
+    // ═══════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task Statistics_AreOwnedByTheCore_NotSelfRecorded()
+    {
+        // Ownership audit: MessagesOut belongs to the core (ToProcessor for a routed .To(),
+        // the ProducerTemplate for template sends) - self-recording per operation doubled
+        // every routed number across all seven LDAP operations.
+        using var ep = CreateEndpoint(BuildSearchUri(UsersDn, "(objectClass=inetOrgPerson)", "subtree"));
+        var producer = (LdapProducer)ep.CreateProducer();
+
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("search")));
+        await producer.Stop();
+
+        ep.MessagesOut.Should().Be(0, "MessagesOut пишет ядро, самозапись задваивала в маршруте");
+    }
 }

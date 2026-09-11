@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
+using redb.Route.Http;
 
 namespace redb.Route.WebSocket;
 
@@ -13,6 +15,7 @@ namespace redb.Route.WebSocket;
 public class WsComponent : ComponentBase
 {
     private readonly string _scheme;
+    private SharedHttpServerManager? _ownedServerManager;
 
     /// <summary>Creates a WebSocket component with the given scheme.</summary>
     public WsComponent(string scheme = "ws")
@@ -22,6 +25,60 @@ public class WsComponent : ComponentBase
 
     /// <inheritdoc />
     public override string Scheme => _scheme;
+
+    /// <summary>
+    /// Shared Kestrel host. Set by <c>AddRedbRouteWebSocket()</c> so ws endpoints multiplex onto
+    /// the same listener as HTTP, gRPC, SOAP and AS2 (and inherit its trusted-proxy, CORS and TLS
+    /// handling). When the component is constructed by hand — tests, embedded scenarios — it owns
+    /// a private manager instead of failing, which keeps `new WsComponent()` usable on its own.
+    /// </summary>
+    public SharedHttpServerManager? ServerManager { get; set; }
+
+    /// <summary>The manager actually used: the injected one, or a private one created on demand.</summary>
+    internal SharedHttpServerManager EffectiveServerManager
+    {
+        get
+        {
+            if (ServerManager is not null) return ServerManager;
+            return _ownedServerManager ??= new SharedHttpServerManager();
+        }
+    }
+
+    /// <summary>
+    /// Authenticates a handshake before the socket is upgraded. Supplied by the host through
+    /// <c>AddRedbRouteWebSocket(o =&gt; o.Authenticate = ...)</c>; null means every connection is
+    /// accepted, which is the historical behaviour.
+    /// </summary>
+    public Func<Microsoft.AspNetCore.Http.HttpContext, Task<System.Security.Claims.ClaimsPrincipal?>>? Authenticate { get; set; }
+
+    // Running consumers, so a server-mode producer can push into the clients of the consumer
+    // serving the same address. The key is host:port plus path, NOT the endpoint's normalized key:
+    // that one carries the sorted query parameters, and a producer always differs from its
+    // consumer by at least mode=Server.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, WsConsumer> _consumers =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    internal static string ConsumerKey(string host, int port, string path) => $"{host}:{port}{path}";
+
+    internal void RegisterConsumer(WsConsumer consumer) =>
+        _consumers[ConsumerKey(consumer.EndpointOptions.Host, consumer.EndpointOptions.Port, consumer.ConsumerPath)] = consumer;
+
+    internal void UnregisterConsumer(WsConsumer consumer) =>
+        _consumers.TryRemove(ConsumerKey(consumer.EndpointOptions.Host, consumer.EndpointOptions.Port, consumer.ConsumerPath), out _);
+
+    internal WsConsumer? GetConsumer(string host, int port, string path) =>
+        _consumers.GetValueOrDefault(ConsumerKey(host, port, path));
+
+    /// <inheritdoc />
+    public override async ValueTask DisposeAsync()
+    {
+        if (_ownedServerManager is not null)
+        {
+            await _ownedServerManager.DisposeAsync().ConfigureAwait(false);
+            _ownedServerManager = null;
+        }
+        await base.DisposeAsync().ConfigureAwait(false);
+    }
 
     /// <inheritdoc />
     public override IEndpoint CreateEndpoint(EndpointUri uri)
@@ -34,15 +91,11 @@ public class WsComponent : ComponentBase
 
         // Named ConnectionFactory keeps the TLS certificate password out of the route URI.
         // Applied before the wss override so the scheme still wins on TLS.
-        if (!string.IsNullOrEmpty(options.ConnectionFactory) && Context is not null)
+        if (!string.IsNullOrEmpty(options.ConnectionFactory))
         {
-            var factory = Context.GetFromRegistry<WsConnectionFactory>(options.ConnectionFactory);
-            if (factory is not null)
-                factory.ApplyTo(options, uri);
-            else
-                Logger?.LogWarning(
-                    "WebSocket: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
-                    options.ConnectionFactory);
+            // A set-but-unknown name fails loud -- never a silent fallback to URI params (Ф11 Ж-1).
+            var factory = Context.GetRequiredFromRegistry<WsConnectionFactory>(options.ConnectionFactory);
+            factory.ApplyTo(options, uri);
         }
 
         // wss implies SSL
@@ -112,6 +165,24 @@ public class WsEndpoint : EndpointBase<WsEndpointOptions>
 
     /// <summary>The consumer route path (after host:port).</summary>
     public string ConsumerPath => WsComponent.ExtractPath(Uri.Path);
+
+    /// <summary>The shared host this endpoint serves on.</summary>
+    internal SharedHttpServerManager ServerManager => ((WsComponent)Component).EffectiveServerManager;
+
+    /// <summary>
+    /// Declares WebSocket support on the listener BEFORE any consumer starts it. The route context
+    /// starts every endpoint before it starts consumers, and only the consumer calls EnsureStarted,
+    /// so by the time the listener is built the middleware is guaranteed to be requested.
+    /// </summary>
+    public override Task Start(CancellationToken ct = default)
+    {
+        ServerManager.EnableWebSockets(Options.Host, Options.Port,
+            Options.KeepAliveInterval > 0
+                ? TimeSpan.FromMilliseconds(Options.KeepAliveInterval)
+                : null,
+            Options.Ssl, Options.SslCertPath, Options.SslCertPassword);
+        return Task.CompletedTask;
+    }
 
     /// <summary>The endpoint options for external access.</summary>
     internal WsEndpointOptions EndpointOptions => Options;

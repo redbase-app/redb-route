@@ -14,31 +14,27 @@ namespace redb.Route.Tests.Processors;
 /// </summary>
 public class ExceptionAndThreadSafetyTests
 {
-    // ══════════════════════════════════════════════════════════════
-    // LogicalExpression — throws on invalid expression
-    // ══════════════════════════════════════════════════════════════
+    // ==============================================================
+    // Condition strings - fail-fast on an invalid expression
+    // (LogicalExpression was removed with the second parser, 2026-08-28)
+    // ==============================================================
 
     [Fact]
-    public void LogicalExpression_InvalidExpression_ThrowsEvaluationException()
+    public void ConditionString_InvalidExpression_ThrowsAtBuildTime()
     {
-        // An expression referencing a non-existent property in a way that breaks evaluation
-        var expr = new LogicalExpression("~~~INVALID~~~");
-        var exchange = new Exchange(new Message("body"));
+        var act = () => redb.Route.Predicates.PredicateFactory.FromString("~~~INVALID~~~ >");
 
-        var act = () => expr.Evaluate<bool>(exchange);
-
-        act.Should().Throw<ExpressionEvaluationException>()
-            .WithMessage("*~~~INVALID~~~*");
+        act.Should().Throw<ExpressionCompilationException>();
     }
 
     [Fact]
-    public void LogicalExpression_ValidExpression_StillWorks()
+    public void ConditionString_ValidExpression_StillWorks()
     {
-        var expr = new LogicalExpression("property.x > 0");
+        var pred = redb.Route.Predicates.PredicateFactory.FromString("property.x > 0");
         var exchange = new Exchange(new Message("body"));
         exchange.Properties["x"] = 5;
 
-        expr.Evaluate<bool>(exchange).Should().BeTrue();
+        pred.Matches(exchange).Should().BeTrue();
     }
 
     // ══════════════════════════════════════════════════════════════

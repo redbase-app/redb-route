@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text;
 using System.Xml;
 using System.Xml.Serialization;
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Controllers.Attributes;
 
@@ -42,7 +43,10 @@ public sealed class SoapControllerDispatcher : IProcessor
         if (controllerTypes is null || controllerTypes.Length == 0)
             throw new ArgumentException("At least one controller type is required.", nameof(controllerTypes));
         _operations = BuildOperationMap(controllerTypes);
+        _logger = ControllerErrorReporting.CreateLogger<SoapControllerDispatcher>(context);
     }
+
+    private readonly Microsoft.Extensions.Logging.ILogger? _logger;
 
     /// <inheritdoc />
     public async Task Process(IExchange exchange, CancellationToken ct = default)
@@ -59,7 +63,23 @@ public sealed class SoapControllerDispatcher : IProcessor
         controller.Context = _context;
         controller.Exchange = exchange;
 
-        var args = ResolveArgs(entry.Method, exchange, ct);
+        // Binding failures on the CALLER's bytes surface as MalformedRequestException, which the SOAP
+        // consumer maps to a Sender/Client fault carrying this message instead of the Receiver fault
+        // with a generic text that an unhandled exception becomes — the HTTP dispatcher's 400, in SOAP
+        // terms. ResolveArgs draws the line itself: a signature no request could ever bind (a required
+        // simple parameter with no source) is the controller author's error and stays a Receiver fault.
+        object?[] args;
+        try
+        {
+            args = ResolveArgs(entry.Method, exchange, ct, operation);
+        }
+        catch (MalformedRequestException ex)
+        {
+            _logger?.LogWarning(
+                "Malformed SOAP request for {Operation} (exchange {ExchangeId}): {Reason}",
+                operation, exchange.ExchangeId, ex.Message);
+            throw;
+        }
 
         object? result;
         try { result = entry.Method.Invoke(controller, args); }
@@ -88,7 +108,7 @@ public sealed class SoapControllerDispatcher : IProcessor
         exchange.Out.ContentType = "text/xml";
     }
 
-    private static object?[] ResolveArgs(MethodInfo method, IExchange exchange, CancellationToken ct)
+    private static object?[] ResolveArgs(MethodInfo method, IExchange exchange, CancellationToken ct, string operation)
     {
         var parameters = method.GetParameters();
         var values = new object?[parameters.Length];
@@ -97,19 +117,39 @@ public sealed class SoapControllerDispatcher : IProcessor
             var p = parameters[i];
             if (p.ParameterType == typeof(CancellationToken)) { values[i] = ct; continue; }
 
-            // Header binding shares the JSON dispatchers' value conversion.
+            // Header binding shares the JSON dispatchers' value conversion. The header value is the
+            // caller's data: a value that does not convert is THEIR malformed request, not our failure.
             if (p.GetCustomAttribute<FromHeaderAttribute>() is { } h)
             {
                 var raw = exchange.In.getHeader(h.Name);
-                values[i] = raw is not null ? ParameterResolver.ConvertValue(raw, p.ParameterType)
-                    : (p.HasDefaultValue ? p.DefaultValue : ParameterResolver.ConvertValue(null, p.ParameterType));
+                try
+                {
+                    values[i] = raw is not null ? ParameterResolver.ConvertValue(raw, p.ParameterType)
+                        : (p.HasDefaultValue ? p.DefaultValue : ParameterResolver.ConvertValue(null, p.ParameterType));
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new MalformedRequestException(
+                        $"Malformed request for operation '{operation}': header '{h.Name}' does not bind to " +
+                        $"parameter '{p.Name}' ({p.ParameterType.Name}): {ex.Message}", ex);
+                }
                 continue;
             }
 
             // The SOAP Body is XML: [FromBody] or a single complex parameter deserializes from it.
+            // The body is the caller's bytes too — XML that does not parse is their malformed request.
             if (p.GetCustomAttribute<FromBodyAttribute>() is not null || !IsSimpleType(p.ParameterType))
             {
-                values[i] = DeserializeXml(exchange.In.Body, p.ParameterType);
+                try
+                {
+                    values[i] = DeserializeXml(exchange.In.Body, p.ParameterType);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new MalformedRequestException(
+                        $"Malformed request for operation '{operation}': the request body does not " +
+                        $"deserialize to '{p.ParameterType.Name}': {ex.Message}", ex);
+                }
                 continue;
             }
 

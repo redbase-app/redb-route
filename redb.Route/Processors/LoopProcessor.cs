@@ -10,7 +10,7 @@ public class LoopProcessor : IProcessor
 {
     private readonly IProcessor _body;
     private readonly int? _maxIterations;
-    private readonly Func<IExchange, bool>? _whileCondition;
+    private readonly IPredicate? _whileCondition;
     private readonly Func<IExchange, int>? _countFactory;
     private readonly bool _copy;
     private readonly bool _shareScope;
@@ -36,6 +36,16 @@ public class LoopProcessor : IProcessor
     /// <param name="copy">If true, each iteration receives a clone of the original exchange.</param>
     /// <param name="shareScope">If true (default), copy-mode iterations share the parent's DI scope (same DB connection, same TX). If false, each iteration gets its own scope.</param>
     public LoopProcessor(IProcessor body, Func<IExchange, bool> whileCondition, bool copy = false, bool shareScope = true)
+        : this(body, new Predicates.LambdaPredicate(whileCondition ?? throw new ArgumentNullException(nameof(whileCondition))), copy, shareScope)
+    {
+    }
+
+    /// <summary>Creates a predicate-based loop processor whose condition is awaited before each iteration.</summary>
+    /// <param name="body">Processor to execute on each iteration.</param>
+    /// <param name="whileCondition">Condition evaluated before each iteration; the loop continues while it holds.</param>
+    /// <param name="copy">If true, each iteration receives a clone of the original exchange.</param>
+    /// <param name="shareScope">If true (default), copy-mode iterations share the parent's DI scope.</param>
+    public LoopProcessor(IProcessor body, IPredicate whileCondition, bool copy = false, bool shareScope = true)
     {
         _body = body ?? throw new ArgumentNullException(nameof(body));
         _whileCondition = whileCondition ?? throw new ArgumentNullException(nameof(whileCondition));
@@ -87,7 +97,7 @@ public class LoopProcessor : IProcessor
             }
             else
             {
-                while (_whileCondition!(exchange))
+                while (await _whileCondition!.MatchesAsync(exchange).ConfigureAwait(false))
                 {
                     ct.ThrowIfCancellationRequested();
                     if (exchange.IsStopped) break;

@@ -1,5 +1,5 @@
 using FluentAssertions;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Nodes;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Expressions;
@@ -46,7 +46,7 @@ public class JsonPathExpressionTests : IDisposable
     }
 
     private static IExchange CreateJsonExchange(string json = SampleJson)
-        => new Exchange(new Message(JToken.Parse(json)));
+        => new Exchange(new Message(JsonNode.Parse(json)!));
 
     private static IExchange CreatePocoExchange()
         => new Exchange(new Message(new { Name = "Alice", Age = 30, Active = true }));
@@ -99,8 +99,8 @@ public class JsonPathExpressionTests : IDisposable
         var expr = new JsonPathExpression("$");
         var result = expr.Evaluate<object>(CreateJsonExchange());
         result.Should().NotBeNull();
-        // Root returns JObject
-        result.Should().BeAssignableTo<JObject>();
+        // Root returns JsonObject (System.Text.Json)
+        result.Should().BeAssignableTo<JsonObject>();
     }
 
     [Fact]

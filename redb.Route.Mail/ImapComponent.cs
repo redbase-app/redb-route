@@ -228,10 +228,19 @@ public class ImapConsumer : DrainableConsumer
             if (ct.IsCancellationRequested) break;
 
             MimeMessage mime;
-            if (_options.Peek)
-                mime = await folder.GetMessageAsync(uid, ct, progress: null).ConfigureAwait(false);
+            if (!_options.FetchBody)
+            {
+                // fetchBody=false: envelope scanning - only the headers travel from the server.
+                // MimeKit keeps address/subject/date properties in sync with the header list, so
+                // filters, idempotency and the exchange headers all work; the body stays empty.
+                // (A dead option before часть B of the options sweep.)
+                var headerList = await folder.GetHeadersAsync(uid, ct).ConfigureAwait(false);
+                mime = MailMessageHelper.FromHeadersOnly(headerList);
+            }
             else
+            {
                 mime = await folder.GetMessageAsync(uid, ct, progress: null).ConfigureAwait(false);
+            }
 
             // Idempotency check
             if (_seenIds is not null)
@@ -246,7 +255,7 @@ public class ImapConsumer : DrainableConsumer
             // Age filters
             if (!PassesAgeFilter(mime)) continue;
 
-            var exchange = MailMessageHelper.CreateExchange(mime, "imap", folder.FullName, uid, scopeFactory: _endpoint.ScopeFactory);
+            var exchange = MailMessageHelper.CreateExchange(mime, "imap", folder.FullName, uid, scopeFactory: _endpoint.ScopeFactory, options: _options);
 
             if (_options.KeepRawMessage)
                 exchange.Properties["RawMimeMessage"] = mime;

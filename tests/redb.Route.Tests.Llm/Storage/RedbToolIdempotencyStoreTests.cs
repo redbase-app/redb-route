@@ -8,12 +8,12 @@ namespace redb.Route.Tests.Llm.Storage;
 /// store with the in-memory <see cref="InMemoryIdempotentRepository"/> for
 /// dedup; the cached output JSON is the part actually persisted in redb.
 /// </summary>
-[Collection("PostgresPro")]
+[Collection("StoragePro")]
 public sealed class RedbToolIdempotencyStoreTests
 {
-    private readonly PostgresProFixture _fx;
+    private readonly StorageProFixture _fx;
 
-    public RedbToolIdempotencyStoreTests(PostgresProFixture fx) => _fx = fx;
+    public RedbToolIdempotencyStoreTests(StorageProFixture fx) => _fx = fx;
 
     private RedbToolIdempotencyStore NewStore() =>
         new(new InMemoryIdempotentRepository(), _fx.RouteContext);

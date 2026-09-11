@@ -18,6 +18,9 @@ public sealed class ToDefinition : ProcessorDefinition
         _uri = uri;
     }
 
+    /// <summary>The target endpoint URI. Read by AdviceWith weaving (<c>MockEndpoints</c>, <c>WeaveByToUri</c>).</summary>
+    public string Uri => _uri;
+
     /// <inheritdoc/>
     public override IProcessor CreateProcessor(IRouteContext context)
         => new ToProcessor(_uri, context);

@@ -80,22 +80,25 @@ public sealed class S3ConnectionFactory
     /// </summary>
     public IAmazonS3 Build()
     {
-        var config = new AmazonS3Config
-        {
-            RegionEndpoint = RegionEndpoint.GetBySystemName(Region),
-            ForcePathStyle = ForcePathStyle,
-            Timeout = TimeSpan.FromMilliseconds(ConnectionTimeout),
-            MaxConnectionsPerServer = MaxConnections,
-            MaxErrorRetry = RetryCount,
-        };
+        var config = new AmazonS3Config { ForcePathStyle = ForcePathStyle };
 
+        // ServiceURL and RegionEndpoint are mutually exclusive, and in SDK v4 setting one
+        // CLEARS the other — the old "set region, then null it out for ServiceUrl" dance
+        // wiped ServiceURL and Build() with a custom URL always threw
+        // "No RegionEndpoint or ServiceURL configured".
         if (!string.IsNullOrEmpty(ServiceUrl))
         {
             config.ServiceURL = ServiceUrl;
-            // When using custom service URL, region endpoint must be null
-            config.RegionEndpoint = null;
             config.AuthenticationRegion = Region;
         }
+        else
+        {
+            config.RegionEndpoint = RegionEndpoint.GetBySystemName(Region);
+        }
+
+        S3ClientConfigSupport.Apply(config,
+            ConnectionTimeout, SocketTimeout, MaxConnections,
+            RetryCount, RetryMode, TrustAllCertificates);
 
         if (!string.IsNullOrEmpty(ProxyHost) && ProxyPort > 0)
         {
@@ -113,13 +116,10 @@ public sealed class S3ConnectionFactory
     /// </summary>
     internal AmazonS3Config BuildConfig()
     {
-        var config = new AmazonS3Config
-        {
-            ForcePathStyle = ForcePathStyle,
-            Timeout = TimeSpan.FromMilliseconds(ConnectionTimeout),
-            MaxConnectionsPerServer = MaxConnections,
-            MaxErrorRetry = RetryCount,
-        };
+        var config = new AmazonS3Config { ForcePathStyle = ForcePathStyle };
+        S3ClientConfigSupport.Apply(config,
+            ConnectionTimeout, SocketTimeout, MaxConnections,
+            RetryCount, RetryMode, TrustAllCertificates);
 
         if (!string.IsNullOrEmpty(ServiceUrl))
         {
@@ -143,9 +143,8 @@ public sealed class S3ConnectionFactory
     private AWSCredentials ResolveCredentials()
     {
         if (UseDefaultCredentialsProvider)
-#pragma warning disable CS0618 // FallbackCredentialsFactory is deprecated but still functional
-            return FallbackCredentialsFactory.GetCredentials();
-#pragma warning restore CS0618
+            // SDK v4: the non-deprecated default-chain resolver (env -> profile -> IMDS etc.)
+            return Amazon.Runtime.Credentials.DefaultAWSCredentialsIdentityResolver.GetCredentials();
 
         if (!string.IsNullOrEmpty(ProfileName))
         {

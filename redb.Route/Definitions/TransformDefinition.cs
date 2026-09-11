@@ -44,25 +44,3 @@ public sealed class TransformExpressionDefinition : ProcessorDefinition
     public override IProcessor CreateProcessor(IRouteContext context)
         => new ExpressionBodyProcessor(_expression);
 }
-
-/// <summary>
-/// Leaf definition that transforms the exchange body using a string template expression.
-/// </summary>
-public sealed class TransformStringExpressionDefinition : ProcessorDefinition
-{
-    private readonly string _template;
-
-    /// <summary>The template string used to produce the transformed body.</summary>
-    public string Template => _template;
-
-    /// <summary>Creates a transform definition from a string template.</summary>
-    public TransformStringExpressionDefinition(string template)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(template);
-        _template = template;
-    }
-
-    /// <inheritdoc />
-    public override IProcessor CreateProcessor(IRouteContext context)
-        => new StringExpressionBodyProcessor(_template);
-}

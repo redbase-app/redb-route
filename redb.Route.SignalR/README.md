@@ -56,8 +56,18 @@ services.AddRedbRoute(route =>
 
 ### Consumer (Hub Server)
 
-The consumer starts an embedded Kestrel server with a `RedbBridgeHub` — an internal bridge hub
-that converts all SignalR invocations into redb.Route exchanges.
+The consumer serves a `RedbBridgeHub` — an internal bridge hub that converts all SignalR
+invocations into redb.Route exchanges — on the **shared Kestrel host**
+(`redb.Route.Http.Hosting`), the same listener HTTP, gRPC, SOAP and AS2 routes use. So the hub
+and the REST API it pushes for sit on one port, behind one proxy and one TLS termination:
+
+```csharp
+From("http://0.0.0.0:8080/api/orders")   // REST
+From("signalr://0.0.0.0:8080/hub")       // push, same port
+From("signalr://0.0.0.0:8080/admin")     // another hub, same port again
+```
+
+Several hubs on one listener are routed to their own consumer by request path.
 
 Clients call `Invoke("MethodName", arg1, arg2, ...)` on the hub. The hub creates an exchange
 with the method name and arguments, processes it through the route pipeline, and optionally returns
@@ -190,6 +200,29 @@ Set headers on the exchange `Out` (or `In`) to add/remove the current connection
 })
 ```
 
+### Groups do not survive a reconnect
+
+A group membership belongs to a connection, and a reconnect is a new connection with a new id, so
+whatever the client joined is gone. SignalR does not restore it and neither can a backplane —
+nobody remembers who was in what. Two ways to put it back, both from the connector:
+
+```csharp
+// Everyone lands in the same group: declare it, and every connection joins on connect.
+SignalR.Hub("0.0.0.0:5000/chatHub").DefaultGroup("lobby")
+
+// Membership depends on who is connecting: rejoin on the Connected event, which the hub
+// dispatches as an exchange like any other.
+route.AddRoute("rejoin", r => r
+    .From(SignalR.Hub("0.0.0.0:5000/chatHub"))
+    .Filter(Header(SignalRHeaders.Event).isEqualTo("Connected"))
+    .Process(async (e, ct) =>
+    {
+        var user = e.In.GetHeader<string>(SignalRHeaders.UserId);
+        e.Out = new Message(null);
+        e.Out.Headers["redbSignalR.AddToGroup"] = await groups.ResolveFor(user);
+    }));
+```
+
 ---
 
 ## Server-Mode Broadcasting
@@ -211,6 +244,11 @@ route.AddRoute("group-notify", r => r
     .To(SignalR.Broadcast("0.0.0.0:5000/chatHub")
         .Method("Alert")));
 ```
+
+Server mode pushes through the hub of the consumer serving the same address, so **the consumer
+has to be running**: a producer that finds none refuses to start rather than pushing into
+nothing. In a route context that happens by itself — consumers start with the context, producers
+resolve lazily on the first message.
 
 ---
 
@@ -249,11 +287,23 @@ SignalR.Connect("host:5443/hub")
 
 Switches the connection URL scheme to `https://`.
 
+`ssl=true` on a consumer **requires** `sslCertPath`: without it the listener would be plain HTTP
+while the log said `https://`, so the consumer refuses to start instead.
+
+To reach a hub with a self-signed certificate (staging), say so out loud:
+
+```csharp
+SignalR.Connect("staging:5443/hub").Ssl().TrustAllCertificates()
+```
+
+It is never implied by anything else, and it disables certificate validation for the whole
+transport — negotiate, redirects and the WebSocket upgrade alike.
+
 ---
 
 ## Authentication
 
-JWT access token for client-mode producer:
+### Producer (client) — sending a token
 
 ```csharp
 SignalR.Connect("host:5000/hub")
@@ -262,6 +312,52 @@ SignalR.Connect("host:5000/hub")
 ```
 
 Passed via `AccessTokenProvider` on the `HubConnection`.
+
+### Consumer (hub) — validating one
+
+The process hosting a route context is a generic host, not an ASP.NET application, so there is no
+`AddAuthentication`/`AddJwtBearer` to hang the hub off. The host supplies a delegate instead:
+
+```csharp
+services.AddRedbRouteSignalR(o =>
+{
+    o.Authenticate = async ctx =>
+    {
+        // A browser cannot set headers on a WebSocket handshake, so the token normally arrives
+        // in the query string; a service client will use the header. Read both.
+        var header = ctx.Request.Headers.Authorization.ToString();
+        var token = header.StartsWith("Bearer ")
+            ? header["Bearer ".Length..]
+            : ctx.Request.Query["access_token"].ToString();
+
+        return await myJwtValidator.ValidateAsync(token);   // null → 401
+    };
+});
+```
+
+Returning null rejects the handshake with 401 **before** the connection is upgraded. The
+principal's `NameIdentifier` claim becomes SignalR's `UserIdentifier`, which is what makes
+`Clients.User(...)` (`targetType=User`) and the `redbSignalR.UserId` header work.
+
+---
+
+## Scale-out: a backplane is mandatory with more than one replica
+
+A hub keeps its connections and groups in the memory of one process. With two replicas behind a
+load balancer, a broadcast from one reaches only the clients attached to that one — the other
+replica's clients hear nothing.
+
+The connector does not depend on Redis or Azure SignalR; it publishes the seam and the host fills
+it in:
+
+```csharp
+services.AddRedbRouteSignalR(o =>
+    o.ConfigureHubServices(s => s.AddSignalR().AddStackExchangeRedis("redis:6379")));
+```
+
+The container this configures belongs to the shared listener and does **not** see the services of
+the application hosting the route context, so anything the backplane needs must be registered
+here.
 
 ---
 
@@ -276,16 +372,17 @@ Passed via `AccessTokenProvider` on the `HubConnection`.
 | `inOut` | bool | `false` | Request-response exchange pattern |
 | `bridge` | bool | `true` | Route through bridge hub (client mode). `false` = direct method calls |
 | `transport` | enum | `WebSockets` | `WebSockets`, `ServerSentEvents`, `LongPolling` |
-| `messagePack` | bool | `false` | Use MessagePack protocol |
+| `messagePack` | bool | `false` | Register the MessagePack protocol beside JSON (JSON stays the base, so existing clients keep working) |
 | `defaultGroup` | string | `null` | Auto-join group on connect (consumer) |
 | `targetType` | string | `"All"` | Broadcast target: `All`, `Group`, `User`, `Connection` (server mode) |
 | `targetGroup` | string | `null` | Default target group (server mode) |
-| `ssl` | bool | `false` | Enable TLS |
+| `ssl` | bool | `false` | Enable TLS. On a consumer, requires `sslCertPath` |
 | `sslCertPath` | string | `null` | PFX certificate path (consumer) |
 | `sslCertPassword` | string | `null` | PFX certificate password |
+| `trustAllCertificates` | bool | `false` | Producer: accept any server certificate (self-signed staging). Explicit, never implied |
 | `reconnect` | bool | `false` | Auto-reconnect on disconnect (client mode) |
 | `reconnectInterval` | int | `5000` | Reconnect interval in ms |
-| `maxReconnectAttempts` | int | `0` | Max reconnect attempts (0 = unlimited) |
+| `maxReconnectAttempts` | int | `0` | Max reconnect attempts (0 = unlimited: `WithAutomaticReconnect` keeps retrying in the background, which is its normal mode) |
 | `accessToken` | string | `null` | JWT token for client auth |
 
 ---
@@ -334,3 +431,29 @@ services.AddRedbRoute(route =>
 ```
 
 Registers the `SignalRComponent` (scheme `signalr`).
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new SignalRConnectionFactory
+{
+    AccessToken = secrets.HubToken,
+});
+// signalr://https://hub.internal/notify?connectionFactory=prod
+```
+
+## Concurrency limits
+
+SignalR concurrency is connections × invocations, so the levers differ from plain HTTP:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `maxConnections` | `0` (unlimited) | Max hub connections; an over-limit connection is aborted at OnConnected — before the `Connected` lifecycle event reaches the pipeline — and counted in the endpoint's `Rejected` |
+| `maxParallelInvocationsPerClient` | `0` (SignalR default = 1) | SignalR's own per-client invocation parallelism |
+
+With the defaults one client's invocations are serial (SignalR's own default) and the number of
+clients is unbounded; `maxConnections` is the coarse lever, the per-client setting the fine one.

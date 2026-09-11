@@ -4,6 +4,7 @@ using FcmMessage = FirebaseAdmin.Messaging.Message;
 using FcmNotification = FirebaseAdmin.Messaging.Notification;
 using FirebaseAdmin.Messaging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 using redb.Route.Telemetry;
 
@@ -53,16 +54,130 @@ internal sealed class FcmProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
-            $"fcm send {_options.MessageType}", ActivityKind.Producer,
+            $"fcm {_options.Operation}", ActivityKind.Producer,
             "messaging.system", "fcm",
             _endpoint.Uri.NormalizedKey,
-            operation: "send");
+            operation: _options.Operation.ToString().ToLowerInvariant());
 
+        switch (_options.Operation)
+        {
+            case FcmOperationType.Send:
+                await ProcessSend(exchange, activity, ct).ConfigureAwait(false);
+                break;
+            case FcmOperationType.Multicast:
+                await ProcessMulticast(exchange, activity, ct).ConfigureAwait(false);
+                break;
+            case FcmOperationType.SubscribeToTopic:
+            case FcmOperationType.UnsubscribeFromTopic:
+                await ProcessTopicManagement(exchange, activity).ConfigureAwait(false);
+                break;
+            default:
+                throw new InvalidOperationException($"Unknown FCM operation: {_options.Operation}");
+        }
+    }
+
+    private async Task ProcessSend(IExchange exchange, Activity? activity, CancellationToken ct)
+    {
         var message = BuildMessage(exchange);
+
+        // Destination for the span: topic/condition are addresses, a device token is a secret —
+        // it goes into telemetry only as the literal "token".
+        activity?.SetTag("messaging.destination.name", message.Topic ?? message.Condition ?? "token");
+
         var messageId = await _messaging!.SendAsync(message, _options.DryRun, ct).ConfigureAwait(false);
 
         exchange.In.Headers[FcmHeaders.MessageId] = messageId;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
+    }
+
+    private async Task ProcessMulticast(IExchange exchange, Activity? activity, CancellationToken ct)
+    {
+        var tokens = ResolveTokens(exchange);
+        activity?.SetTag("messaging.destination.name", "multicast");
+
+        var message = new MulticastMessage { Tokens = tokens };
+        FillPayload(message, exchange);
+
+        var response = await _messaging!.SendEachForMulticastAsync(message, _options.DryRun, ct)
+            .ConfigureAwait(false);
+
+        exchange.In.Headers[FcmHeaders.SuccessCount] = response.SuccessCount;
+        exchange.In.Headers[FcmHeaders.FailureCount] = response.FailureCount;
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
+    }
+
+    private async Task ProcessTopicManagement(IExchange exchange, Activity? activity)
+    {
+        var topic = exchange.In.GetHeader<string>(FcmHeaders.Topic)
+                    ?? _options.Topic?.Resolve(exchange)
+                    ?? throw new InvalidOperationException(
+                        $"FCM Topic is required for the {_options.Operation} operation");
+        var tokens = ResolveTokens(exchange);
+        activity?.SetTag("messaging.destination.name", topic);
+
+        var response = _options.Operation == FcmOperationType.SubscribeToTopic
+            ? await _messaging!.SubscribeToTopicAsync(tokens, topic).ConfigureAwait(false)
+            : await _messaging!.UnsubscribeFromTopicAsync(tokens, topic).ConfigureAwait(false);
+
+        exchange.In.Headers[FcmHeaders.SuccessCount] = response.SuccessCount;
+        exchange.In.Headers[FcmHeaders.FailureCount] = response.FailureCount;
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
+    }
+
+    /// <summary>Tokens for Multicast/Subscribe/Unsubscribe: Tokens header wins over the body.</summary>
+    private static IReadOnlyList<string> ResolveTokens(IExchange exchange)
+    {
+        var source = exchange.In.Headers.TryGetValue(FcmHeaders.Tokens, out var header) && header is not null
+            ? header
+            : exchange.In.Body;
+
+        return source switch
+        {
+            IReadOnlyList<string> list => list,
+            IEnumerable<string> seq => seq.ToList(),
+            string csv => csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            _ => throw new InvalidOperationException(
+                "Device tokens are required: pass IEnumerable<string> (or a comma-separated string) " +
+                $"as the body or in the '{FcmHeaders.Tokens}' header."),
+        };
+    }
+
+    /// <summary>
+    /// Payload for a multicast message. Unlike <see cref="BuildMessage"/> there are no
+    /// body-fallbacks: the exchange body carries the TOKENS, not the notification text.
+    /// </summary>
+    private void FillPayload(MulticastMessage message, IExchange exchange)
+    {
+        if (!_options.DataOnly)
+        {
+            var title = exchange.In.GetHeader<string>(FcmHeaders.Title)
+                        ?? _options.Title?.Resolve(exchange);
+            var body = exchange.In.GetHeader<string>(FcmHeaders.Body)
+                       ?? _options.Body?.Resolve(exchange);
+
+            if (title is not null || body is not null)
+            {
+                message.Notification = new FcmNotification
+                {
+                    Title = title,
+                    Body = body,
+                    ImageUrl = exchange.In.GetHeader<string>(FcmHeaders.ImageUrl) ?? _options.ImageUrl
+                };
+            }
+        }
+
+        var data = new Dictionary<string, string>();
+        foreach (var (key, value) in exchange.In.Headers)
+        {
+            if (key.StartsWith(FcmHeaders.DataPrefix, StringComparison.Ordinal) && value is not null)
+                data[key[FcmHeaders.DataPrefix.Length..]] = value.ToString()!;
+        }
+        if (data.Count > 0)
+            message.Data = data;
+
+        message.Android = BuildAndroidConfig();
+        message.Apns = BuildApnsConfig();
+        message.Webpush = BuildWebpushConfig();
     }
 
     private FcmMessage BuildMessage(IExchange exchange)
@@ -104,7 +219,7 @@ internal sealed class FcmProducer : ConnectableProducer
                 {
                     Title = title,
                     Body = body,
-                    ImageUrl = _options.ImageUrl
+                    ImageUrl = exchange.In.GetHeader<string>(FcmHeaders.ImageUrl) ?? _options.ImageUrl
                 };
             }
         }
@@ -208,13 +323,10 @@ internal sealed class FcmProducer : ConnectableProducer
 
     private IFirebaseCredentialProvider ResolveCredentialProvider()
     {
-        // 1. Try ConnectionFactory from registry
+        // 1. ConnectionFactory from registry — a set-but-unknown name fails loud (Ф11 Ж-1).
         if (!string.IsNullOrEmpty(_options.ConnectionFactory))
-        {
-            var fromRegistry = _endpoint.FcmComponent.Context?
-                .GetFromRegistry<IFirebaseCredentialProvider>(_options.ConnectionFactory);
-            if (fromRegistry is not null) return fromRegistry;
-        }
+            return _endpoint.FcmComponent.Context
+                .GetRequiredFromRegistry<IFirebaseCredentialProvider>(_options.ConnectionFactory);
 
         // 2. Fall back to component-level provider
         return _endpoint.FcmComponent.CredentialProvider

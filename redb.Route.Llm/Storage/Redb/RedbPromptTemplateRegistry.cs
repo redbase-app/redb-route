@@ -1,8 +1,10 @@
 using redb.Core;
+using redb.Core.Exceptions;
 using redb.Core.Models.Entities;
 using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Storage.Redb.Schemas;
+using redb.Route.RedbCore;
 using redb.Route.RedbCore.Extensions;
 
 namespace redb.Route.Llm.Storage.Redb;
@@ -10,8 +12,10 @@ namespace redb.Route.Llm.Storage.Redb;
 /// <summary>
 /// REDB-backed <see cref="IPromptTemplateRegistry"/>. One
 /// <see cref="PromptTemplateProps"/> row per (name, version); the composite
-/// business key <c>"{name}@{version}"</c> lives on the indexed
-/// <c>_objects.value_string</c> column.
+/// business key <c>"{name}@{version}"</c> lives in <c>_objects.value_string</c>
+/// (partial index on PostgreSQL/SQLite; MSSQL cannot index NVARCHAR(MAX)) and,
+/// normalized, in <c>_objects._value_unique</c> — a version registers exactly
+/// once, concurrent registrations of one version resolve first-wins.
 /// <para>
 /// "Latest" lookup is server-side: filter by the value_string prefix
 /// <c>"{name}@"</c> and pick the most recently created row.
@@ -58,7 +62,7 @@ public sealed class RedbPromptTemplateRegistry : IPromptTemplateRegistry
         {
             var key = BuildKey(name, version);
             var row = await redb.Query<PromptTemplateProps>()
-                .WhereRedb(o => o.ValueString == key)
+                .WhereRedb(o => o.ValueUnique == RedbUniqueKey.Normalize(key))
                 .FirstOrDefaultAsync()
                 .ConfigureAwait(false);
             return row is null ? null : Materialize(row);
@@ -87,15 +91,21 @@ public sealed class RedbPromptTemplateRegistry : IPromptTemplateRegistry
 
         var key = BuildKey(template.Name, template.Version);
         var existing = await redb.Query<PromptTemplateProps>()
-            .WhereRedb(o => o.ValueString == key)
+            .WhereRedb(o => o.ValueUnique == RedbUniqueKey.Normalize(key))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
 
         if (existing is null)
         {
+            // The (name, version) key rides in _value_unique: two concurrent
+            // registrations of one version race to a single row. First wins — the
+            // loser's body is dropped, because a version is immutable provenance
+            // (MessageProps pins "which exact prompt drove this answer" to it) and
+            // silently swapping the winner's body would corrupt that audit trail.
             var row = new RedbObject<PromptTemplateProps>
             {
                 value_string = key,
+                ValueUnique = RedbUniqueKey.Normalize(key),
                 Props = new PromptTemplateProps
                 {
                     Name = template.Name,
@@ -105,16 +115,31 @@ public sealed class RedbPromptTemplateRegistry : IPromptTemplateRegistry
                     CreatedAtUtc = new DateTimeOffset(DateTime.SpecifyKind(template.CreatedAtUtc, DateTimeKind.Utc))
                 }
             };
-            await redb.SaveAsync(row).ConfigureAwait(false);
+            try
+            {
+                await redb.SaveAsync(row).ConfigureAwait(false);
+            }
+            catch (RedbUniqueViolationException)
+            {
+                // The version is already registered — first wins.
+            }
         }
-        else
+        else if (string.Equals(existing.value_string, key, StringComparison.Ordinal))
         {
+            // The Р6 upsert contract: re-setting the version you own updates it in place.
             existing.Props.Body = template.Body;
             existing.Props.Description = template.Description;
             // The framework does not auto-stamp date_modify; bump it ourselves
             // so list/latest queries see the real update time.
             existing.date_modify = DateTimeOffset.UtcNow;
             await redb.SaveAsync(existing).ConfigureAwait(false);
+        }
+        else
+        {
+            // The unique key is owned by a row whose raw string diverged — a race winner the
+            // string lookup used to miss (it then hit the collision path below and dropped the
+            // body). Same doctrine on the new access path: first wins, the incoming body is
+            // dropped, because a version is immutable provenance.
         }
     }
 

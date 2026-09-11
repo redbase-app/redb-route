@@ -23,6 +23,19 @@ internal static class SftpClientFactory
                 "No authentication method configured. Provide Password or PrivateKeyPath.");
 
         var connInfo = BuildConnectionInfo(options, authMethods);
+
+        // compression=true: prefer zlib@openssh.com in the negotiation, keeping the remaining
+        // algorithms as fallback so a server without compression still connects. Declared and
+        // documented from day one, wired to nothing until часть B of the options sweep.
+        if (options.Compression)
+        {
+            var existing = connInfo.CompressionAlgorithms.Where(kv => kv.Key != "zlib@openssh.com").ToList();
+            connInfo.CompressionAlgorithms.Clear();
+            connInfo.CompressionAlgorithms["zlib@openssh.com"] = () => new Renci.SshNet.Compression.ZlibOpenSsh();
+            foreach (var kv in existing)
+                connInfo.CompressionAlgorithms[kv.Key] = kv.Value;
+        }
+
         var client = new SftpClient(connInfo);
 
         client.OperationTimeout = TimeSpan.FromMilliseconds(options.OperationTimeout);

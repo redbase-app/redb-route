@@ -272,6 +272,9 @@ public sealed class SqsIntegrationTests
             received.Should().NotBeEmpty("the SNS message must fan out to the subscribed SQS queue");
             // SNS delivers a JSON envelope; the payload is inside "Message".
             received.First().Should().Contain("via-sns");
+            // Ownership audit: a hand-built publish moves nothing into MessagesOut - the core
+            // (ToProcessor / the template) owns it; self-recording doubled routed sends.
+            snsEndpoint.MessagesOut.Should().Be(0, "MessagesOut пишет ядро");
             await producer.Stop();
         }
         finally { await consumer.Stop(); }
@@ -416,6 +419,41 @@ public sealed class SqsIntegrationTests
             await Task.WhenAny(done.Task, Task.Delay(15_000));
             traceparent.Should().NotBeNullOrEmpty(
                 "the producer injects W3C traceparent as a message attribute so the trace continues across SQS");
+        }
+        finally { await consumer.Stop(); }
+    }
+
+    // ── Statistics ownership (audit follow-up) ──
+
+    [Fact]
+    public async Task Statistics_AreOwnedByTheCore_NotSelfRecorded()
+    {
+        // Ownership audit: MessagesOut belongs to the core (ToProcessor / the template) and
+        // MessagesIn to the core's StatisticsProcessor around a routed From(). A hand-built
+        // producer/consumer pair therefore moves NOTHING into those counters - self-recording
+        // here used to double every routed number.
+        var queue = UniqueName("own");
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var consumerEndpoint = MakeEndpoint(Q(queue));
+        var consumer = consumerEndpoint.CreateConsumer(Recorder(_ =>
+        {
+            done.TrySetResult();
+            return Task.CompletedTask;
+        }));
+        await consumer.Start();
+        try
+        {
+            var producerEndpoint = MakeEndpoint(Q(queue));
+            var producer = producerEndpoint.CreateProducer();
+            await producer.Start();
+            await producer.Process(new Exchange(new Message("owned")));
+            await Task.WhenAny(done.Task, Task.Delay(15_000));
+            done.Task.IsCompleted.Should().BeTrue("сообщение должно дойти");
+            await producer.Stop();
+
+            producerEndpoint.MessagesOut.Should().Be(0, "MessagesOut пишет ядро, самозапись задваивала в маршруте");
+            consumerEndpoint.MessagesIn.Should().Be(0, "MessagesIn пишет StatisticsProcessor вокруг From()");
         }
         finally { await consumer.Stop(); }
     }

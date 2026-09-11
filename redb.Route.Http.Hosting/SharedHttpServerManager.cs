@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Security;
+using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -9,6 +10,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Routing.Template;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace redb.Route.Http;
@@ -22,6 +24,31 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, ServerEntry> _servers = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
+    private readonly HttpHostingOptions _options;
+
+    /// <summary>Key under which the pre-resolution socket address is kept in <c>HttpContext.Items</c>.</summary>
+    public const string OriginalRemoteAddressItem = "redb.OriginalRemoteAddress";
+
+    /// <summary>Key under which the pre-resolution scheme is kept in <c>HttpContext.Items</c>.</summary>
+    public const string OriginalSchemeItem = "redb.OriginalScheme";
+
+    /// <summary>Creates a manager with default options: no trusted proxies, forwarded headers ignored.</summary>
+    public SharedHttpServerManager() : this(null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a manager with explicit host options. Under DI the options arrive through
+    /// <c>AddRedbRouteHttpHosting(configure)</c>; a host that constructs the manager by hand
+    /// passes them here.
+    /// </summary>
+    public SharedHttpServerManager(HttpHostingOptions? options)
+    {
+        _options = options ?? new HttpHostingOptions();
+    }
+
+    /// <summary>The process-wide host options this manager applies to every listener it opens.</summary>
+    public HttpHostingOptions Options => _options;
 
     /// <summary>Number of active servers.</summary>
     public int ServerCount => _servers.Count;
@@ -49,6 +76,9 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
     /// handshake, so it is per listener and must agree across routes on the same port.</param>
     /// <param name="clientCertificateValidation">Extra check on a presented client certificate, applied
     /// on top of Kestrel's chain validation (e.g. a thumbprint allow-list).</param>
+    /// <param name="concurrencyLimit">Optional per-registration admission limit: caps concurrent
+    /// executions of <paramref name="handler"/> and sheds the overflow with a status reply before
+    /// any pipeline work. Strictly per-route — neighbors on the same listener are unaffected.</param>
     /// <returns>A registration handle that can be used to unregister the route.</returns>
     public RouteRegistration RegisterRoute(
         string host,
@@ -63,8 +93,10 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
         long maxRequestBodySize = 0,
         HttpProtocol protocol = HttpProtocol.Http1And2,
         ClientCertificateMode? clientCertificateMode = null,
-        Func<X509Certificate2, X509Chain?, SslPolicyErrors, bool>? clientCertificateValidation = null)
+        Func<X509Certificate2, X509Chain?, SslPolicyErrors, bool>? clientCertificateValidation = null,
+        ConcurrencyLimitOptions? concurrencyLimit = null)
     {
+        concurrencyLimit?.Validate();
         var key = BuildKey(host, port);
 
         lock (_lock)
@@ -94,8 +126,21 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
                     $"'{entry.ClientCertificateMode?.ToString() ?? "none"}'. Cannot register a route with " +
                     $"'{clientCertificateMode?.ToString() ?? "none"}' on the same port.");
 
-            var registration = new RouteRegistration(key, pathTemplate, methods, handler, corsOptions);
+            // Admission limit is strictly per-registration: several routes share one listener, and a
+            // saturated neighbor must not eat this route's budget (nor the other way around).
+            System.Threading.RateLimiting.ConcurrencyLimiter? limiter = null;
+            if (concurrencyLimit is not null)
+            {
+                limiter = concurrencyLimit.CreateLimiter();
+                handler = WrapWithConcurrencyLimit(handler, concurrencyLimit, limiter);
+            }
+
+            var registration = new RouteRegistration(key, pathTemplate, methods, handler, corsOptions)
+            {
+                Limiter = limiter,
+            };
             entry.Routes.Add(registration);
+            entry.InvalidateRouteTable();
 
             // Track whether the server needs to install the CORS dispatch middleware.
             // Once any route registers with CORS, the middleware is enabled for the lifetime
@@ -104,6 +149,122 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
                 entry.CorsEnabled = true;
 
             return registration;
+        }
+    }
+
+    /// <summary>
+    /// Declares that the listener on <paramref name="host"/>:<paramref name="port"/> serves WebSocket
+    /// upgrades, so <c>UseWebSockets()</c> is installed when the server is built. Opt-in per listener:
+    /// a listener nobody asked for WebSockets on keeps the pipeline the HTTP-only transports have
+    /// always had, byte for byte.
+    /// <para>
+    /// Must be called BEFORE the server starts. Middleware cannot be added to a built
+    /// <see cref="WebApplication"/>, and silently ignoring the call would produce a listener that
+    /// rejects every upgrade with no explanation. In a route context this is satisfied naturally:
+    /// endpoints start before consumers, and only a consumer calls <see cref="EnsureStarted"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="host">Listener host.</param>
+    /// <param name="port">Listener port.</param>
+    /// <param name="keepAliveInterval">
+    /// Ping interval for idle connections. It is a property of the listener, not of a route, so the
+    /// first non-null value wins and later ones are ignored.
+    /// </param>
+    public void EnableWebSockets(string host, int port, TimeSpan? keepAliveInterval = null,
+        bool ssl = false, string? sslCertPath = null, string? sslCertPassword = null)
+    {
+        var key = BuildKey(host, port);
+
+        lock (_lock)
+        {
+            // The TLS settings travel with the call because this may be the first touch of the
+            // listener: an entry created as plain HTTP here would then collide with the wss route
+            // the consumer registers a moment later.
+            var entry = _servers.GetOrAdd(key, _ => new ServerEntry(host, port, ssl, sslCertPath, sslCertPassword,
+                0, HttpProtocol.Http1And2, null, null));
+
+            // Idempotent: asking again for something the listener already has is a no-op, so a
+            // consumer may repeat the call its endpoint already made. Only a listener that was
+            // built WITHOUT the middleware is a real problem, and that one fails loud.
+            if (entry.IsStarted)
+            {
+                if (entry.WebSocketsEnabled) return;
+
+                throw new InvalidOperationException(
+                    $"Server on {host}:{port} is already started without WebSocket support. " +
+                    "Enable it before the listener starts — from the endpoint's Start, which the route " +
+                    "context runs before any consumer.");
+            }
+
+            entry.WebSocketsEnabled = true;
+            entry.WebSocketKeepAlive ??= keepAliveInterval;
+        }
+    }
+
+    /// <summary>
+    /// Registers configuration applied when the listener's <see cref="WebApplication"/> is built:
+    /// <paramref name="services"/> before <c>Build()</c>, <paramref name="endpoints"/> after it and
+    /// before the catch-all route. This is what lets a transport bring its own framework pieces
+    /// (SignalR hubs, authentication middleware, a backplane) without this package taking a
+    /// dependency on any of them.
+    /// <para>
+    /// Note that the shared host builds its own service container: it does not see the services of
+    /// the application that hosts the route context, so everything a configurator needs must be
+    /// registered by that configurator.
+    /// </para>
+    /// <para>Must be called BEFORE the server starts, for the same reason as <see cref="EnableWebSockets"/>.</para>
+    /// </summary>
+    public ServerConfiguratorRegistration RegisterServerConfigurator(
+        string host,
+        int port,
+        Action<IServiceCollection>? services = null,
+        Action<WebApplication>? endpoints = null,
+        bool ssl = false,
+        string? sslCertPath = null,
+        string? sslCertPassword = null)
+    {
+        if (services is null && endpoints is null)
+            throw new ArgumentException("At least one of services/endpoints must be supplied.");
+
+        var key = BuildKey(host, port);
+
+        lock (_lock)
+        {
+            // A transport that maps its own endpoints (a SignalR hub) may never call RegisterRoute,
+            // so this can be the only place its TLS settings ever reach the listener.
+            var entry = _servers.GetOrAdd(key, _ => new ServerEntry(host, port, ssl, sslCertPath, sslCertPassword,
+                0, HttpProtocol.Http1And2, null, null));
+
+            if (ssl && !entry.Ssl)
+                throw new InvalidOperationException(
+                    $"Server on {host}:{port} is already registered as HTTP. Cannot add an HTTPS hub to the same port.");
+
+            if (entry.IsStarted)
+                throw new InvalidOperationException(
+                    $"Server on {host}:{port} is already started — configurators must be registered before it starts. " +
+                    "Register them from the endpoint's Start (which runs before consumers).");
+
+            var registration = new ServerConfiguratorRegistration(host, port, services, endpoints);
+            entry.Configurators.Add(registration);
+            return registration;
+        }
+    }
+
+    /// <summary>
+    /// Removes a configurator, so a transport that maps itself onto the listener can leave it the
+    /// way an HTTP consumer leaves by unregistering its route. The listener keeps running until
+    /// the last route AND the last configurator are gone.
+    /// </summary>
+    public void UnregisterServerConfigurator(ServerConfiguratorRegistration registration)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+
+        var key = BuildKey(registration.Host, registration.Port);
+
+        lock (_lock)
+        {
+            if (_servers.TryGetValue(key, out var entry))
+                entry.Configurators.Remove(registration);
         }
     }
 
@@ -117,8 +278,39 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
             if (_servers.TryGetValue(registration.ServerKey, out var entry))
             {
                 entry.Routes.Remove(registration);
+                entry.InvalidateRouteTable();
             }
         }
+
+        // Outside the lock: releases queued waiters (their leases come back non-acquired → reject).
+        registration.Limiter?.Dispose();
+    }
+
+    /// <summary>
+    /// Wraps a route handler with the admission limit: acquire a permit (waiting in the FIFO queue
+    /// when one is configured), or shed the request with the configured status + Retry-After before
+    /// any pipeline work. The wait is bound to <c>RequestAborted</c>, so a client that gives up
+    /// leaves the queue instead of holding a slot.
+    /// </summary>
+    private static Func<HttpContext, Task> WrapWithConcurrencyLimit(
+        Func<HttpContext, Task> inner,
+        ConcurrencyLimitOptions limit,
+        System.Threading.RateLimiting.ConcurrencyLimiter limiter)
+    {
+        return async ctx =>
+        {
+            using var lease = await limiter.AcquireAsync(1, ctx.RequestAborted).ConfigureAwait(false);
+            if (!lease.IsAcquired)
+            {
+                limit.OnRejected?.Invoke();
+                ctx.Response.StatusCode = limit.RejectStatusCode;
+                if (limit.RetryAfterSeconds > 0)
+                    ctx.Response.Headers.RetryAfter = limit.RetryAfterSeconds.ToString();
+                return;
+            }
+
+            await inner(ctx).ConfigureAwait(false);
+        };
     }
 
     /// <summary>
@@ -155,7 +347,9 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
             if (!_servers.TryGetValue(key, out entry))
                 return;
 
-            if (entry.Routes.Count > 0)
+            // A hub occupies the listener without registering a route, so both have to be empty
+            // before the socket can go away under a transport that is still serving.
+            if (entry.Routes.Count > 0 || entry.Configurators.Count > 0)
                 return;
 
             _servers.TryRemove(key, out _);
@@ -191,9 +385,74 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
 
     // ── Private ──
 
+    /// <summary>
+    /// Turns the host of an endpoint URI into an address Kestrel can bind. Plain
+    /// <c>IPAddress.Parse</c> threw a bare <c>FormatException</c> on any name; a DNS name is
+    /// resolved here, and a name that resolves to nothing fails with a message that names the
+    /// host. <c>localhost</c> never reaches this method — it has its own Kestrel helper.
+    /// </summary>
+    private static IPAddress ResolveBindAddress(string host)
+    {
+        if (IPAddress.TryParse(host, out var parsed))
+            return parsed;
+
+        if (string.IsNullOrWhiteSpace(host) || host == "*" || host == "+")
+            return IPAddress.Any;
+
+        try
+        {
+            var resolved = Dns.GetHostAddresses(host);
+            if (resolved.Length > 0)
+                return resolved[0];
+        }
+        catch (Exception ex) when (ex is SocketException or ArgumentException)
+        {
+            throw new ArgumentException(
+                $"Cannot bind a listener to host '{host}': it is neither an IP address nor a resolvable name. " +
+                "Use an address the machine owns, 0.0.0.0 for every interface, or localhost.", ex);
+        }
+
+        throw new ArgumentException(
+            $"Cannot bind a listener to host '{host}': the name resolved to no addresses.");
+    }
+
+    /// <summary>
+    /// Where a TLS listener's certificate comes from: the endpoint, then the host-wide default.
+    /// Resolved before the host is built, so a misconfiguration fails at the bind with a message
+    /// about the certificate rather than somewhere inside Kestrel's startup.
+    /// </summary>
+    private (System.Security.Cryptography.X509Certificates.X509Certificate2? Certificate, string? Path, string? Password)
+        ResolveServerCertificate(ServerEntry entry)
+    {
+        if (!entry.Ssl)
+            return (null, null, null);
+
+        if (!string.IsNullOrEmpty(entry.SslCertPath))
+            return (null, entry.SslCertPath, entry.SslCertPassword);
+
+        if (_options.Tls.DefaultCertificate is { } shared)
+            return (shared, null, null);
+
+        if (!string.IsNullOrEmpty(_options.Tls.DefaultCertificatePath))
+            return (null, _options.Tls.DefaultCertificatePath, _options.Tls.DefaultCertificatePassword);
+
+        // Historically this fell through to a PLAINTEXT listener while GetBaseUrl and every log
+        // line reported https://. Refusing to bind is what nginx, httpd, Jetty, Spring Boot and
+        // Kestrel's own UseHttps() all do: TLS asked for and no certificate is a configuration
+        // error, never a downgrade.
+        throw new InvalidOperationException(
+            $"Listener on {entry.Host}:{entry.Port} is configured for TLS but no server certificate could be " +
+            "resolved. Set it on the endpoint (sslCertPath/sslCertPassword, or a named connectionFactory " +
+            "carrying them), or give the host a default: " +
+            "AddRedbRouteHttpHosting(o => o.Tls.DefaultCertificatePath = ...). Refusing to bind, because " +
+            "without a certificate the listener would serve plaintext while reporting https://.");
+    }
+
     private async Task StartServer(ServerEntry entry, CancellationToken ct)
     {
         if (entry.IsStarted) return;
+
+        var certificate = ResolveServerCertificate(entry);
 
         var builder = WebApplication.CreateSlimBuilder();
 
@@ -209,38 +468,66 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
                 _ => Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1AndHttp2
             };
 
-            if (entry.Ssl && !string.IsNullOrEmpty(entry.SslCertPath))
+            void Configure(ListenOptions listenOptions)
             {
-                kestrel.Listen(IPAddress.Parse(entry.Host), entry.Port, listenOptions =>
-                {
-                    listenOptions.Protocols = protocols;
-                    listenOptions.UseHttps(entry.SslCertPath!, entry.SslCertPassword, httpsOptions =>
-                    {
-                        if (entry.ClientCertificateMode is { } mode)
-                            httpsOptions.ClientCertificateMode = mode;
+                listenOptions.Protocols = protocols;
 
-                        if (entry.ClientCertificateValidation is { } validate)
-                            httpsOptions.ClientCertificateValidation = (cert, chain, errors) => validate(cert, chain, errors);
-                    });
-                });
-            }
-            else
-            {
-                kestrel.Listen(IPAddress.Parse(entry.Host), entry.Port, listenOptions =>
+                if (!entry.Ssl) return;
+
+                void ConfigureHttps(HttpsConnectionAdapterOptions httpsOptions)
                 {
-                    listenOptions.Protocols = protocols;
-                });
+                    if (entry.ClientCertificateMode is { } mode)
+                        httpsOptions.ClientCertificateMode = mode;
+
+                    if (entry.ClientCertificateValidation is { } validate)
+                        httpsOptions.ClientCertificateValidation = (cert, chain, errors) => validate(cert, chain, errors);
+                }
+
+                if (certificate.Certificate is { } instance)
+                    listenOptions.UseHttps(instance, ConfigureHttps);
+                else
+                    listenOptions.UseHttps(certificate.Path!, certificate.Password, ConfigureHttps);
             }
+
+            // "localhost" goes through Kestrel's own helper, which binds BOTH loopbacks: picking one
+            // IP for it would leave a client that resolved localhost to the other one unable to
+            // connect. Everything else is an address, or a name resolved to one.
+            if (string.Equals(entry.Host, "localhost", StringComparison.OrdinalIgnoreCase))
+                kestrel.ListenLocalhost(entry.Port, Configure);
+            else
+                kestrel.Listen(ResolveBindAddress(entry.Host), entry.Port, Configure);
 
             if (entry.MaxRequestBodySize > 0)
                 kestrel.Limits.MaxRequestBodySize = entry.MaxRequestBodySize;
             else
                 kestrel.Limits.MaxRequestBodySize = null;
+
+            // Host-wide connection backstop (HostConnectionLimits): Kestrel's own defaults are
+            // unlimited; leave them untouched unless the deployment set a ceiling.
+            if (_options.Limits.MaxConcurrentConnections is { } maxConn)
+                kestrel.Limits.MaxConcurrentConnections = maxConn;
+            if (_options.Limits.MaxConcurrentUpgradedConnections is { } maxUpgraded)
+                kestrel.Limits.MaxConcurrentUpgradedConnections = maxUpgraded;
         });
 
         builder.Logging.ClearProviders();
 
+        // Transport-supplied service registrations (SignalR hubs, authentication, a backplane).
+        // Applied before Build() because that is the only moment a container can still be changed.
+        foreach (var registration in entry.Configurators.ToArray())
+            registration.Services?.Invoke(builder.Services);
+
         var app = builder.Build();
+
+        // Trusted-proxy resolution. Installed first, before anything reads the connection: every
+        // consumer on this listener (Http, Soap, As2, Grpc, the Tsak management API) takes the client
+        // address from Connection.RemoteIpAddress and the URL scheme from Request.Scheme, so rewriting
+        // them here is the one place that covers all of them. Not installed at all when no proxy is
+        // trusted, which keeps the default host byte-for-byte what it was.
+        if (_options.TrustedProxies.IsEnabled)
+        {
+            app.Use(TrustedProxyMiddleware(_options.TrustedProxies));
+        }
 
         // Per-route CORS dispatch middleware.
         // Installed once per server. For each request it locates the matching route (path-only,
@@ -250,6 +537,23 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
         {
             app.Use(CorsDispatchMiddleware(entry));
         }
+
+        // WebSocket upgrades, opt-in per listener (see EnableWebSockets). Installed after the
+        // proxy/CORS middleware so an upgrade request is seen with its real client address, and
+        // before the catch-all so a handler can accept the socket.
+        if (entry.WebSocketsEnabled)
+        {
+            var wsOptions = new WebSocketOptions();
+            if (entry.WebSocketKeepAlive is { } keepAlive)
+                wsOptions.KeepAliveInterval = keepAlive;
+            app.UseWebSockets(wsOptions);
+        }
+
+        // Transport-supplied endpoints (SignalR MapHub and friends). Registered before the
+        // catch-all: the catch-all matches every path, and relying on route precedence to sort
+        // that out is not something to leave implicit.
+        foreach (var registration in entry.Configurators.ToArray())
+            registration.Endpoints?.Invoke(app);
 
         // Single catch-all handler — our RouteTable dispatches dynamically
         app.Map("/{**path}", (HttpContext ctx) => HandleCatchAll(entry, ctx));
@@ -289,6 +593,43 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
         }
 
         await match.Registration.Handler(ctx).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Builds the trusted-proxy delegate for one listener. It hands the socket peer and the two
+    /// forwarded headers to <see cref="ForwardedHeaderResolver"/> and writes the outcome back into
+    /// the connection and the request, keeping the originals in <c>HttpContext.Items</c> under
+    /// <see cref="OriginalRemoteAddressItem"/> / <see cref="OriginalSchemeItem"/> for diagnostics.
+    /// All the policy lives in the resolver; this is the ten lines that know about Kestrel.
+    /// </summary>
+    private static Func<HttpContext, Func<Task>, Task> TrustedProxyMiddleware(TrustedProxyOptions trust)
+    {
+        return (ctx, next) =>
+        {
+            var peer = ctx.Connection.RemoteIpAddress;
+            var headers = ctx.Request.Headers;
+
+            var resolved = ForwardedHeaderResolver.Resolve(
+                peer,
+                headers[ForwardedHeaderResolver.ForwardedFor].ToString(),
+                headers[ForwardedHeaderResolver.ForwardedProto].ToString(),
+                trust);
+
+            if (resolved.AddressApplied && resolved.ClientAddress is not null)
+            {
+                ctx.Items[OriginalRemoteAddressItem] = peer;
+                ctx.Connection.RemoteIpAddress = resolved.ClientAddress;
+            }
+
+            if (trust.ForwardScheme && resolved.Scheme is not null &&
+                !string.Equals(resolved.Scheme, ctx.Request.Scheme, StringComparison.OrdinalIgnoreCase))
+            {
+                ctx.Items[OriginalSchemeItem] = ctx.Request.Scheme;
+                ctx.Request.Scheme = resolved.Scheme;
+            }
+
+            return next();
+        };
     }
 
     /// <summary>
@@ -456,8 +797,32 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
         /// </summary>
         public bool CorsEnabled { get; set; }
 
+        /// <summary>
+        /// True when a transport on this listener needs WebSocket upgrades (ws, wss, SignalR).
+        /// Opt-in per listener: without it the pipeline stays exactly what the HTTP-only
+        /// transports have always had.
+        /// </summary>
+        public bool WebSocketsEnabled { get; set; }
+
+        /// <summary>Keep-alive interval for the WebSocket middleware; null leaves the framework default.</summary>
+        public TimeSpan? WebSocketKeepAlive { get; set; }
+
+        /// <summary>
+        /// Transports that configure the listener itself instead of registering a route (a SignalR
+        /// hub maps itself). They are occupants of the listener just like routes: the server stays
+        /// up while any of them is present, and stops when the last one leaves.
+        /// </summary>
+        public List<ServerConfiguratorRegistration> Configurators { get; } = [];
+
         private readonly TemplateMatcher[] _matchers = [];
         private volatile (TemplateMatcher matcher, RouteRegistration reg, string[]? methods)[]? _compiled;
+
+        /// <summary>
+        /// Drops the compiled route table so the next request rebuilds it. Called on every register and
+        /// unregister: a count comparison missed an unregister + register pair (a route restart, a REST
+        /// redeploy) and kept dispatching to a removed handler.
+        /// </summary>
+        public void InvalidateRouteTable() => _compiled = null;
 
         /// <summary>Client-certificate policy for the listener (mTLS). Null = do not request one.</summary>
         public ClientCertificateMode? ClientCertificateMode { get; }
@@ -528,8 +893,9 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
 
         private (TemplateMatcher matcher, RouteRegistration reg, string[]? methods)[] GetCompiled()
         {
-            if (_compiled is not null && _compiled.Length == Routes.Count)
-                return _compiled;
+            var compiled = _compiled;
+            if (compiled is not null)
+                return compiled;
 
             // Build, then order by specificity so a concrete path (e.g. "/api/echo") is matched
             // BEFORE a catch-all ("/{**path}") registered on the same (host, port). Without this
@@ -606,6 +972,12 @@ public sealed class RouteRegistration
     /// </summary>
     public RouteCorsOptions? Cors { get; }
 
+    /// <summary>
+    /// Admission limiter backing this registration's <c>maxConcurrentRequests</c>, when one is
+    /// configured. Owned by the registration; disposed on unregister.
+    /// </summary>
+    internal System.Threading.RateLimiting.ConcurrencyLimiter? Limiter { get; init; }
+
     internal RouteRegistration(string serverKey, string pathTemplate, string? methods, Func<HttpContext, Task> handler, RouteCorsOptions? cors = null)
     {
         ServerKey = serverKey;
@@ -613,6 +985,33 @@ public sealed class RouteRegistration
         Methods = methods;
         Handler = handler;
         Cors = cors;
+    }
+}
+
+/// <summary>
+/// Handle for a listener configurator: what a transport that maps itself onto the shared host
+/// (a SignalR hub) holds instead of a <see cref="RouteRegistration"/>. Holding one keeps the
+/// listener alive, and giving it back is how the transport leaves.
+/// </summary>
+public sealed class ServerConfiguratorRegistration
+{
+    /// <summary>Bind host of the listener this configurator belongs to.</summary>
+    public string Host { get; }
+
+    /// <summary>Bind port of the listener this configurator belongs to.</summary>
+    public int Port { get; }
+
+    internal Action<IServiceCollection>? Services { get; }
+
+    internal Action<WebApplication>? Endpoints { get; }
+
+    internal ServerConfiguratorRegistration(string host, int port,
+        Action<IServiceCollection>? services, Action<WebApplication>? endpoints)
+    {
+        Host = host;
+        Port = port;
+        Services = services;
+        Endpoints = endpoints;
     }
 }
 

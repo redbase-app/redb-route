@@ -19,9 +19,14 @@ public sealed class FcmEndpointOptions : EndpointOptions
     /// <summary>Named <see cref="IFirebaseCredentialProvider"/> reference from the registry.</summary>
     public string? ConnectionFactory { get; set; }
 
+    // ── Operation ──
+
+    /// <summary>Producer operation: Send (default), Multicast, Subscribe/UnsubscribeFromTopic.</summary>
+    public FcmOperationType Operation { get; set; } = FcmOperationType.Send;
+
     // ── Target ──
 
-    /// <summary>Message target type: Token, Topic, or Condition.</summary>
+    /// <summary>Message target type: Token, Topic, or Condition (Send operation only).</summary>
     public FcmMessageType MessageType { get; set; } = FcmMessageType.Token;
 
     /// <summary>Device registration token. Supports <c>${...}</c> expressions.</summary>
@@ -92,15 +97,25 @@ public sealed class FcmEndpointOptions : EndpointOptions
             throw new ArgumentOutOfRangeException(nameof(CredentialPath),
                 "CredentialPath, ConnectionFactory, or GOOGLE_APPLICATION_CREDENTIALS is required");
 
-        if (MessageType == FcmMessageType.Token && Token is null)
-            throw new ArgumentOutOfRangeException(nameof(Token),
-                "Token is required for Token message type");
-        if (MessageType == FcmMessageType.Topic && Topic is null)
+        // Target checks apply to the classic Send only: multicast takes tokens from the
+        // body/header, topic management takes the Topic option.
+        if (Operation == FcmOperationType.Send)
+        {
+            if (MessageType == FcmMessageType.Token && Token is null)
+                throw new ArgumentOutOfRangeException(nameof(Token),
+                    "Token is required for Token message type");
+            if (MessageType == FcmMessageType.Topic && Topic is null)
+                throw new ArgumentOutOfRangeException(nameof(Topic),
+                    "Topic is required for Topic message type");
+            if (MessageType == FcmMessageType.Condition && Condition is null)
+                throw new ArgumentOutOfRangeException(nameof(Condition),
+                    "Condition is required for Condition message type");
+        }
+
+        if (Operation is FcmOperationType.SubscribeToTopic or FcmOperationType.UnsubscribeFromTopic
+            && Topic is null)
             throw new ArgumentOutOfRangeException(nameof(Topic),
-                "Topic is required for Topic message type");
-        if (MessageType == FcmMessageType.Condition && Condition is null)
-            throw new ArgumentOutOfRangeException(nameof(Condition),
-                "Condition is required for Condition message type");
+                $"Topic is required for the {Operation} operation");
 
         if (AndroidTtlSeconds is not null && AndroidTtlSeconds < 0)
             throw new ArgumentOutOfRangeException(nameof(AndroidTtlSeconds),

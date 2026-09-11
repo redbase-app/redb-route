@@ -42,10 +42,17 @@ public sealed class StringExpression : Expression
         ArgumentException.ThrowIfNullOrEmpty(template, nameof(template));
         _template = template;
 
-        // Determine mode: template interpolation (contains ${...}) vs raw value expression
+        // Determine mode: template interpolation (contains ${...}) vs raw value expression.
+        // A whole-string placeholder is a third case: it keeps the CLR type of its value, so
+        // "${header.a}" with an int header yields the int, not "10". Mixed templates render text.
         _isTemplate = TemplatePattern.IsMatch(template);
 
-        if (_isTemplate)
+        if (_isTemplate && ExpressionResolver.TryGetSinglePlaceholder(template, out var placeholder))
+        {
+            _isTemplate = false;
+            _compiledValue = ExpressionResolver.GetCompiledPlaceholder(placeholder);
+        }
+        else if (_isTemplate)
         {
             _compiledTemplate = ExpressionResolver.GetCompiledTemplate(template);
         }
@@ -82,7 +89,12 @@ public sealed class StringExpression : Expression
         if (result is T typed)
             return typed;
 
-        return (T)Convert.ChangeType(result, typeof(T));
+        // A whole-string placeholder keeps the CLR type; when the caller wants text it is rendered the
+        // same way a hole in a mixed template is — culture-invariant, dates as ISO 8601.
+        if (typeof(T) == typeof(string))
+            return (T)(object)ExpressionResolver.TemplateText(result);
+
+        return (T)Convert.ChangeType(result, typeof(T), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>

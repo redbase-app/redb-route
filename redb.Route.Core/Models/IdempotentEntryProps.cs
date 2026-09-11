@@ -3,9 +3,9 @@ using redb.Core.Attributes;
 namespace redb.Route.RedbCore.Models;
 
 /// <summary>
-/// EAV model for idempotent message tracking.
+/// Props model for idempotent message tracking.
 /// Stored via <see cref="redb.Core.IRedbService"/> — works on any redb-supported database
-/// (PostgreSQL, SQL Server) without raw DDL.
+/// (PostgreSQL, SQL Server, SQLite) without raw DDL.
 /// </summary>
 [RedbScheme("Route Idempotent Entry")]
 public class IdempotentEntryProps

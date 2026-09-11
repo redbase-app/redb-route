@@ -21,6 +21,13 @@ public abstract partial class RouteDefinitionBase<TSelf>
 {
     // ── Identity ──
     IRouteDefinition IRouteDefinition.RouteId(string routeId) => RouteId(routeId);
+    IRouteDefinition IRouteDefinition.Id(string id) => Id(id);
+    IRouteDefinition IRouteDefinition.Description(string description) => Description(description);
+    IRouteDefinition IRouteDefinition.SetHeaders(params (string Name, object? Value)[] headers) => SetHeaders(headers);
+    IRouteDefinition IRouteDefinition.RemoveHeaders(string pattern, params string[] except) => RemoveHeaders(pattern, except);
+    IRouteDefinition IRouteDefinition.RemoveProperties(string pattern, params string[] except) => RemoveProperties(pattern, except);
+    IRouteDefinition IRouteDefinition.Sort(string collectionExpression, string? keyExpression, bool descending) => Sort(collectionExpression, keyExpression, descending);
+    IRouteDefinition IRouteDefinition.Sort<T>(Func<IExchange, IEnumerable<T>> source, Func<T, object?>? key, bool descending, IComparer<object?>? comparer) => Sort(source, key, descending, comparer);
     IRouteDefinition IRouteDefinition.AutoStart(bool value) => AutoStart(value);
     IRouteDefinition IRouteDefinition.ProcessingTimeout(TimeSpan timeout) => ProcessingTimeout(timeout);
 
@@ -42,7 +49,6 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.SetBody(object? value) => SetBody(value);
     IRouteDefinition IRouteDefinition.SetBody(Func<IExchange, object?> factory) => SetBody(factory);
     IRouteDefinition IRouteDefinition.SetBody(IExpression expression) => SetBody(expression);
-    IRouteDefinition IRouteDefinition.SetBodyExpression(string template) => SetBodyExpression(template);
     IRouteDefinition IRouteDefinition.Transform(Func<IExchange, object?> transform) => Transform(transform);
     IRouteDefinition IRouteDefinition.Transform(IExpression expression) => Transform(expression);
     IRouteDefinition IRouteDefinition.RemoveBody() => RemoveBody();
@@ -51,14 +57,12 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.SetHeader(string key, object? value) => SetHeader(key, value);
     IRouteDefinition IRouteDefinition.SetHeader(string key, Func<IExchange, object?> factory) => SetHeader(key, factory);
     IRouteDefinition IRouteDefinition.SetHeader(string name, IExpression expression) => SetHeader(name, expression);
-    IRouteDefinition IRouteDefinition.SetHeaderExpression(string name, string template) => SetHeaderExpression(name, template);
     IRouteDefinition IRouteDefinition.RemoveHeader(string key) => RemoveHeader(key);
 
     // ── Properties ──
     IRouteDefinition IRouteDefinition.SetProperty(string key, object? value) => SetProperty(key, value);
     IRouteDefinition IRouteDefinition.SetProperty(string key, Func<IExchange, object?> factory) => SetProperty(key, factory);
     IRouteDefinition IRouteDefinition.SetProperty(string key, IExpression expression) => SetProperty(key, expression);
-    IRouteDefinition IRouteDefinition.SetPropertyExpression(string key, string template) => SetPropertyExpression(key, template);
     IRouteDefinition IRouteDefinition.RemoveProperty(string key) => RemoveProperty(key);
 
     // ── Logging ──
@@ -76,6 +80,7 @@ public abstract partial class RouteDefinitionBase<TSelf>
     // ── Delay / Sampling ──
     IRouteDefinition IRouteDefinition.Delay(TimeSpan duration) => Delay(duration);
     IRouteDefinition IRouteDefinition.Delay(Func<IExchange, TimeSpan> factory) => Delay(factory);
+    IRouteDefinition IRouteDefinition.Delay(string durationExpression) => Delay(durationExpression);
     IRouteDefinition IRouteDefinition.Sample(long messageFrequency) => Sample(messageFrequency);
     IRouteDefinition IRouteDefinition.Sample(TimeSpan period) => Sample(period);
 
@@ -85,6 +90,7 @@ public abstract partial class RouteDefinitionBase<TSelf>
     // ── Validation ──
     IRouteDefinition IRouteDefinition.Validate(IMessageValidator validator, bool throwOnFailure) => Validate(validator, throwOnFailure);
     IRouteDefinition IRouteDefinition.Validate(Func<IExchange, bool> predicate, string errorMessage, bool throwOnFailure) => Validate(predicate, errorMessage, throwOnFailure);
+    IRouteDefinition IRouteDefinition.Validate(IPredicate predicate, string errorMessage, bool throwOnFailure) => Validate(predicate, errorMessage, throwOnFailure);
     IRouteDefinition IRouteDefinition.ValidateJsonSchema(string schemaJson, bool throwOnFailure) => ValidateJsonSchema(schemaJson, throwOnFailure);
     IRouteDefinition IRouteDefinition.ValidateJsonSchema(Json.Schema.JsonSchema schema, bool throwOnFailure) => ValidateJsonSchema(schema, throwOnFailure);
     IRouteDefinition IRouteDefinition.ValidateXsd(string xsdContent, bool throwOnFailure) => ValidateXsd(xsdContent, throwOnFailure);
@@ -99,6 +105,12 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.Marshal<TSerializer>() => Marshal<TSerializer>();
     IRouteDefinition IRouteDefinition.Unmarshal(Type serializerType, Type targetType) => Unmarshal(serializerType, targetType);
     IRouteDefinition IRouteDefinition.Unmarshal<TSerializer, TTarget>() => Unmarshal<TSerializer, TTarget>();
+    IRouteDefinition IRouteDefinition.Marshal(string contentType) => Marshal(contentType);
+    IRouteDefinition IRouteDefinition.Marshal(IMessageSerializer serializer) => Marshal(serializer);
+    IRouteDefinition IRouteDefinition.Unmarshal<T>(string contentType) => Unmarshal<T>(contentType);
+    IRouteDefinition IRouteDefinition.Unmarshal(string contentType, Type targetType) => Unmarshal(contentType, targetType);
+    IRouteDefinition IRouteDefinition.Unmarshal<T>(IMessageSerializer serializer) => Unmarshal<T>(serializer);
+    IRouteDefinition IRouteDefinition.Unmarshal(IMessageSerializer serializer, Type targetType) => Unmarshal(serializer, targetType);
     IRouteDefinition IRouteDefinition.Unmarshal<T>() => Unmarshal<T>();
     IRouteDefinition IRouteDefinition.ConvertBody<T>() => ConvertBody<T>();
     IRouteDefinition IRouteDefinition.ConvertBody(Type targetType) => ConvertBody(targetType);
@@ -136,8 +148,18 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.Enrich(Func<IExchange, string> uriFactory, Func<IExchange, IExchange, IExchange> mergeStrategy) => Enrich(uriFactory, mergeStrategy);
     IRouteDefinition IRouteDefinition.PollEnrich(string resourceUri, Func<IExchange, IExchange?, IExchange> mergeStrategy, TimeSpan? timeout) => PollEnrich(resourceUri, mergeStrategy, timeout);
     IRouteDefinition IRouteDefinition.PollEnrich(Func<IExchange, string> uriFactory, Func<IExchange, IExchange?, IExchange> mergeStrategy, TimeSpan? timeout) => PollEnrich(uriFactory, mergeStrategy, timeout);
+    IRouteDefinition IRouteDefinition.Enrich(string resourceUri) => Enrich(resourceUri);
+    IRouteDefinition IRouteDefinition.Enrich(Func<IExchange, string> uriFactory) => Enrich(uriFactory);
+    IRouteDefinition IRouteDefinition.PollEnrich(string resourceUri, TimeSpan? timeout) => PollEnrich(resourceUri, timeout);
+    IRouteDefinition IRouteDefinition.PollEnrich(Func<IExchange, string> uriFactory, TimeSpan? timeout) => PollEnrich(uriFactory, timeout);
     IRouteDefinition IRouteDefinition.RecipientList(Func<IExchange, IEnumerable<string>> recipientListFactory, bool parallelProcessing, bool stopOnException, Func<IExchange, IExchange, IExchange>? aggregationStrategy) => RecipientList(recipientListFactory, parallelProcessing, stopOnException, aggregationStrategy);
     IRouteDefinition IRouteDefinition.DynamicRouter(Func<IExchange, string?> routingFunction) => DynamicRouter(routingFunction);
+    IRouteDefinition IRouteDefinition.Enrich(IExpression uri, Func<IExchange, IExchange, IExchange> mergeStrategy) => Enrich(uri, mergeStrategy);
+    IRouteDefinition IRouteDefinition.Enrich(IExpression uri) => Enrich(uri);
+    IRouteDefinition IRouteDefinition.PollEnrich(IExpression uri, Func<IExchange, IExchange?, IExchange> mergeStrategy, TimeSpan? timeout) => PollEnrich(uri, mergeStrategy, timeout);
+    IRouteDefinition IRouteDefinition.PollEnrich(IExpression uri, TimeSpan? timeout) => PollEnrich(uri, timeout);
+    IRouteDefinition IRouteDefinition.RecipientList(IExpression recipients, bool parallelProcessing, bool stopOnException, Func<IExchange, IExchange, IExchange>? aggregationStrategy, string uriDelimiter) => RecipientList(recipients, parallelProcessing, stopOnException, aggregationStrategy, uriDelimiter);
+    IRouteDefinition IRouteDefinition.DynamicRouter(IExpression routingExpression) => DynamicRouter(routingExpression);
     IRouteDefinition IRouteDefinition.RoutingSlip(Func<IExchange, IEnumerable<string>> slipFactory, bool ignoreInvalidEndpoints) => RoutingSlip(slipFactory, ignoreInvalidEndpoints);
     IRouteDefinition IRouteDefinition.RoutingSlip(IExpression slip, string uriDelimiter, bool ignoreInvalidEndpoints) => RoutingSlip(slip, uriDelimiter, ignoreInvalidEndpoints);
     IRouteDefinition IRouteDefinition.RoutingSlip(string slipTemplate, string uriDelimiter, bool ignoreInvalidEndpoints) => RoutingSlip(slipTemplate, uriDelimiter, ignoreInvalidEndpoints);
@@ -169,4 +191,5 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.Cluster(bool value) => Cluster(value);
     IRouteDefinition IRouteDefinition.MessageHistory(bool value) => MessageHistory(value);
     IRouteDefinition IRouteDefinition.RoutePolicy(IRoutePolicy policy) => RoutePolicy(policy);
+    IRouteDefinition IRouteDefinition.RoutePolicy(string policyName) => RoutePolicy(policyName);
 }

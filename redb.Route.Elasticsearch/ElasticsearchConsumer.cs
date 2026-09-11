@@ -216,9 +216,7 @@ internal sealed class ElasticsearchConsumer : DrainableConsumer
             if (hit.Sort is { Count: > 0 })
                 headers[ElasticsearchHeaders.SortValues] = JsonSerializer.Serialize(hit.Sort);
 
-            _endpoint.RecordMessageIn();
-            _endpoint.RecordBytesIn(System.Text.Encoding.UTF8.GetByteCount(bodyJson));
-
+            // Pipeline statistics are the core StatisticsProcessor's (ownership audit).
             await ProcessWithTracking(exchange, ct).ConfigureAwait(false);
 
             // Post-processing: delete after read

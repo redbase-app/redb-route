@@ -42,8 +42,11 @@ public static class RouteTelemetryExtensions
         {
             activity.SetTag(systemAttribute, systemValue);
             activity.SetTag("redb.route.endpoint", EndpointUri.Sanitize(endpointUri));
+            // The destination is often a full URL and may carry a userinfo password or a
+            // sensitive query value; Sanitize is format-preserving and leaves plain names
+            // (queues, topics) byte-for-byte.
             if (!string.IsNullOrEmpty(destination))
-                activity.SetTag("messaging.destination.name", destination);
+                activity.SetTag("messaging.destination.name", EndpointUri.Sanitize(destination));
             if (!string.IsNullOrEmpty(operation))
                 activity.SetTag("messaging.operation", operation);
         }

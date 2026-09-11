@@ -118,8 +118,11 @@ public class MulticastProcessor : IProcessor
         }
         finally
         {
+            // Release the clones' DI scopes only, as Splitter / ScatterGather / RecipientList do. Disposing
+            // a clone would close its body, and the aggregation may have handed exactly that body (or the
+            // clones themselves, GroupedExchange) to the original exchange.
             foreach (var clone in clones)
-                if (clone is IAsyncDisposable d) await d.DisposeAsync().ConfigureAwait(false);
+                if (clone is redb.Route.Core.Exchange e) await e.ReleaseScopes().ConfigureAwait(false);
         }
 
         if (firstException != null && _stopOnException)
@@ -204,8 +207,11 @@ public class MulticastProcessor : IProcessor
         }
         finally
         {
+            // Release the clones' DI scopes only, as Splitter / ScatterGather / RecipientList do. Disposing
+            // a clone would close its body, and the aggregation may have handed exactly that body (or the
+            // clones themselves, GroupedExchange) to the original exchange.
             foreach (var clone in clones)
-                if (clone is IAsyncDisposable d) await d.DisposeAsync().ConfigureAwait(false);
+                if (clone is redb.Route.Core.Exchange e) await e.ReleaseScopes().ConfigureAwait(false);
         }
     }
 

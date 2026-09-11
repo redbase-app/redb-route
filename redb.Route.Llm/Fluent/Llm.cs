@@ -31,6 +31,7 @@ public sealed class LlmBuilder
     private string? _schedule;
     private string? _initialBodyRef;
     private string? _maxIterations;
+    private bool _cacheSystemPrompt;
     private string? _tools;
     private string? _user;
     private readonly List<KeyValuePair<string, string>> _auditTags = [];
@@ -73,6 +74,15 @@ public sealed class LlmBuilder
 
     /// <summary>Maximum tool-loop iterations.</summary>
     public LlmBuilder MaxIterations(int n) { _maxIterations = n.ToString(); return this; }
+
+    /// <summary>
+    /// Asks the provider to cache the system prompt across turns
+    /// (<see cref="LlmEndpointOptions.CacheSystemPrompt"/>).
+    /// <para>Only pays off when the system prompt is byte-stable: caching matches on the
+    /// rendered prefix, so a prompt that varies per request is written and never read back.
+    /// <c>LlmUsage.CacheReadInputTokens</c> is what says it works.</para>
+    /// </summary>
+    public LlmBuilder CacheSystemPrompt() { _cacheSystemPrompt = true; return this; }
 
     /// <summary>
     /// Tool exposure filter — <c>"*"</c> for every descriptor in the registry,
@@ -164,6 +174,7 @@ public sealed class LlmBuilder
         Append(sb, ref first, "schedule", _schedule);
         Append(sb, ref first, "initialBodyRef", _initialBodyRef);
         Append(sb, ref first, "maxIterations", _maxIterations);
+        if (_cacheSystemPrompt) Append(sb, ref first, "cacheSystemPrompt", "true");
         Append(sb, ref first, "tools", _tools);
         Append(sb, ref first, "user", _user);
         Append(sb, ref first, "audit", BuildAuditCsv(_auditTags));

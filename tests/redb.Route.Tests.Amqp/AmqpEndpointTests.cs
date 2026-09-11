@@ -52,4 +52,32 @@ public sealed class AmqpEndpointTests
         ep.Uri.Scheme.Should().Be("amqp");
         ep.Uri.Path.Should().Be("my-queue");
     }
+
+    // ── Часть B плана KAFKA_HARDENING_AND_OPTIONS_SWEEP_PLAN: пара терминуса ──
+
+    [Fact]
+    public void Terminus_CarriesExpiryPolicyAndTimeout()
+    {
+        // expiryPolicy had a resolver nobody called; terminusTimeout had nothing at all.
+        var ep = CreateEndpoint("amqp://my-queue?host=localhost&expiryPolicy=never&terminusTimeout=30");
+
+        var source = ep.BuildSourceTerminus();
+        source.ExpiryPolicy.ToString().Should().Be("never",
+            "expiryPolicy обязан доезжать до терминуса, а не быть мёртвой опцией");
+        source.Timeout.Should().Be(30u);
+
+        var target = ep.BuildTargetTerminus();
+        target.ExpiryPolicy.ToString().Should().Be("never");
+        target.Timeout.Should().Be(30u);
+    }
+
+    [Fact]
+    public void Terminus_DefaultsMatchAmqpDefaults()
+    {
+        var ep = CreateEndpoint("amqp://my-queue?host=localhost");
+
+        var source = ep.BuildSourceTerminus();
+        source.ExpiryPolicy.ToString().Should().Be("session-end", "дефолт AMQP 1.0");
+        source.Timeout.Should().Be(0u);
+    }
 }

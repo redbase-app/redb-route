@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <PackageId>redb.Route.Telegram</PackageId>
-    <Description>Telegram Bot transport for redb.Route ESB framework. Long-polling consumer + webhook unpack, and message/document/photo/edit/delete/answer producer with 429 rate-limit handling, parseMode, inline keyboards and fluent DSL. Built on Telegram.Bot.</Description>
+    <Description>Telegram Bot transport for redb.Route ESB framework. Long-polling consumer + webhook unpack, and message/document/photo/edit/delete/answer/download producer with 429 rate-limit handling, parseMode, inline keyboards, attachment download and fluent DSL. Built on Telegram.Bot.</Description>
     <PackageTags>esb;messaging;telegram;bot;chatops;redb</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>

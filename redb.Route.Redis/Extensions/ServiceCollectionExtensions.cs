@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Redis;
 
@@ -23,23 +23,11 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddRedbRouteRedis(this IServiceCollection services)
     {
-        services.AddSingleton<RedisComponent>();
-
-        // Post-configure: register the component in the route context after engine start
-        services.AddSingleton<IRedisComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            var component = sp.GetRequiredService<RedisComponent>();
-            context.AddComponent(component);
-            return new RedisComponentRegistrar();
-        });
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteComponent<RedisComponent>();
 
         return services;
     }
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IRedisComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class RedisComponentRegistrar : IRedisComponentRegistrar;

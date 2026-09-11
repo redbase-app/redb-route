@@ -77,9 +77,8 @@ public sealed class SftpEndpointOptionsTests
         opts.Idempotent.Should().BeFalse();
         opts.IdempotentKey.Should().BeEmpty();
         opts.DoneFileName.Should().BeEmpty();
-        opts.Binary.Should().BeTrue();
+        // Binary and StepWise removed in часть B of the options sweep: SFTP has no text mode and no cd
         opts.Charset.Should().Be("utf-8");
-        opts.StepWise.Should().BeTrue();
         opts.Separator.Should().Be(SftpSeparator.Auto);
         opts.IgnoreFileNotFoundOrPermissionError.Should().BeFalse();
         opts.StartingDirectoryMustExist.Should().BeTrue();
@@ -563,7 +562,6 @@ public sealed class SftpEndpointOptionsTests
         opts.Noop.Should().BeTrue();
         opts.Idempotent.Should().BeTrue();
         opts.DoneFileName.Should().Be("${file:name}.done");
-        opts.StepWise.Should().BeFalse();
         opts.SendEmptyMessageWhenIdle.Should().BeTrue();
     }
 

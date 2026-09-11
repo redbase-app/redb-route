@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
@@ -43,26 +44,13 @@ public sealed class LlmProducer : ConnectableProducer
     {
         EnsureStarted();
 
-        // Endpoint-level statistics consumed by tsak / tsak.web dashboard.
-        // Counted once per agent turn (one inbound exchange == one user message).
+        // MessagesIn stays with the connector: it means "a user turn arrived at this llm
+        // endpoint", which no core wrapper counts for a producer. MessagesOut/Errors/Time are
+        // the core's (ToProcessor for a routed .To(), the ProducerTemplate for template sends) -
+        // recording them here as well double-counted every turn (the ownership audit).
         _endpoint.RecordMessageIn();
-        var endpointSw = Stopwatch.StartNew();
 
-        try
-        {
-            await ProcessCoreAsync(exchange, ct).ConfigureAwait(false);
-            _endpoint.RecordMessageOut();
-        }
-        catch (Exception ex)
-        {
-            _endpoint.RecordError(ex);
-            throw;
-        }
-        finally
-        {
-            endpointSw.Stop();
-            _endpoint.RecordProcessingTime(endpointSw.Elapsed);
-        }
+        await ProcessCoreAsync(exchange, ct).ConfigureAwait(false);
     }
 
     private async Task ProcessCoreAsync(IExchange exchange, CancellationToken ct)
@@ -107,6 +95,7 @@ public sealed class LlmProducer : ConnectableProducer
 
         var userContent = BuildUserContent(exchange);
         var systemPrompt = await ResolveSystemPromptAsync(exchange, ct).ConfigureAwait(false);
+        var preamble = ResolvePreamble(exchange);
         var conversationId = ResolveConversationId(exchange);
         var tools = ResolveTools(exchange);
         var userId = ResolveUserId(exchange);
@@ -114,8 +103,11 @@ public sealed class LlmProducer : ConnectableProducer
 
         // Endpoint-level statistics (consumed by tsak / tsak.web dashboard).
         // MessagesOut + Errors are tracked by ToProcessor; here we add bytes and timing.
-        var bytesIn = userContent.OfType<LlmTextBlock>().Sum(b => b.Text?.Length ?? 0);
-        if (bytesIn > 0) _endpoint.RecordBytesIn(bytesIn);
+        // The prompt LEAVES the endpoint. It used to be recorded as BytesIn because until Ф14
+        // RecordBytesOut did not exist. Counted in UTF-8 bytes, not UTF-16 chars.
+        var promptBytes = userContent.OfType<LlmTextBlock>()
+            .Sum(b => b.Text is null ? 0 : Encoding.UTF8.GetByteCount(b.Text));
+        if (promptBytes > 0) _endpoint.RecordBytesOut(promptBytes);
 
         var agentRequest = new AgentRequest
         {
@@ -123,6 +115,8 @@ public sealed class LlmProducer : ConnectableProducer
             Exchange = exchange,
             UserContent = userContent,
             SystemPrompt = systemPrompt,
+            CacheSystemPrompt = _options.CacheSystemPrompt,
+            Preamble = preamble,
             Tools = tools,
             ConversationId = conversationId,
             MaxIterations = _options.MaxIterations,
@@ -201,6 +195,18 @@ public sealed class LlmProducer : ConnectableProducer
             ?? ctx?.GetService<IPromptTemplateRegistry>();
         return await PromptRef.ResolveAsync(_options.SystemPromptRef, templates, ctx, exchange, ct).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Fixed opening messages from the <see cref="LlmHeaders.Preamble"/> header. Header only —
+    /// there is no endpoint option: a preamble is assembled per call by whoever assembles the
+    /// system prompt (it is the same kind of thing), and a URI has nowhere to carry a list of
+    /// typed messages. Anything but a sequence of <see cref="LlmMessage"/> is treated as absent.
+    /// </summary>
+    private static IReadOnlyList<LlmMessage> ResolvePreamble(IExchange exchange)
+        => exchange.In.Headers.TryGetValue(LlmHeaders.Preamble, out var hdr)
+           && hdr is IEnumerable<LlmMessage> messages
+            ? [.. messages]
+            : [];
 
     private string? ResolveConversationId(IExchange exchange) => _options.Conversation switch
     {
@@ -318,6 +324,11 @@ public sealed class LlmProducer : ConnectableProducer
         exchange.Out.Headers[LlmHeaders.ModelId] = factory.ModelId;
         exchange.Out.Headers[LlmHeaders.TokensIn] = response.Usage.InputTokens;
         exchange.Out.Headers[LlmHeaders.TokensOut] = response.Usage.OutputTokens;
+        // Written unconditionally, zeros included: a caller that reads "cache read = 0" learns
+        // something (the cache is not being hit), while a missing header is indistinguishable
+        // from an older engine that never reported it.
+        exchange.Out.Headers[LlmHeaders.CacheWriteTokens] = response.Usage.CacheCreationInputTokens;
+        exchange.Out.Headers[LlmHeaders.CacheReadTokens] = response.Usage.CacheReadInputTokens;
         exchange.Out.Headers[LlmHeaders.ToolIterations] = response.Iterations;
         exchange.Out.Headers[LlmHeaders.StopReason] = response.StopReason.ToString();
     }
@@ -338,15 +349,20 @@ public sealed class LlmProducer : ConnectableProducer
 
         var userContent = BuildUserContent(exchange);
         var systemPrompt = await ResolveSystemPromptAsync(exchange, ct).ConfigureAwait(false);
+        var preamble = ResolvePreamble(exchange);
 
-        var bytesIn = userContent.OfType<LlmTextBlock>().Sum(b => b.Text?.Length ?? 0);
-        if (bytesIn > 0) _endpoint.RecordBytesIn(bytesIn);
+        var promptBytes = userContent.OfType<LlmTextBlock>()
+            .Sum(b => b.Text is null ? 0 : Encoding.UTF8.GetByteCount(b.Text));
+        if (promptBytes > 0) _endpoint.RecordBytesOut(promptBytes);
 
         var llmRequest = new LlmRequest
         {
             ModelId = factory.ModelId,
             SystemPrompt = systemPrompt,
-            Messages = [new LlmMessage { Role = "user", Content = userContent }],
+            CacheSystemPrompt = _options.CacheSystemPrompt,
+            // The preamble opens the transcript here too: stream mode has no history, but the
+            // fixed opening exchange is part of the assistant, not of the history.
+            Messages = [.. preamble, new LlmMessage { Role = "user", Content = userContent }],
             // Tools are intentionally not passed in stream mode — the producer
             // does not run a tool-loop here. Use the non-streaming path with
             // ?tools= when tool dispatch is required.
@@ -423,13 +439,15 @@ public sealed class LlmProducer : ConnectableProducer
         // Late-bind summary headers — readable after the consumer drained the stream.
         exchange.Out!.Headers[LlmHeaders.TokensIn] = usage.InputTokens;
         exchange.Out.Headers[LlmHeaders.TokensOut] = usage.OutputTokens;
+        exchange.Out.Headers[LlmHeaders.CacheWriteTokens] = usage.CacheCreationInputTokens;
+        exchange.Out.Headers[LlmHeaders.CacheReadTokens] = usage.CacheReadInputTokens;
         exchange.Out.Headers[LlmHeaders.ToolIterations] = 1;
         exchange.Out.Headers[LlmHeaders.StopReason] = stopReason.ToString();
 
-        // bytesOut is captured as text length for endpoint accounting.
-        // The IEndpointStatistics surface only exposes RecordBytesIn — outbound
-        // bytes accounting belongs to the route processor downstream.
-        _ = bytesOut;
+        // The response ARRIVES at the endpoint. This value used to be computed and then thrown
+        // away (`_ = bytesOut;`) because the statistics surface had no outgoing counter and the
+        // incoming one was already taken by the prompt; both halves have their own place now.
+        if (bytesOut > 0) _endpoint.RecordBytesIn(bytesOut);
 
         var stopTag = new KeyValuePair<string, object?>("llm.stop_reason", stopReason.ToString());
         LlmMetrics.AgentRuns.Add(1, providerTag, modelTag, factoryTag, stopTag);

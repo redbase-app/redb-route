@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 
 namespace redb.Route.Controllers;
@@ -21,6 +22,7 @@ public sealed class HttpControllerDispatcher : IProcessor
     private readonly ControllerRegistry _registry;
     private readonly IRouteContext _context;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly ILogger? _logger;
 
     // Headers set by HttpConsumer (string constants to avoid dependency on redb.Route.Http)
     internal const string HttpMethodHeader = "redbHttp.Method";
@@ -63,6 +65,7 @@ public sealed class HttpControllerDispatcher : IProcessor
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _jsonOptions = jsonOptions ?? DefaultJsonOptions;
+        _logger = ControllerErrorReporting.CreateLogger<HttpControllerDispatcher>(context);
     }
 
     /// <inheritdoc />
@@ -91,13 +94,28 @@ public sealed class HttpControllerDispatcher : IProcessor
         // Merge redbHttp.RouteParam.* headers into routeParams (consumer extracts these from templates)
         MergeHttpRouteParams(exchange, routeParams);
 
+        // The boundary between "the caller's error" and "our error" is the resolution step, not
+        // the exception type: a FormatException thrown while binding a guid route param is a 400,
+        // the same exception thrown inside the action is a 500. Resolution needs nothing from the
+        // controller instance, so it runs first under its own catch.
+        object?[] parameters;
+        try
+        {
+            parameters = ResolveHttpParameters(action.Method, exchange, routeParams);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            WriteError(exchange, 400, ControllerErrorReporting.BadRequestCode,
+                ControllerErrorReporting.ReportBadRequest(_logger, ex, exchange, $"{method} {path}"));
+            return;
+        }
+
         try
         {
             var controller = (RedbController)Activator.CreateInstance(action.ControllerType)!;
             controller.Context = _context;
             controller.Exchange = exchange;
 
-            var parameters = ResolveHttpParameters(action.Method, exchange, routeParams);
             var result = action.Method.Invoke(controller, parameters);
 
             if (result is Task task)
@@ -115,11 +133,13 @@ public sealed class HttpControllerDispatcher : IProcessor
             // Only unwrap TIE — never blindly deref .InnerException on arbitrary exceptions
             // (that would skip a level and misclassify async errors whose first InnerException
             // is a deeper transient wrapper like SocketException inside a DbException).
-            WriteError(exchange, 500, "InternalError", tie.InnerException.Message);
+            WriteError(exchange, 500, ControllerErrorReporting.ErrorCode,
+                ControllerErrorReporting.Report(_logger, tie.InnerException, exchange, $"{method} {path}"));
         }
         catch (Exception ex)
         {
-            WriteError(exchange, 500, "InternalError", ex.Message);
+            WriteError(exchange, 500, ControllerErrorReporting.ErrorCode,
+                ControllerErrorReporting.Report(_logger, ex, exchange, $"{method} {path}"));
         }
     }
 

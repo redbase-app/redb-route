@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Templates\redb.Route.Templates.csproj" />
+    <ProjectReference Include="..\..\redb.Route.TestKit\redb.Route.TestKit.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Templates\order-confirm.json.sbn" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Templates\broken.sbn" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="Templates\notify.xml.sbn" />
+  </ItemGroup>
+
+</Project>
+

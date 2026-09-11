@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using Newtonsoft.Json.Linq;
 using redb.Route.Abstractions;
 
 namespace redb.Route.Expressions;
@@ -10,6 +9,9 @@ namespace redb.Route.Expressions;
 /// </summary>
 public static partial class ExpressionResolver
 {
+    /// <summary>Parsed <c>jpath</c> expressions by path text: the path is constant per call site, the body is parsed per evaluation.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, JsonPathExpression> JsonPathExpressions = new(StringComparer.Ordinal);
+
     #region Types and helper methods for working with properties
 
     /// <summary>
@@ -441,18 +443,12 @@ public static partial class ExpressionResolver
         if (body == null)
             return null;
 
-        var jsonPathExpression = new JsonPathExpression(jsonPath);
+        // The path is constant per call site: parse it once and keep the expression (it holds only the
+        // parsed path and options; the body is parsed per evaluation).
+        var jsonPathExpression = JsonPathExpressions.GetOrAdd(jsonPath, static path => new JsonPathExpression(path));
 
-        // For filter queries [?(...)] return JToken to preserve structure
-        if (jsonPath.Contains("[?"))
-        {
-            var jTokenResult = jsonPathExpression.Evaluate<JToken>(exchange);
-            DebugLog($"JSONPath result (JToken): {jTokenResult}");
-            return jTokenResult;
-        }
-
-        // For regular queries — delegate to JsonPathExpression which handles
-        // typed array conversion (int[], string[], etc.) inside ConvertJTokenToType<object>
+        // JsonPathExpression owns the conversion rules: scalars unwrap, homogeneous arrays become typed
+        // CLR arrays, objects stay JsonObject, filter results come back as arrays (a single scalar unwraps).
         var result = jsonPathExpression.Evaluate<object>(exchange);
         DebugLog($"JSONPath result: {result}");
         return result;

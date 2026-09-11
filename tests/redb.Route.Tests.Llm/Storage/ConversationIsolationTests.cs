@@ -19,12 +19,12 @@ namespace redb.Route.Tests.Llm.Storage;
 /// leaked into each other.
 /// </para>
 /// </summary>
-[Collection("PostgresPro")]
+[Collection("StoragePro")]
 public sealed class ConversationIsolationTests
 {
-    private readonly PostgresProFixture _fx;
+    private readonly StorageProFixture _fx;
 
-    public ConversationIsolationTests(PostgresProFixture fx) => _fx = fx;
+    public ConversationIsolationTests(StorageProFixture fx) => _fx = fx;
 
     private static ConversationMessageMeta Meta(int iter, DateTime? at = null) => new()
     {

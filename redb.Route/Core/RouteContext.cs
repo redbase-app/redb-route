@@ -48,10 +48,24 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     private readonly ILogger? _logger;
     private readonly RouteEngineOptions _options;
     private readonly List<RouteBuilder> _builders = [];
+
+    /// <summary>Registered builders (test-kit seam for AdviceWith; definitions are built on demand).</summary>
+    internal IReadOnlyList<RouteBuilder> RouteBuilders => _builders;
+
+    /// <summary>
+    /// Set by AdviceWith after it has run every builder's <c>Configure()</c> ahead of <see cref="Start"/>
+    /// and rewritten the definitions; <see cref="CompileRoutesFromBuilders"/> then compiles them as-is
+    /// instead of rebuilding (which would discard the advice).
+    /// </summary>
+    internal bool DefinitionsPrebuilt { get; set; }
     private readonly List<CompiledRoute> _routes = [];
     private readonly IInflightRepository _inflightRepository = new DefaultInflightRepository();
 
-    private readonly List<IRouteLifecycleListener> _lifecycleListeners = [];
+    // Copy-on-write: the array is replaced on registration and read as a snapshot per notification, so a
+    // listener registered while exchanges flow (NotifyBuilder on a running context, a listener adding
+    // another listener from a callback) never races an enumeration.
+    private IRouteLifecycleListener[] _lifecycleListeners = [];
+    private readonly object _lifecycleListenersLock = new();
     private readonly List<IRoutePolicyFactory> _policyFactories = [];
 
     private readonly SemaphoreSlim _routeLock = new(1, 1);
@@ -67,6 +81,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     // Message-history state for the route currently being compiled (set alongside _compilingRouteId).
     private bool _compilingMessageHistory;
     private int _compilingNodeCounter;
+    private readonly List<IAsyncDisposable> _disposableProcessors = new();
 
     private volatile bool _started;
 
@@ -110,8 +125,8 @@ public class RouteContext : IRouteContext, IAsyncDisposable
             _services[typeof(ILogger)] = _logger;
 
         // Expose the logger factory via the service locator so definitions
-        // (LogDefinition, RichLogDefinition, etc.) can resolve it through
-        // IRouteContext.GetService<ILoggerFactory>() without reaching for DI.
+        // (the Log* definitions and RichLogScopeDefinition, etc.) can resolve it
+        // through IRouteContext.GetService<ILoggerFactory>() without reaching for DI.
         if (loggerFactory is not null)
             _services[typeof(ILoggerFactory)] = loggerFactory;
 
@@ -125,6 +140,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         _components["vm"] = SetComponentContext(new VmComponent());
         _components["xslt"] = SetComponentContext(new Xslt.XsltComponent());
         _components["controlbus"] = SetComponentContext(new ControlBus.ControlBusComponent());
+        _components["bean"] = SetComponentContext(new Components.Bean.BeanComponent());
 
         // Register built-in services
         _services[typeof(IDataFormatRegistry)] = new DataFormatRegistry();
@@ -244,8 +260,9 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         // connections — old ones from the failed run are dead/rolled-back, so re-creating is correct):
         // nothing to pre-mint or "capture" here. But because we invoke the body directly, bypassing
         // the normal consumer→dispose lifecycle, WE must dispose whatever scopes the tail cached on
-        // the snapshot — else every replay leaks a connection. Exchange.ReleaseScopes does exactly that.
-        (snapshot as Exchange)?.PrepareForReplay();
+        // the snapshot — else every replay leaks a connection. Exchange.ReleaseScopes does exactly
+        // that, and it re-arms itself after every sweep, so a snapshot released before this replay
+        // needs no special preparation.
         try
         {
             // Run the marker's tail directly from the frozen snapshot — same compiled body as inline
@@ -362,7 +379,9 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     /// from <c>IConfiguration</c> (environment, appsettings, user-secrets) first, then the context's own
     /// properties as a container-free fallback. No-op for the common case of a URI without placeholders.
     /// </summary>
-    private string ResolvePlaceholders(string uri)
+    // Internal (not private): the XML loader resolves {{...}} in <route enabled=…> through the
+    // context's own lookup chain instead of keeping a second copy of it.
+    internal string ResolvePlaceholders(string uri)
     {
         if (!PropertyPlaceholderResolver.HasPlaceholder(uri))
             return uri;
@@ -515,7 +534,8 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     public IRouteContext AddLifecycleListener(IRouteLifecycleListener listener)
     {
         ArgumentNullException.ThrowIfNull(listener);
-        _lifecycleListeners.Add(listener);
+        lock (_lifecycleListenersLock)
+            _lifecycleListeners = [.. _lifecycleListeners, listener];
         return this;
     }
 
@@ -753,10 +773,14 @@ public class RouteContext : IRouteContext, IAsyncDisposable
 
         logger?.LogInformation("Compiling {Count} route builder(s)...", _builders.Count);
 
-        // 1. Invoke all builders to collect definitions
+        // 1. Invoke the builders to collect definitions. AdviceWith may already have built (and
+        //    rewritten) them before Start(); re-running Configure() would discard the advice. A builder
+        //    added after that advice has never been built and still must be — otherwise its routes
+        //    would vanish without a word.
         foreach (var builder in _builders)
         {
-            builder.InternalBuild(this);
+            if (!DefinitionsPrebuilt || !builder.IsBuilt)
+                builder.InternalBuild(this);
         }
 
         // 2. Validate route registrations — fail fast before any compilation
@@ -773,6 +797,14 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 // Expand {{key}} placeholders before the URI is parsed — dedup/identity keys, the route id
                 // and the consumer endpoint (below) must all see the same resolved value.
                 fromUri = ResolvePlaceholders(fromUri);
+
+                // A ${...} in a consumer URI has no message to resolve against; before 4.0 it was silently
+                // kept as text (or resolved against nothing). Fail at Start(), the same way a malformed
+                // condition does — the silent variant is the class of defect already removed elsewhere.
+                if (fromUri.Contains("${", StringComparison.Ordinal))
+                    throw new InvalidOperationException(
+                        $"Route '{definition.GetRouteId() ?? "(unnamed)"}': the consumer URI '{EndpointUri.Sanitize(fromUri)}' contains a ${{...}} " +
+                        "placeholder, but a consumer has no message to resolve it against. Use {{key}} configuration placeholders or a constant.");
 
                 var normalizedFrom = EndpointUriParser.Parse(fromUri).NormalizedKey;
                 // Unnamed routes fall back to the endpoint key as their id; sanitize it so a
@@ -792,8 +824,10 @@ public class RouteContext : IRouteContext, IAsyncDisposable
             }
         }
 
-        // 3. Collect builder-level exception definitions
+        // 3. Collect builder-level exception definitions, intercepts and completions
         var allExceptionDefs = _builders.SelectMany(b => b.ExceptionDefinitions).ToList();
+        var builderIntercepts = _builders.SelectMany(b => b.Intercepts).ToList();
+        var builderCompletions = _builders.SelectMany(b => b.OnCompletions).ToList();
 
         if (allExceptionDefs.Count > 0)
         {
@@ -839,12 +873,24 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 // Route-level .MessageHistory() overrides the global option; each route restarts node numbering.
                 _compilingMessageHistory = definition.GetMessageHistory() ?? _options.EnableMessageHistory;
                 _compilingNodeCounter = 0;
+                // Intercepts of this route: builder-level ones plus the route's own; CompileNode decorates every step with them.
+                _compilingIntercepts = builderIntercepts.Concat(definition.GetIntercepts()).ToList();
+                _interceptBodies.Clear();
+                List<CompletionHandler> completionHandlers = [];
                 try
                 {
                     var inner = definition.CreateProcessor(this);
+                    inner = ApplyInterceptFrom(inner, fromUri);
                     pipeline = inner as PipelineProcessor ?? new PipelineProcessor();
                     if (inner is not PipelineProcessor)
                         pipeline.Add(inner);
+
+                    // OnCompletion bodies compile here, inside the route's compile frame (route id for
+                    // checkpoints, message history), detached from its intercepts; they are attached
+                    // further down, outside every error handler.
+                    completionHandlers = builderCompletions.Concat(definition.GetOnCompletions())
+                        .Select(c => new CompletionHandler(CompileDetached(c.Outputs), c.Mode, c.Condition, c.BeforeConsumer))
+                        .ToList();
                 }
                 catch (Exception ex) when (!_options.ThrowOnCompilationError)
                 {
@@ -855,6 +901,8 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 {
                     _compilingRouteId = null;
                     _compilingMessageHistory = false;
+                    _compilingIntercepts = [];
+                    _interceptBodies.Clear();
                 }
 
                 // Wrap with routeId stamp
@@ -862,8 +910,16 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 wrappedPipeline.Add(new DelegateProcessor(exchange => exchange.RouteId = routeId));
                 wrappedPipeline.AddRange(pipeline.Processors);
 
-                // Resolve route policy: explicit definition wins, then factory chain
+                // Resolve route policy: explicit definition wins, then a registry name
+                // (Route-XML Ф1.3), then the factory chain.
                 IRoutePolicy? routePolicy = definition.GetRoutePolicy();
+                if (routePolicy is null && definition.GetRoutePolicyName() is { } policyName)
+                {
+                    routePolicy = GetFromRegistry<IRoutePolicy>(policyName)
+                        ?? throw new InvalidOperationException(
+                            $"Route '{routeId}': route policy '{policyName}' is not in the context registry. " +
+                            "Register it with AddToRegistry before Start().");
+                }
                 IRoutePolicyFactory? winningFactory = null;
                 var explicitPolicy = routePolicy is not null;
                 if (routePolicy is null)
@@ -956,12 +1012,26 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                     }
                 }
 
+                // OnCompletion blocks: outside every error handler, so "failure" is the escaping exception
+                // and a handled error is a completion. Their bodies compile detached (no intercepts).
+                if (completionHandlers.Count > 0)
+                    finalProcessor = new OnCompletionProcessor(finalProcessor, completionHandlers, routeId, _loggerFactory?.CreateLogger<OnCompletionProcessor>());
+
                 // Create consumer on the From endpoint
                 var endpoint = GetEndpoint(fromUri);
                 finalProcessor = new StatisticsProcessor(finalProcessor, endpoint);
 
                 // Outermost wrapper: inflight tracking
                 finalProcessor = new InflightTrackingProcessor(finalProcessor, _inflightRepository, routeId, EndpointUri.Sanitize(fromUri));
+
+                // Exchange-level lifecycle events (received / completed / failed) for listeners such as
+                // NotifyBuilder — outside every error handler so the reported outcome is the final one.
+                finalProcessor = new ExchangeEventsProcessor(finalProcessor, this, routeId);
+
+                // Outermost of all: IExchange.Context points at the context whose route is
+                // executing, for exactly as long as it is executing — so even lifecycle listeners
+                // see a stamped exchange, and the caller gets its own view back afterwards.
+                finalProcessor = new ContextStampProcessor(finalProcessor, this);
 
                 var consumer = endpoint.CreateConsumer(finalProcessor);
                 AddConsumer(consumer);
@@ -1294,6 +1364,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
             await Stop(CancellationToken.None).ConfigureAwait(false);
         }
 
+        await DisposeProcessorsAsync().ConfigureAwait(false);
         await DisposeComponentsAsync().ConfigureAwait(false);
 
         ClearAll();
@@ -1308,10 +1379,32 @@ public class RouteContext : IRouteContext, IAsyncDisposable
             Stop(CancellationToken.None).GetAwaiter().GetResult();
         }
 
+        DisposeProcessorsAsync().AsTask().GetAwaiter().GetResult();
         DisposeComponentsAsync().AsTask().GetAwaiter().GetResult();
 
         ClearAll();
         GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// Releases processors that own background resources (aggregation/resequencing timers),
+    /// registered by <see cref="CompileNode"/>. Runs before component disposal — a processor may
+    /// still hold component-provided resources. Failures are logged and do not stop the sweep.
+    /// </summary>
+    private async ValueTask DisposeProcessorsAsync()
+    {
+        foreach (var processor in _disposableProcessors)
+        {
+            try
+            {
+                await processor.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Error disposing processor {Processor}", processor.GetType().Name);
+            }
+        }
+        _disposableProcessors.Clear();
     }
 
     /// <summary>
@@ -1371,12 +1464,106 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     internal IProcessor CompileNode(IProcessorDefinition definition)
     {
         var inner = definition.CreateProcessor(this);
-        if (!_compilingMessageHistory || inner is null)
+        if (inner is null)
             return inner;
 
-        var label = MessageHistoryLabel(definition);
-        var nodeId = label + (++_compilingNodeCounter);
+        // Review Ф1 (2026-09-02): processors owning background resources (the aggregator's and
+        // resequencer's timers) declare IAsyncDisposable, but nothing ever disposed them — the
+        // resequencer's DisposeAsync was dead code and the aggregator's periodic scan timer
+        // outlived the context. This seam is the one place every compiled node flows through,
+        // so ownership is registered here and released when the context is disposed (not on
+        // Stop(): a stopped context may be started again and reuses its compiled processors).
+        if (inner is IAsyncDisposable disposable)
+            _disposableProcessors.Add(disposable);
+
+        inner = ApplyIntercepts(definition, inner);
+        if (!_compilingMessageHistory)
+            return inner;
+
+        // The counter is consumed from the TYPE-derived label regardless of StepId/StepDescription,
+        // so naming or describing one node never shifts the generated ids of its neighbours.
+        var typeLabel = MessageHistoryLabel(definition);
+        var sequence = ++_compilingNodeCounter;
+        var step = definition as ProcessorDefinition;
+        var label = step?.StepDescription ?? typeLabel;
+        var nodeId = step?.StepId ?? typeLabel + sequence;
         return new MessageHistoryProcessor(inner, _compilingRouteId ?? "route", nodeId, label);
+    }
+
+    // ── Intercepts (phase 07): decorators applied per node at compile time ──────────────
+
+    private IReadOnlyList<InterceptDefinition> _compilingIntercepts = [];
+    private readonly Dictionary<InterceptDefinition, IProcessor> _interceptBodies = new(ReferenceEqualityComparer.Instance);
+    private int _detachedCompileDepth;
+
+    /// <summary>Wraps a compiled step with the route's intercepts: send-interception innermost, then every-step interception.</summary>
+    private IProcessor ApplyIntercepts(IProcessorDefinition definition, IProcessor inner)
+    {
+        if (_compilingIntercepts.Count == 0 || _detachedCompileDepth > 0)
+            return inner;
+
+        // A static To may carry {{key}} configuration placeholders: the mask (and the published target)
+        // must see the resolved URI, the one the endpoint is created from. A ToD's own resolver is shared
+        // with its wrappers, so the target is evaluated once per message and the send goes where the
+        // wrapper looked (a non-pure expression would otherwise publish one URI and send to another).
+        var staticUri = definition is ToDefinition to ? ResolvePlaceholders(to.Uri) : null;
+        var dynamicResolver = (inner as ToDynamicProcessor)?.Resolver;
+
+        // Wrapped last is outermost and runs first, so the list is walked in reverse: the first
+        // declared intercept (builder-level ones first) is the outermost and runs first.
+        foreach (var intercept in _compilingIntercepts.Reverse())
+        {
+            if (intercept.Kind != InterceptKind.SendToEndpoint) continue;
+            Func<IExchange, string>? target = staticUri is not null ? _ => staticUri
+                : dynamicResolver is not null ? dynamicResolver.ResolveUri
+                : definition is ToDynamicDefinition dynamic ? dynamic.CreateResolver(this).ResolveUri
+                : null;
+            if (target is null) continue;
+            if (staticUri is not null && !UriMask.IsMatch(intercept.UriPattern!, staticUri)) continue;
+            inner = new InterceptSendProcessor(InterceptBody(intercept), intercept.Condition, intercept.SkipsOriginal, intercept.UriPattern!, target, inner, dynamicResolver);
+        }
+
+        // Wrapped last is outermost and runs first, so the list is walked in reverse: the first
+        // declared intercept (builder-level ones first) is the outermost and runs first.
+        foreach (var intercept in _compilingIntercepts.Reverse())
+        {
+            if (intercept.Kind != InterceptKind.EveryStep) continue;
+            inner = new InterceptProcessor(InterceptBody(intercept), intercept.Condition, inner);
+        }
+        return inner;
+    }
+
+    /// <summary>Wraps the route pipeline with the <c>InterceptFrom</c> blocks whose mask matches the consumer URI.</summary>
+    private IProcessor ApplyInterceptFrom(IProcessor pipeline, string fromUri)
+    {
+        // Wrapped last is outermost and runs first, so the list is walked in reverse: the first
+        // declared intercept (builder-level ones first) is the outermost and runs first.
+        foreach (var intercept in _compilingIntercepts.Reverse())
+        {
+            if (intercept.Kind != InterceptKind.From) continue;
+            if (intercept.UriPattern is not null && !UriMask.IsMatch(intercept.UriPattern, fromUri)) continue;
+            pipeline = new InterceptProcessor(InterceptBody(intercept), intercept.Condition, pipeline);
+        }
+        return pipeline;
+    }
+
+    /// <summary>The intercept's own steps, compiled once per route and never intercepted themselves.</summary>
+    private IProcessor InterceptBody(InterceptDefinition intercept)
+    {
+        if (!_interceptBodies.TryGetValue(intercept, out var body))
+        {
+            body = CompileDetached(intercept.Outputs);
+            _interceptBodies[intercept] = body;
+        }
+        return body;
+    }
+
+    /// <summary>Compiles steps outside the route's interception (intercept bodies, OnCompletion bodies).</summary>
+    private IProcessor CompileDetached(IList<IProcessorDefinition> outputs)
+    {
+        _detachedCompileDepth++;
+        try { return NodePipeline.Body(this, outputs); }
+        finally { _detachedCompileDepth--; }
     }
 
     /// <summary>Short node label from the definition type (e.g. <c>ToDefinition</c> → <c>to</c>).</summary>
@@ -1445,7 +1632,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         bool failFast)
     {
         List<Exception>? errors = null;
-        foreach (var listener in _lifecycleListeners)
+        foreach (var listener in Volatile.Read(ref _lifecycleListeners))
         {
             try { await invoker(listener).ConfigureAwait(false); }
             catch (Exception ex)
@@ -1495,6 +1682,23 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     internal Task NotifyExchangeTimedOut(string routeId, string exchangeId, TimeSpan elapsed, CancellationToken ct) =>
         InvokeListenersAsync(nameof(IRouteLifecycleListener.OnExchangeTimedOut),
             l => l.OnExchangeTimedOut(routeId, exchangeId, elapsed, ct), failFast: false);
+
+    // Exchange-level events — published by ExchangeEventsProcessor (outermost route wrapper).
+    // Hot path: callers skip the call entirely when HasLifecycleListeners is false.
+
+    internal bool HasLifecycleListeners => Volatile.Read(ref _lifecycleListeners).Length > 0;
+
+    internal Task NotifyExchangeReceived(string routeId, IExchange exchange, CancellationToken ct) =>
+        InvokeListenersAsync(nameof(IRouteLifecycleListener.OnExchangeReceived),
+            l => l.OnExchangeReceived(routeId, exchange, ct), failFast: false);
+
+    internal Task NotifyExchangeCompleted(string routeId, IExchange exchange, CancellationToken ct) =>
+        InvokeListenersAsync(nameof(IRouteLifecycleListener.OnExchangeCompleted),
+            l => l.OnExchangeCompleted(routeId, exchange, ct), failFast: false);
+
+    internal Task NotifyExchangeFailed(string routeId, IExchange exchange, Exception exception, CancellationToken ct) =>
+        InvokeListenersAsync(nameof(IRouteLifecycleListener.OnExchangeFailed),
+            l => l.OnExchangeFailed(routeId, exchange, exception, ct), failFast: false);
 }
 
 /// <summary>

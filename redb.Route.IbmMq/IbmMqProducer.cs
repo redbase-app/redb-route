@@ -151,8 +151,10 @@ public sealed class IbmMqProducer : ConnectableProducer
 
         var msg = IbmMqMessageHelper.BuildOutgoingMessage(exchange, _options);
 
-        // Inject W3C trace context into MQ message properties (RFH2 usr folder)
-        InjectTraceContext(activity, msg);
+        // Inject W3C trace context into MQ message properties (RFH2 usr folder) - not in
+        // targetClient=Mq mode, where a legacy app must see raw MQMD+body with no properties.
+        if (_options.TargetClient != IbmMqTargetClient.Mq)
+            InjectTraceContext(activity, msg);
 
         if (_options.ReplyTo)
         {

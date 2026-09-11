@@ -45,6 +45,12 @@ public sealed class InstrumentedProcessor : IProcessor
         {
             await _inner.Process(exchange, ct).ConfigureAwait(false);
 
+            // The route id is stamped by the first step of the route pipeline, which this span already
+            // wraps, so at start it was still null and the tag was empty on every route span. Set it
+            // again now that it is known — the span is open until this method returns.
+            if (activity is { IsAllDataRequested: true } && !string.IsNullOrEmpty(exchange.RouteId))
+                activity.SetTag("redb.route.id", exchange.RouteId);
+
             if (activity != null && exchange.Exception != null && !exchange.ExceptionHandled)
             {
                 activity.SetStatus(ActivityStatusCode.Error, exchange.Exception.Message);
@@ -53,6 +59,11 @@ public sealed class InstrumentedProcessor : IProcessor
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // Same late stamp as the success path, and this is where attribution matters most: a failing
+            // span with no route id is the one an operator is actually looking for.
+            if (activity is { IsAllDataRequested: true } && !string.IsNullOrEmpty(exchange.RouteId))
+                activity.SetTag("redb.route.id", exchange.RouteId);
+
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.RecordException(ex);
             throw;

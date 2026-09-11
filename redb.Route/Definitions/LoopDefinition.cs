@@ -16,7 +16,7 @@ public class LoopDefinition : RouteDefinitionBase<LoopDefinition>, IRouteScope
     private readonly LoopMode _mode;
     private readonly int _count;
     private readonly Func<IExchange, int>? _countFactory;
-    private readonly Func<IExchange, bool>? _condition;
+    private readonly IPredicate? _condition;
     private readonly bool _copy;
     private readonly bool _shareScope;
 
@@ -41,13 +41,18 @@ public class LoopDefinition : RouteDefinitionBase<LoopDefinition>, IRouteScope
     }
 
     /// <summary>Creates a while-condition loop definition.</summary>
-    internal LoopDefinition(Func<IExchange, bool> condition, bool copy, bool shareScope)
+    internal LoopDefinition(IPredicate condition, bool copy, bool shareScope)
     {
         ArgumentNullException.ThrowIfNull(condition);
         _mode = LoopMode.While;
         _condition = condition;
         _copy = copy;
         _shareScope = shareScope;
+    }
+
+    internal LoopDefinition(Func<IExchange, bool> condition, bool copy, bool shareScope)
+        : this(new Predicates.LambdaPredicate(condition ?? throw new ArgumentNullException(nameof(condition))), copy, shareScope)
+    {
     }
 
     /// <summary>Whether each iteration receives an independent clone of the exchange.</summary>

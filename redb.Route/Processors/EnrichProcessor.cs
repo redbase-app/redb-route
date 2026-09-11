@@ -10,6 +10,7 @@ namespace redb.Route.Processors;
 /// </summary>
 public sealed class EnrichProcessor : IProcessor
 {
+    private IEndpoint? _endpoint;
     private readonly IRouteContext _context;
     private readonly string? _resourceUri;
     private readonly DynamicEndpointResolver? _resolver;
@@ -49,10 +50,10 @@ public sealed class EnrichProcessor : IProcessor
         {
             resourceExchange.Pattern = ExchangePattern.InOut;
 
-            var producer = _resolver is not null
-                ? await _resolver.ResolveProducerAsync(resourceExchange, ct).ConfigureAwait(false)
-                : await GetOrCreateProducerAsync(ct).ConfigureAwait(false);
-            await producer.Process(resourceExchange, ct).ConfigureAwait(false);
+            var (endpoint, producer) = _resolver is not null
+                ? await _resolver.ResolvePairAsync(resourceExchange, ct).ConfigureAwait(false)
+                : await GetOrCreatePairAsync(ct).ConfigureAwait(false);
+            await CountedSend.Process(endpoint, producer, resourceExchange, ct).ConfigureAwait(false);
 
             // Merge the response back into the original exchange
             var merged = _mergeStrategy(exchange, resourceExchange);
@@ -69,14 +70,14 @@ public sealed class EnrichProcessor : IProcessor
         }
     }
 
-    private async Task<IProducer> GetOrCreateProducerAsync(CancellationToken ct)
+    private async Task<(IEndpoint, IProducer)> GetOrCreatePairAsync(CancellationToken ct)
     {
-        if (_producer is not null) return _producer;
-        var endpoint = _context.GetEndpoint(_resourceUri!);
-        _producer = endpoint.CreateProducer();
+        if (_producer is not null) return (_endpoint!, _producer);
+        _endpoint = _context.GetEndpoint(_resourceUri!);
+        _producer = _endpoint.CreateProducer();
         await _producer.Start(ct).ConfigureAwait(false);
         (_context as RouteContext)?.TrackProducer(_producer);
-        return _producer;
+        return (_endpoint, _producer);
     }
 }
 
@@ -94,6 +95,7 @@ public sealed class PollEnrichProcessor : IProcessor
     private readonly Func<IExchange, IExchange?, IExchange> _mergeStrategy;
     private readonly TimeSpan _timeout;
     private IProducer? _producer;
+    private IEndpoint? _endpoint;
 
     /// <summary>Creates a poll enrich processor.</summary>
     /// <param name="context">Route context for resolving the resource endpoint.</param>
@@ -141,10 +143,10 @@ public sealed class PollEnrichProcessor : IProcessor
                 pollExchange = exchange.CloneLinked();
                 pollExchange.Pattern = ExchangePattern.InOut;
 
-                var producer = _resolver is not null
-                    ? await _resolver.ResolveProducerAsync(pollExchange, timeoutCts.Token).ConfigureAwait(false)
-                    : GetOrCreateProducer();
-                await producer.Process(pollExchange, timeoutCts.Token).ConfigureAwait(false);
+                var (endpoint, producer) = _resolver is not null
+                    ? await _resolver.ResolvePairAsync(pollExchange, timeoutCts.Token).ConfigureAwait(false)
+                    : GetOrCreatePair();
+                await CountedSend.Process(endpoint, producer, pollExchange, timeoutCts.Token).ConfigureAwait(false);
                 resourceExchange = pollExchange;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -166,11 +168,11 @@ public sealed class PollEnrichProcessor : IProcessor
         }
     }
 
-    private IProducer GetOrCreateProducer()
+    private (IEndpoint, IProducer) GetOrCreatePair()
     {
-        if (_producer is not null) return _producer;
-        var endpoint = _context.GetEndpoint(_resourceUri!);
-        _producer = endpoint.CreateProducer();
-        return _producer;
+        if (_producer is not null) return (_endpoint!, _producer);
+        _endpoint = _context.GetEndpoint(_resourceUri!);
+        _producer = _endpoint.CreateProducer();
+        return (_endpoint, _producer);
     }
 }

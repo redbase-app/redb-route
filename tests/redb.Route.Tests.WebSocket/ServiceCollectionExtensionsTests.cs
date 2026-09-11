@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using redb.Route.Core;
+using redb.Route.Extensions;
 using redb.Route.Abstractions;
 using redb.Route.WebSocket;
 
@@ -43,18 +45,18 @@ public class ServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddRedbRouteWebSocket_RegistersWithRouteContext()
+    public async Task AddRedbRouteWebSocket_RegistersWithRouteContext()
     {
         var services = new ServiceCollection();
-        var context = Substitute.For<IRouteContext>();
-        services.AddSingleton(context);
         services.AddRedbRouteWebSocket();
-        var sp = services.BuildServiceProvider();
+        await using var sp = services.BuildServiceProvider();
+        await using var context = new RouteContext();
 
-        sp.GetService<IWsComponentRegistrar>();
+        foreach (var configurator in sp.GetServices<IRouteContextConfigurator>())
+            configurator.Configure(context);
 
-        context.Received(1).AddComponent(Arg.Is<WsComponent>(c => c.Scheme == "ws"));
-        context.Received(1).AddComponent(Arg.Is<WssComponent>(c => c.Scheme == "wss"));
+        context.HasComponent("ws").Should().BeTrue();
+        context.HasComponent("wss").Should().BeTrue();
     }
 
     [Fact]

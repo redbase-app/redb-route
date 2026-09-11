@@ -42,6 +42,8 @@ internal sealed class LdapProducer : ConnectableProducer
     }
 
     /// <inheritdoc />
+    // No RecordMessageOut anywhere below: the core (ToProcessor / the template) counts every
+    // send once; per-operation self-recording doubled routed numbers (ownership audit).
     public override async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         EnsureStarted();
@@ -182,7 +184,6 @@ internal sealed class LdapProducer : ConnectableProducer
         activity?.SetTag("ldap.result_count", results.Count);
 
         // Set exchange output
-        _endpoint.RecordMessageOut();
 
         exchange.In.Body = results;
         exchange.In.Headers[LdapHeaders.ResultCount] = results.Count;
@@ -226,7 +227,6 @@ internal sealed class LdapProducer : ConnectableProducer
         await conn.AddAsync(entry, ct).ConfigureAwait(false);
 
         activity?.SetTag("ldap.dn", dn);
-        _endpoint.RecordMessageOut();
 
         exchange.In.Body = dn;
         exchange.In.Headers[LdapHeaders.Dn] = dn;
@@ -275,7 +275,6 @@ internal sealed class LdapProducer : ConnectableProducer
 
         activity?.SetTag("ldap.dn", dn);
         activity?.SetTag("ldap.mod_count", mods.Length);
-        _endpoint.RecordMessageOut();
 
         exchange.In.Body = dn;
         exchange.In.Headers[LdapHeaders.Dn] = dn;
@@ -296,7 +295,6 @@ internal sealed class LdapProducer : ConnectableProducer
         await conn.DeleteAsync(dn, ct).ConfigureAwait(false);
 
         activity?.SetTag("ldap.dn", dn);
-        _endpoint.RecordMessageOut();
 
         exchange.In.Body = dn;
         exchange.In.Headers[LdapHeaders.Dn] = dn;
@@ -325,7 +323,6 @@ internal sealed class LdapProducer : ConnectableProducer
 
         activity?.SetTag("ldap.dn", dn);
         activity?.SetTag("ldap.compare_result", result);
-        _endpoint.RecordMessageOut();
 
         exchange.In.Body = result;
         exchange.In.Headers[LdapHeaders.Dn] = dn;
@@ -358,7 +355,6 @@ internal sealed class LdapProducer : ConnectableProducer
 
         activity?.SetTag("ldap.old_dn", dn);
         activity?.SetTag("ldap.new_dn", resultDn);
-        _endpoint.RecordMessageOut();
 
         exchange.In.Body = resultDn;
         exchange.In.Headers[LdapHeaders.OldDn] = dn;
@@ -395,7 +391,6 @@ internal sealed class LdapProducer : ConnectableProducer
             await conn.BindAsync(_options.ProtocolVersion, authDn, authPassword, ct).ConfigureAwait(false);
 
             activity?.SetTag("ldap.bind_result", 0);
-            _endpoint.RecordMessageOut();
 
             exchange.In.Body = true;
             exchange.In.Headers[LdapHeaders.BindResult] = 0;

@@ -38,11 +38,10 @@ public sealed class AzureServiceBusEndpointOptionsTests
         var options = new AzureServiceBusEndpointOptions
         {
             ConnectionString = "Endpoint=sb://test",
-            MaxConcurrentCalls = 0
+            MaxConcurrentCalls = "0"
         };
         var act = () => options.Validate();
-        act.Should().Throw<ArgumentOutOfRangeException>()
-            .WithParameterName("MaxConcurrentCalls");
+        act.Should().Throw<ArgumentException>().WithMessage("*maxConcurrentCalls*");
     }
 
     [Fact]
@@ -162,7 +161,7 @@ public sealed class AzureServiceBusEndpointOptionsTests
         options.ConnectionString.Should().Be("Endpoint=sb://test");
         options.SubscriptionName.Should().Be("sub1");
         options.ReceiveMode.Should().Be("ReceiveAndDelete");
-        options.MaxConcurrentCalls.Should().Be(5);
+        options.ResolvedMaxConcurrentCalls.Should().Be(5);
         options.PrefetchCount.Should().Be(10);
         options.MaxAutoLockRenewalDuration.Should().Be(600);
         options.SubQueue.Should().Be("deadletter");
@@ -191,7 +190,7 @@ public sealed class AzureServiceBusEndpointOptionsTests
         var options = new AzureServiceBusEndpointOptions();
 
         options.ReceiveMode.Should().Be("PeekLock");
-        options.MaxConcurrentCalls.Should().Be(1);
+        options.ResolvedMaxConcurrentCalls.Should().Be(1);
         options.PrefetchCount.Should().Be(0);
         options.MaxAutoLockRenewalDuration.Should().Be(300);
         options.EnableSessions.Should().BeFalse();

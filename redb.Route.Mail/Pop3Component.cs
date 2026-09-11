@@ -80,6 +80,8 @@ public class Pop3Consumer : DrainableConsumer
     private readonly Regex? _subjectRegex;
     private readonly HashSet<string>? _fromFilter;
     private long _processedCount;
+    // POP3 TOP is optional (RFC 1939); once a server refuses it, stop asking every message.
+    private bool _serverLacksTop;
 
     /// <inheritdoc />
     protected override IEndpoint ConsumerEndpoint => _endpoint;
@@ -128,7 +130,32 @@ public class Pop3Consumer : DrainableConsumer
                 {
                     if (processingCt.IsCancellationRequested) break;
 
-                    var mime = await client.GetMessageAsync(i, processingCt).ConfigureAwait(false);
+                    MimeMessage mime;
+                    if (!_options.FetchBody && !_serverLacksTop)
+                    {
+                        // fetchBody=false: envelope scanning - headers only (часть B of the sweep).
+                        try
+                        {
+                            var headerList = await client.GetMessageHeadersAsync(i, processingCt).ConfigureAwait(false);
+                            mime = MailMessageHelper.FromHeadersOnly(headerList);
+                        }
+                        catch (NotSupportedException ex)
+                        {
+                            // Headers-only needs the POP3 TOP command, which RFC 1939 makes
+                            // OPTIONAL. Without this fallback the poll died with a generic
+                            // transient warning every cycle, indistinguishable from a network
+                            // blip (ревью дуги, M16). Fall back to full fetch, say why, once.
+                            _serverLacksTop = true;
+                            Logger?.LogWarning(ex,
+                                "POP3 server does not support the TOP command; fetchBody=false " +
+                                "cannot do headers-only on this server - falling back to full fetch");
+                            mime = await client.GetMessageAsync(i, processingCt).ConfigureAwait(false);
+                        }
+                    }
+                    else
+                    {
+                        mime = await client.GetMessageAsync(i, processingCt).ConfigureAwait(false);
+                    }
 
                     // Idempotency check
                     if (_seenIds is not null)
@@ -141,7 +168,7 @@ public class Pop3Consumer : DrainableConsumer
                     if (!PassesFilters(mime)) continue;
                     if (!PassesAgeFilter(mime)) continue;
 
-                    var exchange = MailMessageHelper.CreateExchange(mime, "pop3", index: i, scopeFactory: _endpoint.ScopeFactory);
+                    var exchange = MailMessageHelper.CreateExchange(mime, "pop3", index: i, scopeFactory: _endpoint.ScopeFactory, options: _options);
 
                     if (_options.KeepRawMessage)
                         exchange.Properties["RawMimeMessage"] = mime;

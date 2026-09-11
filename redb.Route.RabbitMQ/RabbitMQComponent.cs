@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.RabbitMQ;
@@ -34,6 +35,10 @@ public sealed partial class RabbitMQComponent : ComponentBase
 
     /// <inheritdoc />
     public override string Scheme => "rabbitmq";
+
+    /// <summary>Structured XML form (Route-XML Ф0 §7.2): <c>&lt;rabbitmq queue="orders"/&gt;</c>.</summary>
+    public override string? StructuredPathSynonym => "queue";
+
 
     /// <inheritdoc />
     public override IEndpoint CreateEndpoint(EndpointUri uri)
@@ -149,16 +154,10 @@ public sealed partial class RabbitMQComponent : ComponentBase
         // applied (matches the historical contract of RabbitMQConnectionFactory.Build()).
         if (!string.IsNullOrEmpty(options.ConnectionFactory))
         {
-            var registryFactory = Context?.GetFromRegistry<RabbitMQConnectionFactory>(options.ConnectionFactory);
-            if (registryFactory is not null)
-            {
-                Logger?.LogDebug("RabbitMQ: using ConnectionFactory '{Name}' from registry", options.ConnectionFactory);
-                return registryFactory.Build();
-            }
-
-            Logger?.LogWarning(
-                "RabbitMQ: ConnectionFactory '{Name}' not found in registry — falling back to inline URI parameters",
-                options.ConnectionFactory);
+            // A set-but-unknown name fails loud — never a silent fallback to URI params (Ф11 Ж-1).
+            var registryFactory = Context.GetRequiredFromRegistry<RabbitMQConnectionFactory>(options.ConnectionFactory);
+            Logger?.LogDebug("RabbitMQ: using ConnectionFactory '{Name}' from registry", options.ConnectionFactory);
+            return registryFactory.Build();
         }
 
         var hostList = options.Host.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

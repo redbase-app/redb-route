@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Reflection;
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 
 namespace redb.Route.Controllers;
@@ -18,6 +19,7 @@ public sealed class SignalRControllerDispatcher : IProcessor
 {
     private readonly FrozenDictionary<string, MethodEntry> _methods;
     private readonly IRouteContext _context;
+    private readonly ILogger? _logger;
 
     /// <summary>Header key for the SignalR method name (matches SignalRHeaders.Method).</summary>
     internal const string MethodHeader = "redbSignalR.Method";
@@ -31,6 +33,7 @@ public sealed class SignalRControllerDispatcher : IProcessor
             throw new ArgumentException("At least one controller type is required.", nameof(controllerTypes));
 
         _methods = BuildMethodMap(controllerTypes);
+        _logger = ControllerErrorReporting.CreateLogger<SignalRControllerDispatcher>(context);
     }
 
     /// <inheritdoc />
@@ -49,13 +52,26 @@ public sealed class SignalRControllerDispatcher : IProcessor
             return;
         }
 
+        // Binding failures are the caller's 400, action failures are our 500 — the boundary is
+        // the resolution step, same as the HTTP dispatcher.
+        object?[] parameters;
+        try
+        {
+            parameters = ParameterResolver.ResolvePositional(entry.Method, exchange.In.Body, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            WriteError(exchange, 400, ControllerErrorReporting.BadRequestCode,
+                ControllerErrorReporting.ReportBadRequest(_logger, ex, exchange, methodName));
+            return;
+        }
+
         try
         {
             var controller = (RedbController)Activator.CreateInstance(entry.ControllerType)!;
             controller.Context = _context;
             controller.Exchange = exchange;
 
-            var parameters = ParameterResolver.ResolvePositional(entry.Method, exchange.In.Body, ct);
             var result = entry.Method.Invoke(controller, parameters);
 
             if (result is Task task)
@@ -66,10 +82,19 @@ public sealed class SignalRControllerDispatcher : IProcessor
 
             WriteResult(exchange, result);
         }
+        catch (TargetInvocationException tie) when (tie.InnerException is not null)
+        {
+            // A sync action surfaces its exception wrapped in TIE by MethodInfo.Invoke; an async one
+            // rethrows the original from the faulted task. Unwrap TIE and nothing else: `ex.InnerException
+            // ?? ex` would skip a level on the async path and log a deeper transient wrapper (a
+            // SocketException inside a DbException) instead of the failure the action actually reported.
+            WriteError(exchange, 500, ControllerErrorReporting.ErrorCode,
+                ControllerErrorReporting.Report(_logger, tie.InnerException, exchange, methodName));
+        }
         catch (Exception ex)
         {
-            var inner = ex.InnerException ?? ex;
-            WriteError(exchange, 500, "InternalError", inner.Message);
+            WriteError(exchange, 500, ControllerErrorReporting.ErrorCode,
+                ControllerErrorReporting.Report(_logger, ex, exchange, methodName));
         }
     }
 

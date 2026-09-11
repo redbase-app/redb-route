@@ -4,6 +4,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using redb.Route.Abstractions;
 using SysExpression = System.Linq.Expressions.Expression;
 
@@ -14,488 +15,6 @@ namespace redb.Route.Expressions;
 /// </summary>
 public static partial class ExpressionResolver
 {
-    #region Template compilation
-
-    /// <summary>
-    /// Compiles a template string into a delegate
-    /// </summary>
-    private static Func<IExchange, string> CompileTemplate(string template)
-    {
-        DebugLog($" Compiling new template: '{template}'");
-        
-        try
-        {
-            DebugLog($"Starting template compilation: '{template}'");
-            
-            // Find all ${...} expressions in the template
-            var matches = TemplateRegex.Matches(template);
-            
-            if (matches.Count == 0)
-            {
-                // If no variables found, return the template unchanged
-                return _ => template;
-            }
-            
-            DebugLog($"Found {matches.Count} expressions in template");
-            
-            // Split the template into parts and build an expression tree for compilation
-            var parts = TemplateRegex.Split(template);
-            var parameterExpression = SysExpression.Parameter(typeof(IExchange), "exchange");
-            
-            // Collect all parts into a string concatenation expression
-            var expressionParts = new List<SysExpression>();
-            
-            for (int i = 0; i < parts.Length; i++)
-            {
-                if (i % 2 == 0)
-                {
-                    // This is plain text between ${...} expressions
-                    if (!string.IsNullOrEmpty(parts[i]))
-                    {
-                        expressionParts.Add(SysExpression.Constant(parts[i]));
-                    }
-                }
-                else
-                {
-                    // This is a ${...} expression
-                    var variableName = parts[i];
-                    DebugLog($"Compiling expression: '{variableName}'");
-                    
-                    // Check whether this is an exchange variable
-                    var propertyExpression = CompileTemplateExpression(variableName, parameterExpression);
-                    expressionParts.Add(propertyExpression);
-                }
-            }
-            
-            // Combine all parts into a single expression
-            SysExpression resultExpression = null;
-            
-            if (expressionParts.Count == 0)
-            {
-                resultExpression = SysExpression.Constant(string.Empty);
-            }
-            else if (expressionParts.Count == 1)
-            {
-                // Single expression — ensure string conversion via object?.ToString()
-                var singlePart = expressionParts[0];
-                var objValue = SysExpression.Convert(singlePart, typeof(object));
-                var nullCheck = SysExpression.Equal(objValue, SysExpression.Constant(null, typeof(object)));
-                var emptyStr = SysExpression.Constant(string.Empty);
-                var toStr = SysExpression.Call(objValue, typeof(object).GetMethod("ToString")!);
-                resultExpression = SysExpression.Condition(nullCheck, emptyStr, toStr);
-            }
-            else
-            {
-                // Use StringBuilder for optimized string concatenation
-                var stringBuilderType = typeof(StringBuilder);
-                var appendMethod = stringBuilderType.GetMethod("Append", new[] { typeof(object) });
-                var toStringMethod = stringBuilderType.GetMethod("ToString", Type.EmptyTypes);
-                
-                // Create a StringBuilder instance
-                var builderVar = SysExpression.Variable(stringBuilderType, "builder");
-                var createBuilder = SysExpression.Assign(builderVar, SysExpression.New(stringBuilderType));
-                
-                // Append all parts
-                var appendExpressions = expressionParts.Select(part => 
-                    SysExpression.Call(builderVar, appendMethod, SysExpression.Convert(part, typeof(object))));
-                
-                // Call ToString
-                var callToString = SysExpression.Call(builderVar, toStringMethod);
-                
-                // Assemble everything into a block expression
-                var blockExpressions = new List<SysExpression> { createBuilder };
-                blockExpressions.AddRange(appendExpressions);
-                blockExpressions.Add(callToString);
-                
-                resultExpression = SysExpression.Block(new[] { builderVar }, blockExpressions);
-            }
-            
-            // Create a lambda expression and compile it
-            var lambda = SysExpression.Lambda<Func<IExchange, string>>(
-                SysExpression.Convert(resultExpression, typeof(string)), 
-                parameterExpression);
-                
-            var compiledTemplate = lambda.Compile();
-            
-            // Add to cache
-            DebugLog($"Template successfully compiled: '{template}'");
-            CacheCompiledTemplate(template, compiledTemplate);
-            DebugLog($" Template compiled and cached: '{template}'");
-            
-            return compiledTemplate;
-        }
-        catch (Exception ex)
-        {
-            // Compilation error = syntax error → fail fast
-            DebugLog($"Template compilation error: {ex.Message}");
-            throw new ExpressionCompilationException(
-                $"Failed to compile template '{template}': {ex.Message}", ex);
-        }
-    }
-
-    /// <summary>
-    /// Compiles a single template expression
-    /// </summary>
-    private static SysExpression CompileTemplateExpression(string expression, ParameterExpression exchangeParam)
-    {
-        DebugLog($"Compiling single template expression: '{expression}'");
-        
-        try
-        {
-            // Check if this is a logical() function call
-            var logicalMatch = LogicalFunctionRegex.Match(expression);
-            if (logicalMatch.Success)
-            {
-                var logicalExpression = logicalMatch.Groups[1].Value;
-                DebugLog($"Detected logical function with expression: '{logicalExpression}'");
-                
-                // Compile the logical expression and convert the result to string
-                var logicalFunc = CompileLogicalExpression(logicalExpression);
-                var logicalCall = SysExpression.Call(
-                    SysExpression.Constant(logicalFunc),
-                    typeof(Func<IExchange, bool>).GetMethod("Invoke")!,
-                    exchangeParam
-                );
-                
-                // Convert bool to string
-                var toStringMethod = typeof(bool).GetMethod("ToString", Type.EmptyTypes);
-                return SysExpression.Call(logicalCall, toStringMethod!);
-            }
-            
-            // Check for jpath function
-            var jpathMatch = JPathFunctionRegex.Match(expression);
-            if (jpathMatch.Success)
-            {
-                // Compile the jpath call
-                var jpathExpression = CompileJPathExpression(expression, exchangeParam);
-                
-                // Convert the result to string
-                var nullCheck = SysExpression.Equal(jpathExpression, SysExpression.Constant(null, typeof(object)));
-                var emptyString = SysExpression.Constant(string.Empty);
-                var toStringMethod = typeof(object).GetMethod("ToString");
-                var toStringCall = SysExpression.Call(jpathExpression, toStringMethod!);
-                
-                // Return empty string if value is null, otherwise ToString()
-                return SysExpression.Condition(nullCheck, emptyString, toStringCall);
-            }
-            
-            // Check for xpath function
-            var xpathMatchTpl = XPathFunctionRegex.Match(expression);
-            if (xpathMatchTpl.Success)
-            {
-                var xpathExpression = CompileXPathExpression(expression, exchangeParam);
-                
-                var nullCheck = SysExpression.Equal(xpathExpression, SysExpression.Constant(null, typeof(object)));
-                var emptyString = SysExpression.Constant(string.Empty);
-                var toStringMethod = typeof(object).GetMethod("ToString");
-                var toStringCall = SysExpression.Call(xpathExpression, toStringMethod!);
-                
-                return SysExpression.Condition(nullCheck, emptyString, toStringCall);
-            }
-            
-            // Route function calls (upper, lower, trim, concat, etc.) and index access through AST
-            if (HasFunctionCalls(expression) || HasIndexAccess(expression))
-            {
-                var astCompiled = CompileExpressionWithAst(expression);
-                var astFunc = SysExpression.Constant(astCompiled);
-                var invokeResult = SysExpression.Invoke(astFunc, exchangeParam);
-                var invObjExpr = SysExpression.Convert(invokeResult, typeof(object));
-                var invNullCheck = SysExpression.Equal(invObjExpr, SysExpression.Constant(null, typeof(object)));
-                var invToStringMethod = typeof(object).GetMethod("ToString", Type.EmptyTypes);
-                var invToStringCall = SysExpression.Call(invObjExpr, invToStringMethod!);
-                return SysExpression.Condition(invNullCheck, SysExpression.Constant(string.Empty), invToStringCall);
-            }
-            
-            // Check various expression types
-            if (expression.StartsWith("body."))
-            {
-                DebugLog($"Detected body expression: '{expression}'");
-                var propertyPath = expression.Substring(BODY_PREFIX.Length);
-                DebugLog($"Resolving body property via runtime reflection: '{propertyPath}'");
-                
-                // Use runtime reflection to access body properties
-                var resolveMethodInfo = typeof(ExpressionResolver).GetMethod(
-                    nameof(ResolveBodyProperty), 
-                    BindingFlags.NonPublic | BindingFlags.Static);
-                
-                var bodyPropertyCall = SysExpression.Call(
-                    resolveMethodInfo,
-                    exchangeParam,
-                    SysExpression.Constant(propertyPath));
-                
-                // Convert the result to string
-                var nullCheck = SysExpression.Equal(bodyPropertyCall, SysExpression.Constant(null, typeof(object)));
-                var emptyString = SysExpression.Constant(string.Empty);
-                var toStringMethod = typeof(object).GetMethod("ToString");
-                var toStringCall = SysExpression.Call(
-                    SysExpression.Convert(bodyPropertyCall, typeof(object)), 
-                    toStringMethod!);
-                
-                return SysExpression.Condition(nullCheck, emptyString, toStringCall);
-            }
-            
-            if (expression == "body")
-            {
-                DebugLog($"Detected body expression (entire object): '{expression}'");
-                var inProperty = SysExpression.Property(exchangeParam, nameof(IExchange.In));
-                var getBodyMethod = typeof(IMessage).GetMethods()
-                    .FirstOrDefault(m => m.Name == "getBody" && !m.IsGenericMethod);
-                var bodyValue = SysExpression.Call(inProperty, getBodyMethod!);
-                return bodyValue;
-            }
-
-            if (expression == "contentType")
-            {
-                DebugLog($"Detected contentType expression");
-                var inProperty = SysExpression.Property(exchangeParam, nameof(IExchange.In));
-                var contentTypeProperty = SysExpression.Property(inProperty, nameof(IMessage.ContentType));
-                var nullCheck = SysExpression.Equal(contentTypeProperty, SysExpression.Constant(null, typeof(string)));
-                return SysExpression.Condition(nullCheck, SysExpression.Constant(string.Empty), contentTypeProperty);
-            }
-            
-            if (expression.StartsWith("header."))
-            {
-                var headerName = expression.Substring(HEADER_PREFIX.Length); // Strip "header." prefix
-                DebugLog($"Detected header expression with name: '{headerName}'");
-                
-                // Check whether headerName contains dots indicating nested properties
-                if (headerName.Contains('.'))
-                {
-                    DebugLog($"Detected nested header: '{headerName}'");
-                    
-                    var resolveHeaderSmartMethod = typeof(ExpressionResolver).GetMethod(
-                        nameof(ResolveHeaderSmart), 
-                        BindingFlags.NonPublic | BindingFlags.Static);
-                    
-                    var headerSmartCall = SysExpression.Call(
-                        resolveHeaderSmartMethod,
-                        exchangeParam,
-                        SysExpression.Constant(headerName));
-                    
-                    // Convert the result to string
-                    var nullCheckSmart = SysExpression.Equal(headerSmartCall, SysExpression.Constant(null, typeof(object)));
-                    var emptyStringSmart = SysExpression.Constant(string.Empty);
-                    var toStringMethodSmart = typeof(object).GetMethod("ToString");
-                    var toStringCallSmart = SysExpression.Call(
-                        SysExpression.Convert(headerSmartCall, typeof(object)),
-                        toStringMethodSmart!);
-                    
-                    return SysExpression.Condition(nullCheckSmart, emptyStringSmart, toStringCallSmart);
-                }
-                
-                // Simple header — also use ResolveHeaderSmart for safe TryGetValue
-                var resolveMethod = typeof(ExpressionResolver).GetMethod(
-                    nameof(ResolveHeaderSmart),
-                    BindingFlags.NonPublic | BindingFlags.Static);
-                
-                var headerResult = SysExpression.Call(
-                    resolveMethod,
-                    exchangeParam,
-                    SysExpression.Constant(headerName));
-                
-                var nullCheckSimple = SysExpression.Equal(headerResult, SysExpression.Constant(null, typeof(object)));
-                var emptyStringSimple = SysExpression.Constant(string.Empty);
-                var toStringSimple = SysExpression.Call(
-                    SysExpression.Convert(headerResult, typeof(object)),
-                    typeof(object).GetMethod("ToString")!);
-                
-                return SysExpression.Condition(nullCheckSimple, emptyStringSimple, toStringSimple);
-            }
-            
-            if (expression.StartsWith("exception."))
-            {
-                var exceptionPropertyName = expression.Substring(EXCEPTION_PREFIX.Length); // Strip "exception." prefix
-                DebugLog($"Detected exception expression with name: '{exceptionPropertyName}'");
-                
-                var exceptionProperty = SysExpression.Property(exchangeParam, nameof(IExchange.Exception));
-                
-                // Check for null
-                var nullCheck = SysExpression.Equal(exceptionProperty, SysExpression.Constant(null, typeof(Exception)));
-                var emptyString = SysExpression.Constant(string.Empty);
-                
-                // Get the exception property (e.g. Message, StackTrace)
-                var exceptionPropertyInfo = typeof(Exception).GetProperty(exceptionPropertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                if (exceptionPropertyInfo != null)
-                {
-                    var propertyAccess = SysExpression.Property(exceptionProperty, exceptionPropertyInfo);
-                    var toStringMethod = typeof(object).GetMethod("ToString");
-                    var toStringCall = SysExpression.Call(propertyAccess, toStringMethod!);
-                    
-                    // Return empty string if exception is null, otherwise the property value
-                    return SysExpression.Condition(nullCheck, emptyString, toStringCall);
-                }
-                else
-                {
-                    DebugLog($"Property Exception.{exceptionPropertyName} not found");
-                    return emptyString;
-                }
-            }
-            
-            if (expression.Equals("exception"))
-            {
-                DebugLog("Detected exception expression (entire object)");
-                
-                var exceptionProperty = SysExpression.Property(exchangeParam, nameof(IExchange.Exception));
-                
-                // Check for null
-                var nullCheck = SysExpression.Equal(exceptionProperty, SysExpression.Constant(null, typeof(Exception)));
-                var emptyString = SysExpression.Constant(string.Empty);
-                
-                var toStringMethod = typeof(object).GetMethod("ToString");
-                var toStringCall = SysExpression.Call(exceptionProperty, toStringMethod!);
-                
-                // Return empty string if exception is null, otherwise ToString()
-                return SysExpression.Condition(nullCheck, emptyString, toStringCall);
-            }
-            
-            // Check whether the expression contains operations BEFORE prefix-based dispatch,
-            // because expressions like "property.a + property.b" start with "property." but need
-            // arithmetic compilation, not simple property access.
-            if (HasBinaryOperatorsInExpression(expression))
-            {
-                // Route all binary expressions through AST for uniform handling
-                var astCompiled = CompileExpressionWithAst(expression);
-                var astFunc = SysExpression.Constant(astCompiled);
-                var invokeResult = SysExpression.Invoke(astFunc, exchangeParam);
-                var invObjExpr = SysExpression.Convert(invokeResult, typeof(object));
-                var invNullCheck = SysExpression.Equal(invObjExpr, SysExpression.Constant(null, typeof(object)));
-                var invToStringMethod = typeof(object).GetMethod("ToString", Type.EmptyTypes);
-                var invToStringCall = SysExpression.Call(invObjExpr, invToStringMethod!);
-                return SysExpression.Condition(invNullCheck, SysExpression.Constant(string.Empty), invToStringCall);
-            }
-            
-            if (expression.StartsWith("property."))
-            {
-                var propertyName = expression.Substring(PROPERTY_PREFIX.Length);
-                DebugLog($"Processing property: '{propertyName}'");
-                
-                // Check whether propertyName contains dots indicating nested properties
-                if (propertyName.Contains('.'))
-                {
-                    DebugLog($"Detected nested property: '{propertyName}'");
-                    
-                    // Use ResolvePropertyPathWithExchange for complex path resolution
-                    var resolveMethodInfo = typeof(ExpressionResolver).GetMethod(
-                        nameof(ResolvePropertyPathWithExchange), 
-                        BindingFlags.NonPublic | BindingFlags.Static);
-                    
-                    // Find the first path segment (before the first dot)
-                    var firstDotIndex = propertyName.IndexOf('.');
-                    var firstProperty = propertyName.Substring(0, firstDotIndex);
-                    var remainingPath = propertyName.Substring(firstDotIndex + 1);
-                    
-                    // Get the root object
-                    var getPropertyMethodInfo = typeof(ExpressionResolver).GetMethod(
-                        nameof(GetExchangeProperty), 
-                        BindingFlags.NonPublic | BindingFlags.Static);
-                    
-                    var rootObj = SysExpression.Call(
-                        getPropertyMethodInfo,
-                        exchangeParam,
-                        SysExpression.Constant(firstProperty));
-                    
-                    // Resolve the remaining path
-                    var propertyCall = SysExpression.Call(
-                        resolveMethodInfo,
-                        rootObj,
-                        SysExpression.Constant(remainingPath),
-                        exchangeParam);
-                    
-                    return SysExpression.Convert(propertyCall, typeof(object));
-                }
-                else
-                {
-                    // Simple property
-                    var getPropertyMethodInfo = typeof(ExpressionResolver).GetMethod(
-                        nameof(GetExchangeProperty), 
-                        BindingFlags.NonPublic | BindingFlags.Static);
-                    
-                    var propertyCall = SysExpression.Call(
-                        getPropertyMethodInfo,
-                        exchangeParam,
-                        SysExpression.Constant(propertyName));
-                    
-                    return SysExpression.Convert(propertyCall, typeof(object));
-                }
-            }
-            
-            // Check whether the expression contains operations
-            if (HasOperations(expression))
-            {
-                // If it contains operations, compile as a full expression
-                var compiledExpression = CompileExpression(expression, exchangeParam);
-                
-                // Convert the result to string safely (null → empty string)
-                var objExpr = SysExpression.Convert(compiledExpression, typeof(object));
-                var nullCheck = SysExpression.Equal(objExpr, SysExpression.Constant(null, typeof(object)));
-                var emptyString = SysExpression.Constant(string.Empty);
-                var toStringMethod = typeof(object).GetMethod("ToString", Type.EmptyTypes);
-                var toStringCall = SysExpression.Call(objExpr, toStringMethod!);
-                
-                return SysExpression.Condition(nullCheck, emptyString, toStringCall);
-            }
-            else
-            {
-                // Check whether this is an exchange variable
-                // Use GetExchangeProperty which safely returns null for missing keys
-                var getPropertyMethodInfo = typeof(ExpressionResolver).GetMethod(
-                    nameof(GetExchangeProperty), 
-                    BindingFlags.NonPublic | BindingFlags.Static);
-                
-                var propertyCall = SysExpression.Call(
-                    getPropertyMethodInfo,
-                    exchangeParam,
-                    SysExpression.Constant(expression));
-                
-                // Convert to string safely (null → empty string)
-                var nullCheckProp = SysExpression.Equal(propertyCall, SysExpression.Constant(null, typeof(object)));
-                var emptyStringProp = SysExpression.Constant(string.Empty);
-                var toStringMethodProp = typeof(object).GetMethod("ToString", Type.EmptyTypes);
-                var toStringCallProp = SysExpression.Call(propertyCall, toStringMethodProp!);
-                
-                return SysExpression.Condition(nullCheckProp, emptyStringProp, toStringCallProp);
-            }
-        }
-        catch (Exception ex)
-        {
-            DebugLog($"Error compiling template expression '{expression}': {ex.Message}");
-            return SysExpression.Constant(expression);
-        }
-    }
-
-    /// <summary>
-    /// Compiles object property access
-    /// </summary>
-    private static SysExpression CompilePropertyAccess(SysExpression obj, string propertyPath)
-    {
-        DebugLog($"Compiling property access: '{propertyPath}'");
-        var parts = propertyPath.Split('.');
-        var current = obj;
-
-        foreach (var part in parts)
-        {
-            DebugLog($"Processing path segment: '{part}'");
-            var propertyInfo = current.Type.GetProperty(part, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-            if (propertyInfo != null)
-            {
-                current = SysExpression.Property(current, propertyInfo);
-                DebugLog($"Found property: '{part}' of type {propertyInfo.PropertyType.Name}");
-            }
-            else
-            {
-                DebugLog($"Property not found: '{part}', returning empty string");
-                // If property not found, return empty string
-                return SysExpression.Constant(string.Empty);
-            }
-        }
-
-        var toStringMethod = typeof(object).GetMethod(nameof(ToString));
-        DebugLog($"Property access compilation completed: '{propertyPath}'");
-        return SysExpression.Call(current, toStringMethod);
-    }
-
-    #endregion
-
     #region Resolver compilation
 
     /// <summary>
@@ -514,218 +33,6 @@ public static partial class ExpressionResolver
         var lambda = SysExpression.Lambda<Func<object?, string, object?>>(callExpression, objParam, pathParam);
         DebugLog($"Property resolver compiled: '{expression}'");
         return lambda.Compile();
-    }
-
-    #endregion
-
-    #region Logical expression compilation
-
-    /// <summary>
-    /// Compiles a logical expression
-    /// </summary>
-    private static Func<IExchange, bool> CompileLogicalExpression(string expression)
-    {
-        DebugLog($"Compiling logical expression: '{expression}'");
-        
-        var exchangeParam = SysExpression.Parameter(typeof(IExchange), "exchange");
-        var body = CompileLogicalExpressionRecursive(expression, exchangeParam);
-        var lambda = SysExpression.Lambda<Func<IExchange, bool>>(body, exchangeParam);
-        
-        var compiled = lambda.Compile();
-        DebugLog($"Logical expression compiled: '{expression}'");
-        return compiled;
-    }
-    
-    /// <summary>
-    /// Recursively compiles a logical expression
-    /// </summary>
-    private static SysExpression CompileLogicalExpressionRecursive(string expression, ParameterExpression exchangeParam)
-    {
-        DebugLog($"Recursive compilation: '{expression}'");
-
-        // Handle parentheses
-        if (expression.Trim().StartsWith("(") && expression.Trim().EndsWith(")"))
-        {
-            var innerExpression = expression.Trim().Substring(1, expression.Trim().Length - 2);
-            DebugLog($"Processing parenthesized expression: '{innerExpression}'");
-            return CompileLogicalExpressionRecursive(innerExpression, exchangeParam);
-        }
-
-        // For expressions that may contain logical operators (AND, OR, XOR) 
-        // and complex comparisons, use CompileComplexComparison
-        return CompileComplexComparison(expression, exchangeParam);
-    }
-
-    /// <summary>
-    /// Compiles a compound logical expression with AND, OR, etc. operators
-    /// </summary>
-    private static SysExpression CompileComplexComparison(string expression, ParameterExpression exchangeParam)
-    {
-        DebugLog($"Compiling compound expression: '{expression}'");
-        
-        expression = expression.Trim();
-        
-        // Handle parentheses
-        if (expression.StartsWith("(") && expression.EndsWith(")"))
-        {
-            var innerExpression = expression.Substring(1, expression.Length - 2).Trim();
-            DebugLog($"Processing parenthesized expression: '{innerExpression}'");
-            return CompileComplexComparison(innerExpression, exchangeParam);
-        }
-        
-        // Search for OR, AND, XOR operators in precedence order (low to high)
-        // Use FindLogicalOperator for correct searching accounting for nested properties
-        
-        // Search for OR
-        int orIndex = FindLogicalOperator(expression, "OR");
-        if (orIndex >= 0)
-        {
-            DebugLog($"Found OR operator: left='{expression.Substring(0, orIndex)}', right='{expression.Substring(orIndex + 2).TrimStart()}'");
-            
-            var left = CompileComplexComparison(expression.Substring(0, orIndex).Trim(), exchangeParam);
-            var right = CompileComplexComparison(expression.Substring(orIndex + 2).TrimStart(), exchangeParam);
-            
-            return SysExpression.OrElse(left, right);
-        }
-        
-        // Search for AND
-        int andIndex = FindLogicalOperator(expression, "AND");
-        if (andIndex >= 0)
-        {
-            DebugLog($"Found AND operator: left='{expression.Substring(0, andIndex)}', right='{expression.Substring(andIndex + 3).TrimStart()}'");
-            
-            var left = CompileComplexComparison(expression.Substring(0, andIndex).Trim(), exchangeParam);
-            var right = CompileComplexComparison(expression.Substring(andIndex + 3).TrimStart(), exchangeParam);
-            
-            return SysExpression.AndAlso(left, right);
-        }
-        
-        // Search for XOR
-        int xorIndex = FindLogicalOperator(expression, "XOR");
-        if (xorIndex >= 0)
-        {
-            DebugLog($"Found XOR operator: left='{expression.Substring(0, xorIndex)}', right='{expression.Substring(xorIndex + 3).TrimStart()}'");
-            
-            var left = CompileComplexComparison(expression.Substring(0, xorIndex).Trim(), exchangeParam);
-            var right = CompileComplexComparison(expression.Substring(xorIndex + 3).TrimStart(), exchangeParam);
-            
-            // XOR is implemented as (left OR right) AND NOT (left AND right)
-            var leftOrRight = SysExpression.OrElse(left, right);
-            var leftAndRight = SysExpression.AndAlso(left, right);
-            var notLeftAndRight = SysExpression.Not(leftAndRight);
-            
-            return SysExpression.AndAlso(leftOrRight, notLeftAndRight);
-        }
-        
-        // Handle NOT operator
-        if (expression.StartsWith("NOT "))
-        {
-            DebugLog($"Found NOT operator: '{expression.Substring(4)}'");
-            
-            var innerExpr = CompileComplexComparison(expression.Substring(4), exchangeParam);
-            return SysExpression.Not(innerExpr);
-        }
-        
-        // Search for comparison operators (==, !=, >, <, >=, <=)
-        foreach (var op in new[] { "==", "!=", ">=", "<=", ">", "<" })
-        {
-            int index = FindComparisonOperator(expression, op);
-            if (index >= 0)
-            {
-                DebugLog($"Found comparison operator: '{op}'");
-                string leftExpr = expression.Substring(0, index).Trim();
-                string rightExpr = expression.Substring(index + op.Length).Trim();
-                DebugLog($"Left side: '{leftExpr}', right side: '{rightExpr}'");
-                
-                // Check whether the left side contains a property, header, or body prefix
-                bool isPropertyAccess = leftExpr.StartsWith("property.") || rightExpr.StartsWith("property.") ||
-                                        leftExpr.StartsWith("header.") || rightExpr.StartsWith("header.") ||
-                                        leftExpr.StartsWith("body.") || rightExpr.StartsWith("body.");
-                
-                if (isPropertyAccess)
-                {
-                    DebugLog("Detected property access, using CompileBinaryComparison");
-                    // Use a specialized method for binary comparison compilation
-                    return CompileBinaryComparison(leftExpr, op, rightExpr, exchangeParam);
-                }
-                else
-                {
-                    DebugLog("Regular comparison, compiling directly");
-                    var leftExprValue = CompileValueGetter(leftExpr, exchangeParam);
-                    var rightExprValue = CompileValueGetter(rightExpr, exchangeParam);
-                    
-                    return CreateComparisonExpression(leftExprValue, rightExprValue, op);
-                }
-            }
-        }
-        
-        // If no comparison operators found, check if this is a property access
-        if (expression.StartsWith("property.") || expression.StartsWith("header.") || expression.StartsWith("body."))
-        {
-            DebugLog($"Compiling property/header/body access: '{expression}'");
-            var valueExpression = CompileNestedPropertyAccess(expression, exchangeParam);
-            
-            // Convert to bool
-            return SysExpression.Call(
-                typeof(ExpressionResolver).GetMethod(
-                    nameof(ConvertToBoolExpression), 
-                    BindingFlags.NonPublic | BindingFlags.Static),
-                SysExpression.Convert(valueExpression, typeof(object)));
-        }
-        
-        // If no comparison operators, this is just a value
-        DebugLog($"Simple expression without operators: '{expression}'");
-        
-        // Only allow known identifiers and boolean/numeric literals in logical context.
-        // Arbitrary strings like "~~~INVALID~~~" must not silently evaluate to true.
-        var trimmedExpr = expression.Trim();
-        if (!string.Equals(trimmedExpr, "true", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(trimmedExpr, "false", StringComparison.OrdinalIgnoreCase)
-            && !trimmedExpr.StartsWith("body")
-            && !trimmedExpr.StartsWith("header.")
-            && !trimmedExpr.StartsWith("property.")
-            && !trimmedExpr.StartsWith("contentType")
-            && !double.TryParse(trimmedExpr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out _)
-            && !trimmedExpr.StartsWith("jpath(")
-            && !trimmedExpr.StartsWith("xpath("))
-        {
-            throw new ExpressionCompilationException(
-                $"Unrecognized logical expression: '{expression}'. " +
-                "Expected a comparison (e.g. 'property.x > 0'), a boolean literal, or a property/header/body accessor.");
-        }
-        
-        var simpleValueExpression = CompileValueGetter(expression, exchangeParam);
-        
-        // Convert to bool
-        return SysExpression.Call(
-            typeof(ExpressionResolver).GetMethod(
-                nameof(ConvertToBoolExpression), 
-                BindingFlags.NonPublic | BindingFlags.Static),
-            SysExpression.Convert(simpleValueExpression, typeof(object)));
-    }
-
-    /// <summary>
-    /// Compiles a logical expression of the form "property.obj1.field1 operator property.obj2.field2"
-    /// </summary>
-    private static SysExpression CompileBinaryComparison(string leftExpr, string operatorStr, string rightExpr, ParameterExpression exchangeParam)
-    {
-        DebugLog($"Compiling binary comparison: '{leftExpr} {operatorStr} {rightExpr}'");
-        
-        // Compile the left and right sides of the expression
-        var leftValueExpr = CompileValueGetter(leftExpr, exchangeParam);
-        var rightValueExpr = CompileValueGetter(rightExpr, exchangeParam);
-        
-        // Get the comparison method based on the operator
-        var compareMethod = typeof(ExpressionResolver).GetMethod(
-            nameof(CompareExpressionValues),
-            BindingFlags.NonPublic | BindingFlags.Static);
-        
-        // Create a comparison method call with values and the operator
-        return SysExpression.Call(
-            compareMethod,
-            SysExpression.Convert(leftValueExpr, typeof(object)),
-            SysExpression.Convert(rightValueExpr, typeof(object)),
-            SysExpression.Constant(operatorStr));
     }
 
     #endregion
@@ -854,10 +161,14 @@ public static partial class ExpressionResolver
             if (PostfixIncrementDecrementRegex.IsMatch(expression) || PrefixIncrementDecrementRegex.IsMatch(expression)
                 || expression.Contains("??") || ContainsTernary(expression)
                 || HasFunctionCalls(expression) || HasIndexAccess(expression)
-                || expression.Contains(" AND ") || expression.Contains(" OR ") || expression.Contains(" XOR ")
-                || expression.Contains(" == ") || expression.Contains(" != ")
-                || expression.Contains(" > ") || expression.Contains(" < ")
-                || expression.Contains(" >= ") || expression.Contains(" <= ")
+                // Whitespace around an operator carries no meaning here either: an explicit
+                // expression ("Expr(...)") is an expression whatever its spacing. Until
+                // 2026-08-28 this was the last dialect that required single spaces.
+                || ContainsComparisonOrWordLogicOperator(expression)
+                // Route-XML Ф1.5: modulo is new, so no legacy path ever learned it — route it to
+                // the AST. Deliberately narrow (only '%', literals masked) so no existing form
+                // changes its compilation path.
+                || ContainsModuloOperator(expression)
                 || expression.StartsWith("NOT ", StringComparison.OrdinalIgnoreCase)
                 || expression.StartsWith("!", StringComparison.Ordinal)
                 || expression.StartsWith("-", StringComparison.Ordinal)
@@ -874,7 +185,7 @@ public static partial class ExpressionResolver
             DebugLog($"Value expression compiled: '{expression}'");
             return lambda.Compile();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not ExpressionSandboxViolationException)
         {
             DebugLog($"Error compiling expression '{expression}', using AST parser as fallback: {ex.Message}");
             return CompileExpressionWithAst(expression);
@@ -1579,76 +890,21 @@ public static partial class ExpressionResolver
         }
     }
 
-    /// <summary>
-    /// Creates a comparison expression
-    /// </summary>
-    private static SysExpression CreateComparisonExpression(SysExpression left, SysExpression right, string operatorType)
-    {
-        DebugLog($"Creating comparison expression with operator: '{operatorType}'");
-        // Cast to object for universal comparison
-        var leftObj = SysExpression.Convert(left, typeof(object));
-        var rightObj = SysExpression.Convert(right, typeof(object));
-
-        var compareMethod = typeof(ExpressionResolver).GetMethod(nameof(CompareValues), BindingFlags.NonPublic | BindingFlags.Static);
-        var compareCall = SysExpression.Call(compareMethod, leftObj, rightObj, SysExpression.Constant(operatorType));
-
-        return compareCall;
-    }
 
     #endregion
 
     #region Operator search helper methods
 
-    /// <summary>
-    /// Finds the position of a logical operator accounting for parentheses
-    /// </summary>
-    private static int FindLogicalOperator(string expression, string operatorName)
-    {
-        var depth = 0;
-        var i = 0;
-        
-        while (i <= expression.Length - operatorName.Length)
-        {
-            if (expression[i] == '(')
-            {
-                depth++;
-            }
-            else if (expression[i] == ')')
-            {
-                depth--;
-            }
-            else if (depth == 0)
-            {
-                // Check if the operator is at this position
-                if (i + operatorName.Length <= expression.Length)
-                {
-                    var substring = expression.Substring(i, operatorName.Length);
-                    if (string.Equals(substring, operatorName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        // Verify this is a standalone word (not part of another word)
-                        var isWordBoundary = (i == 0 || !char.IsLetterOrDigit(expression[i - 1])) &&
-                                           (i + operatorName.Length == expression.Length || !char.IsLetterOrDigit(expression[i + operatorName.Length]));
-                        
-                        if (isWordBoundary)
-                        {
-                            return i;
-                        }
-                    }
-                }
-            }
-            i++;
-        }
-        
-        return -1;
-    }
 
+
+    /// <summary>
     /// <summary>
     /// Finds the index of the first comparison operator in the string
     /// </summary>
     private static int FindFirstOperator(string expression)
     {
         string[] operators = { "==", "!=", ">=", "<=", ">", "<", "&&", "||", " AND ", " OR ", " XOR " };
-        
+
         int minIndex = int.MaxValue;
         foreach (var op in operators)
         {
@@ -1658,11 +914,10 @@ public static partial class ExpressionResolver
                 minIndex = index;
             }
         }
-        
+
         return minIndex == int.MaxValue ? -1 : minIndex;
     }
 
-    /// <summary>
     /// Finds the last occurrence of an operator outside parentheses in the expression
     /// </summary>
     private static int FindLastOperatorOutsideBrackets(string expression, char op)
@@ -1718,68 +973,6 @@ public static partial class ExpressionResolver
         return lastIndex;
     }
 
-    /// <summary>
-    /// Finds a comparison operator in the expression, accounting for potential nested properties with dots
-    /// </summary>
-    private static int FindComparisonOperator(string expression, string op)
-    {
-        int bracketLevel = 0;
-        bool inString = false;
-        char stringChar = '"';
-        
-        for (int i = 0; i < expression.Length - (op.Length - 1); i++)
-        {
-            // Skip string literal contents
-            if ((expression[i] == '"' || expression[i] == '\'') && (i == 0 || expression[i-1] != '\\'))
-            {
-                if (!inString) 
-                {
-                    inString = true;
-                    stringChar = expression[i];
-                }
-                else if (expression[i] == stringChar)
-                {
-                    inString = false;
-                }
-                continue;
-            }
-            
-            if (inString) continue;
-            
-            // Account for parenthesis nesting level
-            if (expression[i] == '(') 
-            {
-                bracketLevel++;
-                continue;
-            }
-            if (expression[i] == ')') 
-            {
-                bracketLevel--;
-                continue;
-            }
-            
-            // Search for operator only at the top level (outside parentheses)
-            if (bracketLevel == 0)
-            {
-                if (i + op.Length <= expression.Length && expression.Substring(i, op.Length) == op)
-                {
-                    // Ensure this is not part of a property name (e.g. property.customer.Id)
-                    bool isPartOfProperty = false;
-                    
-                    if (i > 0 && expression[i-1] == '.')
-                        isPartOfProperty = true;
-                    
-                    if (i + op.Length < expression.Length && expression[i + op.Length] == '.')
-                        isPartOfProperty = true;
-                    
-                    if (!isPartOfProperty)
-                        return i;
-                }
-            }
-        }
-        
-        return -1;
-    }
 
     /// <summary>
     /// Checks whether the expression is a string literal
@@ -1809,6 +1002,89 @@ public static partial class ExpressionResolver
     /// </summary>
     private static bool HasIndexAccess(string expression)
         => expression.Contains("[") && expression.Contains("]");
+
+    /// <summary>
+    /// Comparison and word-logic operators, looked for outside quoted literals.
+    /// Whitespace between tokens carries no meaning, so detection must not depend on it:
+    /// <c>a&gt;1</c>, <c>a &gt; 1</c> and a tab- or newline-separated form are one expression.
+    /// Word operators are matched the way the tokenizer matches them, case-insensitively.
+    /// Arithmetic is deliberately absent: the value path already handles + - * / without
+    /// requiring whitespace, and a bare literal must not be mistaken for a subtraction.
+    /// </summary>
+    private static readonly Regex ComparisonOrWordLogicRegex =
+        new(@"==|!=|>=|<=|>|<|\b(AND|OR|XOR)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Reports whether the expression contains a comparison or word-logic operator that is not
+    /// part of a quoted literal. Used at the condition boundary to decide whether a string is a
+    /// boolean expression, which has to be parsed, or a value to be read for truthiness.
+    /// </summary>
+    /// <param name="expression">The expression to inspect.</param>
+    /// <returns><c>true</c> when an operator is present outside every quoted literal.</returns>
+    internal static bool ContainsComparisonOrWordLogicOperator(string expression)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        return ComparisonOrWordLogicRegex.IsMatch(MaskQuotedLiterals(expression));
+    }
+
+    /// <summary>
+    /// Reports whether the expression contains the modulo operator outside every quoted literal
+    /// (Route-XML Ф1.5). Narrow on purpose: the value dialect routes '%' to the AST through this,
+    /// and nothing else, so existing forms keep their compilation path.
+    /// </summary>
+    private static bool ContainsModuloOperator(string expression)
+        => MaskQuotedLiterals(expression).Contains('%');
+
+    /// <summary>
+    /// Replaces every quoted literal, quotes included, with a run of filler characters of the same
+    /// length, so an operator inside a literal cannot be seen by a scan over the result. Literals
+    /// are delimited the same way the tokenizer delimits them: a matching quote character, with a
+    /// backslash escaping the next character, and an unterminated literal running to the end.
+    /// </summary>
+    private static string MaskQuotedLiterals(string expression)
+    {
+        if (expression.IndexOf('\'') < 0 && expression.IndexOf('"') < 0)
+            return expression;
+
+        const char filler = '#';
+        var masked = new StringBuilder(expression.Length);
+        var position = 0;
+
+        while (position < expression.Length)
+        {
+            var current = expression[position];
+            if (current is not ('\'' or '"'))
+            {
+                masked.Append(current);
+                position++;
+                continue;
+            }
+
+            var quote = current;
+            masked.Append(filler);
+            position++;
+
+            while (position < expression.Length && expression[position] != quote)
+            {
+                if (expression[position] == '\\' && position + 1 < expression.Length)
+                {
+                    masked.Append(filler);
+                    position++;
+                }
+
+                masked.Append(filler);
+                position++;
+            }
+
+            if (position < expression.Length)
+            {
+                masked.Append(filler);
+                position++;
+            }
+        }
+
+        return masked.ToString();
+    }
 
     /// <summary>
     /// Checks for special prefixes
@@ -1874,18 +1150,19 @@ public static partial class ExpressionResolver
                     return true;
                 }
                 // Check for binary operators
-                else if (c == '+' || c == '-' || c == '*' || c == '/')
+                else if (c == '+' || c == '-' || c == '*' || c == '/' || c == '%')
                 {
                     // For unary operations (e.g. +1 or -2), verify this is not a unary operator
                     if (c == '+' || c == '-')
                     {
                         // If this is the first character or follows another operator, it is unary
-                        if (i == 0 || 
-                            expression[i-1] == '+' || 
-                            expression[i-1] == '-' || 
-                            expression[i-1] == '*' || 
-                            expression[i-1] == '/' || 
-                            expression[i-1] == '(' || 
+                        if (i == 0 ||
+                            expression[i-1] == '+' ||
+                            expression[i-1] == '-' ||
+                            expression[i-1] == '*' ||
+                            expression[i-1] == '/' ||
+                            expression[i-1] == '%' ||
+                            expression[i-1] == '(' ||
                             expression[i-1] == '[' ||
                             expression[i-1] == ',')
                         {

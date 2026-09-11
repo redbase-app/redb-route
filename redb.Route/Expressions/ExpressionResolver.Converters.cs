@@ -35,52 +35,6 @@ public static partial class ExpressionResolver
     }
 
     /// <summary>
-    /// Compares two values using the specified operator
-    /// </summary>
-    private static bool CompareExpressionValues(object? left, object? right, string operatorStr)
-    {
-        DebugLog($"Comparing values: '{left}' {operatorStr} '{right}'");
-        
-        if (left == null || right == null)
-        {
-            // Special handling of null values
-            if (operatorStr == "==") return left == right;
-            if (operatorStr == "!=") return left != right;
-            
-            DebugLog("One of the values is null, cannot perform numeric comparison");
-            return false;
-        }
-        
-        // Try to convert both values to numeric, if possible
-        if (TryConvertToNumber(left, out double leftNum) && TryConvertToNumber(right, out double rightNum))
-        {
-            DebugLog($"Numeric comparison: {leftNum} {operatorStr} {rightNum}");
-            
-            switch (operatorStr)
-            {
-                case "==": return leftNum == rightNum;
-                case "!=": return leftNum != rightNum;
-                case ">": return leftNum > rightNum;
-                case "<": return leftNum < rightNum;
-                case ">=": return leftNum >= rightNum;
-                case "<=": return leftNum <= rightNum;
-            }
-        }
-        
-        // For string and other comparison types
-        DebugLog($"String comparison: '{left}' {operatorStr} '{right}'");
-        
-        switch (operatorStr)
-        {
-            case "==": return left.Equals(right);
-            case "!=": return !left.Equals(right);
-            default:
-                DebugLog($"Operator {operatorStr} is not supported for non-numeric types");
-                return false;
-        }
-    }
-
-    /// <summary>
     /// Checks equality of two values considering their types
     /// </summary>
     private static bool AreEqual(object? left, object? right)
@@ -116,8 +70,10 @@ public static partial class ExpressionResolver
             return result;
         }
 
-        // Try boolean comparison
-        if (TryConvertToBool(left, out var leftBool) && TryConvertToBool(right, out var rightBool))
+        // Try boolean comparison — STRICT conversion only. Truthiness must not leak into
+        // equality: under the total rule "x" and 42 are both truthy, which would make
+        // 42 == 'x' true. Only explicit boolean words, bools and numbers take part here.
+        if (TryConvertToBoolStrict(left, out var leftBool) && TryConvertToBoolStrict(right, out var rightBool))
         {
             var result = leftBool == rightBool;
             DebugLog($"Converted boolean comparison: {leftBool} == {rightBool} = {result}");
@@ -167,47 +123,12 @@ public static partial class ExpressionResolver
     #region Type conversion methods
 
     /// <summary>
-    /// Converts a value to bool for expressions - single parameter function for Expression API
+    /// Converts a value to a boolean by the single DSL truthiness rule
+    /// (<see cref="Predicates.RouteTruthiness"/>). The conversion is total, so this always
+    /// returns <c>true</c>; the Try-shape is kept because the word-logic operators and
+    /// <c>logical()</c> call it, and their call sites predate the unification.
     /// </summary>
-    private static bool ConvertToBoolExpression(object? value)
-    {
-        DebugLog($"Converting to bool: '{value}' (type: {value?.GetType().Name ?? "null"})");
-        
-        if (value == null)
-            return false;
-        
-        if (value is bool boolValue)
-            return boolValue;
-        
-        if (value is string strValue)
-        {
-            if (bool.TryParse(strValue, out bool parsedBool))
-                return parsedBool;
-            
-            // A string is considered true if it is not empty
-            return !string.IsNullOrEmpty(strValue);
-        }
-        
-        if (value is int intValue)
-            return intValue != 0;
-        
-        if (value is long longValue)
-            return longValue != 0;
-        
-        if (value is double doubleValue)
-            return doubleValue != 0;
-        
-        if (value is decimal decimalValue)
-            return decimalValue != 0;
-        
-        // For other types - object exists, so it's true
-        return true;
-    }
-
-    /// <summary>
-    /// Attempts to convert a value to boolean
-    /// </summary>
-    public static bool TryConvertToBool(object? value, out bool result) 
+    public static bool TryConvertToBool(object? value, out bool result)
     {
         return _TryConvertToBool(value, out result);
     }
@@ -215,69 +136,44 @@ public static partial class ExpressionResolver
     // Method with _ prefix to break recursion
     private static bool _TryConvertToBool(object? value, out bool result)
     {
-        if (value == null)
-        {
-            result = false;
-            return true;
-        }
+        result = Predicates.RouteTruthiness.ToBoolean(value);
+        return true;
+    }
 
+    /// <summary>
+    /// Strict partial boolean conversion for equality coercion: a bool is itself, an explicit
+    /// boolean word parses, a number is non-zero. Anything else — an arbitrary string, an
+    /// object — refuses to convert, so equality falls through to its string comparison instead
+    /// of comparing truthiness.
+    /// </summary>
+    private static bool TryConvertToBoolStrict(object? value, out bool result)
+    {
         switch (value)
         {
+            case null:
+                result = false;
+                return true;
             case bool b:
                 result = b;
                 return true;
-                
             case string s:
-                return TryParseBoolFromString(s, out result);
-                
-            case int i:
-                result = i != 0;
+                return Predicates.RouteTruthiness.TryParseBooleanWord(s, out result);
+            case sbyte or byte or short or ushort or int or uint or long or ulong:
+                result = Convert.ToInt64(value) != 0;
                 return true;
-                
+            case float f:
+                result = f != 0f;
+                return true;
             case double d:
-                result = Math.Abs(d) > double.Epsilon;
+                result = d != 0d;
                 return true;
-                
             case decimal m:
-                result = m != 0;
+                result = m != 0m;
                 return true;
-                
-            case long l:
-                result = l != 0;
-                return true;
-                
             default:
                 result = false;
                 return false;
         }
-    }
-
-    /// <summary>
-    /// Parses a boolean value from a string with support for various formats
-    /// </summary>
-    private static bool TryParseBoolFromString(string s, out bool result)
-    {
-        result = false;
-        if (string.IsNullOrEmpty(s)) return false;
-        
-        var normalized = s.Trim().ToLowerInvariant();
-        
-        // Standard boolean values
-        if (bool.TryParse(normalized, out result))
-        {
-            return true;
-        }
-        
-        // Additional formats
-        result = normalized switch
-        {
-            "1" or "yes" or "y" or "on" or "да" or "истина" => true,
-            "0" or "no" or "n" or "off" or "нет" or "ложь" => false,
-            _ => false
-        };
-        
-        return normalized is "1" or "yes" or "y" or "on" or "да" or "истина" or 
-                            "0" or "no" or "n" or "off" or "нет" or "ложь";
     }
 
     /// <summary>

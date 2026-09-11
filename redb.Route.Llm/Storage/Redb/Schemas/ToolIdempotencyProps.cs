@@ -10,9 +10,10 @@ namespace redb.Route.Llm.Storage.Redb.Schemas;
 /// contrast, is keyed on a content hash and lives on its own TTL.
 /// <para>
 /// Each row carries the composite key <c>"llm-tool:{conv}:{toolUseId}"</c> on
-/// the indexed <c>_objects.value_string</c> column. Filtering by this scheme
-/// id alone narrows the scan to idempotency rows — no mixing with cache rows
-/// in <c>WhereRedb</c> queries.
+/// the <c>_objects.value_string</c> column (partial index on PostgreSQL/SQLite;
+/// no index on MSSQL) and, normalized, in <c>value_unique</c> (per-scheme unique
+/// race barrier). Filtering by this scheme id alone narrows the scan to
+/// idempotency rows — no mixing with cache rows in <c>WhereRedb</c> queries.
 /// </para>
 /// </summary>
 [RedbScheme("LLM Tool Idempotency")]

@@ -15,24 +15,18 @@ namespace redb.Route.Tests.Telemetry;
 public class TracedDslTests : IAsyncDisposable
 {
     private readonly RouteContext _context = new();
-    private readonly ActivityListener _listener;
-    private readonly List<Activity> _completedActivities = [];
 
-    public TracedDslTests()
-    {
-        _listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == RouteActivitySource.SourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activity => _completedActivities.Add(activity)
-        };
-        ActivitySource.AddActivityListener(_listener);
-    }
+    // Every route of this class consumes from direct://traced-…, so its spans carry a route id with
+    // that prefix. The probe drops the spans of routes other tests are running at the same time; an
+    // activity listener is process state, so filtering by source name alone would collect theirs too.
+    private readonly RouteTelemetryProbe _probe = RouteTelemetryProbe.ForRouteIdPrefix("direct://traced-");
+
+    private IReadOnlyList<Activity> _completedActivities => _probe.Activities;
 
     public async ValueTask DisposeAsync()
     {
         await _context.Stop();
-        _listener.Dispose();
+        _probe.Dispose();
     }
 
     // ── Inline delegate (sync) ──

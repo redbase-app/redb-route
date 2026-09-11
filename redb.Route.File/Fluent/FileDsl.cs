@@ -126,7 +126,7 @@ public sealed class FileBuilder
     /// <c>${file:name}</c> and <c>${file:name.noext}</c>; exchange expressions are not
     /// available here, the directory is resolved from file metadata alone.
     /// </summary>
-    public FileBuilder MoveTo(string directory) => MoveTo(new StringExpression(directory));
+    public FileBuilder MoveTo(string directory) { _moveTo = directory; return this; }
 
     /// <summary>Strategy when file exists in move target: Override, Append, Fail, Ignore, Move, TryRename.</summary>
     public FileBuilder MoveExisting(string strategy) { _moveExisting = strategy; return this; }
@@ -137,7 +137,7 @@ public sealed class FileBuilder
     /// Pre-move directory (temporary move before processing). Supports the file variables
     /// <c>${file:name}</c> and <c>${file:name.noext}</c>.
     /// </summary>
-    public FileBuilder PreMove(string directory) => PreMove(new StringExpression(directory));
+    public FileBuilder PreMove(string directory) { _preMove = directory; return this; }
 
     // ── Idempotency ───────────────────────────────────────────────────
 
@@ -149,7 +149,7 @@ public sealed class FileBuilder
     /// exchange exists, so header and body expressions cannot be used.
     /// Without a key the default is path + last modified + size.
     /// </summary>
-    public FileBuilder Idempotent(string key) => Idempotent(new StringExpression(key));
+    public FileBuilder Idempotent(string key) { _idempotent = true; _idempotentKey = key; return this; }
 
     // ── Read locking ──────────────────────────────────────────────────
 
@@ -179,7 +179,7 @@ public sealed class FileBuilder
     /// <summary>Done file name pattern. If set, only files with a matching done file are processed.</summary>
     public FileBuilder DoneFileName(IExpression name) { _doneFileName = name.ToTemplateString(); return this; }
     /// <summary>Done file name pattern (template string, supports ${...}).</summary>
-    public FileBuilder DoneFileName(string name) => DoneFileName(new StringExpression(name));
+    public FileBuilder DoneFileName(string name) { _doneFileName = name; return this; }
 
     /// <summary>Set exchange body to a FileStream instead of byte[]. Stream is closed by Exchange.DisposeAsync.</summary>
     public FileBuilder StreamBody() { _streamBody = true; return this; }
@@ -189,7 +189,7 @@ public sealed class FileBuilder
     /// <summary>Output file name or expression (e.g. <c>Header("CamelFileName")</c>).</summary>
     public FileBuilder FileName(IExpression name) { _fileName = name.ToTemplateString(); return this; }
     /// <summary>Output file name (template string, supports ${...}).</summary>
-    public FileBuilder FileName(string name) => FileName(new StringExpression(name));
+    public FileBuilder FileName(string name) { _fileName = name; return this; }
 
     /// <summary>Strategy when target file exists: Override, Append, Fail, Ignore, Move, TryRename.</summary>
     public FileBuilder FileExist(string strategy) { _fileExist = strategy; return this; }
@@ -197,12 +197,12 @@ public sealed class FileBuilder
     /// <summary>Temporary file prefix during write.</summary>
     public FileBuilder TempPrefix(IExpression prefix) { _tempPrefix = prefix.ToTemplateString(); return this; }
     /// <summary>Temporary file prefix during write (template string, supports ${...}).</summary>
-    public FileBuilder TempPrefix(string prefix) => TempPrefix(new StringExpression(prefix));
+    public FileBuilder TempPrefix(string prefix) { _tempPrefix = prefix; return this; }
 
     /// <summary>Temporary file name during write.</summary>
     public FileBuilder TempFileName(IExpression name) { _tempFileName = name.ToTemplateString(); return this; }
     /// <summary>Temporary file name during write (template string, supports ${...}).</summary>
-    public FileBuilder TempFileName(string name) => TempFileName(new StringExpression(name));
+    public FileBuilder TempFileName(string name) { _tempFileName = name; return this; }
 
     /// <summary>Character encoding. Default "utf-8".</summary>
     public FileBuilder Charset(string charset) { _charset = charset; return this; }

@@ -9,10 +9,11 @@ namespace redb.Route.Llm.Storage.Redb.Schemas;
 /// regenerate / parallel-tool / what-if path attaches as another child of the
 /// same parent.
 /// <para>
-/// Identifier lives in <c>value_string</c> (per-message GUID) and the
-/// conversation FK lives in <c>value_long</c> (pointing at the root's
-/// <c>_objects.id</c>) — both on the indexed <c>_objects</c> row, so transcript
-/// queries never scan <c>_values</c>. Parent is tracked natively via the tree's
+/// Identifier lives in <c>value_string</c> (per-message GUID; partial index on
+/// PostgreSQL/SQLite, no index on MSSQL) and the conversation FK lives in
+/// <c>value_long</c> (pointing at the root's <c>_objects.id</c>; indexed on
+/// every provider) — both on the <c>_objects</c> row, so transcript queries
+/// never scan <c>_values</c>. Parent is tracked natively via the tree's
 /// <c>parent_id</c>; no duplicate fields here.
 /// </para>
 /// Content blocks (text / tool-use / tool-result) are stored as a typed

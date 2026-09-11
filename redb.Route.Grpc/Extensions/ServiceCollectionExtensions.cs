@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Http;
 
 namespace redb.Route.Grpc;
@@ -20,18 +20,16 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<GrpcComponent>();
 
-        services.AddSingleton<IGrpcComponentRegistrar>(sp =>
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteContextConfigurator((sp, context) =>
         {
-            var context = sp.GetRequiredService<IRouteContext>();
             var component = sp.GetRequiredService<GrpcComponent>();
-            component.ServerManager = sp.GetRequiredService<redb.Route.Http.SharedHttpServerManager>();
+            component.ServerManager = sp.GetRequiredService<SharedHttpServerManager>();
             context.AddComponent(component);
-            return new GrpcComponentRegistrar();
         });
 
         return services;
     }
 }
 
-internal interface IGrpcComponentRegistrar;
-internal sealed class GrpcComponentRegistrar : IGrpcComponentRegistrar;

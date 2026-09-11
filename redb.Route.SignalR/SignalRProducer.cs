@@ -35,7 +35,13 @@ public class SignalRProducer : ConnectableProducer
     protected override IEndpoint ProducerEndpoint => _endpoint;
 
     /// <inheritdoc />
-    protected override string ProducerName => $"signalr:{_options.Mode}:{_endpoint.BuildClientUrl()}";
+    // The name reaches the log as "producer started", so a URI carrying userinfo must not print
+    // its password there.
+    protected override string ProducerName =>
+        $"signalr:{_options.Mode}:{EndpointUri.Sanitize(_endpoint.BuildClientUrl())}";
+
+    /// <summary>The logged producer name, so a test can pin the masking.</summary>
+    internal string DiagnosticName => ProducerName;
 
     /// <inheritdoc />
     protected override async Task ConnectAsync(CancellationToken ct)
@@ -85,12 +91,14 @@ public class SignalRProducer : ConnectableProducer
                 await ProcessClientMode(exchange, ct).ConfigureAwait(false);
             else
                 await ProcessServerMode(exchange, ct).ConfigureAwait(false);
+
+            // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Logger?.LogError(ex, "SignalR send failed: hub={HubPath}, method={Method}, mode={Mode}",
                 _endpoint.HubPath, _options.Method, _options.Mode);
-            throw;
+            throw; // the core records the error against this endpoint
         }
     }
 
@@ -118,8 +126,11 @@ public class SignalRProducer : ConnectableProducer
                     connectionOptions.AccessTokenProvider = () => Task.FromResult<string?>(token);
                 }
 
-                // Skip HTTPS cert validation for dev scenarios when SSL is not set
-                if (!_options.Ssl)
+                // Explicit and opt-in. This used to fire when ssl=false, on the theory that "TLS
+                // was not asked for, so there is nothing to check" — but the handler covers the
+                // whole SignalR transport, negotiate and redirects included, so an http:// hub
+                // that redirected to https:// was accepted with any certificate at all.
+                if (_options.TrustAllCertificates)
                 {
                     connectionOptions.HttpMessageHandlerFactory = handler =>
                     {
@@ -128,6 +139,12 @@ public class SignalRProducer : ConnectableProducer
                                 HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
                         return handler;
                     };
+
+                    // The handler above covers negotiate and the long-polling / SSE transports;
+                    // the WebSocket upgrade runs on its own ClientWebSocket and needs its own
+                    // callback, or the connection dies at the upgrade with UntrustedRoot.
+                    connectionOptions.WebSocketConfiguration = ws =>
+                        ws.RemoteCertificateValidationCallback = (_, _, _, _) => true;
                 }
             });
 
@@ -210,12 +227,12 @@ public class SignalRProducer : ConnectableProducer
         // Find the consumer's WebApplication to get IHubContext
         // Server-mode producer needs the consumer running on the same endpoint
         var consumer = FindConsumer();
-        if (consumer?.App is null)
+        if (consumer?.HubServices is null)
             throw new InvalidOperationException(
                 "Server-mode producer requires a running SignalR consumer on the same endpoint. " +
                 "Ensure From(\"signalr:...\") is started before To(\"signalr:...?mode=server\").");
 
-        _hubContext = consumer.App.Services.GetRequiredService<IHubContext<RedbBridgeHub>>();
+        _hubContext = consumer.HubServices.GetRequiredService<IHubContext<RedbBridgeHub>>();
     }
 
     private async Task ProcessServerMode(IExchange exchange, CancellationToken ct)
@@ -276,7 +293,7 @@ public class SignalRProducer : ConnectableProducer
         // The endpoint caches consumers/producers. Walk the route context to find the consumer
         // sharing our endpoint URI. For now, store on the endpoint itself.
         return _endpoint.Component is SignalRComponent comp
-            ? comp.GetConsumer(_endpoint.Uri.NormalizedKey)
+            ? comp.GetConsumer(_options.Host, _options.Port, _endpoint.HubPath)
             : null;
     }
 

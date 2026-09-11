@@ -1,11 +1,13 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using redb.Core;
+using redb.Core.Exceptions;
 using redb.Core.Models.Contracts;
 using redb.Core.Models.Entities;
 using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Storage.Redb.Schemas;
+using redb.Route.RedbCore;
 using redb.Route.RedbCore.Extensions;
 
 namespace redb.Route.Llm.Storage.Redb;
@@ -17,7 +19,10 @@ namespace redb.Route.Llm.Storage.Redb;
 /// <b>property-less</b> — chunks read / write a single <c>_objects</c> row
 /// with zero <c>_props</c> rows. Column layout:
 /// <list type="bullet">
-///   <item><c>value_string</c> — stable chunk id (business key, indexed).</item>
+///   <item><c>value_string</c> — stable chunk id (business key; partial index on
+///         PostgreSQL/SQLite, no index on MSSQL — NVARCHAR(MAX)). New rows also
+///         carry it, normalized, in <c>_value_unique</c>: the per-scheme unique
+///         index keeps concurrent upserts of one id on a single row.</item>
 ///   <item><c>name</c> — collection / namespace.</item>
 ///   <item><c>note</c> — JSON envelope <c>{"text":"...","meta":"..."}</c>.</item>
 ///   <item><c>value_bytes</c> — embedding, written as the raw byte view of
@@ -71,12 +76,39 @@ public sealed class RedbKnowledgeStore : IKnowledgeStore
         var redb = Resolve(exchange);
 
         var existing = await redb.Query<KnowledgeChunkProps>()
-            .WhereRedb(o => o.ValueString == chunk.Id)
+            .WhereRedb(o => o.ValueUnique == RedbUniqueKey.Normalize(chunk.Id))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
 
-        Populate(existing ?? new RedbObject<KnowledgeChunkProps>(), chunk, out var row);
-        await redb.SaveAsync(row).ConfigureAwait(false);
+        if (existing is not null)
+        {
+            Populate(existing, chunk, out var row);
+            await redb.SaveAsync(row).ConfigureAwait(false);
+            return;
+        }
+
+        // The chunk id rides in _value_unique: two concurrent ingestors of one id race
+        // to a single row — before, both inserted and searches returned duplicate hits.
+        Populate(new RedbObject<KnowledgeChunkProps>(), chunk, out var fresh);
+        fresh.ValueUnique = RedbUniqueKey.Normalize(chunk.Id);
+        try
+        {
+            await redb.SaveAsync(fresh).ConfigureAwait(false);
+        }
+        catch (RedbUniqueViolationException)
+        {
+            // Lost the creation race — an upsert is last-writer-wins, so write this
+            // chunk onto the winner's row, resolved by the key that collided.
+            var winnerKey = fresh.ValueUnique;
+            var winner = await redb.Query<KnowledgeChunkProps>()
+                .WhereRedb(o => o.ValueUnique == winnerKey)
+                .FirstOrDefaultAsync()
+                .ConfigureAwait(false);
+            if (winner is null) throw; // the key vanished again (deleted mid-race)
+
+            Populate(winner, chunk, out var row);
+            await redb.SaveAsync(row).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
@@ -84,17 +116,28 @@ public sealed class RedbKnowledgeStore : IKnowledgeStore
     {
         ArgumentNullException.ThrowIfNull(chunks);
 
+        // One chunk per id even within one call — the last entry wins (re-chunking
+        // pipelines do emit an id twice). Two fresh rows sharing an id would
+        // otherwise self-collide on the unique index inside a single bulk save
+        // (the pre-barrier code silently inserted both).
         var input = chunks
             .Where(c => c is not null
                         && !string.IsNullOrWhiteSpace(c.Id)
                         && !string.IsNullOrWhiteSpace(c.Text))
+            .GroupBy(c => c.Id, StringComparer.Ordinal)
+            .Select(g => g.Last())
             .ToList();
         if (input.Count == 0) return;
 
         var redb = Resolve(exchange);
+        await UpsertManyCoreAsync(redb, input, retryOnRace: true, ct).ConfigureAwait(false);
+    }
 
-        // ONE indexed IN-clause lookup for all keys, then ONE bulk SaveAsync —
-        // SaveAsync internally batches inserts/updates as separate streams.
+    private static async Task UpsertManyCoreAsync(
+        IRedbService redb, List<KnowledgeChunk> input, bool retryOnRace, CancellationToken ct)
+    {
+        // ONE IN-clause lookup for all keys (partial index on PG/SQLite; a scan on
+        // MSSQL), then ONE bulk SaveAsync — insert/update streams are internal.
         var keys = input.Select(c => c.Id).ToArray();
         var existingByKey = (await redb.Query<KnowledgeChunkProps>()
                 .WhereRedb(o => keys.Contains(o.ValueString))
@@ -102,6 +145,22 @@ public sealed class RedbKnowledgeStore : IKnowledgeStore
                 .ConfigureAwait(false))
             .Where(o => o.value_string is not null)
             .ToDictionary(o => o.value_string!, StringComparer.Ordinal);
+
+        if (!retryOnRace)
+        {
+            // Retry pass after a lost creation race: the winners hold the unique key —
+            // resolve by it too, so every collided chunk becomes an update.
+            var normByKey = input.ToDictionary(c => c.Id, c => RedbUniqueKey.Normalize(c.Id), StringComparer.Ordinal);
+            var norms = normByKey.Values.ToArray();
+            var keyByNorm = normByKey.ToDictionary(kv => kv.Value, kv => kv.Key, StringComparer.Ordinal);
+            var byUnique = await redb.Query<KnowledgeChunkProps>()
+                .WhereRedb(o => norms.Contains(o.ValueUnique))
+                .ToListAsync()
+                .ConfigureAwait(false);
+            foreach (var row in byUnique)
+                if (row.ValueUnique is { } u && keyByNorm.TryGetValue(u, out var k))
+                    existingByKey.TryAdd(k, row);
+        }
 
         var rowsToSave = new List<IRedbObject>(input.Count);
 
@@ -123,12 +182,25 @@ public sealed class RedbKnowledgeStore : IKnowledgeStore
             else
             {
                 Populate(new RedbObject<KnowledgeChunkProps>(), chunk, out var fresh);
+                fresh.ValueUnique = RedbUniqueKey.Normalize(chunk.Id);
                 rowsToSave.Add(fresh);
             }
         }
 
         if (rowsToSave.Count == 0) return;
-        await redb.SaveAsync(rowsToSave).ConfigureAwait(false);
+
+        try
+        {
+            await redb.SaveAsync(rowsToSave).ConfigureAwait(false);
+        }
+        catch (RedbUniqueViolationException) when (retryOnRace)
+        {
+            // A concurrent ingestor claimed one of the fresh chunk ids after our lookup
+            // and the batch rolled back whole. The winners are visible now: rebuild from
+            // a fresh lookup (collided ids become updates) and retry once — a second
+            // violation is a real error.
+            await UpsertManyCoreAsync(redb, input, retryOnRace: false, ct).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />
@@ -138,7 +210,7 @@ public sealed class RedbKnowledgeStore : IKnowledgeStore
 
         var redb = Resolve(exchange);
         var row = await redb.Query<KnowledgeChunkProps>()
-            .WhereRedb(o => o.ValueString == chunkId)
+            .WhereRedb(o => o.ValueUnique == RedbUniqueKey.Normalize(chunkId))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
 

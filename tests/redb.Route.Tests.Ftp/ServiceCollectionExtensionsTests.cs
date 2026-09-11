@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Extensions;
 using redb.Route.Ftp;
 
 namespace redb.Route.Tests.Ftp;
@@ -18,14 +20,21 @@ public sealed class ServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddRedbRouteFtp_RegistersComponentRegistrar()
+    public async Task AddRedbRouteFtp_ConfiguratorRegistersComponentInContext()
     {
         var services = new ServiceCollection();
         services.AddRedbRouteFtp();
 
-        var descriptors = services.Where(d => d.ServiceType.Name.Contains("FtpComponentRegistrar")).ToList();
-        descriptors.Should().HaveCount(1);
-        descriptors[0].Lifetime.Should().Be(ServiceLifetime.Singleton);
+        services.Where(d => d.ServiceType == typeof(IRouteContextConfigurator))
+            .Should().ContainSingle()
+            .Which.Lifetime.Should().Be(ServiceLifetime.Singleton);
+
+        await using var sp = services.BuildServiceProvider();
+        await using var context = new RouteContext();
+        foreach (var configurator in sp.GetServices<IRouteContextConfigurator>())
+            configurator.Configure(context);
+
+        context.HasComponent("ftp").Should().BeTrue();
     }
 
     [Fact]

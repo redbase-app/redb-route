@@ -45,9 +45,6 @@ public sealed class AmqpConnectionFactory
     /// <summary>Maximum sessions per connection. (default: 8)</summary>
     public ushort MaxSessions { get; set; } = 8;
 
-    /// <summary>Maximum links (senders+receivers) per session. 0 = unlimited. (default: 0)</summary>
-    public int MaxLinksPerSession { get; set; }
-
     // ── TCP tuning ──
 
     /// <summary>TCP NoDelay (Nagle off). (default: true)</summary>
@@ -95,16 +92,9 @@ public sealed class AmqpConnectionFactory
     /// </summary>
     public SaslMechanism SaslMechanism { get; set; } = SaslMechanism.Auto;
 
-    // ── Reconnect ──
-
-    /// <summary>Enable automatic reconnect. (default: false — caller is responsible)</summary>
-    public bool Reconnect { get; set; }
-
-    /// <summary>Reconnect interval in milliseconds. (default: 5000)</summary>
-    public int ReconnectInterval { get; set; } = 5000;
-
-    /// <summary>Max reconnect attempts. 0 = infinite. (default: 0)</summary>
-    public int MaxReconnectAttempts { get; set; }
+    // Reconnect settings were removed (Ф11 мелочи): the component's connection pool already
+    // self-heals (a closed connection is evicted and recreated on the next call), and the
+    // factory-level Reconnect/ReconnectInterval/MaxReconnectAttempts were never read.
 
     // ── Build ──
 

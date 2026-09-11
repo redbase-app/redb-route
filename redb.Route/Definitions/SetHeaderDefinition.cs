@@ -76,34 +76,6 @@ public sealed class SetHeaderExpressionDefinition : ProcessorDefinition
 }
 
 /// <summary>
-/// Leaf definition that sets a header on the exchange using a string template expression.
-/// </summary>
-public sealed class SetHeaderStringExpressionDefinition : ProcessorDefinition
-{
-    private readonly string _name;
-    private readonly string _template;
-
-    /// <summary>The header name to set.</summary>
-    public string Name => _name;
-
-    /// <summary>The template string used to produce the header value.</summary>
-    public string Template => _template;
-
-    /// <summary>Creates a set-header definition from a string template.</summary>
-    public SetHeaderStringExpressionDefinition(string name, string template)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        ArgumentException.ThrowIfNullOrWhiteSpace(template);
-        _name = name;
-        _template = template;
-    }
-
-    /// <inheritdoc />
-    public override IProcessor CreateProcessor(IRouteContext context)
-        => new StringExpressionHeaderProcessor(_name, _template);
-}
-
-/// <summary>
 /// Leaf definition that removes a header from the exchange.
 /// </summary>
 public sealed class RemoveHeaderDefinition : ProcessorDefinition

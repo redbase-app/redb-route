@@ -59,7 +59,6 @@ public sealed class KafkaBuilder
     private string? _key;
     private string? _partitionNumber;
     private bool _transacted;
-    private string? _transactionIdPrefix;
     private string? _lingerMs;
     private string? _batchSize;
     private string? _compressionType;
@@ -76,7 +75,7 @@ public sealed class KafkaBuilder
     /// <summary>Bootstrap servers (comma-separated host:port). e.g. "broker1:9092,broker2:9092".</summary>
     public KafkaBuilder Brokers(IExpression brokers) { _brokers = brokers.ToTemplateString(); return this; }
     /// <summary>Bootstrap servers (template string, supports <c>${...}</c>). e.g. "broker1:9092,broker2:9092".</summary>
-    public KafkaBuilder Brokers(string brokers) => Brokers(new StringExpression(brokers));
+    public KafkaBuilder Brokers(string brokers) { _brokers = brokers; return this; }
 
     /// <summary>Security protocol: Plaintext, Ssl, SaslPlaintext, SaslSsl.</summary>
     public KafkaBuilder SecurityProtocol(string protocol) { _securityProtocol = protocol; return this; }
@@ -90,7 +89,7 @@ public sealed class KafkaBuilder
     /// <summary>Path to CA certificate file for SSL.</summary>
     public KafkaBuilder SslCa(IExpression path) { _sslCaLocation = path.ToTemplateString(); return this; }
     /// <summary>Path to CA certificate file for SSL (template string, supports <c>${...}</c>).</summary>
-    public KafkaBuilder SslCa(string path) => SslCa(new StringExpression(path));
+    public KafkaBuilder SslCa(string path) { _sslCaLocation = path; return this; }
 
     /// <summary>Client certificate for mutual TLS.</summary>
     public KafkaBuilder SslCert(IExpression certPath, IExpression? keyPath = null, IExpression? keyPassword = null)
@@ -101,14 +100,14 @@ public sealed class KafkaBuilder
     /// <summary>Use a named connection factory registered in DI.</summary>
     public KafkaBuilder ConnectionFactory(IExpression name) { _connectionFactory = name.ToTemplateString(); return this; }
     /// <summary>Use a named connection factory registered in DI (template string, supports <c>${...}</c>).</summary>
-    public KafkaBuilder ConnectionFactory(string name) => ConnectionFactory(new StringExpression(name));
+    public KafkaBuilder ConnectionFactory(string name) { _connectionFactory = name; return this; }
 
     // ── Consumer ──────────────────────────────────────────────────────
 
     /// <summary>Consumer group ID.</summary>
     public KafkaBuilder GroupId(IExpression groupId) { _groupId = groupId.ToTemplateString(); return this; }
     /// <summary>Consumer group ID (template string, supports <c>${...}</c>).</summary>
-    public KafkaBuilder GroupId(string groupId) => GroupId(new StringExpression(groupId));
+    public KafkaBuilder GroupId(string groupId) { _groupId = groupId; return this; }
 
     /// <summary>Auto offset reset: Latest, Earliest, Error.</summary>
     public KafkaBuilder AutoOffsetReset(string reset) { _autoOffsetReset = reset; return this; }
@@ -142,7 +141,7 @@ public sealed class KafkaBuilder
     /// <summary>Static group instance ID for cooperative rebalancing.</summary>
     public KafkaBuilder GroupInstanceId(IExpression id) { _groupInstanceId = id.ToTemplateString(); return this; }
     /// <summary>Static group instance ID for cooperative rebalancing (template string, supports <c>${...}</c>).</summary>
-    public KafkaBuilder GroupInstanceId(string id) => GroupInstanceId(new StringExpression(id));
+    public KafkaBuilder GroupInstanceId(string id) { _groupInstanceId = id; return this; }
 
     /// <summary>Session timeout in milliseconds.</summary>
     public KafkaBuilder SessionTimeout(int ms) { _sessionTimeoutMs = ms.ToString(); return this; }
@@ -181,20 +180,20 @@ public sealed class KafkaBuilder
     /// <summary>Message key for partitioning.</summary>
     public KafkaBuilder Key(IExpression key) { _key = key.ToTemplateString(); return this; }
     /// <summary>Message key for partitioning (template string, supports <c>${...}</c>).</summary>
-    public KafkaBuilder Key(string key) => Key(new StringExpression(key));
+    public KafkaBuilder Key(string key) { _key = key; return this; }
 
     /// <summary>Explicit partition number.</summary>
     public KafkaBuilder Partition(int number) { _partitionNumber = number.ToString(); return this; }
     /// <summary>Partition from an expression.</summary>
     public KafkaBuilder Partition(IExpression number) { _partitionNumber = number.ToTemplateString(); return this; }
 
-    /// <summary>Enable transactional producer with optional ID prefix.</summary>
-    public KafkaBuilder Transacted(IExpression? idPrefix = null)
-    {
-        _transacted = true; _transactionIdPrefix = idPrefix?.ToTemplateString(); return this;
-    }
-    /// <summary>Enable transactional producer with an ID prefix (template string, supports <c>${...}</c>).</summary>
-    public KafkaBuilder Transacted(string idPrefix) => Transacted(new StringExpression(idPrefix));
+    /// <summary>
+    /// Idempotent producer whose send is deferred to the route's transaction boundary —
+    /// at-least-once, NOT Kafka exactly-once (see docs/KAFKA_TRANSACTIONS_TODO.md). The former
+    /// idPrefix parameter is gone: it fed transactional.id, which this mode deliberately does not
+    /// configure, so the value was silently discarded (волна A3).
+    /// </summary>
+    public KafkaBuilder Transacted() { _transacted = true; return this; }
 
     /// <summary>Linger time in milliseconds (batch delay).</summary>
     public KafkaBuilder Linger(int ms) { _lingerMs = ms.ToString(); return this; }
@@ -269,7 +268,6 @@ public sealed class KafkaBuilder
         AppendIf("key", _key);
         AppendIf("partitionNumber", _partitionNumber);
         AppendBool("transacted", _transacted);
-        AppendIf("transactionIdPrefix", _transactionIdPrefix);
         AppendIf("lingerMs", _lingerMs);
         AppendIf("batchSize", _batchSize);
         AppendIf("compressionType", _compressionType);

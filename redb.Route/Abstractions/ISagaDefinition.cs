@@ -29,6 +29,15 @@ public interface ISagaDefinition
     /// <returns>This definition for chaining.</returns>
     ISagaDefinition Step(Func<IExchange, CancellationToken, Task> action);
 
+    /// <summary>
+    /// Adds a saga step from processor instances — the seam declarative forms use (Route-XML
+    /// <c>&lt;saga&gt;</c>: steps are <c>#name</c> registry references to <see cref="IProcessor"/>s).
+    /// </summary>
+    /// <param name="action">Forward processor.</param>
+    /// <param name="compensate">Compensation processor to run on rollback; null for forward-only.</param>
+    /// <returns>This definition for chaining.</returns>
+    ISagaDefinition Step(IProcessor action, IProcessor? compensate = null);
+
     /// <summary>Sets a callback invoked when all saga steps complete successfully.</summary>
     /// <param name="callback">Callback to invoke on saga completion.</param>
     /// <returns>This definition for chaining.</returns>

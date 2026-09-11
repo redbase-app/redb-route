@@ -70,11 +70,20 @@ public sealed class FirestoreBuilder
     /// <summary>Merge fields on Set instead of overwriting.</summary>
     public FirestoreBuilder Merge(bool v = true) => Set("merge", v);
 
+    /// <summary>BatchWrite: take the document id from this field of each item.</summary>
+    public FirestoreBuilder DocumentIdField(string field) => Set("documentIdField", field);
+
     /// <summary>Use realtime snapshot listener (default: true).</summary>
     public FirestoreBuilder Realtime(bool v = true) => Set("realtime", v);
 
+    /// <summary>Max parallel document changes per snapshot (realtime mode, default 16).</summary>
+    public FirestoreBuilder MaxConcurrency(int n) => Set("maxConcurrency", n);
+
     /// <summary>Poll interval (ms) for non-realtime mode.</summary>
     public FirestoreBuilder Delay(int ms) => Set("delay", ms);
+
+    /// <summary>Initial delay (ms) before the first poll (non-realtime mode).</summary>
+    public FirestoreBuilder InitialDelay(int ms) => Set("initialDelay", ms);
 
     /// <summary>Body as raw JSON string.</summary>
     public FirestoreBuilder RawJson(bool v = true) => Set("rawJson", v);
@@ -84,6 +93,9 @@ public sealed class FirestoreBuilder
 
     /// <summary>Firebase project ID.</summary>
     public FirestoreBuilder ProjectId(string v) => Set("projectId", v);
+
+    /// <summary>Firestore database id (multi-database projects).</summary>
+    public FirestoreBuilder DatabaseId(string v) => Set("databaseId", v);
 
     /// <summary>Named connection factory reference.</summary>
     public FirestoreBuilder ConnectionFactory(string v) => Set("connectionFactory", v);

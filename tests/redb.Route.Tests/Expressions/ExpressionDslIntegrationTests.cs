@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using static redb.Route.Core.RouteBuilder;
 using redb.Route.Definitions;
 using redb.Route.Expressions;
 using redb.Route.Predicates;
@@ -145,7 +146,7 @@ public class ExpressionDslIntegrationTests : IAsyncDisposable
         _context.AddRoutes(r =>
         {
             r.From("direct://setbody-str")
-                .SetBodyExpression("${header.greeting} ${header.name}")
+                .SetBody(Expr("${header.greeting} ${header.name}"))
                 .Process(e => captured = e.In.Body);
         });
 
@@ -191,7 +192,7 @@ public class ExpressionDslIntegrationTests : IAsyncDisposable
         _context.AddRoutes(r =>
         {
             r.From("direct://setheader-str")
-                .SetHeaderExpression("fullName", "${header.first} ${header.last}")
+                .SetHeader("fullName", Expr("${header.first} ${header.last}"))
                 .Process(e => capturedHeader = e.In.Headers["fullName"]);
         });
 
@@ -237,7 +238,7 @@ public class ExpressionDslIntegrationTests : IAsyncDisposable
         _context.AddRoutes(r =>
         {
             r.From("direct://transform-str")
-                .TransformExpression("${header.prefix}-${body}")
+                .Transform(Expr("${header.prefix}-${body}"))
                 .Process(e => captured = e.In.Body);
         });
 
@@ -528,7 +529,7 @@ public class ExpressionDslIntegrationTests : IAsyncDisposable
                 .SetHeader("processed", new ConstantExpression(true))
                 .Filter(new IsNotNullPredicate(new HeaderExpression("source")))
                 .Transform(e => $"[{e.In.Headers["source"]}] {e.In.Body}")
-                .SetHeaderExpression("label", "${header.source}-processed")
+                .SetHeader("label", Expr("${header.source}-processed"))
                 .Process(e => captured = $"{e.In.Headers["label"]}: {e.In.Body}");
         });
 
@@ -555,9 +556,10 @@ public class ExpressionDslIntegrationTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task StringExpressionBodyProcessor_ResolvesTemplate()
+    public async Task ExpressionBodyProcessor_ResolvesATemplateExpression()
     {
-        var processor = new StringExpressionBodyProcessor("${header.x}");
+        // 4.0: the separate string-template processor is gone; a ${...} template is an expression.
+        var processor = new ExpressionBodyProcessor(new StringExpression("${header.x}"));
         var exchange = new Exchange(new Message());
         exchange.In.Headers["x"] = "resolved";
         await processor.Process(exchange);
@@ -574,9 +576,9 @@ public class ExpressionDslIntegrationTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task StringExpressionHeaderProcessor_ResolvesTemplate()
+    public async Task ExpressionHeaderProcessor_ResolvesATemplateExpression()
     {
-        var processor = new StringExpressionHeaderProcessor("full", "${header.a}-${header.b}");
+        var processor = new ExpressionHeaderProcessor("full", new StringExpression("${header.a}-${header.b}"));
         var exchange = new Exchange(new Message());
         exchange.In.Headers["a"] = "X";
         exchange.In.Headers["b"] = "Y";
@@ -686,11 +688,11 @@ public class ExpressionDslIntegrationTests : IAsyncDisposable
         var def = new RouteDefinition();
         def.From("direct://test")
             .SetBody(new ConstantExpression(42))
-            .SetBodyExpression("${body}")
+            .SetBody(Expr("${body}"))
             .SetHeader("h", new BodyExpression())
-            .SetHeaderExpression("h2", "${header.h}")
+            .SetHeader("h2", Expr("${header.h}"))
             .Transform(new DelegateExpression<string>(e => "x"))
-            .TransformExpression("${body}")
+            .Transform(Expr("${body}"))
             .Filter(new IsNotNullPredicate(new BodyExpression())).EndFilter()
             .Filter("${header.flag}").EndFilter()
             .Split(new BodyExpression()).End()

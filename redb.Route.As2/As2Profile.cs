@@ -1,5 +1,6 @@
 using System.Security.Cryptography.X509Certificates;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.As2;
 
@@ -29,8 +30,9 @@ internal sealed class As2Profile
     /// <summary>Resolves the effective profile: connection factory (if named) wins over inline options.</summary>
     public static As2Profile Resolve(IRouteContext? context, As2EndpointOptions options)
     {
+        // A set-but-unknown name fails loud — never a silent fallback to inline options (Ф11 Ж-1).
         As2ConnectionFactory? f = !string.IsNullOrEmpty(options.ConnectionFactory)
-            ? context?.GetFromRegistry<As2ConnectionFactory>(options.ConnectionFactory)
+            ? context.GetRequiredFromRegistry<As2ConnectionFactory>(options.ConnectionFactory)
             : null;
 
         return new As2Profile

@@ -3,7 +3,10 @@
 Firebase transport for the **redb.Route** ESB framework — **Firestore**, **Cloud Storage (GCS)**, and **FCM** in a single package.
 
 Firestore producer with CRUD, queries, and 500-doc batch writes. Realtime snapshot listener consumer.
-Cloud Storage producer with upload/download/delete/list/metadata. Polling consumer with idempotency, glob filtering, move/delete after read.
+Cloud Storage producer with upload/download (buffered or true streaming)/delete/copy/list/metadata,
+signed download links and bucket operations (create/delete/list, auto-create on the consumer).
+Polling consumer with idempotency (in-memory or a named shared repository), glob filtering,
+move/delete after read and a `MoveFailed` quarantine.
 FCM producer with full platform support — Android priority/TTL/channel, APNS content-available/mutable-content, WebPush.
 
 Shared `IFirebaseCredentialProvider` across all three services — one credential setup, three transports.
@@ -63,18 +66,32 @@ All three components share the same resolution order:
 1. `ConnectionFactory` — named `IFirebaseCredentialProvider` from the service registry
 2. `CredentialPath` — path to a service-account JSON file
 3. `GOOGLE_APPLICATION_CREDENTIALS` environment variable (default credential)
-4. Emulator environment variables — `FIRESTORE_EMULATOR_HOST`, `FIREBASE_STORAGE_EMULATOR_HOST` (for development)
+4. Emulator environment variables (for development) — `FIRESTORE_EMULATOR_HOST` (e.g. `localhost:8086`)
+   and `STORAGE_EMULATOR_HOST`. The storage SDK uses `STORAGE_EMULATOR_HOST` verbatim as the
+   service base URI, so for fake-gcs-server pass the full path: `http://localhost:4443/storage/v1/`.
 
 ```csharp
 // Option 1: Explicit credential file
 .CredentialPath("/secrets/firebase.json")
 
-// Option 2: Named provider from DI
+// Option 2: Named provider from the context registry — several service accounts per process
+context.AddToRegistry("myFirebase", new FirebaseCredentialProvider
+{
+    DefaultProjectId = "my-project",
+    DefaultCredentialPath = "/secrets/firebase-sa.json",
+});
+// ...then on any endpoint:
 .ConnectionFactory("myFirebase")
 
 // Option 3: Environment variable (no code needed)
 // Set GOOGLE_APPLICATION_CREDENTIALS=/secrets/firebase.json
 ```
+
+Firebase apps are created as named instances — the connector never touches (or deletes) the
+process-global `[DEFAULT]` app, so it coexists with a host that initializes Firebase Admin SDK
+itself. The Firestore project id must be configured explicitly (endpoint `projectId`,
+`AddRedbRouteFirebase(o => o.ProjectId = ...)`, `DefaultProjectId`, or the `FIREBASE_PROJECT`
+environment variable) — a missing project is a loud startup error, never a silent default.
 
 ---
 
@@ -131,6 +148,16 @@ route.From("direct:update-partial")
         .Merge());
 ```
 
+### Where syntax
+
+`field OP value` conditions separated by `;`. Operators: `==`, `!=`, `<`, `<=`, `>`, `>=`,
+and ` array-contains ` (as a spaced token: `tags array-contains 'admin'`). Unquoted values
+are type-inferred (int/long/double/bool, else string); a single-quoted value is STRICTLY a
+string — `status=='007'` matches the string `"007"`, never the number 7. `${...}` templates
+in `Where` resolve per exchange on the producer `Query` operation only; a consumer with
+`${...}` in `Where` fails at startup (the subscription query is built once — there is no
+exchange to resolve against).
+
 ### Query
 
 ```csharp
@@ -155,6 +182,11 @@ route.From("direct:bulk-import")
 
 Automatically chunks into batches of 500 (Firestore hard limit). Body must be `IEnumerable<IDictionary<string, object?>>`.
 
+With `.DocumentIdField("id")` the document id is taken from that field of each item (and the
+field itself is not written to the document); without it every item gets an auto-generated id.
+Note: batches commit sequentially — a failure between chunks leaves the earlier chunks written
+(the .NET SDK ships no BulkWriter, so cross-batch atomicity is not promised).
+
 ## Consumer
 
 Realtime snapshot listener — receives document changes as they happen via gRPC stream.
@@ -172,6 +204,21 @@ route.From(Firestore.Collection("orders")
 ```
 
 Each document change creates a separate exchange. All changes within a snapshot are processed in parallel with graceful drain on stop.
+
+A permanently failed listener (revoked credentials, deleted project) does not kill the consumer
+silently: the error is recorded in endpoint statistics and the subscription is re-created with
+exponential backoff (1s → 60s cap). Note that every (re)subscription delivers the current
+query results as an initial snapshot of `Added` changes. `MaxConcurrency` (default 16) bounds
+how many changes of one snapshot are processed in parallel.
+
+### Polling mode
+
+`.Realtime(false)` switches to an honest poll loop: the query runs every `Delay` ms
+(`InitialDelay` before the first poll) and the result is diffed against the previous poll by
+`DocumentId → UpdateTime` — new id = `Added`, changed `UpdateTime` = `Modified`, id gone from
+the result = `Removed` (body is `null`; the old data is not retained). The first poll delivers
+everything as `Added`; the diff lives in memory, so a restart starts from a clean snapshot.
+`Removed` is only visible within the query result window — `Where`/`Limit` shift it.
 
 ### Consumer Headers
 
@@ -200,6 +247,11 @@ With `RawJson(true)`: serialized JSON string.
 fbstorage://bucket-name?option=value&...
 fbstorage://bucket-name/prefix?option=value&...
 ```
+
+The path after the bucket is a folder-like prefix: `bucket/uploads` and `bucket/uploads/` both
+mean the `uploads/` folder — Upload joins names with `/` (`uploads/file.txt`) and the consumer
+lists under the same folder. A raw (non-folder) string prefix is available via the `prefix`
+option instead.
 
 **Consumer** — polls bucket for objects:
 ```
@@ -285,11 +337,19 @@ ListObjects → Filter (prefix/include/exclude) → Idempotency Check → Downlo
 | `Prefix` | — | Object name prefix filter |
 | `MaxMessagesPerPoll` | `10` | Max objects per cycle |
 | `IncludeBody` | `true` | Download object content into exchange body |
-| `Include` | — | Glob pattern for object names to include (`*.csv`, `data/**/*.json`) |
+| `Include` | — | Glob pattern for object names to include (`*.csv`, `data/**/*.json`) — matched against the FULL object name (S3's sibling matches the last `/`-segment only) |
 | `Exclude` | — | Glob pattern for object names to exclude (`*.tmp`) |
 | `Idempotent` | `false` | Skip previously processed objects (in-memory, double-buffer eviction at 10K entries) |
+| `IdempotentRepository` | — | Named `IIdempotentRepository` from the registry (`context.AddIdempotentRepository(name, repo)`) — two-phase claim, survives restarts/scale-out with a persistent repo |
+| `AutoCreateBucket` | `false` | Create the bucket on consumer start (needs `projectId` or `FIREBASE_PROJECT`) |
 | `DeleteAfterRead` | `false` | Delete object after successful processing |
 | `MoveAfterRead` | — | Move objects to this prefix after processing (copy + delete) |
+| `MoveFailed` | — | Quarantine prefix for objects whose processing failed (copy + delete) |
+
+Delete/move-after-read happens **only when the exchange succeeded** (no unhandled exception).
+A failed object stays in place and is retried on the next poll — or, with `MoveFailed` set,
+is moved to the quarantine prefix so the poll loop stops retrying it. With `Idempotent`
+enabled, only successfully processed objects are marked as seen.
 
 ### Consumer Headers
 
@@ -320,6 +380,16 @@ fcm://send?messageType=Condition&condition='news' in topics && 'premium' in topi
 ## Producer (send-only)
 
 FCM is producer-only — no consumer. Sends push notifications via Firebase Cloud Messaging.
+
+Beyond the classic send, three operations (`?operation=`): **Multicast** — the same message to
+many device tokens (`IEnumerable<string>` body or a comma-separated `redbFcm.Tokens` header);
+**SubscribeToTopic** / **UnsubscribeFromTopic** — topic management for a token list. All three
+report `redbFcm.SuccessCount` / `redbFcm.FailureCount`.
+
+```csharp
+.To(Fcm.Multicast().Title("Broadcast").Build())            // body: List<string> of tokens
+.To(Fcm.SubscribeToTopic("news").Build())                  // body: tokens to subscribe
+```
 
 ### Token Targeting (single device)
 
@@ -421,8 +491,9 @@ using redb.Route.Firebase.Fluent;
 | **Operation** | `.Operation(op)` |
 | **Document** | `.DocumentId(id)`, `.DocumentId(expr)` |
 | **Query** | `.Where(filter)`, `.OrderBy(field)`, `.Limit(n)`, `.Offset(n)` |
-| **Write** | `.Merge()` |
-| **Consumer** | `.Realtime()`, `.Delay(ms)` |
+| **Write** | `.Merge()`, `.DocumentIdField(name)` |
+| **Consumer** | `.Realtime()`, `.MaxConcurrency(n)`, `.Delay(ms)`, `.InitialDelay(ms)` |
+| **Database** | `.DatabaseId(id)` — multi-database projects (default `(default)`) |
 | **Format** | `.RawJson()` |
 | **Auth** | `.CredentialPath(p)`, `.ProjectId(id)`, `.ConnectionFactory(name)` |
 
@@ -434,7 +505,7 @@ using redb.Route.Firebase.Fluent;
 | **Operation** | `.Operation(op)` |
 | **Object** | `.ObjectName(name)`, `.ObjectName(expr)`, `.ContentType(ct)`, `.CacheControl(v)` |
 | **Consumer** | `.Delay(ms)`, `.Prefix(p)`, `.MaxMessagesPerPoll(n)` |
-| **Post** | `.DeleteAfterRead()`, `.MoveAfterRead(prefix)`, `.Idempotent()` |
+| **Post** | `.DeleteAfterRead()`, `.MoveAfterRead(prefix)`, `.MoveFailed(prefix)`, `.Idempotent()` |
 | **Filter** | `.Include(glob)`, `.Exclude(glob)` |
 | **Body** | `.IncludeBody()`, `.StreamBody()` |
 | **Auth** | `.CredentialPath(p)`, `.ProjectId(id)`, `.ConnectionFactory(name)` |
@@ -443,7 +514,7 @@ using redb.Route.Firebase.Fluent;
 
 | Category | Methods |
 |---|---|
-| **Entry** | `Fcm.Token(v)`, `Fcm.Topic(v)`, `Fcm.Condition(v)` |
+| **Entry** | `Fcm.Token(v)`, `Fcm.Topic(v)`, `Fcm.Condition(v)`, `Fcm.Multicast()`, `Fcm.SubscribeToTopic(t)`, `Fcm.UnsubscribeFromTopic(t)` |
 | **Notification** | `.Title(v)`, `.Body(v)`, `.ImageUrl(url)` |
 | **Mode** | `.DataOnly()`, `.DryRun()` |
 | **Android** | `.AndroidPriority(p)`, `.AndroidTtlSeconds(s)`, `.AndroidChannelId(id)` |

@@ -4,6 +4,7 @@ using redb.Route.Abstractions;
 using redb.Route.As2.Crypto;
 using redb.Route.As2.Mdn;
 using redb.Route.Core;
+using redb.Route.Extensions;
 using redb.Route.Http;
 
 namespace redb.Route.As2;
@@ -38,8 +39,19 @@ internal sealed class As2MdnReceiver : IConsumer
 
     public async Task Start(CancellationToken ct = default)
     {
+        // Same as the message receiver: TLS without a certificate used to open a plaintext port.
+        var certPath = _options.SslCertPath;
+        var certPassword = _options.SslCertPassword;
+        if (string.IsNullOrEmpty(certPath) && !string.IsNullOrEmpty(_options.ConnectionFactory))
+        {
+            var factory = _endpoint.Context.GetRequiredFromRegistry<As2ConnectionFactory>(_options.ConnectionFactory);
+            certPath = factory.SslCertPath;
+            certPassword = factory.SslCertPassword;
+        }
+
         _registration = Component.Server.RegisterRoute(
-            _options.Host, _options.Port, _endpoint.Uri.Path, "POST", HandleRequest, _options.UseTls);
+            _options.Host, _options.Port, _endpoint.Uri.Path, "POST", HandleRequest,
+            _options.UseTls, certPath, certPassword);
         await Component.Server.EnsureStarted(_options.Host, _options.Port, ct).ConfigureAwait(false);
         _logger?.LogInformation("AS2 async-MDN receiver started: {Host}:{Port}{Path}", _options.Host, _options.Port, _endpoint.Uri.Path);
     }

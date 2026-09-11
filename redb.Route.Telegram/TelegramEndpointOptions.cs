@@ -92,6 +92,28 @@ public sealed class TelegramEndpointOptions : EndpointOptions
     /// </summary>
     public bool ShowAlert { get; set; }
 
+    // ── Download ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Which file the <c>download</c> mode fetches. Supports expressions, resolved per
+    /// message: <c>fileId=${header.telegram.attachment.fileId}</c> takes the attachment the
+    /// consumer reported. An explicit <c>telegram.fileId</c> header wins over this option,
+    /// and with neither set the producer falls back to the inbound attachment header — the
+    /// case that needs no configuration at all.
+    /// </summary>
+    public string? FileId { get; set; }
+
+    /// <summary>
+    /// Ceiling on a <c>download</c>, in bytes. Default 20 MiB — the Bot API's own limit for
+    /// what a bot may download, so the default refuses exactly what Telegram would refuse.
+    /// <para>
+    /// Enforced BEFORE the transfer, against the size <c>getFile</c> reports, and again while
+    /// reading: a downloaded file becomes a byte array in memory, and "how big can that get"
+    /// must not be answerable only by the sender. Set <c>0</c> to lift the ceiling.
+    /// </para>
+    /// </summary>
+    public long MaxDownloadBytes { get; set; } = 20L * 1024 * 1024;
+
     /// <summary>
     /// Per-send timeout in seconds for producer calls (send / document / photo / edit / delete / answer).
     /// Default 120. Range 1–600. Independent from the long-polling HTTP ceiling so large uploads over
@@ -117,6 +139,10 @@ public sealed class TelegramEndpointOptions : EndpointOptions
         if (SendTimeoutSeconds is < 1 or > 600)
             throw new ArgumentOutOfRangeException(nameof(SendTimeoutSeconds),
                 SendTimeoutSeconds, "Telegram send timeout must be between 1 and 600 seconds.");
+
+        if (MaxDownloadBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxDownloadBytes),
+                MaxDownloadBytes, "Telegram maxDownloadBytes must be 0 (no ceiling) or a positive size.");
 
         if (!TryParseParseMode(ParseMode, out _))
             throw new ArgumentException(

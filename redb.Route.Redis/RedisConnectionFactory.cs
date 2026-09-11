@@ -113,8 +113,16 @@ public sealed class RedisConnectionFactory
         if (!string.IsNullOrEmpty(SslHost))
             config.SslHost = SslHost;
 
-        if (!string.IsNullOrEmpty(SslProtocols) && Enum.TryParse<System.Security.Authentication.SslProtocols>(SslProtocols, true, out var protocols))
+        // A typo must not silently drop the protocol policy the admin pinned (волна A1.3 плана
+        // KAFKA_HARDENING_AND_OPTIONS_SWEEP_PLAN). Flags-enum: "Tls12, Tls13" is a valid value.
+        if (!string.IsNullOrEmpty(SslProtocols))
+        {
+            if (!Enum.TryParse<System.Security.Authentication.SslProtocols>(SslProtocols, true, out var protocols))
+                throw new ArgumentException(
+                    $"Unknown value '{SslProtocols}' for 'sslProtocols'. Valid values: " +
+                    "Tls12, Tls13 (comma-separated for several).");
             config.SslProtocols = protocols;
+        }
 
         if (!string.IsNullOrEmpty(ServiceName))
             config.ServiceName = ServiceName;

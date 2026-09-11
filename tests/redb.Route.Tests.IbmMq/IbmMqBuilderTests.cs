@@ -206,21 +206,10 @@ public sealed class IbmMqBuilderTests
         uri.Should().Contain("transacted=true");
     }
 
-    // ── Dead Letter ─────────────────────────────────────────────────
-
-    [Fact]
-    public void DeadLetterQueue_SetsParam()
-    {
-        var uri = IbmMqDsl.Queue("Q").DeadLetterQueue("DLQ").Build();
-        uri.Should().Contain("deadLetterQueue=DLQ");
-    }
-
-    [Fact]
-    public void MaxRedeliveries_SetsParam()
-    {
-        var uri = IbmMqDsl.Queue("Q").MaxRedeliveries(3).Build();
-        uri.Should().Contain("maxRedeliveries=3");
-    }
+    // DeadLetterQueue/MaxRedeliveries tests removed with the verbs (часть B): a second, dead
+    // vocabulary for poison handling - the implemented one is BackoutThreshold/BackoutQueue.
+    // These *_SetsParam tests are exactly the coverage that let dead options survive: they
+    // asserted the URI string and nothing else.
 
     // ── RPC ─────────────────────────────────────────────────────────
 

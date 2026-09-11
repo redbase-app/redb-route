@@ -19,6 +19,7 @@ public sealed class WsProducer : ConnectableProducer
     private readonly WsEndpointOptions _options;
     private readonly Encoding _encoding;
     private ClientWebSocket? _ws;
+    private WsConsumer? _localConsumer;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     /// <summary>Creates a WebSocket producer.</summary>
@@ -33,17 +34,37 @@ public sealed class WsProducer : ConnectableProducer
     protected override IEndpoint ProducerEndpoint => _endpoint;
 
     /// <inheritdoc />
-    protected override string ProducerName => $"ws:{_endpoint.BuildProducerUrl()}";
+    // The name goes into the "producer started" log line, so a ws://user:pass@host URI must not
+    // carry its password through it.
+    protected override string ProducerName =>
+        $"ws:{_options.Mode}:{EndpointUri.Sanitize(_endpoint.BuildProducerUrl())}";
+
+    /// <summary>The logged producer name, so a test can pin the masking.</summary>
+    internal string DiagnosticName => ProducerName;
 
     /// <inheritdoc />
     protected override async Task ConnectAsync(CancellationToken ct)
     {
+        if (_options.Mode == WsMode.Server)
+        {
+            // Push into the clients of the consumer on the same URI. It has to be running:
+            // silently pushing into nothing would be worse than a refusal to start.
+            _localConsumer = (_endpoint.Component as WsComponent)?.GetConsumer(
+                    _options.Host, _options.Port, _endpoint.ConsumerPath)
+                ?? throw new InvalidOperationException(
+                    $"Server-mode producer needs a running WebSocket consumer on {_endpoint.Uri.ToMaskedUriString()}. " +
+                    "Start From(\"ws:...\") on the same URI before sending to \"ws:...?mode=Server\".");
+            return;
+        }
+
         await ConnectWsAsync(ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     protected override async Task DisconnectAsync(CancellationToken ct)
     {
+        _localConsumer = null;
+
         if (_ws is { State: WebSocketState.Open or WebSocketState.CloseReceived })
         {
             try
@@ -63,11 +84,42 @@ public sealed class WsProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
-            "ws send", ActivityKind.Producer,
+            $"ws send {_options.Mode}", ActivityKind.Producer,
             "messaging.system", "websocket",
             _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.ConsumerPath,
             operation: "send");
 
+        // No catch/RecordError here: an exception flies into the core (ToProcessor / the
+        // template), which records it against this endpoint - recording here as well
+        // double-counted it (the statistics-ownership audit).
+        if (_options.Mode == WsMode.Server)
+            await ProcessServerMode(exchange, ct).ConfigureAwait(false);
+        else
+            await ProcessClientMode(exchange, ct).ConfigureAwait(false);
+
+        SetExchangeHeaders(exchange);
+    }
+
+    /// <summary>Pushes the body into the clients of the local consumer (mode=Server).</summary>
+    private async Task ProcessServerMode(IExchange exchange, CancellationToken ct)
+    {
+        var (data, msgType) = ResolveBody(exchange);
+        var target = exchange.In.Headers.TryGetValue(WsHeaders.TargetConnection, out var raw)
+                     && raw is string id && !string.IsNullOrEmpty(id)
+            ? id
+            : null;
+
+        var sent = await _localConsumer!.SendToClients(data, msgType, target, ct).ConfigureAwait(false);
+
+        // MessagesOut is the core's (ToProcessor counts the exchange once); the connector owns
+        // only the wire bytes - one exchange can reach many sockets, so bytes follow the frames.
+        for (var i = 0; i < sent; i++)
+            _endpoint.RecordBytesOut(data.Length);
+    }
+
+    private async Task ProcessClientMode(IExchange exchange, CancellationToken ct)
+    {
         // Reconnect if needed
         if (_ws is null or { State: not WebSocketState.Open })
         {
@@ -83,6 +135,7 @@ public sealed class WsProducer : ConnectableProducer
         try
         {
             await _ws!.SendAsync(data, msgType, endOfMessage: true, ct).ConfigureAwait(false);
+            _endpoint.RecordBytesOut(data.Length); // wire bytes only: MessagesOut belongs to the core
 
             // InOut: read response frame
             if (_options.InOut)
@@ -90,6 +143,7 @@ public sealed class WsProducer : ConnectableProducer
                 var (responseData, responseType) = await ReceiveMessageAsync(ct).ConfigureAwait(false);
                 if (responseData is not null)
                 {
+                    _endpoint.RecordBytesIn(responseData.Length);
                     object body = responseType == WebSocketMessageType.Text
                         ? _encoding.GetString(responseData)
                         : responseData;
@@ -105,8 +159,6 @@ public sealed class WsProducer : ConnectableProducer
         {
             _sendLock.Release();
         }
-
-        SetExchangeHeaders(exchange);
     }
 
     private (byte[] data, WebSocketMessageType type) ResolveBody(IExchange exchange)
@@ -175,6 +227,11 @@ public sealed class WsProducer : ConnectableProducer
         if (_options.SubProtocol is not null)
             _ws.Options.AddSubProtocol(_options.SubProtocol);
 
+        // Explicit, never implied: a self-signed staging server is reachable only when the route
+        // says so out loud.
+        if (_options.TrustAllCertificates)
+            _ws.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+
         var uri = new Uri(_endpoint.BuildProducerUrl());
 
         using var cts = _options.ConnectTimeout > 0
@@ -188,6 +245,8 @@ public sealed class WsProducer : ConnectableProducer
     private async Task ReconnectAsync(CancellationToken ct)
     {
         var attempts = 0;
+        var budget = _options.ReconnectTimeout > 0 ? Stopwatch.StartNew() : null;
+
         while (true)
         {
             attempts++;
@@ -201,6 +260,14 @@ public sealed class WsProducer : ConnectableProducer
             {
                 Logger?.LogError("WebSocket reconnect to {Host}:{Port} exhausted {Max} attempts",
                     _options.Host, _options.Port, _options.MaxReconnectAttempts);
+                throw;
+            }
+            catch when (budget is not null && budget.ElapsedMilliseconds >= _options.ReconnectTimeout)
+            {
+                // Without a budget an exchange against a server that stays down never returns:
+                // it does not fail, so dead-letter never fires and the route simply hangs.
+                Logger?.LogError("WebSocket reconnect to {Host}:{Port} exhausted its {Timeout} ms budget after {Attempts} attempts",
+                    _options.Host, _options.Port, _options.ReconnectTimeout, attempts);
                 throw;
             }
             catch (Exception ex)

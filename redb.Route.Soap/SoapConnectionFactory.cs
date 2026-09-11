@@ -28,6 +28,29 @@ public sealed class SoapConnectionFactory
     /// <summary>Default SOAPAction when the exchange does not carry <c>redbSoap.action</c>.</summary>
     public string? DefaultAction { get; set; }
 
+    // ── Transport TLS (consumer: how the endpoint is served) ──
+
+    /// <summary>
+    /// Serve the receive endpoint over TLS. The scheme <c>soaps</c> says the same thing; this is here so a
+    /// deployment can turn TLS on together with the certificate it needs, in one registered place.
+    /// </summary>
+    public bool Ssl { get; set; }
+
+    /// <summary>Path to the PFX certificate served on the TLS handshake.</summary>
+    public string? SslCertPath { get; set; }
+
+    /// <summary>Password for <see cref="SslCertPath"/> (redacted in logs and the dashboard).</summary>
+    [Sensitive] public string? SslCertPassword { get; set; }
+
+    /// <summary>Client-certificate policy (mTLS) for the receive endpoint.</summary>
+    public SoapClientCertificateMode ClientCertificateMode { get; set; } = SoapClientCertificateMode.NoCertificate;
+
+    /// <summary>
+    /// Comma-separated thumbprints of accepted client certificates. Chain validation stays Kestrel's job;
+    /// this adds «and it must be one of ours», which is what pins a partner in a closed contour.
+    /// </summary>
+    public string? AllowedClientThumbprints { get; set; }
+
     // ── WS-Security (baseline: XML-Signature / XML-Encryption via System.Security.Cryptography.Xml) ──
 
     /// <summary>Our certificate with private key: signs outgoing, decrypts incoming.</summary>
@@ -63,6 +86,4 @@ public sealed class SoapConnectionFactory
     /// </summary>
     public Type? ResponseType { get; set; }
 
-    /// <summary>Pojo mode only: a build-time <c>dotnet-svcutil</c> proxy type (optional).</summary>
-    public Type? ProxyType { get; set; }
 }

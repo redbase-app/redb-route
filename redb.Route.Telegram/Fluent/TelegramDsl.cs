@@ -63,6 +63,21 @@ public static class Tg
     /// <summary>Deletes a message using an expression token.</summary>
     public static TgBuilder Delete(IExpression token) => new TgBuilder("delete", token.ToTemplateString());
 
+    /// <summary>
+    /// Downloads a file the user sent; the bytes land in <c>Out.Body</c> as a <c>byte[]</c>.
+    /// With no <c>.FileId(...)</c> it takes the attachment the consumer reported, which is
+    /// what a voice / photo / document route wants.
+    /// <example><code>
+    /// From("direct://voice")
+    ///     .To(Tg.Download(token))     // telegram.attachment.fileId → bytes
+    ///     .To("stt://local");         // bytes → text
+    /// </code></example>
+    /// </summary>
+    public static TgBuilder Download(string token) => new TgBuilder("download", token);
+
+    /// <summary>Downloads a file using an expression token.</summary>
+    public static TgBuilder Download(IExpression token) => new TgBuilder("download", token.ToTemplateString());
+
     // ── Token-less overloads: the bot token comes from a registered
     //    TelegramConnectionFactory via .ConnectionFactory("name") ──────────────
 
@@ -86,6 +101,9 @@ public static class Tg
 
     /// <summary>Delete-message producer; token supplied by <c>.ConnectionFactory(name)</c>.</summary>
     public static TgBuilder Delete() => new TgBuilder("delete", string.Empty);
+
+    /// <summary>File-download producer; token supplied by <c>.ConnectionFactory(name)</c>.</summary>
+    public static TgBuilder Download() => new TgBuilder("download", string.Empty);
 }
 
 /// <summary>
@@ -107,6 +125,8 @@ public sealed class TgBuilder
     private string? _messageId;
     private bool    _showAlert;
     private int?    _sendTimeoutSeconds;
+    private string? _fileId;
+    private long?   _maxDownloadBytes;
 
     private string? _connectionFactory;
 
@@ -182,6 +202,25 @@ public sealed class TgBuilder
     /// <summary>Treat a string exchange body as a Telegram <c>file_id</c> (document/photo) instead of uploading.</summary>
     public TgBuilder BodyIsFileId(bool value = true) { _bodyIsFileId = value; return this; }
 
+    // ── Download ──────────────────────────────────────────────────────────────
+
+    /// <summary>Which file to download, by <c>file_id</c>.</summary>
+    public TgBuilder FileId(string fileId) { _fileId = fileId; return this; }
+
+    /// <summary>
+    /// Which file to download, from an expression resolved per message — e.g.
+    /// <c>Header(TelegramHeaders.AttachmentFileId)</c>. Without this the producer takes the
+    /// attachment header anyway; spell it out when a route downloads something other than
+    /// "whatever the user just sent".
+    /// </summary>
+    public TgBuilder FileId(IExpression expr) { _fileId = expr.ToTemplateString(); return this; }
+
+    /// <summary>
+    /// Ceiling on a download, in bytes; <c>0</c> lifts it. Default 20 MiB — the Bot API's own
+    /// limit on what a bot may download.
+    /// </summary>
+    public TgBuilder MaxDownloadBytes(long bytes) { _maxDownloadBytes = bytes; return this; }
+
     // ── Producer ──────────────────────────────────────────────────────────────
 
     /// <summary>Per-send timeout in seconds for producer calls (1–600). Default 120. Not used by <c>receive</c>.</summary>
@@ -216,6 +255,10 @@ public sealed class TgBuilder
         AppendIf("fileName", _fileName);
         AppendIf("replyToMessageId", _replyToMessageId);
         AppendIf("messageId", _messageId);
+        AppendIf("fileId", _fileId);
+
+        if (_maxDownloadBytes.HasValue)
+            Append("maxDownloadBytes", _maxDownloadBytes.Value.ToString());
 
         if (_disableNotification)
             Append("disableNotification", "true");

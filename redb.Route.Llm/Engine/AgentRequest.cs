@@ -23,6 +23,32 @@ public sealed class AgentRequest
     /// <summary>System prompt for this run.</summary>
     public string? SystemPrompt { get; init; }
 
+    /// <summary>
+    /// Ask the provider to cache the system prompt across turns — see
+    /// <see cref="Providers.LlmRequest.CacheSystemPrompt"/>. Worth it only when the system prompt
+    /// is byte-stable; a prompt that varies per request never gets read back.
+    /// </summary>
+    public bool CacheSystemPrompt { get; init; }
+
+    /// <summary>
+    /// Messages placed <b>before the loaded conversation history</b> on every iteration of the
+    /// run — a fixed opening exchange the model sees as its own past, a few-shot block, anything
+    /// that must precede the dialog without being part of it.
+    ///
+    /// <para><b>Not persisted and not part of the conversation.</b> The store keeps what was
+    /// said in this dialog; the preamble is part of how the assistant is assembled, so it is
+    /// re-attached from the request each time rather than written as rows. That is also what
+    /// makes it survive a branch rebuild: a fresh branch loads an empty path and the preamble is
+    /// still there.</para>
+    ///
+    /// <para>Keep it byte-stable and mark its last message with
+    /// <see cref="LlmMessage.CacheBreakpoint"/> when the system prompt is cached too — otherwise
+    /// the cached prefix ends at the system block and the preamble is paid in full on every
+    /// turn. The first preamble message must be a <c>user</c> turn: providers require the
+    /// transcript to open with one.</para>
+    /// </summary>
+    public IReadOnlyList<LlmMessage> Preamble { get; init; } = [];
+
     /// <summary>Tools available to the model on this run.</summary>
     public IReadOnlyList<ILlmToolDescriptor> Tools { get; init; } = [];
 

@@ -4,6 +4,7 @@ using Amazon.S3;
 using Amazon.S3.Model;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Components;
 using redb.Route.Core;
 
 namespace redb.Route.S3;
@@ -25,8 +26,17 @@ internal sealed class S3Consumer : DrainableConsumer
     private IAmazonS3? _client;
     private long _processedCount;
 
-    // In-memory idempotent repository: key → true
-    private readonly ConcurrentDictionary<string, bool>? _idempotentRepo;
+    // In-memory idempotent repository with double-buffer eviction (S-6): when current fills
+    // up it rotates to previous and starts fresh — retains up to 2×MaxIdempotentEntries of
+    // history instead of growing without bound.
+    private const int MaxIdempotentEntries = 10_000;
+    private ConcurrentDictionary<string, bool>? _idempotentRepo;
+    private ConcurrentDictionary<string, bool>? _previousIdempotentRepo;
+
+    // Named repository (Д4): the shared IIdempotentRepository contract of the route-level
+    // IdempotentConsumer EIP — dedup survives consumer restarts (and process restarts with
+    // a persistent implementation).
+    private IIdempotentRepository? _sharedRepo;
 
     // Include/Exclude patterns compiled from glob
     private readonly Regex? _includeRegex;
@@ -62,6 +72,15 @@ internal sealed class S3Consumer : DrainableConsumer
     {
         _client = await _endpoint.GetOrCreateClientAsync(ct).ConfigureAwait(false);
 
+        if (!string.IsNullOrEmpty(_options.IdempotentRepository))
+        {
+            var context = (_endpoint.Component as ComponentBase)?.Context
+                          ?? throw new InvalidOperationException(
+                              $"IdempotentRepository '{_options.IdempotentRepository}' requires a route context " +
+                              "(register the repository with context.AddIdempotentRepository(name, ...)).");
+            _sharedRepo = context.GetIdempotentRepositoryProvider().Get(_options.IdempotentRepository);
+        }
+
         if (_options.AutoCreateBucket)
         {
             try
@@ -95,7 +114,7 @@ internal sealed class S3Consumer : DrainableConsumer
             catch (Exception ex)
             {
                 Logger?.LogError(ex, "S3 consumer poll error on bucket {Bucket}", _endpoint.BucketName);
-                _endpoint.RecordError();
+                _endpoint.RecordError(ex); // с деталями — иначе LastErrorMessage пуст (S-11)
             }
 
             // Wait between polls
@@ -123,6 +142,14 @@ internal sealed class S3Consumer : DrainableConsumer
             return;
         }
 
+        // Without sorting the listing streams page by page with an early exit at
+        // MaxMessagesPerPoll — a big bucket no longer costs O(N) memory per poll (S-7).
+        if (_options.SortBy == S3SortBy.None)
+        {
+            await PollStreamingAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
         var request = new ListObjectsV2Request
         {
             BucketName = _endpoint.BucketName,
@@ -133,7 +160,7 @@ internal sealed class S3Consumer : DrainableConsumer
         var allObjects = new List<S3Object>();
         string? continuationToken = null;
 
-        // Paginate through listing
+        // Paginate through listing — SortBy honestly needs the full list in memory.
         do
         {
             request.ContinuationToken = continuationToken;
@@ -181,6 +208,56 @@ internal sealed class S3Consumer : DrainableConsumer
         }
     }
 
+    /// <summary>
+    /// Streaming poll for the unsorted case (S-7): pages are processed as they arrive and the
+    /// loop exits as soon as <c>MaxMessagesPerPoll</c> eligible objects were handled.
+    /// </summary>
+    private async Task PollStreamingAsync(CancellationToken ct)
+    {
+        var request = new ListObjectsV2Request
+        {
+            BucketName = _endpoint.BucketName,
+            Prefix = _options.Prefix,
+            Delimiter = _options.Delimiter,
+        };
+
+        var processed = 0;
+        var anyEligible = false;
+        var now = DateTime.UtcNow;
+        string? continuationToken = null;
+
+        do
+        {
+            request.ContinuationToken = continuationToken;
+            var response = await _client!.ListObjectsV2Async(request, ct).ConfigureAwait(false);
+
+            foreach (var obj in response.S3Objects ?? [])
+            {
+                if (ct.IsCancellationRequested)
+                    return;
+
+                if (!_options.IncludeFolders && obj.Key.EndsWith('/'))
+                    continue;
+                if (!PassesFilters(obj, now))
+                    continue;
+
+                anyEligible = true;
+                await ProcessObjectAsync(obj, ct).ConfigureAwait(false);
+
+                if (_options.MaxMessagesPerPoll > 0 && ++processed >= _options.MaxMessagesPerPoll)
+                    return;
+            }
+
+            continuationToken = response.IsTruncated == true ? response.NextContinuationToken : null;
+        } while (continuationToken != null);
+
+        if (!anyEligible && _options.SendEmptyMessageWhenIdle)
+        {
+            var emptyExchange = CreateExchange(null);
+            await ProcessWithTracking(emptyExchange, ct).ConfigureAwait(false);
+        }
+    }
+
     private async Task PollSingleFileAsync(CancellationToken ct)
     {
         try
@@ -197,13 +274,9 @@ internal sealed class S3Consumer : DrainableConsumer
                 ETag = metadata.ETag,
             };
 
-            // Check idempotency
-            if (_idempotentRepo != null)
-            {
-                var idempotentKey = BuildIdempotentKey(pseudoObj);
-                if (!_idempotentRepo.TryAdd(idempotentKey, true))
-                    return;
-            }
+            // Idempotency: check only — the mark is written after success in ProcessObjectAsync (S-2)
+            if (IsAlreadySeen(pseudoObj))
+                return;
 
             await ProcessObjectAsync(pseudoObj, ct).ConfigureAwait(false);
         }
@@ -214,6 +287,25 @@ internal sealed class S3Consumer : DrainableConsumer
     }
 
     private async Task ProcessObjectAsync(S3Object obj, CancellationToken ct)
+    {
+        // Named repo (Д4): two-phase claim BEFORE the download — Add is atomic, so a
+        // concurrent consumer cannot take the same object twice; released on any failure.
+        if (_sharedRepo is not null
+            && !await _sharedRepo.Add(BuildIdempotentKey(obj), ct).ConfigureAwait(false))
+            return;
+
+        try
+        {
+            await ProcessObjectCoreAsync(obj, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await ReleaseSharedClaimAsync(obj, ct).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async Task ProcessObjectCoreAsync(S3Object obj, CancellationToken ct)
     {
         // Done file check
         if (!string.IsNullOrEmpty(_options.DoneFileName))
@@ -226,15 +318,18 @@ internal sealed class S3Consumer : DrainableConsumer
             catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
                 Logger?.LogDebug("S3: Skipping {Key} — done file {DoneKey} not found", obj.Key, doneKey);
+                // Release the Д4 claim: the object must be re-offered once the done file appears.
+                await ReleaseSharedClaimAsync(obj, ct).ConfigureAwait(false);
                 return;
             }
         }
 
-        // Download object
+        // Download object. IncludeBody=false (and IgnoreBody) mean "no content download" —
+        // no GET is issued at all; previously a raw ResponseStream leaked into the body (S-8).
         object? body = null;
         GetObjectResponse? getResponse = null;
 
-        if (!_options.IgnoreBody)
+        if (!_options.IgnoreBody && (_options.StreamBody || _options.IncludeBody))
         {
             var getRequest = new GetObjectRequest
             {
@@ -245,19 +340,24 @@ internal sealed class S3Consumer : DrainableConsumer
 
             if (_options.StreamBody)
             {
+                // Ownership: the stream goes into the exchange; Exchange.DisposeAsync closes
+                // it, which releases the HTTP connection. The response object must NOT be
+                // disposed here — that would close the stream we just handed over (S-8).
                 body = getResponse.ResponseStream;
-            }
-            else if (_options.IncludeBody)
-            {
-                using var ms = new MemoryStream();
-                await getResponse.ResponseStream.CopyToAsync(ms, ct).ConfigureAwait(false);
-                body = ms.ToArray();
-                getResponse.ResponseStream.Dispose();
-                _endpoint.RecordBytesIn(ms.Length);
             }
             else
             {
-                body = getResponse.ResponseStream;
+                try
+                {
+                    using var ms = new MemoryStream();
+                    await getResponse.ResponseStream.CopyToAsync(ms, ct).ConfigureAwait(false);
+                    body = ms.ToArray(); // BytesIn is counted by the core around the routed consumer
+                }
+                catch
+                {
+                    getResponse.Dispose();
+                    throw;
+                }
             }
         }
 
@@ -265,15 +365,75 @@ internal sealed class S3Consumer : DrainableConsumer
         var exchange = CreateExchange(body);
         SetConsumerHeaders(exchange, obj, getResponse);
 
-        // Process
-        _endpoint.RecordMessageIn();
-        await ProcessWithTracking(exchange, ct).ConfigureAwait(false);
+        // Buffered path: the response is fully read and its headers copied — release the
+        // connection now instead of leaking it until GC (S-8).
+        if (getResponse is not null && !_options.StreamBody)
+            getResponse.Dispose();
+
+        // Process (MessagesIn is counted by the core StatisticsProcessor - ownership audit)
+        var success = await ProcessExchangeAsync(exchange, obj.Key, ct).ConfigureAwait(false);
         Interlocked.Increment(ref _processedCount);
 
-        // Post-processing (only on success)
-        if (exchange.Exception == null || exchange.ExceptionHandled)
+        if (success)
         {
+            // Idempotent mark only AFTER success (S-2): a failed object and objects beyond
+            // MaxMessagesPerPoll must be offered again on the next poll.
+            MarkSeen(obj);
+            if (_sharedRepo is not null)
+                await _sharedRepo.Confirm(BuildIdempotentKey(obj), ct).ConfigureAwait(false);
             await PostProcessAsync(obj, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            await ReleaseSharedClaimAsync(obj, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Releases the two-phase claim so a failed object is offered again (Д4).</summary>
+    private async Task ReleaseSharedClaimAsync(S3Object obj, CancellationToken ct)
+    {
+        if (_sharedRepo is null) return;
+        try
+        {
+            await _sharedRepo.Remove(BuildIdempotentKey(obj), ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger?.LogWarning(ex,
+                "S3: releasing idempotent claim for {Key} failed — the object stays marked until manual cleanup",
+                obj.Key);
+        }
+    }
+
+    /// <summary>
+    /// Runs the exchange through the processor with inflight tracking and reports whether it
+    /// succeeded. A processing failure must not delete/move the object (S-1), so unlike
+    /// <see cref="DrainableConsumer.ProcessWithTracking"/> the outcome is observed here:
+    /// both a raw throw (no error handler took the exchange) and an unhandled
+    /// <c>exchange.Exception</c> set by the pipeline count as failure.
+    /// </summary>
+    private async Task<bool> ProcessExchangeAsync(IExchange exchange, string key, CancellationToken ct)
+    {
+        IncrementInflight();
+        try
+        {
+            await Processor.Process(exchange, ct).ConfigureAwait(false);
+            return exchange.Exception is null || exchange.ExceptionHandled;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // shutdown — let the poll loop exit
+        }
+        catch (Exception ex)
+        {
+            // Pipeline errors are counted by the core StatisticsProcessor (ownership audit).
+            Logger?.LogError(ex, "S3: processing failed for {Key}; object is kept.", key);
+            return false;
+        }
+        finally
+        {
+            DecrementInflight();
+            await exchange.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -301,8 +461,20 @@ internal sealed class S3Consumer : DrainableConsumer
                 DestinationKey = destKey,
             }, ct).ConfigureAwait(false);
 
-            // Delete from source after successful copy
-            await _client.DeleteObjectAsync(_endpoint.BucketName, obj.Key, ct).ConfigureAwait(false);
+            // Delete from source after successful copy. A failed delete must not bubble as a
+            // poll error (S-9): the copy already succeeded — log the duplication and move on;
+            // the idempotent mark (when enabled) keeps the source from being re-processed.
+            try
+            {
+                await _client.DeleteObjectAsync(_endpoint.BucketName, obj.Key, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger?.LogWarning(ex,
+                    "S3: MoveAfterRead copied {Bucket}/{Key} → {DestBucket}/{DestKey} but delete of source failed. " +
+                    "Object exists in both locations until the next successful delete",
+                    _endpoint.BucketName, obj.Key, _options.DestinationBucket, destKey);
+            }
 
             Logger?.LogDebug("S3: Moved {Bucket}/{Key} → {DestBucket}/{DestKey}",
                 _endpoint.BucketName, obj.Key, _options.DestinationBucket, destKey);
@@ -321,48 +493,46 @@ internal sealed class S3Consumer : DrainableConsumer
     private List<S3Object> FilterObjects(List<S3Object> objects)
     {
         var now = DateTime.UtcNow;
+        return objects.Where(obj => PassesFilters(obj, now)).ToList();
+    }
 
-        return objects.Where(obj =>
+    private bool PassesFilters(S3Object obj, DateTime now)
+    {
+        // Extract filename (last segment) for glob matching
+        var fileName = obj.Key.Contains('/')
+            ? obj.Key[(obj.Key.LastIndexOf('/') + 1)..]
+            : obj.Key;
+
+        // Include pattern
+        if (_includeRegex != null && !_includeRegex.IsMatch(fileName))
+            return false;
+
+        // Exclude pattern
+        if (_excludeRegex != null && _excludeRegex.IsMatch(fileName))
+            return false;
+
+        // Min age
+        if (_options.MinAge > 0)
         {
-            // Extract filename (last segment) for glob matching
-            var fileName = obj.Key.Contains('/')
-                ? obj.Key[(obj.Key.LastIndexOf('/') + 1)..]
-                : obj.Key;
-
-            // Include pattern
-            if (_includeRegex != null && !_includeRegex.IsMatch(fileName))
+            var age = (now - (obj.LastModified ?? now)).TotalMilliseconds;
+            if (age < _options.MinAge)
                 return false;
+        }
 
-            // Exclude pattern
-            if (_excludeRegex != null && _excludeRegex.IsMatch(fileName))
+        // Max age
+        if (_options.MaxAge > 0)
+        {
+            var age = (now - (obj.LastModified ?? now)).TotalMilliseconds;
+            if (age > _options.MaxAge)
                 return false;
+        }
 
-            // Min age
-            if (_options.MinAge > 0)
-            {
-                var age = (now - (obj.LastModified ?? now)).TotalMilliseconds;
-                if (age < _options.MinAge)
-                    return false;
-            }
+        // Idempotency: check only — the "seen" mark is written after a SUCCESSFUL
+        // exchange (S-2), never at filter time.
+        if (IsAlreadySeen(obj))
+            return false;
 
-            // Max age
-            if (_options.MaxAge > 0)
-            {
-                var age = (now - (obj.LastModified ?? now)).TotalMilliseconds;
-                if (age > _options.MaxAge)
-                    return false;
-            }
-
-            // Idempotency
-            if (_idempotentRepo != null)
-            {
-                var idempotentKey = BuildIdempotentKey(obj);
-                if (!_idempotentRepo.TryAdd(idempotentKey, true))
-                    return false;
-            }
-
-            return true;
-        }).ToList();
+        return true;
     }
 
     private List<S3Object> SortObjects(List<S3Object> objects)
@@ -385,8 +555,8 @@ internal sealed class S3Consumer : DrainableConsumer
 
     private IExchange CreateExchange(object? body)
     {
-        var message = new Message { Body = body };
-        return new Exchange(message);
+        // ScopeFactory from the endpoint — otherwise per-exchange DI scopes are dead (S-4).
+        return Exchange.Create(new Message { Body = body }, _endpoint.ScopeFactory);
     }
 
     private void SetConsumerHeaders(IExchange exchange, S3Object obj, GetObjectResponse? response)
@@ -416,12 +586,28 @@ internal sealed class S3Consumer : DrainableConsumer
     //  HELPERS
     // ═══════════════════════════════════════════════════════════════════
 
-    private string BuildIdempotentKey(S3Object obj)
-    {
-        if (!string.IsNullOrEmpty(_options.IdempotentKey))
-            return _options.IdempotentKey; // TODO: expression evaluation
+    private static string BuildIdempotentKey(S3Object obj)
+        => $"{obj.Key}|{obj.ETag}|{obj.Size}";
 
-        return $"{obj.Key}|{obj.ETag}|{obj.Size}";
+    private bool IsAlreadySeen(S3Object obj)
+    {
+        if (_idempotentRepo is null) return false;
+        var key = BuildIdempotentKey(obj);
+        return _idempotentRepo.ContainsKey(key)
+               || _previousIdempotentRepo?.ContainsKey(key) == true;
+    }
+
+    private void MarkSeen(S3Object obj)
+    {
+        if (_idempotentRepo is null) return;
+
+        // Double-buffer eviction (S-6)
+        if (_idempotentRepo.Count > MaxIdempotentEntries)
+        {
+            _previousIdempotentRepo = _idempotentRepo;
+            _idempotentRepo = new ConcurrentDictionary<string, bool>();
+        }
+        _idempotentRepo.TryAdd(BuildIdempotentKey(obj), true);
     }
 
     private string BuildDestinationKey(string sourceKey)

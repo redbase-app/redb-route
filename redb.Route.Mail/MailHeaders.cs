@@ -90,6 +90,12 @@ public static class MailHeaders
     /// <summary>IMAP message flags (Seen, Answered, Flagged, etc.).</summary>
     public const string Flags = "redbMail.Flags";
 
+    /// <summary>
+    /// Prefix for raw MIME headers copied onto the exchange when <c>mapMimeHeaders=true</c>:
+    /// <c>redbMail.Mime.&lt;Field&gt;</c> (e.g. <c>redbMail.Mime.X-Custom-Track</c>).
+    /// </summary>
+    public const string MimePrefix = "redbMail.Mime.";
+
     /// <summary>Message size in bytes.</summary>
     public const string Size = "redbMail.Size";
 

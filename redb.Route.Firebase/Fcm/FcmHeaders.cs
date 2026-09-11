@@ -13,16 +13,22 @@ public static class FcmHeaders
     /// <summary>FCM message ID returned by the server (projects/*/messages/*).</summary>
     public const string MessageId = "redbFcm.MessageId";
 
-    /// <summary>Success count for multicast sends (future).</summary>
+    /// <summary>Success count for Multicast and topic-management operations.</summary>
     public const string SuccessCount = "redbFcm.SuccessCount";
 
-    /// <summary>Failure count for multicast sends (future).</summary>
+    /// <summary>Failure count for Multicast and topic-management operations.</summary>
     public const string FailureCount = "redbFcm.FailureCount";
 
     // ── Read from exchange for targeting ──
 
     /// <summary>Device registration token override (from exchange header).</summary>
     public const string Token = "redbFcm.Token";
+
+    /// <summary>
+    /// Device tokens for Multicast/Subscribe/Unsubscribe: an IEnumerable&lt;string&gt; or a
+    /// comma-separated string. Overrides the exchange body.
+    /// </summary>
+    public const string Tokens = "redbFcm.Tokens";
 
     /// <summary>Topic name override (from exchange header).</summary>
     public const string Topic = "redbFcm.Topic";

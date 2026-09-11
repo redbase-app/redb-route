@@ -2,6 +2,7 @@ using FluentAssertions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Expressions;
+using redb.Route.Predicates;
 
 namespace redb.Route.Tests.Expressions;
 
@@ -23,6 +24,15 @@ public class ExpressionResolverFullTests : IDisposable
     {
         ExpressionResolver.ClearAllCaches();
     }
+
+    // The hand-written logical branch (EvaluateLogicalExpression / CompileLogicalPredicate) was
+    // removed on 2026-08-28 - one language, one parser. The semantic tests below migrated to the
+    // surviving condition path; these helpers keep the call shape of the old API.
+    private static bool EvaluateCondition(string condition, IExchange exchange)
+        => PredicateFactory.FromString(condition).Matches(exchange);
+
+    private static Func<IExchange, bool> CompileCondition(string condition)
+        => PredicateFactory.FromString(condition).Matches;
 
     private static IExchange CreateExchange(object? body = null)
         => new Exchange(new Message(body));
@@ -138,74 +148,74 @@ public class ExpressionResolverFullTests : IDisposable
     #region Logical expressions — comparison operators
 
     [Fact]
-    public void LogicalExpression_NotEqual_True()
+    public void Condition_NotEqual_True()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["status"] = "active";
-        ExpressionResolver.EvaluateLogicalExpression("property.status != 'inactive'", exchange)
+        EvaluateCondition("property.status != 'inactive'", exchange)
             .Should().BeTrue();
     }
 
     [Fact]
-    public void LogicalExpression_NotEqual_False()
+    public void Condition_NotEqual_False()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["status"] = "active";
-        ExpressionResolver.EvaluateLogicalExpression("property.status != 'active'", exchange)
+        EvaluateCondition("property.status != 'active'", exchange)
             .Should().BeFalse();
     }
 
     [Fact]
-    public void LogicalExpression_LessThan_True()
+    public void Condition_LessThan_True()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["count"] = 3;
-        ExpressionResolver.EvaluateLogicalExpression("property.count < 10", exchange)
+        EvaluateCondition("property.count < 10", exchange)
             .Should().BeTrue();
     }
 
     [Fact]
-    public void LogicalExpression_LessThan_False()
+    public void Condition_LessThan_False()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["count"] = 10;
-        ExpressionResolver.EvaluateLogicalExpression("property.count < 5", exchange)
+        EvaluateCondition("property.count < 5", exchange)
             .Should().BeFalse();
     }
 
     [Fact]
-    public void LogicalExpression_GreaterOrEqual_True()
+    public void Condition_GreaterOrEqual_True()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["count"] = 5;
-        ExpressionResolver.EvaluateLogicalExpression("property.count >= 5", exchange)
+        EvaluateCondition("property.count >= 5", exchange)
             .Should().BeTrue();
     }
 
     [Fact]
-    public void LogicalExpression_GreaterOrEqual_False()
+    public void Condition_GreaterOrEqual_False()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["count"] = 4;
-        ExpressionResolver.EvaluateLogicalExpression("property.count >= 5", exchange)
+        EvaluateCondition("property.count >= 5", exchange)
             .Should().BeFalse();
     }
 
     [Fact]
-    public void LogicalExpression_LessOrEqual_True()
+    public void Condition_LessOrEqual_True()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["count"] = 5;
-        ExpressionResolver.EvaluateLogicalExpression("property.count <= 5", exchange)
+        EvaluateCondition("property.count <= 5", exchange)
             .Should().BeTrue();
     }
 
     [Fact]
-    public void LogicalExpression_LessOrEqual_False()
+    public void Condition_LessOrEqual_False()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["count"] = 6;
-        ExpressionResolver.EvaluateLogicalExpression("property.count <= 5", exchange)
+        EvaluateCondition("property.count <= 5", exchange)
             .Should().BeFalse();
     }
 
@@ -214,80 +224,80 @@ public class ExpressionResolverFullTests : IDisposable
     #region Logical expressions — connectives
 
     [Fact]
-    public void LogicalExpression_XOR_TrueWhenOnlyOneTrue()
+    public void Condition_XOR_TrueWhenOnlyOneTrue()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["a"] = 10;
         exchange.Properties["b"] = 3;
         // a > 5 is true, b > 5 is false → XOR = true
-        ExpressionResolver.EvaluateLogicalExpression("property.a > 5 XOR property.b > 5", exchange)
+        EvaluateCondition("property.a > 5 XOR property.b > 5", exchange)
             .Should().BeTrue();
     }
 
     [Fact]
-    public void LogicalExpression_XOR_FalseWhenBothTrue()
+    public void Condition_XOR_FalseWhenBothTrue()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["a"] = 10;
         exchange.Properties["b"] = 10;
         // Both true → XOR = false
-        ExpressionResolver.EvaluateLogicalExpression("property.a > 5 XOR property.b > 5", exchange)
+        EvaluateCondition("property.a > 5 XOR property.b > 5", exchange)
             .Should().BeFalse();
     }
 
     [Fact]
-    public void LogicalExpression_PropertyAsBooleanTruthy()
+    public void Condition_PropertyAsBooleanTruthy()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["flag"] = true;
-        ExpressionResolver.EvaluateLogicalExpression("property.flag", exchange)
+        EvaluateCondition("property.flag", exchange)
             .Should().BeTrue();
     }
 
     [Fact]
-    public void LogicalExpression_PropertyAsBooleanFalsy()
+    public void Condition_PropertyAsBooleanFalsy()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["flag"] = false;
-        ExpressionResolver.EvaluateLogicalExpression("property.flag", exchange)
+        EvaluateCondition("property.flag", exchange)
             .Should().BeFalse();
     }
 
     [Fact]
-    public void LogicalExpression_StringEquality()
+    public void Condition_StringEquality()
     {
         var exchange = CreateExchange("body");
         exchange.In.Headers["type"] = "order";
-        ExpressionResolver.EvaluateLogicalExpression("header.type == 'order'", exchange)
+        EvaluateCondition("header.type == 'order'", exchange)
             .Should().BeTrue();
     }
 
     [Fact]
-    public void LogicalExpression_HeaderNumericComparison()
+    public void Condition_HeaderNumericComparison()
     {
         var exchange = CreateExchange("body");
         exchange.In.Headers["status"] = 200;
-        ExpressionResolver.EvaluateLogicalExpression("header.status == 200", exchange)
+        EvaluateCondition("header.status == 200", exchange)
             .Should().BeTrue();
     }
 
     [Fact]
-    public void LogicalExpression_AND_BothFalse()
+    public void Condition_AND_BothFalse()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["a"] = 1;
         exchange.Properties["b"] = 2;
-        ExpressionResolver.EvaluateLogicalExpression("property.a > 5 AND property.b > 5", exchange)
+        EvaluateCondition("property.a > 5 AND property.b > 5", exchange)
             .Should().BeFalse();
     }
 
     [Fact]
-    public void LogicalExpression_OR_BothFalse()
+    public void Condition_OR_BothFalse()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["a"] = 1;
         exchange.Properties["b"] = 2;
-        ExpressionResolver.EvaluateLogicalExpression("property.a > 5 OR property.b > 5", exchange)
+        EvaluateCondition("property.a > 5 OR property.b > 5", exchange)
             .Should().BeFalse();
     }
 
@@ -468,19 +478,19 @@ public class ExpressionResolverFullTests : IDisposable
     }
 
     [Fact]
-    public void ValueExpression_LogicalExprWithNestedProperty()
+    public void Condition_NestedPropertyWithNestedProperty()
     {
         // Logical: property.obj.Count > 3
-        var pred = ExpressionResolver.CompileLogicalPredicate("property.obj.Count > 3");
+        var pred = CompileCondition("property.obj.Count > 3");
         var exchange = CreateExchange("body");
         exchange.Properties["obj"] = new { Count = 5 };
         pred(exchange).Should().BeTrue();
     }
 
     [Fact]
-    public void ValueExpression_LogicalExprWithNestedPropertyFalse()
+    public void Condition_NestedPropertyWithNestedPropertyFalse()
     {
-        var pred = ExpressionResolver.CompileLogicalPredicate("property.obj.Count > 10");
+        var pred = CompileCondition("property.obj.Count > 10");
         var exchange = CreateExchange("body");
         exchange.Properties["obj"] = new { Count = 5 };
         pred(exchange).Should().BeFalse();
@@ -893,17 +903,14 @@ public class ExpressionResolverFullTests : IDisposable
     }
 
     [Fact]
-    public void TryConvertToBool_StringDa_Russian()
+    public void TryConvertToBool_LocaleWords_AreNotSpecial()
     {
-        ExpressionResolver.TryConvertToBool("да", out var result).Should().BeTrue();
-        result.Should().BeTrue();
-    }
-
-    [Fact]
-    public void TryConvertToBool_StringNet_Russian()
-    {
-        ExpressionResolver.TryConvertToBool("нет", out var result).Should().BeTrue();
-        result.Should().BeFalse();
+        // The boolean word set is English-only by design: a routing language must not change
+        // meaning with the author's locale. A foreign word for "no" is an ordinary non-empty
+        // string, which the truthiness rule reads as true. (Until 2026-08-28 a few localized
+        // words were recognised; the removal is recorded in the changelog.)
+        ExpressionResolver.TryConvertToBool("nein", out var result).Should().BeTrue();
+        result.Should().BeTrue("a non-empty string that is not a boolean word is truthy");
     }
 
     #endregion
@@ -1070,20 +1077,20 @@ public class ExpressionResolverFullTests : IDisposable
     }
 
     [Fact]
-    public void LogicalExpression_BothNulls_AreEqual()
+    public void Condition_BothNulls_AreEqual()
     {
         var exchange = CreateExchange("body");
         // Neither property.a nor property.b is set → both null
-        ExpressionResolver.EvaluateLogicalExpression("property.a == property.b", exchange)
+        EvaluateCondition("property.a == property.b", exchange)
             .Should().BeTrue();
     }
 
     [Fact]
-    public void LogicalExpression_NullVsNonNull_NotEqual()
+    public void Condition_NullVsNonNull_NotEqual()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["b"] = "value";
-        ExpressionResolver.EvaluateLogicalExpression("property.a != property.b", exchange)
+        EvaluateCondition("property.a != property.b", exchange)
             .Should().BeTrue();
     }
 
@@ -1103,10 +1110,10 @@ public class ExpressionResolverFullTests : IDisposable
     }
 
     [Fact]
-    public void EvaluateLogicalExpression_EmptyString_Throws()
+    public void Condition_EmptyString_Throws()
     {
         var exchange = CreateExchange("body");
-        var act = () => ExpressionResolver.EvaluateLogicalExpression("", exchange);
+        var act = () => EvaluateCondition("", exchange);
         act.Should().Throw<ArgumentException>();
     }
 
@@ -1121,12 +1128,12 @@ public class ExpressionResolverFullTests : IDisposable
     }
 
     [Fact]
-    public void LogicalExpression_MixedType_StringVsInt()
+    public void Condition_MixedType_StringVsInt()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["val"] = "10";
         // "10" == 10 should compare numerically
-        ExpressionResolver.EvaluateLogicalExpression("property.val == 10", exchange)
+        EvaluateCondition("property.val == 10", exchange)
             .Should().BeTrue();
     }
 
@@ -1143,23 +1150,11 @@ public class ExpressionResolverFullTests : IDisposable
     {
         ExpressionResolver.ClearAllCaches();
         ExpressionResolver.GetCompiledTemplate("test ${body}");
-        ExpressionResolver.GetCompiledLogicalExpression("property.x == 1");
+        ExpressionResolver.GetCompiledValueExpression("property.independent");
         ExpressionResolver.ClearTemplateCache();
         var stats = ExpressionResolver.GetCacheStatistics();
         stats.TemplateCount.Should().Be(0);
-        stats.LogicalExpressionCount.Should().BeGreaterThanOrEqualTo(1);
-    }
-
-    [Fact]
-    public void ClearLogicalExpressionCache_WorksIndependently()
-    {
-        ExpressionResolver.ClearAllCaches();
-        ExpressionResolver.GetCompiledTemplate("test ${body}");
-        ExpressionResolver.GetCompiledLogicalExpression("property.x == 1");
-        ExpressionResolver.ClearLogicalExpressionCache();
-        var stats = ExpressionResolver.GetCacheStatistics();
-        stats.TemplateCount.Should().BeGreaterThanOrEqualTo(1);
-        stats.LogicalExpressionCount.Should().Be(0);
+        stats.ValueExpressionCount.Should().BeGreaterThanOrEqualTo(1);
     }
 
     [Fact]
@@ -1227,8 +1222,6 @@ public class ExpressionResolverFullTests : IDisposable
         var v1 = ExpressionResolver.GetCompiledValueExpression("property.x", "ctx-1");
         var v2 = ExpressionResolver.GetCompiledValueExpression("property.y", "ctx-2");
         
-        var l1 = ExpressionResolver.GetCompiledLogicalExpression("property.a == 1", "ctx-1");
-        
         // Clear only ctx-1
         ExpressionResolver.ClearCachesForContext("ctx-1");
         
@@ -1237,8 +1230,6 @@ public class ExpressionResolverFullTests : IDisposable
             .Should().NotBeSameAs(t1, "ctx-1 template should have been evicted");
         ExpressionResolver.GetCompiledValueExpression("property.x", "ctx-1")
             .Should().NotBeSameAs(v1, "ctx-1 value expression should have been evicted");
-        ExpressionResolver.GetCompiledLogicalExpression("property.a == 1", "ctx-1")
-            .Should().NotBeSameAs(l1, "ctx-1 logical expression should have been evicted");
         
         // ctx-2 and global entries should still be cached (same references)
         ExpressionResolver.GetCompiledTemplate("clear-ctx-t2 ${body}", "ctx-2")
@@ -1302,7 +1293,7 @@ public class ExpressionResolverFullTests : IDisposable
     [Fact]
     public void CompileLogicalPredicate_ComplexExpression()
     {
-        var pred = ExpressionResolver.CompileLogicalPredicate(
+        var pred = CompileCondition(
             "property.status == 'active' AND property.count > 0");
         
         var ex1 = CreateExchange("body");
@@ -1324,7 +1315,7 @@ public class ExpressionResolverFullTests : IDisposable
     [Fact]
     public void CompileLogicalPredicate_HeaderComparison()
     {
-        var pred = ExpressionResolver.CompileLogicalPredicate("header.status == 200");
+        var pred = CompileCondition("header.status == 200");
         
         var ex1 = CreateExchange("body");
         ex1.In.Headers["status"] = 200;

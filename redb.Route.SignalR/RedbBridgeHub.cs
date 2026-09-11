@@ -25,8 +25,8 @@ internal sealed class RedbBridgeHub : Hub
     /// <returns>Result from the pipeline (when InOut), otherwise null.</returns>
     public async Task<object?> Invoke(string method, object?[]? args)
     {
-        var consumer = Context.GetHttpContext()?.RequestServices.GetService<SignalRConsumer>()
-            ?? throw new HubException("SignalRConsumer not available in DI.");
+        var consumer = ResolveConsumer()
+            ?? throw new HubException("SignalRConsumer not available for this hub path.");
 
         var options = consumer.EndpointOptions;
 
@@ -85,8 +85,18 @@ internal sealed class RedbBridgeHub : Hub
     /// <inheritdoc />
     public override async Task OnConnectedAsync()
     {
-        var consumer = Context.GetHttpContext()?.RequestServices.GetService<SignalRConsumer>();
+        var consumer = ResolveConsumer();
         if (consumer is null) { await base.OnConnectedAsync(); return; }
+
+        // Admission (волна В4 плана лимитов): a connection over maxConnections is aborted here —
+        // no group membership, no Connected event, nothing reaches the pipeline. The marker keeps
+        // OnDisconnected from releasing a slot this connection never held.
+        if (!consumer.TryAcquireConnection())
+        {
+            Context.Abort();
+            return;
+        }
+        Context.Items["__redb_conn_slot"] = true;
 
         // Auto-add to default group
         if (consumer.EndpointOptions.DefaultGroup is not null)
@@ -122,8 +132,19 @@ internal sealed class RedbBridgeHub : Hub
     /// <inheritdoc />
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        var consumer = Context.GetHttpContext()?.RequestServices.GetService<SignalRConsumer>();
+        var consumer = ResolveConsumer();
         if (consumer is null) { await base.OnDisconnectedAsync(exception); return; }
+
+        // Release the admission slot only if OnConnected actually claimed one (see the marker).
+        // A refused connection (no marker under an active limit) also gets NO Disconnected event:
+        // the pipeline never saw it connect, so it must not see it disconnect.
+        if (Context.Items.ContainsKey("__redb_conn_slot"))
+            consumer.ReleaseConnection();
+        else if (consumer.EndpointOptions.MaxConnections > 0)
+        {
+            await base.OnDisconnectedAsync(exception).ConfigureAwait(false);
+            return;
+        }
 
         var message = new Message(null);
         message.Headers[SignalRHeaders.Event] = "Disconnected";
@@ -148,6 +169,22 @@ internal sealed class RedbBridgeHub : Hub
         }
 
         await base.OnDisconnectedAsync(exception);
+    }
+
+    /// <summary>
+    /// Finds the consumer behind this hub request. Since hubs share one listener with each other
+    /// and with HTTP, the container can hold several consumers, so the lookup goes by request path
+    /// (<c>/chatHub</c>, <c>/chatHub/negotiate</c>) through the component's registry.
+    /// </summary>
+    private SignalRConsumer? ResolveConsumer()
+    {
+        var http = Context.GetHttpContext();
+        if (http is null) return null;
+
+        var component = http.RequestServices.GetService<SignalRComponent>();
+        // The listener's own port is part of the identity: one component can serve the same hub
+        // path on several ports, and those are different hubs.
+        return component?.GetConsumerByRequestPath(http.Connection.LocalPort, http.Request.Path.Value);
     }
 
     private async Task HandleGroupCommands(IExchange exchange)

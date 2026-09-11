@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The package identity `redb-route-xml pack` uses. -->
+    <RoutePackageName>XmlDemo</RoutePackageName>
+    <RouteContextName>xmldemo</RouteContextName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="redb.Route.Xml" Version="3.7.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="routes/**/*.route.xml" />
+    <None Include="context.xml" />
+    <None Include="resources/**/*" />
+    <None Include="config/**/*.json" />
+  </ItemGroup>
+  <!-- Opt-in build-time packaging: dotnet build -p:PackRouteOnBuild=true -p:Version=1.0.0
+       runs the Ф5.4 checks against the fresh build output and produces pkg/XmlDemo-VERSION.tpkg. -->
+  <Target Name="RoutePackage" AfterTargets="Build" Condition="'$(PackRouteOnBuild)' == 'true'">
+    <Exec Command="redb-route-xml pack &quot;$(MSBuildProjectDirectory)&quot; --version $(Version) --bin &quot;$(TargetDir).&quot;" />
+  </Target>
+</Project>

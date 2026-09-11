@@ -21,7 +21,10 @@ public sealed class S3IntegrationTests : IAsyncLifetime
     private const string AccessKey = "minioadmin";
     private const string SecretKey = "minioadmin";
     private const string Region = "us-east-1";
-    private const string TestBucket = "integration-tests";
+
+    // Bucket per TFM (S-В): three test assemblies run in parallel against one MinIO, and
+    // one assembly's DisposeAsync cleanup must not delete another's freshly seeded objects.
+    private static readonly string TestBucket = $"integration-tests-net{Environment.Version.Major}";
 
     private readonly ITestOutputHelper _output;
     private IAmazonS3? _rawClient;

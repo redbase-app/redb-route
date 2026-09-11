@@ -1,0 +1,9 @@
+{
+  "id": {{ headers.orderId }},
+  "customer": "{{ args.customer }}",
+  "items": [
+    {{~ for i in body.items ~}}
+    { "sku": "{{ i.sku }}", "qty": {{ i.qty }} }{{ if !for.last }},{{ end }}
+    {{~ end ~}}
+  ]
+}

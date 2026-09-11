@@ -59,7 +59,7 @@ public class SedaComponentTests : IAsyncDisposable
     public void Options_DefaultValues()
     {
         var opts = new SedaEndpointOptions();
-        opts.ConcurrentConsumers.Should().Be(1);
+        opts.ResolvedConcurrentConsumers.Should().Be(1, "дефолт остаётся 1, как у Camel/Spring/Azure (В-7)");
         opts.Size.Should().Be(0);
         opts.Timeout.Should().Be(30000);
     }
@@ -67,9 +67,9 @@ public class SedaComponentTests : IAsyncDisposable
     [Fact]
     public void Options_Validate_ThrowsOnInvalidConcurrentConsumers()
     {
-        var opts = new SedaEndpointOptions { ConcurrentConsumers = 0 };
+        var opts = new SedaEndpointOptions { ConcurrentConsumers = "0" };
         var act = () => opts.Validate();
-        act.Should().Throw<ArgumentOutOfRangeException>();
+        act.Should().Throw<ArgumentException>().WithMessage("*concurrentConsumers*");
     }
 
     [Fact]

@@ -92,7 +92,8 @@ public class ChoiceProcessorTests
     [Fact]
     public void WhenClause_NullPredicate_Throws()
     {
-        var act = () => new WhenClause(null!, new DelegateProcessor(_ => { }));
+        // The cast only picks the overload: both the predicate and the delegate constructors reject null.
+        var act = () => new WhenClause((redb.Route.Abstractions.IPredicate)null!, new DelegateProcessor(_ => { }));
         act.Should().Throw<ArgumentNullException>();
     }
 }

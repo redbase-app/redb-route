@@ -1,5 +1,6 @@
 using Google.Cloud.Storage.V1;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.Firebase;
@@ -46,7 +47,13 @@ internal sealed class FirebaseStorageEndpoint : EndpointBase<FirebaseStorageEndp
         var path = uri.Path;
         var slashIdx = path.IndexOf('/');
         BucketName = options.BucketName ?? (slashIdx > 0 ? path[..slashIdx] : path);
-        ObjectPrefix = slashIdx > 0 ? path[(slashIdx + 1)..] : null;
+
+        // The path after the bucket is folder-like: "bucket/uploads" and "bucket/uploads/"
+        // both mean the "uploads/" prefix — Upload must never produce "uploadsfile.txt".
+        // A raw (non-folder) string prefix is still available via the Prefix option.
+        var rawPrefix = slashIdx > 0 ? path[(slashIdx + 1)..] : null;
+        ObjectPrefix = string.IsNullOrEmpty(rawPrefix) ? null
+            : rawPrefix.EndsWith('/') ? rawPrefix : rawPrefix + "/";
     }
 
     /// <summary>Bucket name parsed from the URI path or options.</summary>
@@ -72,7 +79,7 @@ internal sealed class FirebaseStorageEndpoint : EndpointBase<FirebaseStorageEndp
             if (_client is not null) return _client;
 
             var provider = ResolveCredentialProvider();
-            _client = provider.GetStorageClient();
+            _client = provider.GetStorageClient(Options.CredentialPath);
             return _client;
         }
         finally
@@ -80,6 +87,21 @@ internal sealed class FirebaseStorageEndpoint : EndpointBase<FirebaseStorageEndp
             _lock.Release();
         }
     }
+
+    /// <summary>Signer for CreateDownloadLink — requires a service-account credential.</summary>
+    internal Google.Cloud.Storage.V1.UrlSigner GetUrlSigner()
+        => ResolveCredentialProvider().GetUrlSigner(Options.CredentialPath);
+
+    /// <summary>
+    /// Project id for bucket-level operations (CreateBucket/ListBuckets/AutoCreateBucket) —
+    /// GCS needs it to own the bucket; a missing project is a loud error, never a guess.
+    /// </summary>
+    internal string RequireProjectId()
+        => Options.ProjectId
+           ?? Environment.GetEnvironmentVariable("FIREBASE_PROJECT")
+           ?? throw new InvalidOperationException(
+               "Bucket operations require a project id. Set it on the endpoint (?projectId=...) " +
+               "or via the FIREBASE_PROJECT environment variable.");
 
     /// <inheritdoc />
     public override IProducer CreateProducer()
@@ -102,12 +124,10 @@ internal sealed class FirebaseStorageEndpoint : EndpointBase<FirebaseStorageEndp
 
     private IFirebaseCredentialProvider ResolveCredentialProvider()
     {
+        // A set-but-unknown name fails loud -- never a silent fallback (Ф11 Ж-1).
         if (!string.IsNullOrEmpty(Options.ConnectionFactory))
-        {
-            var fromRegistry = StorageComponent.Context?
-                .GetFromRegistry<IFirebaseCredentialProvider>(Options.ConnectionFactory);
-            if (fromRegistry is not null) return fromRegistry;
-        }
+            return StorageComponent.Context
+                .GetRequiredFromRegistry<IFirebaseCredentialProvider>(Options.ConnectionFactory);
 
         return StorageComponent.CredentialProvider
                ?? throw new InvalidOperationException(

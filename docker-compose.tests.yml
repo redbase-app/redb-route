@@ -517,6 +517,26 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── FCM HTTP v1 API mock ────────────────────────────────────────────────────
+  # Google ships no FCM emulator; this echo records messages:send calls.
+  # Used by: redb.Route.Tests.Firebase FCM e2e (AppOptions.HttpClientFactory redirect).
+  # Source of the server script: C:\Work\yaml\firebase\fcm-echo\server.js (host infra dir).
+  #   POST /v1/projects/*/messages:send | GET/DELETE /messages | GET /healthz
+  fcm-echo:
+    image: node:22-slim
+    container_name: fcm-echo
+    hostname: fcm-echo
+    working_dir: /app
+    volumes: ["./tests/docker/fcm-echo:/app"]
+    command: node server.js
+    ports: ["18200:18200"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:18200/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ── Mock OAuth2 Server (OIDC) ────────────────────────────────────────────────
   # Used by: redb.Identity federation tests → http://localhost:9199/default
   mock-oauth2:

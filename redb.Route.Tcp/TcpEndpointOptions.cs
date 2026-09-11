@@ -109,6 +109,24 @@ public class TcpEndpointOptions : EndpointOptions
     /// </summary>
     public string? SslTargetHost { get; set; }
 
+    /// <summary>
+    /// Producer only: accept any server certificate, including a self-signed one. Off by default
+    /// and never implied by another option — a staging server behind a self-signed certificate is
+    /// a real need, but switching validation off has to be a decision someone wrote down.
+    /// </summary>
+    public bool TrustAllCertificates { get; set; }
+
+    /// <summary>
+    /// Producer only: PFX client certificate presented to a server that requires mTLS. Distinct
+    /// from <see cref="SslCertPath"/>, which is the certificate a consumer serves; naming follows
+    /// the gRPC connector's <c>clientCertPath</c>.
+    /// </summary>
+    public string? ClientCertPath { get; set; }
+
+    /// <summary>Password for <see cref="ClientCertPath"/>.</summary>
+    [Sensitive]
+    public string? ClientCertPassword { get; set; }
+
     /// <inheritdoc />
     public override void Validate()
     {

@@ -1,8 +1,10 @@
 using redb.Core;
+using redb.Core.Exceptions;
 using redb.Core.Models.Entities;
 using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Storage.Redb.Schemas;
+using redb.Route.RedbCore;
 using redb.Route.RedbCore.Extensions;
 
 namespace redb.Route.Llm.Storage.Redb;
@@ -12,8 +14,10 @@ namespace redb.Route.Llm.Storage.Redb;
 /// via the supplied <see cref="IIdempotentRepository"/> (the
 /// <c>RedbIdempotentRepository</c> in production); idempotent tool outputs
 /// are persisted in a <see cref="ToolIdempotencyProps"/> row whose composite
-/// key <c>"llm-tool:{conv}:{toolUseId}"</c> lives in the indexed
-/// <c>_objects.value_string</c> column. The dedicated scheme keeps
+/// key <c>"llm-tool:{conv}:{toolUseId}"</c> lives in <c>_objects.value_string</c>
+/// (partial index on PostgreSQL/SQLite; MSSQL cannot index NVARCHAR(MAX)) and,
+/// normalized, in <c>_objects._value_unique</c> — the per-scheme unique index
+/// keeps a raced completion on a single row. The dedicated scheme keeps
 /// idempotency rows physically separate from <see cref="ToolCacheProps"/>
 /// content-hash entries — lookups touch a single scheme partition.
 /// On a duplicate, the previously-saved output is returned and the model
@@ -69,15 +73,19 @@ public sealed class RedbToolIdempotencyStore : IToolIdempotencyStore
         var redb = Resolve(exchange);
 
         var row = await redb.Query<ToolIdempotencyProps>()
-            .WhereRedb(x => x.ValueString == key)
+            .WhereRedb(x => x.ValueUnique == RedbUniqueKey.Normalize(key))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
 
         if (row is null)
         {
+            // The composite key rides in _value_unique: the reservation protocol makes
+            // a second completer rare (release + re-reserve, crash recovery), but when
+            // one appears the unique index keeps the output on a single row.
             row = new RedbObject<ToolIdempotencyProps>
             {
                 value_string = key,
+                ValueUnique = RedbUniqueKey.Normalize(key),
                 Props = new ToolIdempotencyProps
                 {
                     ToolName = null,
@@ -85,13 +93,31 @@ public sealed class RedbToolIdempotencyStore : IToolIdempotencyStore
                     CreatedAtUtc = DateTimeOffset.UtcNow
                 }
             };
+            try
+            {
+                await redb.SaveAsync(row).ConfigureAwait(false);
+            }
+            catch (RedbUniqueViolationException)
+            {
+                // Lost the creation race — write this completion onto the winner's row.
+                var winnerKey = row.ValueUnique;
+                var winner = await redb.Query<ToolIdempotencyProps>()
+                    .WhereRedb(x => x.ValueUnique == winnerKey)
+                    .FirstOrDefaultAsync()
+                    .ConfigureAwait(false);
+                if (winner is null) throw; // the key vanished again (released mid-race)
+
+                winner.Props.OutputJson = outputJson;
+                winner.date_modify = DateTimeOffset.UtcNow;
+                await redb.SaveAsync(winner).ConfigureAwait(false);
+            }
         }
         else
         {
             row.Props.OutputJson = outputJson;
             row.date_modify = DateTimeOffset.UtcNow;
+            await redb.SaveAsync(row).ConfigureAwait(false);
         }
-        await redb.SaveAsync(row).ConfigureAwait(false);
         await _repository.Confirm(key, ct).ConfigureAwait(false);
     }
 
@@ -103,7 +129,7 @@ public sealed class RedbToolIdempotencyStore : IToolIdempotencyStore
 
         var redb = Resolve(exchange);
         var row = await redb.Query<ToolIdempotencyProps>()
-            .WhereRedb(x => x.ValueString == key)
+            .WhereRedb(x => x.ValueUnique == RedbUniqueKey.Normalize(key))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
         if (row is not null)
@@ -113,7 +139,7 @@ public sealed class RedbToolIdempotencyStore : IToolIdempotencyStore
     private static async Task<string?> LoadCachedOutputAsync(IRedbService redb, string key)
     {
         var row = await redb.Query<ToolIdempotencyProps>()
-            .WhereRedb(x => x.ValueString == key)
+            .WhereRedb(x => x.ValueUnique == RedbUniqueKey.Normalize(key))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
         return row?.Props.OutputJson;

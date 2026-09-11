@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Net;
 using Microsoft.Extensions.Logging;
 using Telegram.Bot;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.Telegram;
@@ -46,15 +48,11 @@ public sealed class TelegramComponent : ComponentBase
         // Resolve the named ConnectionFactory BEFORE Validate(): the factory may be the only
         // source of the bot token, and Validate() requires one. This is what lets a route
         // reference `connectionFactory=my-bot` and keep the token out of the URI entirely.
-        if (!string.IsNullOrEmpty(options.ConnectionFactory) && Context is not null)
+        if (!string.IsNullOrEmpty(options.ConnectionFactory))
         {
-            var factory = Context.GetFromRegistry<TelegramConnectionFactory>(options.ConnectionFactory);
-            if (factory is not null)
-                factory.ApplyTo(options, uri);
-            else
-                Logger?.LogWarning(
-                    "Telegram: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
-                    options.ConnectionFactory);
+            // A set-but-unknown name fails loud -- never a silent fallback to URI params (Ф11 Ж-1).
+            var factory = Context.GetRequiredFromRegistry<TelegramConnectionFactory>(options.ConnectionFactory);
+            factory.ApplyTo(options, uri);
         }
 
         options.Validate();
@@ -75,23 +73,41 @@ public sealed class TelegramComponent : ComponentBase
         var entry = _clients.GetOrAdd(resolved, static token =>
         {
             // Own the HttpClient so we can dispose it on component shutdown.
-            // PooledConnectionLifetime mirrors Telegram.Bot's own default when
-            // no HttpClient is supplied.
-            var handler = new SocketsHttpHandler
-            {
-                PooledConnectionLifetime = TimeSpan.FromMinutes(3)
-            };
-            var http = new HttpClient(handler)
-            {
-                // Must exceed the maximum long-polling duration (50s) plus a margin.
-                Timeout = TimeSpan.FromSeconds(75)
-            };
+            var http = BuildHttpClient();
             var bot = new TelegramBotClient(token, http);
             return new ClientEntry(bot, http);
         });
 
         return entry.Bot;
     }
+
+    /// <summary>
+    /// The shared HTTP transport of one bot: long polling and every producer send and download go
+    /// through it. A getUpdates long poll is silent for up to ~50 s (Telegram caps the wait there);
+    /// middleboxes (VPN tunnels, NAT, proxies) drop TLS connections that stay silent for about that
+    /// long, which showed up as "The response ended prematurely" on nearly every poll through a
+    /// sing-tun/xray tunnel (2026-09-04) — a retry storm in the log, and a message arriving in the
+    /// gap waits for the next poll. HTTP/2 with PING frames while a request is in flight keeps the
+    /// connection visibly alive (four consecutive 50-second polls completed with a ping every 15 s;
+    /// without pings HTTP/1.1 lost every one). api.telegram.org speaks HTTP/2; on HTTP/1.1 the pings
+    /// are simply not sent.
+    /// </summary>
+    internal static HttpClient BuildHttpClient() => new(new Http2UpgradeHandler(BuildHandler()))
+    {
+        // Must exceed the maximum long-polling duration (50s) plus a margin.
+        Timeout = TimeSpan.FromSeconds(75),
+        DefaultRequestVersion = HttpVersion.Version20,
+        DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+    };
+
+    /// <summary>See <see cref="BuildHttpClient"/>. PooledConnectionLifetime mirrors Telegram.Bot's own default.</summary>
+    internal static SocketsHttpHandler BuildHandler() => new()
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(3),
+        KeepAlivePingDelay = TimeSpan.FromSeconds(15),
+        KeepAlivePingTimeout = TimeSpan.FromSeconds(20),
+        KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
+    };
 
     /// <summary>
     /// Reserves consumer ownership for <paramref name="rawToken"/> within this
@@ -132,4 +148,22 @@ public sealed class TelegramComponent : ComponentBase
     }
 
     private readonly record struct ClientEntry(TelegramBotClient Bot, HttpClient Http);
+}
+
+/// <summary>
+/// Asks for HTTP/2 on every request that passes through. <see cref="HttpClient.DefaultRequestVersion"/>
+/// applies only to messages the client creates itself; Telegram.Bot builds its own
+/// <see cref="HttpRequestMessage"/>s, which therefore start at HTTP/1.1 — and on HTTP/1.1 the
+/// keep-alive pings of <see cref="TelegramComponent.BuildHandler"/> are never sent (verified
+/// 2026-09-04: getMe through a client with DefaultRequestVersion 2.0 still went out as 1.1).
+/// HTTP/1.1 remains the fallback when the server does not offer h2.
+/// </summary>
+internal sealed class Http2UpgradeHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        request.Version = HttpVersion.Version20;
+        request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+        return base.SendAsync(request, cancellationToken);
+    }
 }

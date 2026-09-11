@@ -1,18 +1,22 @@
 using redb.Core;
+using redb.Core.Exceptions;
 using redb.Core.Models.Contracts;
 using redb.Core.Models.Entities;
 using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Storage.Redb.Schemas;
+using redb.Route.RedbCore;
 using redb.Route.RedbCore.Extensions;
 
 namespace redb.Route.Llm.Storage.Redb;
 
 /// <summary>
 /// REDB-backed <see cref="IBatchStore"/>. One <see cref="LlmBatchProps"/> row
-/// per submitted batch; the batch id lives on the indexed
-/// <c>_objects.value_string</c> column so callback lookups hit a single-row
-/// server-side query.
+/// per submitted batch; the batch id lives in <c>_objects.value_string</c>
+/// (partial index on PostgreSQL/SQLite; MSSQL cannot index NVARCHAR(MAX)) and,
+/// normalized, in <c>_objects._value_unique</c> — the per-scheme unique index
+/// keeps a batch raced between the submit path and a fast webhook callback on
+/// a single row.
 /// <para>
 /// The store does not own an <see cref="IRedbService"/> instance — each call
 /// resolves one through <c>IRouteContext.GetRedbService(name, exchange)</c>,
@@ -53,7 +57,7 @@ public sealed class RedbBatchStore : IBatchStore
         var redb = Resolve(exchange);
 
         var existing = await redb.Query<LlmBatchProps>()
-            .WhereRedb(o => o.ValueString == record.BatchId)
+            .WhereRedb(o => o.ValueUnique == RedbUniqueKey.Normalize(record.BatchId))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
 
@@ -61,15 +65,52 @@ public sealed class RedbBatchStore : IBatchStore
 
         if (existing is null)
         {
+            // The batch id rides in _value_unique: duplicate submit registrations (a
+            // redelivered exchange, a RegisterManyAsync reconciliation) race to a
+            // single row — the unique index keeps them on one, the loser re-registers
+            // onto the winner. The webhook itself never registers; it only advances
+            // status via UpdateStatusAsync.
             var row = new RedbObject<LlmBatchProps>
             {
                 value_string = record.BatchId,
+                ValueUnique = RedbUniqueKey.Normalize(record.BatchId),
                 Props = props
             };
-            await redb.SaveAsync(row).ConfigureAwait(false);
+            try
+            {
+                await redb.SaveAsync(row).ConfigureAwait(false);
+            }
+            catch (RedbUniqueViolationException)
+            {
+                var winnerKey = row.ValueUnique;
+                var winner = await redb.Query<LlmBatchProps>()
+                    .WhereRedb(o => o.ValueUnique == winnerKey)
+                    .FirstOrDefaultAsync()
+                    .ConfigureAwait(false);
+                if (winner is null) throw; // the key vanished again (deleted mid-race)
+
+                // Never regress a terminal status: between our miss and this catch the
+                // webhook may have already marked the winner completed/failed, and the
+                // framework never polls — a redelivered "submitted" overwriting it
+                // would report the batch as pending forever.
+                if (IsTerminal(winner.Props.Status) && !IsTerminal(props.Status))
+                    return;
+
+                winner.Props = props;
+                winner.date_modify = DateTimeOffset.UtcNow;
+                await redb.SaveAsync(winner).ConfigureAwait(false);
+            }
         }
         else
         {
+            // Same terminal-status guard as the collision path below used to carry alone. The
+            // unique lookup now finds the winner up front, so a redelivered "submitted" arrives
+            // here — and before Ф4 this branch could downgrade a completed batch to pending
+            // forever whenever the raw ids matched. The guard belongs to the register, not to
+            // the way the row was found.
+            if (IsTerminal(existing.Props.Status) && !IsTerminal(props.Status))
+                return;
+
             existing.Props = props;
             existing.date_modify = DateTimeOffset.UtcNow;
             await redb.SaveAsync(existing).ConfigureAwait(false);
@@ -81,15 +122,25 @@ public sealed class RedbBatchStore : IBatchStore
     {
         ArgumentNullException.ThrowIfNull(records);
 
+        // One record per id even within one call — the last entry wins. Two fresh
+        // records sharing an id would otherwise self-collide on the unique index
+        // inside a single bulk save (the pre-barrier code silently inserted both).
         var input = records
             .Where(r => r is not null && !string.IsNullOrWhiteSpace(r.BatchId))
+            .GroupBy(r => r.BatchId, StringComparer.Ordinal)
+            .Select(g => g.Last())
             .ToList();
         if (input.Count == 0) return;
 
         var redb = Resolve(exchange);
+        await RegisterManyCoreAsync(redb, input, retryOnRace: true, ct).ConfigureAwait(false);
+    }
 
-        // ONE indexed IN-clause lookup for all batch ids, then ONE bulk SaveAsync —
-        // SaveAsync handles insert/update streams internally.
+    private static async Task RegisterManyCoreAsync(
+        IRedbService redb, List<BatchJobRecord> input, bool retryOnRace, CancellationToken ct)
+    {
+        // ONE IN-clause lookup for all batch ids (partial index on PG/SQLite; a scan
+        // on MSSQL), then ONE bulk SaveAsync — insert/update streams are internal.
         var keys = input.Select(r => r.BatchId).ToArray();
         var existingByKey = (await redb.Query<LlmBatchProps>()
                 .WhereRedb(o => keys.Contains(o.ValueString))
@@ -97,6 +148,22 @@ public sealed class RedbBatchStore : IBatchStore
                 .ConfigureAwait(false))
             .Where(o => o.value_string is not null)
             .ToDictionary(o => o.value_string!, StringComparer.Ordinal);
+
+        if (!retryOnRace)
+        {
+            // Retry pass after a lost creation race: the winners hold the unique key —
+            // resolve by it too, so every collided batch id becomes an update.
+            var normByKey = input.ToDictionary(r => r.BatchId, r => RedbUniqueKey.Normalize(r.BatchId), StringComparer.Ordinal);
+            var norms = normByKey.Values.ToArray();
+            var keyByNorm = normByKey.ToDictionary(kv => kv.Value, kv => kv.Key, StringComparer.Ordinal);
+            var byUnique = await redb.Query<LlmBatchProps>()
+                .WhereRedb(o => norms.Contains(o.ValueUnique))
+                .ToListAsync()
+                .ConfigureAwait(false);
+            foreach (var row in byUnique)
+                if (row.ValueUnique is { } u && keyByNorm.TryGetValue(u, out var k))
+                    existingByKey.TryAdd(k, row);
+        }
 
         var rowsToSave = new List<IRedbObject>(input.Count);
         var now = DateTimeOffset.UtcNow;
@@ -110,10 +177,12 @@ public sealed class RedbBatchStore : IBatchStore
             if (existingByKey.TryGetValue(record.BatchId, out var existing))
             {
                 // Hash-pre-check skips no-op upserts so SaveAsync’s change-tracking
-                // doesn't re-read originals from DB for unchanged rows.
+                // doesn't re-read originals from DB for unchanged rows. On the retry
+                // pass it is skipped: the first pass already mutated instances, and a
+                // pre-check comparing a copy to itself would silently drop the update.
                 var hashBefore = existing.ComputeHash();
                 existing.Props = props;
-                if (existing.ComputeHash() == hashBefore)
+                if (retryOnRace && existing.ComputeHash() == hashBefore)
                     continue;
                 existing.date_modify = now;
                 rowsToSave.Add(existing);
@@ -123,14 +192,29 @@ public sealed class RedbBatchStore : IBatchStore
                 rowsToSave.Add(new RedbObject<LlmBatchProps>
                 {
                     value_string = record.BatchId,
+                    ValueUnique = RedbUniqueKey.Normalize(record.BatchId),
                     Props = props
                 });
             }
         }
 
         if (rowsToSave.Count == 0) return;
-        await redb.SaveAsync(rowsToSave).ConfigureAwait(false);
+
+        try
+        {
+            await redb.SaveAsync(rowsToSave).ConfigureAwait(false);
+        }
+        catch (RedbUniqueViolationException) when (retryOnRace)
+        {
+            // A concurrent writer claimed one of the fresh batch ids after our lookup
+            // and the batch rolled back whole. The winners are visible now: rebuild
+            // from a fresh lookup and retry once — a second violation is a real error.
+            await RegisterManyCoreAsync(redb, input, retryOnRace: false, ct).ConfigureAwait(false);
+        }
     }
+
+    /// <summary>Lifecycle states the webhook writes once and nothing may undo.</summary>
+    private static bool IsTerminal(string status) => status is "completed" or "failed" or "cancelled";
 
     private static LlmBatchProps ToProps(BatchJobRecord record) => new()
     {
@@ -156,7 +240,7 @@ public sealed class RedbBatchStore : IBatchStore
         var redb = Resolve(exchange);
 
         var row = await redb.Query<LlmBatchProps>()
-            .WhereRedb(o => o.ValueString == batchId)
+            .WhereRedb(o => o.ValueUnique == RedbUniqueKey.Normalize(batchId))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
 
@@ -178,7 +262,7 @@ public sealed class RedbBatchStore : IBatchStore
         var redb = Resolve(exchange);
 
         var row = await redb.Query<LlmBatchProps>()
-            .WhereRedb(o => o.ValueString == batchId)
+            .WhereRedb(o => o.ValueUnique == RedbUniqueKey.Normalize(batchId))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
         if (row is null) return;

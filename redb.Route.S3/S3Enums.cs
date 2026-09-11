@@ -46,18 +46,6 @@ public enum S3SortBy
 }
 
 /// <summary>
-/// Naming strategy for streaming upload mode.
-/// </summary>
-public enum S3NamingStrategy
-{
-    /// <summary>Progressive numbering: key.txt, key-1.txt, key-2.txt, ...</summary>
-    Progressive,
-
-    /// <summary>Random UUID suffix: key-{guid}.txt</summary>
-    Random,
-}
-
-/// <summary>
 /// Canned ACL presets for S3 objects and buckets.
 /// </summary>
 public enum S3CannedAcl

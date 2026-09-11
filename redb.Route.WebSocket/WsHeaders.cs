@@ -31,4 +31,17 @@ public static class WsHeaders
 
     /// <summary>Request path the WebSocket was accepted on.</summary>
     public const string Path = "redbWs.Path";
+
+    /// <summary>
+    /// Identity of the connected client, when the host supplied an authentication delegate:
+    /// the principal's NameIdentifier claim.
+    /// </summary>
+    public const string UserId = "redbWs.UserId";
+
+    /// <summary>
+    /// Server-mode producer: the connection id to push this frame to. Absent means every
+    /// connected client. The id is the one the consumer put into
+    /// <see cref="ConnectionId"/> on the incoming exchange.
+    /// </summary>
+    public const string TargetConnection = "redbWs.TargetConnection";
 }

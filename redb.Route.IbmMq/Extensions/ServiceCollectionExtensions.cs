@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.IbmMq;
 
@@ -23,22 +23,11 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddRedbRouteIbmMq(this IServiceCollection services)
     {
-        services.AddSingleton<IbmMqComponent>();
-
-        services.AddSingleton<IIbmMqComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            var component = sp.GetRequiredService<IbmMqComponent>();
-            context.AddComponent(component);
-            return new IbmMqComponentRegistrar();
-        });
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteComponent<IbmMqComponent>();
 
         return services;
     }
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IIbmMqComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class IbmMqComponentRegistrar : IIbmMqComponentRegistrar;

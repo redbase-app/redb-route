@@ -152,8 +152,30 @@ public sealed class AmqpProducer : ConnectableProducer
     private async Task ProcessImmediateAsync(AmqpMessage msg, CancellationToken ct)
     {
         await _sender!.SendAsync(msg).ConfigureAwait(false);
+
+        // Wire-level bytes are the connector's to record: the core's ToProcessor counts
+        // MessagesOut/Errors for a routed producer but has no idea of payload sizes.
+        var payload = PayloadSize(msg);
+        if (payload > 0)
+            _endpoint.RecordBytesOut(payload);
+
         Logger?.LogDebug("AMQP immediate send: address={Address}", _endpoint.Address);
     }
+
+    /// <summary>
+    /// Payload size of an outgoing message. Checked against the BODY SECTION: AMQPNetLite's
+    /// <c>Message.Body</c> getter unwraps a <c>Data</c> section to its byte[] and our own
+    /// <see cref="PrepareMessage"/> builds an <c>AmqpValue</c> - so the old
+    /// <c>msg.Body is Data</c> pattern was never true and BytesOut stayed at zero forever
+    /// (ревью дуги, H4).
+    /// </summary>
+    private static int PayloadSize(AmqpMessage msg) => msg.BodySection switch
+    {
+        Data { Binary.Length: > 0 } d => d.Binary.Length,
+        AmqpValue { Value: byte[] b } => b.Length,
+        AmqpValue { Value: string s } => System.Text.Encoding.UTF8.GetByteCount(s),
+        _ => 0,
+    };
 
     // ── Transactional deferred send ──
 
@@ -239,7 +261,7 @@ public sealed class AmqpProducer : ConnectableProducer
                     addressTcs.TrySetResult(remoteSource?.Address ?? string.Empty);
                 });
 
-            _replyReceiver.SetCredit(_options.ConcurrentConsumers * 3, true);
+            _replyReceiver.SetCredit(_options.ResolvedConcurrentConsumers * 3, true);
 
             // Wait for broker to assign the dynamic address
             _replyAddress = await addressTcs.Task.ConfigureAwait(false);

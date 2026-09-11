@@ -51,11 +51,11 @@ public sealed class HttpTelemetrySmokeTests : IAsyncLifetime
     [Fact]
     public async Task HttpProducer_EmitsTransportSpanWithHttpSemantics()
     {
-        var activities = new List<Activity>();
-        using var tracer = Sdk.CreateTracerProviderBuilder()
-            .AddSource(RouteActivitySource.SourceName)
-            .AddInMemoryExporter(activities)
-            .Build()!;
+        // Filtered to this test's own endpoint: the exporter is process state, so a plain
+        // AddSource(...) collects the spans of every route the other tests are running right now, and
+        // the Single() below then fails on somebody else's span. The producer span carries
+        // redb.route.endpoint; this test owns a port nobody else has.
+        using var probe = RouteTelemetryProbe.ForEndpointContaining($":{_port}/");
 
         var component = new HttpComponent();
         var path = $"/localhost:{_port}/smoke";
@@ -73,9 +73,8 @@ public sealed class HttpTelemetrySmokeTests : IAsyncLifetime
             await producer.Stop();
         }
 
-        tracer.ForceFlush(1000);
-        activities.Should().NotBeEmpty("HttpProducer.Process must open a transport span");
-        var activity = activities.Single();
+        probe.Activities.Should().NotBeEmpty("HttpProducer.Process must open a transport span");
+        var activity = probe.Activities.Single();
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
         activity.Kind.Should().Be(ActivityKind.Client);
         activity.GetTagItem("http.method").Should().Be("GET");

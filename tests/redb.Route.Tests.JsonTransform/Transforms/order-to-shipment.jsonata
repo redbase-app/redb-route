@@ -1,0 +1,7 @@
+{
+  "id": orderId,
+  "to": { "city": address.city, "zip": address.zip },
+  "skus": items.sku,
+  "total": $sum(items.(qty * price)),
+  "status": status ? status : "new"
+}

@@ -38,11 +38,14 @@ public sealed class ToDynamicDefinition : ProcessorDefinition
 
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
-    {
-        var resolver =
-            _template is not null ? DynamicEndpointResolver.FromTemplate(context, _template) :
-            _expression is not null ? DynamicEndpointResolver.FromExpression(context, _expression) :
-            new DynamicEndpointResolver(context, _uriFactory!);
-        return new ToDynamicProcessor(resolver);
-    }
+        => new ToDynamicProcessor(CreateResolver(context));
+
+    /// <summary>The URI template, when the node was declared with one (diagnostics, XML form).</summary>
+    public string? Template => _template;
+
+    /// <summary>Builds the per-message URI resolver of this node (also used by <c>InterceptSendToEndpoint</c> to learn the target URI).</summary>
+    internal DynamicEndpointResolver CreateResolver(IRouteContext context)
+        => _template is not null ? DynamicEndpointResolver.FromTemplate(context, _template) :
+           _expression is not null ? DynamicEndpointResolver.FromExpression(context, _expression) :
+           new DynamicEndpointResolver(context, _uriFactory!);
 }

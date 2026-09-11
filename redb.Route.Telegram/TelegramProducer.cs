@@ -15,14 +15,18 @@ namespace redb.Route.Telegram;
 
 /// <summary>
 /// Telegram Bot producer.
-/// Supported modes: send, document, photo, answer, edit, delete.
+/// Supported modes: send, document, photo, answer, edit, delete, download.
 ///
 /// ChatId is resolved (in priority order):
 ///   1. Header telegram.chatId on the exchange
 ///   2. Options.ChatId (from URI or DSL)
 ///
+/// The <c>answer</c> and <c>download</c> modes need no chatId: the first is addressed by
+/// callback query id, the second by file id.
+///
 /// On successful send/document/photo/edit the resulting <c>Message.MessageId</c>
-/// is written back to the exchange as header <see cref="TelegramHeaders.SentMessageId"/>.
+/// is written back to the exchange as header <see cref="TelegramHeaders.SentMessageId"/>;
+/// <c>download</c> writes the bytes to <c>Out.Body</c>.
 /// </summary>
 public sealed class TelegramProducer : ConnectableProducer
 {
@@ -106,10 +110,14 @@ public sealed class TelegramProducer : ConnectableProducer
         ChatId? chatIdForLog = null;
         try
         {
-            // answer mode uses callbackQueryId — no chatId needed
+            // answer is addressed by callbackQueryId, download by fileId — neither needs a chat.
             if (_endpoint.Mode == "answer")
             {
                 await AnswerCallbackQueryAsync(bot, exchange, activity, reqCt).ConfigureAwait(false);
+            }
+            else if (_endpoint.Mode == "download")
+            {
+                await DownloadFileAsync(bot, exchange, activity, reqCt).ConfigureAwait(false);
             }
             else
             {
@@ -142,10 +150,8 @@ public sealed class TelegramProducer : ConnectableProducer
                 }
             }
 
-            // Record on the producer endpoint (matches S3Producer / SqsProducer). The consumer-side
-            // StatisticsProcessor does not wrap the telegram:// producer path, so MessagesOut would
-            // otherwise stay at 0.
-            _endpoint.RecordMessageOut();
+            // No RecordMessageOut: a routed .To() is counted by ToProcessor and a template send
+            // by the ProducerTemplate - self-recording here doubled both (ownership audit).
         }
         catch (ApiRequestException ex)
         {
@@ -363,6 +369,165 @@ public sealed class TelegramProducer : ConnectableProducer
             .ConfigureAwait(false);
 
         Logger?.LogDebug("Telegram: deleted message {MessageId} in chat {ChatId}", messageId, chatId);
+    }
+
+    // ── Download ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Fetches a file the user sent and writes the bytes to <c>Out.Body</c>.
+    ///
+    /// <para>Two calls, because the Bot API is two calls: <c>getFile</c> resolves a
+    /// <c>file_id</c> to a server-side path valid for at least an hour, and the transfer
+    /// itself is an ordinary download from that path. Neither is something a route should
+    /// have to spell out — the consumer already reports <c>telegram.attachment.fileId</c>,
+    /// and everything between that header and the bytes is transport.</para>
+    ///
+    /// <para>The download URL embeds the bot token, which is why it is built inside the
+    /// client and never surfaces on the exchange: <see cref="TelegramHeaders.FilePath"/>
+    /// carries the path alone.</para>
+    /// </summary>
+    private async Task DownloadFileAsync(
+        ITelegramBotClient bot,
+        IExchange exchange,
+        Activity? activity,
+        CancellationToken ct)
+    {
+        var fileId = ResolveDownloadFileId(exchange);
+
+        var file = await WithRateLimitRetryAsync(c => bot.GetFile(fileId, c), ct).ConfigureAwait(false);
+
+        if (string.IsNullOrEmpty(file.FilePath))
+            throw new InvalidOperationException(
+                "Telegram download: getFile returned no file_path. The file is either expired or " +
+                "too large for a bot to download (Bot API caps bot downloads at 20 MB).");
+
+        activity?.SetTag("messaging.destination.name", file.FilePath);
+        activity?.SetTag("messaging.telegram.file.unique_id", file.FileUniqueId);
+
+        // Cheap refusal first: when Telegram states the size up front there is no reason to
+        // start a transfer that is going to be rejected at the end of it.
+        var ceiling = _options.MaxDownloadBytes;
+        if (ceiling > 0 && file.FileSize is { } declared && declared > ceiling)
+            throw new InvalidOperationException(
+                $"Telegram download: file is {declared} bytes, over the {ceiling}-byte ceiling " +
+                $"(maxDownloadBytes). Reject oversized attachments before the download, or raise the option.");
+
+        using var buffer = new CappedMemoryStream(ceiling);
+
+        await WithRateLimitRetryAsync(async c =>
+        {
+            // A 429 retry re-downloads from the start, so the buffer has to start from the
+            // start too — otherwise the second attempt appends to the first one's bytes and
+            // the route gets a file that is longer than any file Telegram holds.
+            buffer.SetLength(0);
+            await bot.DownloadFile(file.FilePath, buffer, c).ConfigureAwait(false);
+        }, ct).ConfigureAwait(false);
+
+        var bytes = buffer.ToArray();
+
+        exchange.Out ??= exchange.In.Clone();
+        exchange.Out.Body = bytes;
+        exchange.Out.Headers[TelegramHeaders.FilePath] = file.FilePath;
+        exchange.Out.Headers[TelegramHeaders.FileSize] = (long)bytes.Length;
+        exchange.Out.Headers[TelegramHeaders.FileUniqueId] = file.FileUniqueId;
+
+        activity?.SetTag("messaging.telegram.file.size", bytes.Length);
+        Logger?.LogDebug(
+            "Telegram: downloaded {Bytes} bytes from {FilePath}", bytes.Length, file.FilePath);
+    }
+
+    /// <summary>
+    /// Which file <c>download</c> fetches, in priority order: the explicit producer
+    /// instruction, then the option expression, then the attachment the consumer reported,
+    /// then a bare string body.
+    /// <para>
+    /// The attachment header is third and not first on purpose — it is the default, not the
+    /// override, and a route that says which file it wants must be obeyed. It is present at
+    /// all so that the common case ("download what the user just sent") needs no configuration.
+    /// </para>
+    /// </summary>
+    private string ResolveDownloadFileId(IExchange exchange)
+    {
+        if (exchange.In.Headers.TryGetValue(TelegramHeaders.FileId, out var explicitId)
+            && explicitId is string id && !string.IsNullOrWhiteSpace(id))
+            return id;
+
+        if (!string.IsNullOrWhiteSpace(_options.FileId))
+        {
+            // An empty resolution means the referenced header is absent on this update —
+            // fall through to the attachment rather than fail the exchange, the same way
+            // ReplyToMessageId treats an unresolved expression.
+            var resolved = _options.ResolveOption(_options.FileId, exchange);
+            if (!string.IsNullOrWhiteSpace(resolved))
+                return resolved;
+        }
+
+        if (exchange.In.Headers.TryGetValue(TelegramHeaders.AttachmentFileId, out var attachment)
+            && attachment is string attachmentId && !string.IsNullOrWhiteSpace(attachmentId))
+            return attachmentId;
+
+        if (exchange.In.Body is string body && !string.IsNullOrWhiteSpace(body))
+            return body;
+
+        throw new InvalidOperationException(
+            $"Telegram download: no file id. Set header '{TelegramHeaders.FileId}', use " +
+            $".FileId(...) in the fluent builder, or route an update that carries " +
+            $"'{TelegramHeaders.AttachmentFileId}'.");
+    }
+
+    /// <summary>
+    /// Buffer that refuses to grow past a ceiling.
+    /// <para>
+    /// A downloaded file becomes an array in this process's memory, and <c>file_size</c> is
+    /// optional in the Bot API — so the pre-flight check above can be skipped by an update
+    /// that simply omits it. Trusting it alone would leave "how much memory does one message
+    /// cost" to the sender.
+    /// </para>
+    /// </summary>
+    private sealed class CappedMemoryStream(long limit) : MemoryStream
+    {
+        /// <inheritdoc />
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            Guard(count);
+            base.Write(buffer, offset, count);
+        }
+
+        /// <inheritdoc />
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            Guard(buffer.Length);
+            base.Write(buffer);
+        }
+
+        /// <inheritdoc />
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            Guard(count);
+            return base.WriteAsync(buffer, offset, count, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            Guard(buffer.Length);
+            return base.WriteAsync(buffer, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public override void WriteByte(byte value)
+        {
+            Guard(1);
+            base.WriteByte(value);
+        }
+
+        private void Guard(int incoming)
+        {
+            if (limit > 0 && Length + incoming > limit)
+                throw new InvalidOperationException(
+                    $"Telegram download: the transfer passed the {limit}-byte ceiling (maxDownloadBytes) " +
+                    "and was stopped. Telegram did not declare the size up front.");
+        }
     }
 
     // ── Resolution helpers ────────────────────────────────────────────────────

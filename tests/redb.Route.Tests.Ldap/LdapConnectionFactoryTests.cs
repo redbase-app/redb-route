@@ -68,17 +68,18 @@ public sealed class LdapConnectionFactoryTests
     }
 
     [Fact]
-    public void MissingFactory_FallsBackToUriParameters_WithoutThrowing()
+    public void MissingFactory_FailsLoud()
     {
         var context = new RouteContext();
         var component = new LdapComponent();
         context.AddComponent(component);
 
         var uri = EndpointUriParser.Parse("ldap:SEARCH:dc=corp?connectionFactory=absent&server=direct");
-        var endpoint = (LdapEndpoint)component.CreateEndpoint(uri);
+        var act = () => component.CreateEndpoint(uri);
 
-        endpoint.ResolvedFactory.Should().BeNull();
-        endpoint.EndpointOptions.Server.Should().Be("direct");
+        // Ф11 Ж-1: опечатка в connectionFactory обязана падать громко, а не молча фолбэчиться
+        act.Should().Throw<InvalidOperationException>()
+            .Which.Message.Should().Contain("absent");
     }
 
     [Fact]

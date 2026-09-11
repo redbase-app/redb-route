@@ -24,6 +24,14 @@ public static class Ws
     /// <summary>Connect to a remote WebSocket (producer).</summary>
     /// <param name="hostPortPath">Target address, e.g. <c>api.example.com:443/stream</c>.</param>
     public static WsBuilder Connect(string hostPortPath) => new(hostPortPath);
+
+    /// <summary>
+    /// Push into the clients of the local consumer serving this address, so a route can send
+    /// unsolicited frames (quotes, notifications, progress) instead of only answering incoming
+    /// ones. Set the <c>redbWs.TargetConnection</c> header to reach one client instead of all.
+    /// </summary>
+    /// <param name="hostPortPath">The address of the running consumer, e.g. <c>0.0.0.0:8080/stream</c>.</param>
+    public static WsBuilder Broadcast(string hostPortPath) => new WsBuilder(hostPortPath).ServerMode();
 }
 
 /// <summary>Fluent builder for WebSocket endpoint URIs. Scheme: <c>ws</c> (or <c>wss</c> with SSL).</summary>
@@ -46,6 +54,8 @@ public sealed class WsBuilder
     private bool _reconnect;
     private int? _reconnectInterval;
     private int? _maxReconnectAttempts;
+    private int? _reconnectTimeout;
+    private string? _mode;
 
     // Consumer
     private int? _maxConnections;
@@ -55,6 +65,7 @@ public sealed class WsBuilder
     private bool _ssl;
     private string? _sslCertPath;
     private string? _sslCertPassword;
+    private bool _trustAllCertificates;
 
     internal WsBuilder(string hostPortPath)
     {
@@ -92,6 +103,15 @@ public sealed class WsBuilder
     /// <summary>Enable auto-reconnect.</summary>
     public WsBuilder Reconnect(int intervalMs = 5000, int maxAttempts = 0) { _reconnect = true; _reconnectInterval = intervalMs; _maxReconnectAttempts = maxAttempts; return this; }
 
+    /// <summary>
+    /// Overall time budget for reconnecting, in ms. Without it (and without a max attempt count)
+    /// a send against a server that stays down never returns, so dead-letter never fires.
+    /// </summary>
+    public WsBuilder ReconnectTimeout(int ms) { _reconnectTimeout = ms; return this; }
+
+    /// <summary>Push into the clients of the local consumer instead of connecting out.</summary>
+    public WsBuilder ServerMode() { _mode = "Server"; return this; }
+
     // ── Consumer ────────────────────────────────────────────────────
 
     /// <summary>Max concurrent connections. 0 = unlimited.</summary>
@@ -110,6 +130,12 @@ public sealed class WsBuilder
 
     /// <summary>SSL certificate password.</summary>
     public WsBuilder SslCertPassword(string password) { _sslCertPassword = password; return this; }
+
+    /// <summary>
+    /// Producer: accept any server certificate, including a self-signed one. Explicit on purpose --
+    /// turning certificate validation off should never be a side effect of another option.
+    /// </summary>
+    public WsBuilder TrustAllCertificates() { _trustAllCertificates = true; return this; }
 
     // ── Build ───────────────────────────────────────────────────────
 
@@ -138,11 +164,14 @@ public sealed class WsBuilder
         AppendBool("reconnect", _reconnect);
         AppendInt("reconnectInterval", _reconnectInterval);
         AppendInt("maxReconnectAttempts", _maxReconnectAttempts);
+        AppendInt("reconnectTimeout", _reconnectTimeout);
+        AppendStr("mode", _mode);
         AppendInt("maxConnections", _maxConnections);
         AppendBoolN("inOut", _inOut);
         AppendBool("ssl", _ssl);
         AppendStr("sslCertPath", _sslCertPath);
         AppendStr("sslCertPassword", _sslCertPassword);
+        AppendBool("trustAllCertificates", _trustAllCertificates);
 
         return sb.ToString();
     }

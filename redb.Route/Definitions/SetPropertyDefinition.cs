@@ -70,28 +70,6 @@ public sealed class SetPropertyExpressionDefinition : ProcessorDefinition
 }
 
 /// <summary>
-/// Leaf definition that sets an exchange property using a string template expression.
-/// </summary>
-public sealed class SetPropertyStringExpressionDefinition : ProcessorDefinition
-{
-    private readonly string _key;
-    private readonly string _template;
-
-    /// <summary>Creates a set-property definition from a string template.</summary>
-    public SetPropertyStringExpressionDefinition(string key, string template)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
-        ArgumentException.ThrowIfNullOrWhiteSpace(template);
-        _key = key;
-        _template = template;
-    }
-
-    /// <inheritdoc />
-    public override IProcessor CreateProcessor(IRouteContext context)
-        => new StringExpressionPropertyProcessor(_key, _template);
-}
-
-/// <summary>
 /// Leaf definition that removes a property from the exchange.
 /// </summary>
 public sealed class RemovePropertyDefinition : ProcessorDefinition

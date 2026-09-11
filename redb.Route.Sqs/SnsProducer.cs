@@ -106,8 +106,7 @@ internal sealed class SnsProducer : ConnectableProducer
         exchange.In.Headers[SnsHeaders.MessageId] = response.MessageId;
         if (!string.IsNullOrEmpty(response.SequenceNumber))
             exchange.In.Headers[SnsHeaders.SequenceNumber] = response.SequenceNumber;
-
-        _endpoint.RecordMessageOut();
+        // No RecordMessageOut: the core (ToProcessor / the template) owns it (ownership audit).
     }
 
     private string? ResolveGroupId(IExchange exchange) =>

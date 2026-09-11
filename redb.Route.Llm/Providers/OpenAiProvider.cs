@@ -81,7 +81,10 @@ public sealed class OpenAiProvider : ILlmProvider
         "mistral" => new("https://api.mistral.ai/v1/"),
         "together" or "togetherai" => new("https://api.together.xyz/v1/"),
         "huggingface" or "hf" => new("https://router.huggingface.co/v1/"),
-        "deepseek" => new("https://api.deepseek.com/v1/"),
+        // DeepSeek's documented base is the ROOT, unlike everyone else's /v1 (checked 2026-09-10
+        // against api-docs.deepseek.com after the V4.1-Flash release; /v1 still answers as a
+        // legacy alias but vanished from the docs, so the canonical form is the durable one).
+        "deepseek" => new("https://api.deepseek.com/"),
         "grok" or "xai" => new("https://api.x.ai/v1/"),
         "ollama" => new("http://localhost:11434/v1/"),
         "lmstudio" => new("http://localhost:1234/v1/"),

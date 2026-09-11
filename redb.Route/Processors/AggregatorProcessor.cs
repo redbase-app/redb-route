@@ -8,7 +8,7 @@ namespace redb.Route.Processors;
 /// Collects exchanges with the same correlation key, then applies the aggregation strategy
 /// when the completion predicate is satisfied.
 /// </summary>
-public class AggregatorProcessor : IProcessor
+public class AggregatorProcessor : IProcessor, IAsyncDisposable
 {
     private readonly Func<IExchange, string> _correlationKey;
     private readonly Func<IExchange, IExchange, IExchange> _aggregationStrategy;
@@ -17,6 +17,16 @@ public class AggregatorProcessor : IProcessor
 
     private readonly Dictionary<string, IExchange> _aggregated = new(StringComparer.Ordinal);
     private readonly object _lock = new();
+
+    // ── Inactivity timeout (Route-XML Ф1.3, Camel completionTimeout parity) ──────────────
+    // A group whose last arrival is older than the timeout completes with what it has. The
+    // flush rides a periodic scan timer, the same shape the resequencer established: the
+    // callback is fire-and-forget, an exception from the target lands on the exchange.
+    private readonly TimeSpan? _completionTimeout;
+    private readonly Dictionary<string, DateTime> _lastArrival = new(StringComparer.Ordinal);
+    private Timer? _timer;
+    private readonly CancellationTokenSource _disposeCts = new();
+    private int _disposed;
 
     /// <summary>Creates an aggregator processor.</summary>
     /// <param name="correlationKey">Function to extract the correlation key from an exchange.</param>
@@ -34,11 +44,29 @@ public class AggregatorProcessor : IProcessor
         Func<IExchange, IExchange, IExchange> aggregationStrategy,
         Func<IExchange, bool> completionPredicate,
         IProcessor target)
+        : this(correlationKey, aggregationStrategy, completionPredicate, target, completionTimeout: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates an aggregator with an inactivity timeout: a group that receives nothing for
+    /// <paramref name="completionTimeout"/> completes with what it has accumulated (Apache Camel
+    /// <c>completionTimeout</c> semantics — the clock restarts on every arrival for the group).
+    /// </summary>
+    public AggregatorProcessor(
+        Func<IExchange, string> correlationKey,
+        Func<IExchange, IExchange, IExchange> aggregationStrategy,
+        Func<IExchange, bool> completionPredicate,
+        IProcessor target,
+        TimeSpan? completionTimeout)
     {
         _correlationKey = correlationKey ?? throw new ArgumentNullException(nameof(correlationKey));
         _aggregationStrategy = aggregationStrategy ?? throw new ArgumentNullException(nameof(aggregationStrategy));
         _completionPredicate = completionPredicate ?? throw new ArgumentNullException(nameof(completionPredicate));
         _target = target ?? throw new ArgumentNullException(nameof(target));
+        if (completionTimeout is { } t && t <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(completionTimeout), "completionTimeout must be positive.");
+        _completionTimeout = completionTimeout;
     }
 
     /// <inheritdoc />
@@ -58,7 +86,11 @@ public class AggregatorProcessor : IProcessor
                 if (_completionPredicate(merged))
                 {
                     completed = merged;
-                    _aggregated.Remove(key);
+                    RemoveGroup(key);
+                }
+                else
+                {
+                    TouchGroup(key);
                 }
             }
             else
@@ -69,8 +101,12 @@ public class AggregatorProcessor : IProcessor
                 if (_completionPredicate(exchange))
                 {
                     completed = exchange;
-                    _aggregated.Remove(key);
+                    RemoveGroup(key);
                     groupCreated = false;
+                }
+                else
+                {
+                    TouchGroup(key);
                 }
             }
         }
@@ -94,5 +130,93 @@ public class AggregatorProcessor : IProcessor
     public int PendingGroupCount
     {
         get { lock (_lock) return _aggregated.Count; }
+    }
+
+    // ── Inactivity-timeout plumbing ──────────────────────────────────────────
+
+    /// <summary>Under <see cref="_lock"/>: stamps the group's last arrival and arms the scan timer.</summary>
+    private void TouchGroup(string key)
+    {
+        if (_completionTimeout is not { } timeout)
+            return;
+        _lastArrival[key] = DateTime.UtcNow;
+        if (_timer is null && Volatile.Read(ref _disposed) == 0)
+        {
+            // Periodic scan at half the timeout (floor 50 ms): expiry detection is at most half a
+            // period late, and an idle aggregator costs two no-op callbacks per timeout.
+            var period = TimeSpan.FromMilliseconds(Math.Max(timeout.TotalMilliseconds / 2, 50));
+            _timer = new Timer(OnScanTimer, null, period, period);
+        }
+    }
+
+    /// <summary>Under <see cref="_lock"/>: removes the group and its arrival stamp.</summary>
+    private void RemoveGroup(string key)
+    {
+        _aggregated.Remove(key);
+        _lastArrival.Remove(key);
+    }
+
+    private void OnScanTimer(object? state)
+    {
+        // Timer callback — flush expired groups on the thread pool. Fire-and-forget is the
+        // resequencer's established shape: an exception from the target lands on the exchange.
+        _ = FlushExpired(_disposeCts.Token);
+    }
+
+    private async Task FlushExpired(CancellationToken ct)
+    {
+        if (_completionTimeout is not { } timeout)
+            return;
+
+        List<IExchange>? expired = null;
+        lock (_lock)
+        {
+            var cutoff = DateTime.UtcNow - timeout;
+            List<string>? keys = null;
+            foreach (var (key, last) in _lastArrival)
+            {
+                if (last > cutoff) continue;
+                (keys ??= []).Add(key);
+            }
+            if (keys is not null)
+            {
+                expired = new List<IExchange>(keys.Count);
+                foreach (var key in keys)
+                {
+                    expired.Add(_aggregated[key]);
+                    RemoveGroup(key);
+                }
+            }
+        }
+
+        if (expired is null)
+            return;
+
+        foreach (var exchange in expired)
+        {
+            if (ct.IsCancellationRequested)
+                return;
+            ProcessorMetrics.AggregatorCompleted.Add(1);
+            ProcessorMetrics.AggregatorInflightGroups.Add(-1);
+            try
+            {
+                await _target.Process(exchange, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                exchange.Exception = ex;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+        await _disposeCts.CancelAsync().ConfigureAwait(false);
+        if (_timer is not null)
+            await _timer.DisposeAsync().ConfigureAwait(false);
+        _disposeCts.Dispose();
     }
 }

@@ -156,3 +156,42 @@ The tests are gated on the container being reachable, so the normal suite stays 
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new GrpcConnectionFactory
+{
+    Ssl = true,
+    SslCertPath = "/secrets/client.pfx",
+    SslCertPassword = secrets.CertPassword,
+});
+// grpc://inventory.internal:5005/Inventory?connectionFactory=prod
+```
+
+## Concurrency limits
+
+Kestrel executes as many handlers as requests arrive; without a limit a route has no ceiling.
+The admission limit caps concurrent pipeline executions per endpoint and sheds the overflow
+BEFORE any pipeline work (load shedding, not backpressure):
+
+| Parameter | Default | Description |
+|---|---|---|
+| `maxConcurrentRequests` | `0` (unlimited) | Max concurrent pipeline executions |
+| `requestQueueLimit` | `0` | Requests over the limit that WAIT (FIFO) instead of being rejected |
+| `rejectStatusCode` | `429` | Status for a shed request |
+| `retryAfterSeconds` | `1` | `Retry-After` header value; `0` = do not send |
+
+A shed request is answered before an exchange exists: it appears in the endpoint's `Rejected`
+counter, not in `MessagesIn` or `Errors`. The limit is strictly per endpoint — other routes on
+the same listener keep their own budget. For "slow down but do not drop" semantics use
+`.Threads(n)` in the route instead; the two compose (the limit sheds at the door, Threads
+paces inside).
+
+gRPC specifics: the limit counts **unary** calls only. A streaming call would hold a permit
+for its whole life and starve the limit, and a shed health probe would flap orchestrators —
+both are deliberately outside the limit.

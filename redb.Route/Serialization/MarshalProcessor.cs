@@ -22,7 +22,11 @@ public sealed class MarshalProcessor : IProcessor
     public Task Process(IExchange exchange, CancellationToken ct = default)
     {
         var body = exchange.In.Body;
-        if (body is null or byte[])
+        if (body is null)
+            return Task.CompletedTask;
+        // For an object-model format (JSON, XML, Avro, ...) a byte[] body is an already-marshalled result
+        // and passes through; for a byte wrapper (GZip, Zip, Base64) the bytes are the payload itself.
+        if (body is byte[] && !_serializer.WrapsBytes)
             return Task.CompletedTask;
 
         var bytes = SerializeBody(body);
@@ -61,12 +65,31 @@ public sealed class UnmarshalProcessor : IProcessor
     }
 
     /// <inheritdoc />
-    public Task Process(IExchange exchange, CancellationToken ct = default)
+    public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
-        if (exchange.In.Body is not byte[] bytes)
-            return Task.CompletedTask;
+        // Text formats (CSV, YAML, JSON) usually arrive as a string; a Stream is common after an
+        // HTTP or file consumer. All three are the same bytes to a serializer.
+        var bytes = exchange.In.Body switch
+        {
+            byte[] b => b,
+            string s => System.Text.Encoding.UTF8.GetBytes(s),
+            Stream stream => await ReadAllAsync(stream, ct).ConfigureAwait(false),
+            _ => null,
+        };
+        if (bytes is null)
+            return;
 
         exchange.In.Body = _serializer.Deserialize(bytes, _targetType);
-        return Task.CompletedTask;
+    }
+
+    private static async Task<byte[]> ReadAllAsync(Stream stream, CancellationToken ct)
+    {
+        // The buffer shortcut only when the stream is at its start; a positioned stream (an earlier step
+        // consumed framing) is read from its position like any other, never from byte zero.
+        if (stream is MemoryStream ms && ms.Position == 0 && ms.TryGetBuffer(out var segment) && segment.Offset == 0 && segment.Count == ms.Length)
+            return segment.Array!.Length == segment.Count ? segment.Array : segment.ToArray();
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer, ct).ConfigureAwait(false);
+        return buffer.ToArray();
     }
 }

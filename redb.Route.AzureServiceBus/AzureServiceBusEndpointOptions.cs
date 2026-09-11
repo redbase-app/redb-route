@@ -33,8 +33,12 @@ public sealed class AzureServiceBusEndpointOptions : EndpointOptions
     /// <summary>Receive mode: PeekLock (default) or ReceiveAndDelete.</summary>
     public string ReceiveMode { get; set; } = "PeekLock";
 
-    /// <summary>Maximum concurrent message handler invocations (default 1).</summary>
-    public int MaxConcurrentCalls { get; set; } = 1;
+    /// <summary>Maximum concurrent handler invocations: a number or "auto" (= max(CPU, 2)). Default 1.</summary>
+    // A string so "auto" binds verbatim instead of silently degrading to the int default (В-7).
+    public string? MaxConcurrentCalls { get; set; }
+
+    /// <summary>Resolved handler parallelism (see <see cref="ConcurrencyOption"/>).</summary>
+    public int ResolvedMaxConcurrentCalls => ConcurrencyOption.Resolve(MaxConcurrentCalls, "maxConcurrentCalls");
 
     /// <summary>Number of messages to pre-fetch into local buffer (default 0).</summary>
     public int PrefetchCount { get; set; }
@@ -123,8 +127,7 @@ public sealed class AzureServiceBusEndpointOptions : EndpointOptions
             throw new ArgumentOutOfRangeException(nameof(ConnectionString),
                 "ConnectionString or ConnectionFactory is required");
 
-        if (MaxConcurrentCalls < 1)
-            throw new ArgumentOutOfRangeException(nameof(MaxConcurrentCalls), "Must be >= 1");
+        _ = ConcurrencyOption.Resolve(MaxConcurrentCalls, "maxConcurrentCalls"); // loud on garbage
 
         if (PrefetchCount < 0)
             throw new ArgumentOutOfRangeException(nameof(PrefetchCount), "Must be >= 0");

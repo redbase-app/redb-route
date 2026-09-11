@@ -792,6 +792,135 @@ public class HttpProducerTests : IAsyncLifetime
         await producer.Stop();
     }
 
+    // ── Часть B плана KAFKA_HARDENING_AND_OPTIONS_SWEEP_PLAN: preserveHostHeader ──
+
+    [Fact]
+    public async Task Default_ProxiedRequest_CarriesTheTargetHost()
+    {
+        // A proxy route (From(http) -> To(http)) copies inbound request headers into the message,
+        // Host included, and BridgeExchangeHeaders pushed it into the outgoing request - so the
+        // ORIGINAL host leaked to the target unconditionally while preserveHostHeader (default
+        // false) was read by nothing. The default contract: the target sees its own host.
+        var endpoint = CreateEndpointWithPath("/api/proxied");
+        var producer = (HttpProducer)endpoint.CreateProducer();
+        await producer.Start();
+
+        var msg = new Message("data");
+        msg.Headers["Host"] = "upstream.example.com";
+        await producer.Process(new Exchange(msg));
+        await producer.Stop();
+
+        _lastRequestHeaders.Should().ContainKey("Host")
+            .WhoseValue.Should().Be($"localhost:{_port}",
+                "по умолчанию исходящий запрос обязан нести хост ЦЕЛИ, а не оригинала");
+    }
+
+    [Fact]
+    public async Task PreserveHostHeader_KeepsTheOriginalHost()
+    {
+        var endpoint = CreateEndpointWithPath("/api/proxied", new Dictionary<string, string>
+        {
+            ["preserveHostHeader"] = "true",
+        });
+        var producer = (HttpProducer)endpoint.CreateProducer();
+        await producer.Start();
+
+        var msg = new Message("data");
+        msg.Headers["Host"] = "upstream.example.com";
+        await producer.Process(new Exchange(msg));
+        await producer.Stop();
+
+        _lastRequestHeaders.Should().ContainKey("Host")
+            .WhoseValue.Should().Be("upstream.example.com",
+                "reverse-proxy сценарий: цель должна видеть хост оригинального запроса");
+    }
+
+    [Fact]
+    public void ProducerName_MasksUserInfoPassword()
+    {
+        // The name is logged as "producer started". A [Sensitive] option name covers a secret that
+        // travels as a query parameter; a userinfo password lives in the authority, where no
+        // attribute can reach it, so the name goes through EndpointUri.Sanitize instead.
+        var component = new HttpComponent();
+        var uri = EndpointUriParser.Parse("http://user:s3cr3t@api.example.com:8080/orders");
+        var endpoint = (HttpEndpoint)component.CreateEndpoint(uri);
+        var producer = (HttpProducer)endpoint.CreateProducer();
+
+        producer.DiagnosticName.Should().NotContain("s3cr3t");
+    }
+
+    [Fact]
+    public async Task PreserveHostHeader_WorksWithoutHeaderBridging()
+    {
+        // The explicit Host set used to live inside the bridgeHeaders block, so
+        // bridgeHeaders=false silently killed the just-revived option. The two options are
+        // independent in camel-http and must be independent here.
+        var endpoint = CreateEndpointWithPath("/api/proxied", new Dictionary<string, string>
+        {
+            ["preserveHostHeader"] = "true",
+            ["bridgeHeaders"] = "false",
+        });
+        var producer = (HttpProducer)endpoint.CreateProducer();
+        await producer.Start();
+
+        var msg = new Message("data");
+        msg.Headers["Host"] = "upstream.example.com";
+        await producer.Process(new Exchange(msg));
+        await producer.Stop();
+
+        _lastRequestHeaders.Should().ContainKey("Host")
+            .WhoseValue.Should().Be("upstream.example.com",
+                "preserveHostHeader не должен зависеть от bridgeHeaders");
+    }
+
+    [Fact]
+    public async Task FailedRequest_ErrorLogDoesNotLeakThePassword()
+    {
+        // ProducerName goes through Sanitize, but the per-request error log used to print the
+        // raw resolved URL - userinfo password included - on EVERY failed send.
+        var capture = new CapturingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(b => b.AddProvider(capture));
+        await using var context = new RouteContext(loggerFactory: loggerFactory);
+        var component = new HttpComponent();
+        context.AddComponent(component);
+
+        // A .invalid host fails DNS resolution fast with HttpRequestException - the error-log
+        // path. (A dead port would time out instead, and a timeout is an OperationCanceledException,
+        // which that catch deliberately does not log.)
+        var path = "/user:s3cr3t@host.invalid/orders";
+        var uri = new EndpointUri("http", path, $"http:{path}", new Dictionary<string, string>());
+        var endpoint = (HttpEndpoint)component.CreateEndpoint(uri);
+        var producer = (HttpProducer)endpoint.CreateProducer();
+        await producer.Start();
+
+        Func<Task> act = () => producer.Process(CreateExchange("data"));
+        await act.Should().ThrowAsync<HttpRequestException>();
+        await producer.Stop();
+
+        capture.Entries.Should().Contain(e => e.Level == LogLevel.Error,
+            "сбой запроса обязан логироваться");
+        capture.Entries.Select(e => e.Message).Should()
+            .NotContain(m => m.Contains("s3cr3t"), "пароль из userinfo не должен утекать в лог ошибки");
+    }
+
+    /// <summary>Captures every log entry for assertions on emitted messages.</summary>
+    private sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        public System.Collections.Concurrent.ConcurrentBag<(string Category, LogLevel Level, string Message)> Entries { get; } = new();
+
+        public ILogger CreateLogger(string categoryName) => new Logger(this, categoryName);
+        public void Dispose() { }
+
+        private sealed class Logger(CapturingLoggerProvider owner, string category) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+                Exception? exception, Func<TState, Exception?, string> formatter)
+                => owner.Entries.Add((category, logLevel, formatter(state, exception)));
+        }
+    }
+
     private static int GetFreePort()
     {
         using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);

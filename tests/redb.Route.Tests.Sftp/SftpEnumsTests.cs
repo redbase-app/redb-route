@@ -36,8 +36,9 @@ public sealed class SftpEnumsTests
     [Fact]
     public void SftpSeparator_HasExpectedValues()
     {
+        // No Windows: SFTP's wire separator is always "/" (арка-ревью H6, removed like Binary/StepWise).
         Enum.GetNames<SftpSeparator>().Should()
-            .BeEquivalentTo("Auto", "Unix", "Windows");
+            .BeEquivalentTo("Auto", "Unix");
     }
 
     [Theory]

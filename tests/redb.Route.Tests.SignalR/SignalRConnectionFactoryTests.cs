@@ -52,7 +52,7 @@ public sealed class SignalRConnectionFactoryTests
     }
 
     [Fact]
-    public void MissingFactory_FallsBackToUriParameters()
+    public void MissingFactory_FailsLoud()
     {
         var context = new RouteContext();
         var component = new SignalRComponent();
@@ -61,6 +61,8 @@ public sealed class SignalRConnectionFactoryTests
         var uri = EndpointUriParser.Parse("signalr://0.0.0.0:5000/chatHub?connectionFactory=absent");
         var act = () => component.CreateEndpoint(uri);
 
-        act.Should().NotThrow();
+        // Ф11 Ж-1: опечатка в connectionFactory обязана падать громко, а не молча фолбэчиться
+        act.Should().Throw<InvalidOperationException>()
+            .Which.Message.Should().Contain("absent");
     }
 }

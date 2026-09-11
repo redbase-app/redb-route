@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Templates</PackageId>
+    <Description>Payload templates for redb.Route (WSO2 PayloadFactory / Camel templating analog): Scriban templates from files, embedded resources or inline text, media-type aware escaping (JSON / XML / text), named arguments from route expressions.</Description>
+    <PackageTags>esb;messaging;template;scriban;payload;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Templates" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.Xml\redb.Route.Xml.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Scriban" Version="7.2.6" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

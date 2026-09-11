@@ -70,7 +70,7 @@ we author one connector and the entire engine carries it.
 Pieces:
 
 - **`LlmComponent`** — registers itself for scheme `llm` (one URI scheme,
-  by design — see [PLAN.md](doc/PLAN.md) §3a).
+  by design — see PLAN.md §3a).
 - **`LlmEndpoint`** — created from `llm://<connectionFactoryName>?...`. Resolves
   the named `LlmConnectionFactory` from the route registry, owns options, exposes
   `IEndpointStatistics` (tsak.web reads these).
@@ -554,6 +554,48 @@ llm://<connectionFactoryName>
 | `maxIterations` | yes | yes |
 | `tools` | yes | yes |
 
+### Sibling schemes
+
+Both are producer-only and both name an `LlmConnectionFactory` the same way
+`llm://` does — set its `ModelId` to the embedding or speech model, not the chat one.
+
+```
+embed://<connectionFactoryName>          # text → float[] / float[][]
+stt://<connectionFactoryName>            # recorded audio → text
+    ?language=ru                         # ISO-639-1 hint; empty = let the model detect
+    &prompt=<terms the model would misspell>
+    &fileName=voice.oga                  # decides the demuxer; derived from ContentType when unset
+```
+
+`stt://` takes the recording off the body (`byte[]`, `ReadOnlyMemory<byte>` or a
+`Stream`) and writes the text to `Out.Body`, with
+`llm.transcription.model` / `.provider` / `.chars` / `.language` beside it. It reports
+the **length** and never the text: a header travels into logs and dead letters, and a
+transcription is the speaker's own words.
+
+An empty result is a result — silence and music transcribe to nothing, and
+`llm.transcription.chars = 0` says so without turning it into a failure. Failures
+throw, and they are typed (`LlmRateLimitException` / `LlmTransientException`), so a
+route that degrades to "sorry, I did not catch that" does not say it to a person whose
+recording was fine and whose server was merely busy.
+
+Local and paid recognition differ by `BaseUrl` alone: OpenAI and Groq on one side,
+whisper.cpp's server / Speaches / LM Studio on `127.0.0.1` on the other. Same route,
+same code — which is what lets a product develop against its own GPU and move to a
+paid endpoint without touching a route.
+
+```csharp
+From(Tg.Receive(token))
+    .To(Tg.Download(token))    // Telegram attachment → bytes
+    .To("stt://speech")        // bytes → text
+    .To("direct://chat");      // and on as an ordinary message
+```
+
+⚠️ Neither component is registered by `AddRedbRouteLlm()` — add the one you use to the
+route context yourself (`context.AddComponent(new SttComponent())`), the same as
+`EmbedComponent`. A missing component fails the whole context at start, not just its
+own route.
+
 ## Failures
 
 Every provider maps a failed HTTP response through one rule (`LlmHttpErrors.FromResponse`), so a
@@ -830,9 +872,9 @@ LlmConsumer.cs          PeriodicTimer scheduler, fires AgentEngine on each tick
 See [doc/USER-GUIDE.md](doc/USER-GUIDE.md) — the full long-form guide
 covering every DSL shape, the `#`-registry pattern, all 14 providers, the
 Claude live-test suite, the testing strategy, the Camel comparison and a FAQ.
-For phase planning: [doc/PLAN.md](doc/PLAN.md),
-[doc/PHASE-1-MVP.md](doc/PHASE-1-MVP.md),
-[doc/PHASE-2.md](doc/PHASE-2.md), [doc/STATUS.md](doc/STATUS.md).
+For phase planning: doc/PLAN.md,
+doc/PHASE-1-MVP.md,
+doc/PHASE-2.md, doc/STATUS.md.
 
 ## Design principles
 

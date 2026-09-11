@@ -44,6 +44,8 @@ public sealed class SignalRBuilder
     // Transport
     private SignalRTransport? _transport;
     private bool? _messagePack;
+    private int? _maxConnections;
+    private int? _maxParallelInvocationsPerClient;
 
     // Groups / targeting
     private string? _defaultGroup;
@@ -54,6 +56,7 @@ public sealed class SignalRBuilder
     private bool _ssl;
     private string? _sslCertPath;
     private string? _sslCertPassword;
+    private bool _trustAllCertificates;
 
     // Client: reconnect
     private bool _reconnect;
@@ -92,6 +95,12 @@ public sealed class SignalRBuilder
     /// <summary>Enable MessagePack protocol.</summary>
     public SignalRBuilder MessagePack(bool value = true) { _messagePack = value; return this; }
 
+    /// <summary>Maximum hub connections (server mode); a connection over the limit is aborted at OnConnected. 0 = unlimited.</summary>
+    public SignalRBuilder MaxConnections(int max) { _maxConnections = max; return this; }
+
+    /// <summary>SignalR MaximumParallelInvocationsPerClient; 0 = SignalR default (per-client serial).</summary>
+    public SignalRBuilder MaxParallelInvocationsPerClient(int max) { _maxParallelInvocationsPerClient = max; return this; }
+
     // ── Groups / targeting ──────────────────────────────────────────
 
     /// <summary>Default group for auto-join on connect (consumer).</summary>
@@ -119,6 +128,12 @@ public sealed class SignalRBuilder
 
     /// <summary>SSL certificate password.</summary>
     public SignalRBuilder SslCertPassword(string password) { _sslCertPassword = password; return this; }
+
+    /// <summary>
+    /// Producer: accept any server certificate, including a self-signed one. Explicit on purpose --
+    /// this used to switch itself on whenever ssl was NOT set.
+    /// </summary>
+    public SignalRBuilder TrustAllCertificates() { _trustAllCertificates = true; return this; }
 
     // ── Client reconnect ────────────────────────────────────────────
 
@@ -175,10 +190,13 @@ public sealed class SignalRBuilder
         AppendBool("ssl", _ssl);
         AppendStr("sslCertPath", _sslCertPath);
         AppendStr("sslCertPassword", _sslCertPassword);
+        AppendBool("trustAllCertificates", _trustAllCertificates);
         AppendBool("reconnect", _reconnect);
         AppendInt("reconnectInterval", _reconnectInterval);
         AppendInt("maxReconnectAttempts", _maxReconnectAttempts);
         AppendStr("accessToken", _accessToken);
+        AppendInt("maxConnections", _maxConnections);
+        AppendInt("maxParallelInvocationsPerClient", _maxParallelInvocationsPerClient);
         if (!_bridge) Append("bridge", "false");
 
         return sb.ToString();

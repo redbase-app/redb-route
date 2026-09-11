@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 using redb.Route.Telemetry;
 
@@ -104,8 +105,9 @@ public sealed class SoapProducer : ConnectableProducer
             $"soap {action ?? "call"}", ActivityKind.Client, "rpc.system", "soap",
             _endpoint.Uri.NormalizedKey, url, action);
 
-        _endpoint.RecordMessageOut();
-        _endpoint.RecordBytesIn(envelope.Length);
+        // The envelope is what we SEND. It used to land in BytesIn because that was the only
+        // byte counter the statistics surface had.
+        _endpoint.RecordBytesOut(envelope.Length);
 
         var content = new ByteArrayContent(envelope);
         if (MediaTypeHeaderValue.TryParse(httpContentType, out var mt))
@@ -115,85 +117,78 @@ public sealed class SoapProducer : ConnectableProducer
         if (version == SoapVersion.Soap11 && !string.IsNullOrEmpty(action))
             request.Headers.TryAddWithoutValidation("SOAPAction", $"\"{action}\"");
 
-        try
+        using var response = await _http!.SendAsync(request, ct).ConfigureAwait(false);
+        var respBytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+
+        // Inbound MTOM: unwrap multipart/related and surface the attachments on the reply.
+        IReadOnlyList<SoapAttachment>? respAttachments = null;
+        if (SoapMultipart.IsMultipartRelated(response.Content.Headers.ContentType?.ToString()))
         {
-            using var response = await _http!.SendAsync(request, ct).ConfigureAwait(false);
-            var respBytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-
-            // Inbound MTOM: unwrap multipart/related and surface the attachments on the reply.
-            IReadOnlyList<SoapAttachment>? respAttachments = null;
-            if (SoapMultipart.IsMultipartRelated(response.Content.Headers.ContentType?.ToString()))
-            {
-                var (rootBytes, atts) = SoapMultipart.Parse(respBytes, response.Content.Headers.ContentType!.ToString());
-                respBytes = rootBytes;
-                respAttachments = atts;
-            }
-
-            // Symmetric to the consumer: decrypt an encrypted response when we hold the private key, so parse
-            // and signature-verify below see plaintext. Skipped in Message (transparent proxy) mode — there
-            // the route must receive the response bytes verbatim, exactly as the consumer skips inbound decrypt.
-            if (dataFormat != SoapDataFormat.Message && factory?.SigningCert is { HasPrivateKey: true } decKey)
-            {
-                try
-                {
-                    var rdoc = new System.Xml.XmlDocument { PreserveWhitespace = true };
-                    rdoc.Load(new MemoryStream(respBytes));
-                    if (SoapEncryption.HasEncryptedData(rdoc))
-                    {
-                        SoapEncryption.DecryptBody(rdoc, decKey);
-                        using var rms = new MemoryStream();
-                        rdoc.Save(rms);
-                        respBytes = rms.ToArray();
-                    }
-                }
-                catch { /* leave as-is; parse below surfaces a fault if truly malformed */ }
-            }
-
-            var parsed = SoapEnvelope.Parse(respBytes, version);
-            if (parsed.IsFault)
-            {
-                exchange.In.Headers[SoapHeaders.FaultCode] = parsed.FaultCode;
-                exchange.In.Headers[SoapHeaders.FaultString] = parsed.FaultString;
-                _endpoint.RecordError();
-                throw new SoapFaultException(parsed.FaultCode, parsed.FaultString);
-            }
-
-            exchange.Out = dataFormat switch
-            {
-                // MESSAGE: hand back the whole envelope. POJO: deserialize into the response type. PAYLOAD: body XML.
-                SoapDataFormat.Message => new Message(System.Text.Encoding.UTF8.GetString(respBytes))
-                    { ContentType = SoapEnvelope.ContentType(version, null) },
-                SoapDataFormat.Pojo when ResolveResponseType(exchange, factory) is { } rt
-                    => new Message(SoapPojo.Deserialize(parsed.BodyXml, rt)) { ContentType = "text/xml" },
-                _ => new Message(parsed.BodyXml) { ContentType = "text/xml" },
-            };
-
-            // Verify a response signature (authenticated when the partner cert is configured), like the consumer.
-            // Not in Message mode: the route owns the verbatim envelope there.
-            if (dataFormat != SoapDataFormat.Message)
-            {
-                try
-                {
-                    var rdoc = new System.Xml.XmlDocument { PreserveWhitespace = true };
-                    rdoc.Load(new MemoryStream(respBytes));
-                    if (SoapSignature.HasSignature(rdoc))
-                        exchange.Out!.Headers[SoapHeaders.SignatureValid] = SoapSignature.VerifyBody(rdoc, factory?.EncryptCert, version);
-                }
-                catch { /* malformed signature — leave the flag unset */ }
-            }
-
-            if (respAttachments is { Count: > 0 })
-            {
-                exchange.Out!.Headers[SoapHeaders.Attachments] = respAttachments;
-                exchange.Out!.Headers[SoapHeaders.HasAttachments] = true;
-            }
+            var (rootBytes, atts) = SoapMultipart.Parse(respBytes, response.Content.Headers.ContentType!.ToString());
+            respBytes = rootBytes;
+            respAttachments = atts;
         }
-        catch (SoapFaultException) { throw; }
-        catch (Exception ex)
+
+        // Symmetric to the consumer: decrypt an encrypted response when we hold the private key, so parse
+        // and signature-verify below see plaintext. Skipped in Message (transparent proxy) mode — there
+        // the route must receive the response bytes verbatim, exactly as the consumer skips inbound decrypt.
+        if (dataFormat != SoapDataFormat.Message && factory?.SigningCert is { HasPrivateKey: true } decKey)
         {
-            _endpoint.RecordError(ex);
-            throw;
+            try
+            {
+                var rdoc = new System.Xml.XmlDocument { PreserveWhitespace = true };
+                rdoc.Load(new MemoryStream(respBytes));
+                if (SoapEncryption.HasEncryptedData(rdoc))
+                {
+                    SoapEncryption.DecryptBody(rdoc, decKey);
+                    using var rms = new MemoryStream();
+                    rdoc.Save(rms);
+                    respBytes = rms.ToArray();
+                }
+            }
+            catch { /* leave as-is; parse below surfaces a fault if truly malformed */ }
         }
+
+        var parsed = SoapEnvelope.Parse(respBytes, version);
+        if (parsed.IsFault)
+        {
+            exchange.In.Headers[SoapHeaders.FaultCode] = parsed.FaultCode;
+            exchange.In.Headers[SoapHeaders.FaultString] = parsed.FaultString;
+            // The throw carries the fault into the core, which records the error once.
+            throw new SoapFaultException(parsed.FaultCode, parsed.FaultString);
+        }
+
+        exchange.Out = dataFormat switch
+        {
+            // MESSAGE: hand back the whole envelope. POJO: deserialize into the response type. PAYLOAD: body XML.
+            SoapDataFormat.Message => new Message(System.Text.Encoding.UTF8.GetString(respBytes))
+                { ContentType = SoapEnvelope.ContentType(version, null) },
+            SoapDataFormat.Pojo when ResolveResponseType(exchange, factory) is { } rt
+                => new Message(SoapPojo.Deserialize(parsed.BodyXml, rt)) { ContentType = "text/xml" },
+            _ => new Message(parsed.BodyXml) { ContentType = "text/xml" },
+        };
+
+        // Verify a response signature (authenticated when the partner cert is configured), like the consumer.
+        // Not in Message mode: the route owns the verbatim envelope there.
+        if (dataFormat != SoapDataFormat.Message)
+        {
+            try
+            {
+                var rdoc = new System.Xml.XmlDocument { PreserveWhitespace = true };
+                rdoc.Load(new MemoryStream(respBytes));
+                if (SoapSignature.HasSignature(rdoc))
+                    exchange.Out!.Headers[SoapHeaders.SignatureValid] = SoapSignature.VerifyBody(rdoc, factory?.EncryptCert, version);
+            }
+            catch { /* malformed signature — leave the flag unset */ }
+        }
+
+        if (respAttachments is { Count: > 0 })
+        {
+            exchange.Out!.Headers[SoapHeaders.Attachments] = respAttachments;
+            exchange.Out!.Headers[SoapHeaders.HasAttachments] = true;
+        }
+        // No catch/RecordError: exceptions fly into the core (ToProcessor / the template),
+        // which records them against this endpoint (ownership audit).
     }
 
     private static Type? ResolveResponseType(IExchange exchange, SoapConnectionFactory? factory)
@@ -219,7 +214,8 @@ public sealed class SoapProducer : ConnectableProducer
     {
         var name = _endpoint.SoapOptions.ConnectionFactory;
         if (string.IsNullOrEmpty(name)) return null;
-        return (_endpoint.Component as ComponentBase)?.Context?.GetFromRegistry<SoapConnectionFactory>(name);
+        // A set-but-unknown name fails loud -- never a silent fallback (Ф11 Ж-1).
+        return ((_endpoint.Component as ComponentBase)?.Context).GetRequiredFromRegistry<SoapConnectionFactory>(name);
     }
 
     private string ResolveUrl(SoapConnectionFactory? factory)

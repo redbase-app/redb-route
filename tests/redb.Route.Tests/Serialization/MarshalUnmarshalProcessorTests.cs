@@ -65,14 +65,37 @@ public class MarshalUnmarshalProcessorTests
     }
 
     [Fact]
-    public async Task UnmarshalProcessor_SkipsIfBodyIsNotBytes()
+    public async Task UnmarshalProcessor_SkipsIfBodyIsNotBytesStringOrStream()
     {
         var processor = new UnmarshalProcessor(_serializer, typeof(OrderDto));
-        var exchange = new Exchange(new Message { Body = "not bytes" });
+        var exchange = new Exchange(new Message { Body = 42 });
 
         await processor.Process(exchange);
 
-        exchange.In.Body.Should().Be("not bytes");
+        exchange.In.Body.Should().Be(42);
+    }
+
+    [Fact]
+    public async Task UnmarshalProcessor_AcceptsStringBody()
+    {
+        // Text formats (JSON, CSV, YAML) arrive as strings far more often than as byte[].
+        var processor = new UnmarshalProcessor(_serializer, typeof(OrderDto));
+        var exchange = new Exchange(new Message { Body = """{"id":"ORD-9","amount":5}""" });
+
+        await processor.Process(exchange);
+
+        exchange.In.Body.Should().BeOfType<OrderDto>().Which.Id.Should().Be("ORD-9");
+    }
+
+    [Fact]
+    public async Task UnmarshalProcessor_AcceptsStreamBody()
+    {
+        var processor = new UnmarshalProcessor(_serializer, typeof(OrderDto));
+        var exchange = new Exchange(new Message { Body = new MemoryStream("""{"id":"ORD-10","amount":1}"""u8.ToArray()) });
+
+        await processor.Process(exchange);
+
+        exchange.In.Body.Should().BeOfType<OrderDto>().Which.Id.Should().Be("ORD-10");
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using redb.Core;
 using redb.Core.Data;
+using redb.Core.Exceptions;
 using redb.Core.Models.Contracts;
 using redb.Core.Models.Entities;
 using redb.Route.Abstractions;
@@ -9,27 +10,30 @@ using redb.Route.RedbCore.Models;
 namespace redb.Route.RedbCore.Repositories;
 
 /// <summary>
-/// Idempotent repository backed by redb.Core EAV storage.
-/// Works on any redb-supported database (PostgreSQL, SQL Server) via <see cref="IRedbService"/>
-/// without raw DDL — the scheme is managed automatically through <see cref="IdempotentEntryProps"/>.
+/// Idempotent repository backed by redb.Core props storage.
+/// Works on any redb-supported database (PostgreSQL, SQL Server, SQLite) via
+/// <see cref="IRedbService"/> without raw DDL — the scheme is managed automatically
+/// through <see cref="IdempotentEntryProps"/>.
 /// <para>
 /// Uses <see cref="IServiceScopeFactory"/> to create a fresh <see cref="IRedbService"/> scope
 /// per operation — safe for concurrent use from multiple route threads.
 /// </para>
 /// <para>
-/// <b>Identity strategy:</b> each entry stores its composite identity in the indexed
-/// <see cref="IRedbObject.Name"/> column as <c>"{ProcessorName}:{MessageKey}"</c>. Lookups
-/// use <c>WhereRedb(x =&gt; x.Name == compositeName)</c> which hits the
-/// <c>IX__objects__name</c> index in both PostgreSQL and SQL Server — O(log n) instead of
-/// the EAV property-table scan that the previous implementation incurred.
+/// <b>Identity strategy:</b> each entry stores its composite identity
+/// <c>"{ProcessorName}:{MessageKey}"</c> twice: in the indexed <see cref="IRedbObject.Name"/>
+/// column (readable, O(log n) lookups via <c>IX__objects__name</c>) and in
+/// <see cref="IRedbObject.ValueUnique"/>, which the core guards with the per-scheme UNIQUE
+/// index <c>UIX__objects__scheme_unique</c> on every provider. A composite longer than
+/// 440 characters (client keys can be arbitrary) is normalized to a readable prefix plus a
+/// SHA-256 tail so it fits both columns on every provider.
 /// </para>
 /// <para>
-/// <b>Cluster-safety caveat:</b> EAV has no native UNIQUE constraint, so the read-then-write
-/// pattern still has a TOCTOU window between concurrent <see cref="Add"/> calls for the same key.
-/// <see cref="DeadlockRetryHelper"/> mitigates database-level deadlocks but does not give
-/// strict at-most-once semantics across cluster nodes. For cluster-safe idempotency use
-/// <see cref="redb.Route.Sql.Repositories.SqlIdempotentRepository"/> with a manually-created
-/// UNIQUE INDEX on <c>(processor_name, message_key)</c>.
+/// <b>Cluster safety:</b> concurrent <see cref="Add"/> calls for one key race to insert the
+/// same <c>ValueUnique</c>; the database lets exactly one row through and the loser's typed
+/// <see cref="RedbUniqueViolationException"/> is treated as «already processed» — first wins,
+/// nobody crashes, at-most-once holds across threads and cluster nodes. Entries created by
+/// older versions carry no <c>ValueUnique</c>; the <c>Name</c> lookups still find them, so no
+/// backfill is required.
 /// </para>
 /// </summary>
 public sealed class RedbIdempotentRepository : IIdempotentRepository
@@ -56,9 +60,18 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
     /// <summary>
     /// Composite identity name for a (processor, key) pair. Stored in the indexed
-    /// <c>_objects._name</c> column for fast lookup.
+    /// <c>_objects._name</c> column for fast lookup and in <c>_objects._value_unique</c>
+    /// for the database-enforced uniqueness guarantee.
     /// </summary>
-    private string ComposeName(string key) => $"{_options.ProcessorName}:{key}";
+    private string ComposeName(string key) => ComposeEntryName(_options.ProcessorName, key);
+
+    /// <summary>
+    /// <c>"{processorName}:{key}"</c>, normalized by the shared <see cref="RedbUniqueKey"/>
+    /// helper (440-char cap, SHA-256 tail for over-long composites). Internal so tests can
+    /// compute the stored identity without copying the format.
+    /// </summary>
+    internal static string ComposeEntryName(string processorName, string key)
+        => RedbUniqueKey.Normalize($"{processorName}:{key}");
 
     /// <inheritdoc/>
     public async Task<bool> Add(string key, CancellationToken ct = default)
@@ -91,6 +104,7 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
             var entry = new RedbObject<IdempotentEntryProps>
             {
                 name = entryName,
+                ValueUnique = entryName,
                 Props = new IdempotentEntryProps
                 {
                     ProcessorName = _options.ProcessorName,
@@ -100,9 +114,18 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
                 }
             };
 
-            await redb.SaveAsync(entry).ConfigureAwait(false);
+            try
+            {
+                await redb.SaveAsync(entry).ConfigureAwait(false);
+            }
+            catch (RedbUniqueViolationException)
+            {
+                // Lost the creation race: a concurrent Add committed this key between our
+                // lookup and insert. First wins — the message is already claimed.
+                return false;
+            }
             return true;
-        });
+        }, MaxRetries, BaseDelayMs);
     }
 
     /// <inheritdoc/>
@@ -130,7 +153,7 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
                 item.Props.Confirmed = true;
                 await redb.SaveAsync(item).ConfigureAwait(false);
             }
-        });
+        }, MaxRetries, BaseDelayMs);
     }
 
     /// <inheritdoc/>
@@ -157,7 +180,7 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
                     || item.Props.MessageKey != key) continue;
                 await redb.DeleteAsync(item).ConfigureAwait(false);
             }
-        });
+        }, MaxRetries, BaseDelayMs);
     }
 
     /// <inheritdoc/>
@@ -180,7 +203,7 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
             return items.Any(e => e.Props.ProcessorName == _options.ProcessorName
                                && e.Props.MessageKey == key);
-        });
+        }, MaxRetries, BaseDelayMs);
     }
 
     /// <inheritdoc/>
@@ -202,7 +225,7 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
             if (items.Count > 0)
                 await redb.DeleteAsync((IEnumerable<IRedbObject>)items).ConfigureAwait(false);
-        });
+        }, MaxRetries, BaseDelayMs);
     }
 
     private async Task EnsureSchemeAsync()
@@ -233,6 +256,6 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
             if (expired.Count > 0)
                 await redb.DeleteAsync((IEnumerable<IRedbObject>)expired).ConfigureAwait(false);
-        });
+        }, MaxRetries, BaseDelayMs);
     }
 }

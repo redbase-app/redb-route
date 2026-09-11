@@ -123,3 +123,19 @@ services:
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new LdapConnectionFactory
+{
+    Server = "dc01.corp.local",
+    BindDn = "CN=svc,OU=Service,DC=corp,DC=local",
+    BindPassword = secrets.LdapPassword,
+});
+// ldap:SEARCH:dc=corp,dc=local?connectionFactory=prod
+```

@@ -172,6 +172,10 @@ internal sealed class IbmMqXmsReplyReceiver
         if (!string.IsNullOrEmpty(options.SslCipherSpec))
             factory.SetStringProperty(XMSC.WMQ_SSL_CIPHER_SPEC, options.SslCipherSpec);
 
+        // Same key-reset contract as the consumer engine (ревью дуги, H5).
+        if (options.SslKeyResetCount > 0)
+            factory.SetIntProperty(XMSC.WMQ_SSL_KEY_RESETCOUNT, options.SslKeyResetCount);
+
         return factory;
     }
 }

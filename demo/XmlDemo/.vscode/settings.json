@@ -1,0 +1,6 @@
+{
+  "xml.fileAssociations": [
+    { "pattern": "**/*.route.xml", "systemId": "./schema/redb-route-1.0.xsd" },
+    { "pattern": "**/context.xml", "systemId": "./schema/redb-route-1.0.xsd" }
+  ]
+}

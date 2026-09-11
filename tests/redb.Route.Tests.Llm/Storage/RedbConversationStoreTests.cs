@@ -9,12 +9,12 @@ namespace redb.Route.Tests.Llm.Storage;
 /// Postgres Pro database. Validates Append + LoadPath + LoadTree round-trip,
 /// branching (parent/child), and TreeQuery-based latest-leaf resolution.
 /// </summary>
-[Collection("PostgresPro")]
+[Collection("StoragePro")]
 public sealed class RedbConversationStoreTests
 {
-    private readonly PostgresProFixture _fx;
+    private readonly StorageProFixture _fx;
 
-    public RedbConversationStoreTests(PostgresProFixture fx) => _fx = fx;
+    public RedbConversationStoreTests(StorageProFixture fx) => _fx = fx;
 
     private static ConversationMessageMeta Meta(int iter, DateTime? at = null) => new()
     {

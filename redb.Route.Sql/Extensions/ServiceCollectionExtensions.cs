@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Sql.Connection;
 
 namespace redb.Route.Sql;
@@ -44,9 +44,10 @@ public static class ServiceCollectionExtensions
         // Capture data sources from builder
         var dataSources = builder.BuildDataSources();
 
-        services.AddSingleton<ISqlComponentRegistrar>(sp =>
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteContextConfigurator((sp, context) =>
         {
-            var context = sp.GetRequiredService<IRouteContext>();
             var component = sp.GetRequiredService<SqlComponent>();
             component.NamedQueryRegistry = sp.GetRequiredService<ISqlNamedQueryRegistry>();
             context.AddComponent(component);
@@ -54,19 +55,11 @@ public static class ServiceCollectionExtensions
             // Register all named data sources in the context registry
             foreach (var (name, factory) in dataSources)
                 context.AddToRegistry(name, factory);
-
-            return new SqlComponentRegistrar();
         });
 
         return services;
     }
 }
-
-/// <summary>Marker interface for DI registration.</summary>
-internal interface ISqlComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class SqlComponentRegistrar : ISqlComponentRegistrar;
 
 /// <summary>Fluent builder for configuring the SQL connector.</summary>
 public sealed class SqlConfigurationBuilder

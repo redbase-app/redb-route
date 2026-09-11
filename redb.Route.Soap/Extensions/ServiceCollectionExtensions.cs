@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Http;
 
 namespace redb.Route.Soap;
@@ -25,21 +25,16 @@ public static class ServiceCollectionExtensions
         services.AddRedbRouteHttpHosting();
         services.AddSingleton<SoapComponent>();
 
-        services.AddSingleton<ISoapComponentRegistrar>(sp =>
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteContextConfigurator((sp, context) =>
         {
-            var context = sp.GetRequiredService<IRouteContext>();
             var component = sp.GetRequiredService<SoapComponent>();
             component.ServerManager = sp.GetRequiredService<SharedHttpServerManager>();
             context.AddComponent(component);   // registers soap + soaps, sets Context + Logger
-            return new SoapComponentRegistrar();
         });
 
         return services;
     }
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface ISoapComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class SoapComponentRegistrar : ISoapComponentRegistrar;

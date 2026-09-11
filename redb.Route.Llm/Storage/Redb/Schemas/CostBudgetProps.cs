@@ -6,8 +6,10 @@ namespace redb.Route.Llm.Storage.Redb.Schemas;
 /// Running cost / token totals scoped to a conversation. One row per
 /// conversation per billing period — <see cref="PeriodStartUtc"/> is the
 /// boundary that lets a daily / monthly reset roll the counters. The
-/// conversation id lives on the indexed <c>value_string</c> column of
-/// <c>_objects</c>, not in props.
+/// conversation id lives on the <c>value_string</c> column of <c>_objects</c>
+/// (partial index on PostgreSQL/SQLite; no index on MSSQL) and, normalized, in
+/// <c>value_unique</c> (per-scheme unique — one budget row per conversation),
+/// not in props.
 /// </summary>
 [RedbScheme("LLM Cost Budget")]
 public class CostBudgetProps

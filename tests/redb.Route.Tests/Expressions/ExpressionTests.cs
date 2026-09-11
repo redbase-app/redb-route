@@ -8,7 +8,7 @@ namespace redb.Route.Tests.Expressions;
 /// <summary>
 /// Tests for the Expression hierarchy (BodyExpression, HeaderExpression,
 /// PropertyExpression, ConstantExpression, DelegateExpression, ExchangeExpression,
-/// LogicalExpression).
+/// DelegateExpression).
 /// </summary>
 public class ExpressionTests
 {
@@ -128,23 +128,7 @@ public class ExpressionTests
         expr.Evaluate<string>(exchange).Should().Be("hello");
     }
 
-    // ── LogicalExpression ──
-
-    [Fact]
-    public void LogicalExpression_ReturnsPredicateResult_True()
-    {
-        var expr = new LogicalExpression("property.count > 3");
-        var exchange = CreateExchange("body");
-        exchange.Properties["count"] = 10;
-        expr.Evaluate<bool>(exchange).Should().BeTrue();
-    }
-
-    [Fact]
-    public void LogicalExpression_ReturnsPredicateResult_False()
-    {
-        var expr = new LogicalExpression("property.count > 100");
-        var exchange = CreateExchange("body");
-        exchange.Properties["count"] = 5;
-        expr.Evaluate<bool>(exchange).Should().BeFalse();
-    }
+    // LogicalExpression was dead public API (never constructed by the library) and was removed
+    // together with the hand-written logical branch on 2026-08-28. A boolean-valued expression
+    // is written as a condition string or via the predicate factories on IExpression.
 }

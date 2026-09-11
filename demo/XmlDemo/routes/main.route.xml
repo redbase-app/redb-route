@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes xmlns="urn:redb:route:1.0">
+
+  <!-- Bounded by construction. The first cut of this demo wrote a NEW row every tick
+       (MessageKey=${uuid()} with a plain insert) — the table grew forever, the query got
+       slower with it, and on SQLite the 5s cycle degraded to ~50s with writer-lock storms.
+       Now one fixed identity rides SaveByUniqueAsync: the same row is upserted each tick,
+       the query matches exactly it, the count stays flat no matter how long the worker runs. -->
+  <route id="redbdemo-cycle" description="redb bridge: upsert one row by unique key, query it back">
+    <from uri="timer://redbdemo?period={{demo.period:5000}}"/>
+    <setBody expr='{"name":"xmldemo:heartbeat","value_unique":"xmldemo:heartbeat","properties":{"ProcessorName":"xmldemo","MessageKey":"heartbeat","Confirmed":true}}'/>
+    <redbSave type="redb.Route.RedbCore.Models.IdempotentEntryProps, redb.Route.Core" byUnique="true"/>
+    <redbQuery type="redb.Route.RedbCore.Models.IdempotentEntryProps, redb.Route.Core"
+               where="ProcessorName == 'xmldemo' AND MessageKey == 'heartbeat'"
+               orderBy="MessageKey" take="10"/>
+    <setBody expr="REDBDEMO total=${body.Count}"/>
+    <to uri="log://redbdemo"/>
+  </route>
+
+</routes>

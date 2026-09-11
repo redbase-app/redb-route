@@ -74,3 +74,19 @@ From(Pop3.Read("pop3.example.com")
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new MailConnectionFactory
+{
+    Host = "smtp.internal",
+    Username = "noreply",
+    Password = secrets.SmtpPassword,
+});
+// smtp://noreply@internal?connectionFactory=prod
+```

@@ -14,6 +14,9 @@ public class FileComponent : ComponentBase
     /// <inheritdoc />
     public override string Scheme => "file";
 
+    /// <summary>Structured XML form (Route-XML Ф0 §7.2): <c>&lt;file directory="out/orders"/&gt;</c>.</summary>
+    public override string? StructuredPathSynonym => "directory";
+
     /// <inheritdoc />
     public override IEndpoint CreateEndpoint(EndpointUri uri)
     {

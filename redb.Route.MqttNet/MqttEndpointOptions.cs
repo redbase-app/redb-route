@@ -65,7 +65,11 @@ public sealed class MqttEndpointOptions : EndpointOptions
     /// generic <c>.Threads(N)</c> in the route, which would acknowledge on hand-off (before processing).
     /// Ordering is not preserved when &gt; 1.
     /// </summary>
-    public int ConcurrentConsumers { get; set; } = 1;
+    // A string so "auto" binds verbatim instead of silently degrading to the int default (В-7).
+    public string? ConcurrentConsumers { get; set; }
+
+    /// <summary>Resolved consumer parallelism: 1, N, or auto = max(CPU, 2) (see <see cref="ConcurrencyOption"/>).</summary>
+    public int ResolvedConcurrentConsumers => ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers");
 
     // ── Publish (producer) ────────────────────────────────────────────
 
@@ -93,7 +97,6 @@ public sealed class MqttEndpointOptions : EndpointOptions
         if (Qos < 0 || Qos > 2)
             throw new ArgumentException($"QoS must be 0, 1, or 2. Got: {Qos}");
 
-        if (ConcurrentConsumers < 1)
-            throw new ArgumentException($"ConcurrentConsumers must be at least 1. Got: {ConcurrentConsumers}");
+        _ = ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers"); // loud on garbage
     }
 }

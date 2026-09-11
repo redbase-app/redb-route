@@ -40,7 +40,7 @@ public sealed class IbmMqBuilder
 
     // Consumer
     private IbmMqReceiveMode? _receiveMode;
-    private int? _concurrentConsumers;
+    private string? _concurrentConsumers;
     private int? _waitInterval;
     private int? _batchSize;
     private int? _backoutThreshold;
@@ -61,8 +61,6 @@ public sealed class IbmMqBuilder
     private bool _transacted;
 
     // Dead Letter
-    private string? _deadLetterQueue;
-    private int? _maxRedeliveries;
 
     // RPC
     private bool _replyTo;
@@ -128,7 +126,10 @@ public sealed class IbmMqBuilder
     public IbmMqBuilder Listener() { _receiveMode = IbmMqReceiveMode.Listener; return this; }
 
     /// <summary>Number of concurrent consumers. Default 1.</summary>
-    public IbmMqBuilder ConcurrentConsumers(int count) { _concurrentConsumers = count; return this; }
+    public IbmMqBuilder ConcurrentConsumers(int count) { _concurrentConsumers = count.ToString(); return this; }
+
+    /// <summary>Consumer parallelism as a string: a number or "auto" (= max(CPU, 2)).</summary>
+    public IbmMqBuilder ConcurrentConsumers(string count) { _concurrentConsumers = count; return this; }
 
     /// <summary>MQGET wait interval in milliseconds. Default 5000.</summary>
     public IbmMqBuilder WaitInterval(int ms) { _waitInterval = ms; return this; }
@@ -188,13 +189,9 @@ public sealed class IbmMqBuilder
     /// <summary>Enable local MQ transactions.</summary>
     public IbmMqBuilder Transacted() { _transacted = true; return this; }
 
-    // ── Dead Letter ───────────────────────────────────────────────────
-
-    /// <summary>Dead-letter queue for failed messages.</summary>
-    public IbmMqBuilder DeadLetterQueue(string queue) { _deadLetterQueue = queue; return this; }
-
-    /// <summary>Max redelivery attempts before dead-lettering.</summary>
-    public IbmMqBuilder MaxRedeliveries(int count) { _maxRedeliveries = count; return this; }
+    // DeadLetterQueue/MaxRedeliveries verbs removed (часть B of the options sweep): a second,
+    // dead vocabulary for poison handling - the implemented one is IBM MQ's native
+    // BackoutThreshold/BackoutQueue pair (BOTHRESH/BOQNAME), see .BackoutThreshold().
 
     // ── RPC ───────────────────────────────────────────────────────────
 
@@ -291,7 +288,7 @@ public sealed class IbmMqBuilder
         // Consumer
         if (_receiveMode.HasValue)
             Append("receiveMode", _receiveMode.Value.ToString());
-        AppendInt("concurrentConsumers", _concurrentConsumers);
+        AppendIf("concurrentConsumers", _concurrentConsumers);
         AppendInt("waitInterval", _waitInterval);
         AppendInt("batchSize", _batchSize);
         AppendInt("backoutThreshold", _backoutThreshold);
@@ -317,8 +314,6 @@ public sealed class IbmMqBuilder
         AppendBool("transacted", _transacted);
 
         // Dead Letter
-        AppendIf("deadLetterQueue", _deadLetterQueue);
-        AppendInt("maxRedeliveries", _maxRedeliveries);
 
         // RPC
         AppendBool("replyTo", _replyTo);

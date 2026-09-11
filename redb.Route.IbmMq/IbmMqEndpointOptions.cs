@@ -139,8 +139,12 @@ public sealed class IbmMqEndpointOptions : EndpointOptions
     /// </summary>
     public IbmMqReceiveMode ReceiveMode { get; set; } = IbmMqReceiveMode.Poll;
 
-    /// <summary>Number of concurrent consumer threads. (default: 1)</summary>
-    public int ConcurrentConsumers { get; set; } = 1;
+    /// <summary>Concurrent consumer sessions: a number or "auto" (= max(CPU, 2)). Default 1. Topics clamp to 1 (parallel subscriptions would duplicate delivery).</summary>
+    // A string so "auto" binds verbatim instead of silently degrading to the int default (В-7).
+    public string? ConcurrentConsumers { get; set; }
+
+    /// <summary>Resolved consumer parallelism (see <see cref="ConcurrencyOption"/>).</summary>
+    public int ResolvedConcurrentConsumers => ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers");
 
     /// <summary>MQGET wait interval in milliseconds. 0 = no wait. (default: 5000)</summary>
     public int WaitInterval { get; set; } = 5000;
@@ -194,13 +198,9 @@ public sealed class IbmMqEndpointOptions : EndpointOptions
     /// <summary>Enable local MQ transactions (MQCMIT/MQBACK). (default: false)</summary>
     public bool Transacted { get; set; }
 
-    // ── Dead Letter ──────────────────────────────────────────────────
-
-    /// <summary>Dead-letter queue for failed messages. If empty, uses queue manager's DLQ.</summary>
-    public string? DeadLetterQueue { get; set; }
-
-    /// <summary>Max redelivery attempts before sending to DeadLetterQueue. 0 = disabled.</summary>
-    public int MaxRedeliveries { get; set; }
+    // DeadLetterQueue/MaxRedeliveries are gone (часть B of the options sweep): both were declared
+    // and read by nothing - a second vocabulary for poison handling next to the IMPLEMENTED one,
+    // IBM MQ's native BackoutThreshold/BackoutQueue (BOTHRESH/BOQNAME) in the XMS engine.
 
     // ── RPC (Request/Reply) ──────────────────────────────────────────
 
@@ -267,8 +267,7 @@ public sealed class IbmMqEndpointOptions : EndpointOptions
         if (Port is < 1 or > 65535)
             throw new ArgumentException($"IBM MQ port must be 1–65535, got: {Port}");
 
-        if (ConcurrentConsumers < 1)
-            throw new ArgumentException($"IBM MQ concurrentConsumers must be >= 1, got: {ConcurrentConsumers}");
+        _ = ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers"); // loud on garbage
 
         if (WaitInterval < 0)
             throw new ArgumentException($"IBM MQ waitInterval must be >= 0, got: {WaitInterval}");

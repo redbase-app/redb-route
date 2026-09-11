@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Amqp;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.Amqp;
@@ -130,18 +131,11 @@ public sealed class AmqpComponent : ComponentBase
     {
         if (!string.IsNullOrEmpty(options.ConnectionFactory))
         {
-            var registryFactory = Context?.GetFromRegistry<AmqpConnectionFactory>(options.ConnectionFactory);
-            if (registryFactory is not null)
-            {
-                Logger?.LogDebug("AMQP: using ConnectionFactory '{Name}' from registry", options.ConnectionFactory);
-                return registryFactory.Build();
-            }
-
-            Logger?.LogWarning(
-                "AMQP: ConnectionFactory '{Name}' not found in registry — falling back to inline URI parameters",
-                options.ConnectionFactory);
+            // A set-but-unknown name fails loud — never a silent fallback to URI params (Ф11 Ж-1).
+            var registryFactory = Context.GetRequiredFromRegistry<AmqpConnectionFactory>(options.ConnectionFactory);
+            Logger?.LogDebug("AMQP: using ConnectionFactory '{Name}' from registry", options.ConnectionFactory);
+            return registryFactory.Build();
         }
-
         var cf = new AmqpConnectionFactory
         {
             Host = options.Host,

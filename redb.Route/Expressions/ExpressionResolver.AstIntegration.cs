@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
 using redb.Route.Abstractions;
@@ -204,17 +205,36 @@ public static partial class ExpressionResolver
 
     /// <summary>Returns the minimum of two values.</summary>
     public static object? Ast_Min(object? a, object? b)
-    {
-        if (TryConvertToDouble(a, out var va) && TryConvertToDouble(b, out var vb))
-            return Math.Min(va, vb);
-        return null;
-    }
+        => Ast_Extremum(a, b, Math.Min);
 
-    /// <summary>Returns the maximum of two values.</summary>
+    /// <summary>Returns the maximum of two values, or of every numeric value in a collection.</summary>
     public static object? Ast_Max(object? a, object? b)
+        => Ast_Extremum(a, b, Math.Max);
+
+    /// <summary>
+    /// Shared body of <c>min</c> / <c>max</c>: two scalars compare directly; a single collection
+    /// argument folds over its numeric items the way <c>sum</c> and <c>avg</c> already did. Until
+    /// 2026-08-29 the collection form returned null, so <c>min(property.nums)</c> silently read as
+    /// "no value" while <c>sum(property.nums)</c> worked.
+    /// </summary>
+    private static object? Ast_Extremum(object? a, object? b, Func<double, double, double> pick)
     {
+        if (b is null && a is System.Collections.IEnumerable items && a is not string)
+        {
+            double? result = null;
+            foreach (var item in items)
+            {
+                if (!TryConvertToDouble(item, out var v))
+                    continue;
+                result = result is null ? v : pick(result.Value, v);
+            }
+
+            return result;
+        }
+
         if (TryConvertToDouble(a, out var va) && TryConvertToDouble(b, out var vb))
-            return Math.Max(va, vb);
+            return pick(va, vb);
+
         return null;
     }
 
@@ -271,6 +291,33 @@ public static partial class ExpressionResolver
         return value?.ToString();
     }
 
+    /// <summary>
+    /// Formats a value with a .NET format string and an optional culture name:
+    /// <c>format(header.price, 'N2')</c> is invariant, <c>format(header.price, 'N2', 'ru-RU')</c> is
+    /// the named locale. This is the explicit way to get locale-specific text now that <c>${...}</c>
+    /// renders culture-invariant; a string that holds a number or a date is parsed invariantly first,
+    /// anything else is returned as its own text.
+    /// </summary>
+    public static object? Ast_Format(object? value, object? format, object? culture)
+    {
+        if (value is null) return null;
+        var formatString = format?.ToString();
+        var cultureInfo = ExpressionFormatting.Culture(culture?.ToString());
+
+        if (string.IsNullOrEmpty(formatString))
+            return value is IFormattable plain ? plain.ToString(null, cultureInfo) : value.ToString();
+
+        if (value is IFormattable formattable)
+            return formattable.ToString(formatString, cultureInfo);
+
+        var text = value.ToString();
+        if (decimal.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out var number))
+            return number.ToString(formatString, cultureInfo);
+        if (DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+            return date.ToString(formatString, cultureInfo);
+        return text;
+    }
+
     /// <summary>Adds a time interval to a date value.</summary>
     public static object? Ast_DateAdd(object? value, object? amount, object? unit)
     {
@@ -293,6 +340,80 @@ public static partial class ExpressionResolver
             "years" or "year" => baseDate.AddYears((int)amt),
             _ => null
         };
+    }
+
+    /// <summary>
+    /// Modulo over the same numeric coercion as division (Route-XML Ф1.5): both operands convert
+    /// invariantly, a zero divisor yields null (as division does), a whole result collapses to int.
+    /// </summary>
+    public static object? Ast_ApplyModulo(object? left, object? right)
+    {
+        if (left is null || right is null)
+            return null;
+        if (!TryConvertToNumber(left, out var leftNumber) || !TryConvertToNumber(right, out var rightNumber))
+            return null;
+        if (Math.Abs(rightNumber) < double.Epsilon)
+            return null;
+
+        var result = leftNumber % rightNumber;
+        if (Math.Abs(result - Math.Floor(result)) < double.Epsilon)
+            return Convert.ToInt32(result);
+        return result;
+    }
+
+    /// <summary>
+    /// A fresh GUID as text (Route-XML Ф1.5). Impure by design: every evaluation yields a new value
+    /// (the expression cache stores compiled delegates, never results). The optional argument is the
+    /// standard GUID format specifier (<c>'D'</c> default, <c>'N'</c> compact, <c>'B'</c>, <c>'P'</c>);
+    /// an unknown specifier throws rather than falling back silently.
+    /// </summary>
+    public static object? Ast_Uuid(object? format)
+        => Guid.NewGuid().ToString(format?.ToString() ?? "D");
+
+    /// <summary>
+    /// Difference between two dates, first minus second, in the requested unit (Route-XML Ф1.5).
+    /// Dates coerce exactly as <see cref="Ast_DateAdd"/> does (DateTime, DateTimeOffset, or an
+    /// invariantly parsed string); the unit vocabulary is <see cref="Ast_DateAdd"/>'s plus
+    /// milliseconds (<c>ms</c>); an unknown unit yields null, matching <see cref="Ast_DateAdd"/>.
+    /// A whole result collapses to int, matching division.
+    /// </summary>
+    public static object? Ast_DateDiff(object? left, object? right, object? unit)
+    {
+        if (!TryCoerceDate(left, out var a) || !TryCoerceDate(right, out var b))
+            return null;
+
+        var span = a - b;
+        var u = unit?.ToString()?.ToLowerInvariant() ?? "days";
+        double result = u switch
+        {
+            "days" or "day" => span.TotalDays,
+            "hours" or "hour" => span.TotalHours,
+            "minutes" or "minute" => span.TotalMinutes,
+            "seconds" or "second" => span.TotalSeconds,
+            "milliseconds" or "millisecond" or "ms" => span.TotalMilliseconds,
+            _ => double.NaN
+        };
+        if (double.IsNaN(result))
+            return null;
+        if (Math.Abs(result - Math.Floor(result)) < double.Epsilon)
+            return Convert.ToInt32(result);
+        return result;
+    }
+
+    private static bool TryCoerceDate(object? value, out DateTime date)
+    {
+        switch (value)
+        {
+            case DateTime d:
+                date = d;
+                return true;
+            case DateTimeOffset o:
+                date = o.UtcDateTime;
+                return true;
+            default:
+                return DateTime.TryParse(value?.ToString(), System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out date);
+        }
     }
 
     /// <summary>Sums all numeric values in a collection.</summary>
@@ -347,12 +468,122 @@ public static partial class ExpressionResolver
         return ApplyJPath(exchange, pathStr);
     }
 
+    /// <summary>
+    /// Evaluates the two-argument <c>jpath(path, source)</c>, which reads the source instead of the
+    /// message body. The source arrives already evaluated, as a value.
+    /// </summary>
+    public static object? Ast_JPathFrom(object? path, object? source, IExchange exchange)
+    {
+        var pathStr = path?.ToString();
+        if (pathStr == null) return null;
+
+        // The language is lenient about missing data: the one-argument form yields null on a null
+        // body, and a named source that produced nothing is the same situation with the data
+        // missing from somewhere else. The strict reading lives on the object form, where
+        // From(...) still fails loudly.
+        if (source is null) return null;
+
+        // Same per-call-site cache as the one-argument form: the path is constant, the input is not.
+        var expression = JsonPathExpressions.GetOrAdd(pathStr, static p => new JsonPathExpression(p));
+        return expression.EvaluateOn<object>(source, fromSource: true);
+    }
+
     /// <summary>Evaluates an xpath() function via AST delegation.</summary>
     public static object? Ast_XPath(object? path, IExchange exchange)
     {
         var pathStr = path?.ToString();
         if (pathStr == null) return null;
         return ApplyXPath(exchange, pathStr);
+    }
+
+    /// <summary>
+    /// Evaluates <c>stats(target, metric)</c> — endpoint statistics as a value in the expression
+    /// language, so a route can branch on its own measurements (METRICS_IN_ROUTE_PLAN, П2):
+    /// <c>Filter("stats('direct:target', 'health') != 'Critical'")</c>.
+    /// </summary>
+    /// <remarks>
+    /// <c>target</c> is an endpoint URI or <c>'current'</c> (the route processing the exchange);
+    /// <c>metric</c> names an <see cref="redb.Route.Abstractions.IEndpointStatistics"/> reading,
+    /// case-insensitive. Unlike a missing data source in <c>xpath()</c>, every failure here is an
+    /// authoring error — a route that asks for measurements it cannot get should say so loudly,
+    /// not route messages on a silent null.
+    /// </remarks>
+    public static object? Ast_Stats(object? target, object? metric, IExchange exchange)
+    {
+        var targetText = target?.ToString();
+        var metricText = metric?.ToString();
+        if (string.IsNullOrWhiteSpace(targetText) || string.IsNullOrWhiteSpace(metricText))
+            throw new InvalidOperationException("stats() needs a target ('current' or an endpoint URI) and a metric name.");
+
+        var context = exchange.Context
+            ?? throw new InvalidOperationException(
+                "stats(): the exchange carries no route context. Only an exchange that entered a " +
+                "route can read statistics; one built by hand cannot.");
+
+        IEndpointStatistics? stats;
+        if (targetText.Equals("current", StringComparison.OrdinalIgnoreCase))
+        {
+            var routeId = exchange.RouteId
+                ?? throw new InvalidOperationException("stats('current'): the exchange has no route id.");
+            stats = (context as Core.RouteContext)?.GetRoute(routeId)?.Endpoint as IEndpointStatistics;
+            if (stats is null)
+                throw new InvalidOperationException(
+                    $"stats('current'): route '{routeId}' was not found or its endpoint keeps no statistics.");
+        }
+        else
+        {
+            stats = context.GetEndpoint(targetText) as IEndpointStatistics;
+            if (stats is null)
+                throw new InvalidOperationException(
+                    $"stats(): endpoint '{targetText}' keeps no statistics.");
+        }
+
+        return ReadStatistic(stats, metricText);
+    }
+
+    /// <summary>The statistic names <c>stats()</c> understands, and their readings.</summary>
+    internal static object? ReadStatistic(IEndpointStatistics stats, string metric) =>
+        metric.ToLowerInvariant() switch
+        {
+            "messagesin" => stats.MessagesIn,
+            "messagesout" => stats.MessagesOut,
+            "errors" => stats.Errors,
+            "warnings" => stats.Warnings,
+            "rejected" => stats.Rejected,
+            "cancelled" => stats.Cancelled,
+            "bytesin" => stats.BytesIn,
+            "bytesout" => stats.BytesOut,
+            "throughputpersecond" => stats.ThroughputPerSecond,
+            // Milliseconds rather than a TimeSpan: the language compares numbers.
+            "averageprocessingtimems" => stats.AverageProcessingTime.TotalMilliseconds,
+            "health" => stats.HealthStatus.ToString(),
+            "healthreason" => stats.HealthReason,
+            "lasterror" => stats.LastErrorMessage,
+            _ => throw new ArgumentException(
+                $"stats(): unknown statistic '{metric}'. Known: messagesIn, messagesOut, errors, " +
+                "warnings, rejected, cancelled, bytesIn, bytesOut, throughputPerSecond, " +
+                "averageProcessingTimeMs, health, healthReason, lastError.")
+        };
+
+    /// <summary>True when <paramref name="metric"/> is a name <see cref="ReadStatistic"/> accepts.</summary>
+    internal static bool IsKnownStatistic(string metric) => metric.ToLowerInvariant() is
+        "messagesin" or "messagesout" or "errors" or "warnings" or "rejected" or "cancelled"
+        or "bytesin" or "bytesout" or "throughputpersecond" or "averageprocessingtimems"
+        or "health" or "healthreason" or "lasterror";
+
+    /// <summary>
+    /// Evaluates the two-argument <c>xpath(path, source)</c>, which reads the source instead of the
+    /// message body. The source arrives already evaluated, as a value.
+    /// </summary>
+    public static object? Ast_XPathFrom(object? path, object? source, IExchange exchange)
+    {
+        var pathStr = path?.ToString();
+        if (pathStr == null) return null;
+
+        // Lenient like the one-argument form on a null body — see Ast_JPathFrom.
+        if (source is null) return null;
+
+        return new XPathExpression(pathStr).EvaluateOn<object>(source, fromSource: true);
     }
 
     /// <summary>
@@ -442,13 +673,7 @@ public static partial class ExpressionResolver
     /// <param name="value">The value to convert.</param>
     /// <returns>The boolean interpretation of the value.</returns>
     public static bool Ast_ConvertToBool(object? value)
-    {
-        if (value == null) return false;
-        if (Ast_TryConvertToBool(value, out var result)) return result;
-        // For values that can't be converted (e.g. arbitrary strings, objects), 
-        // treat non-null as truthy (similar to JavaScript/Python truthiness)
-        return true;
-    }
+        => Predicates.RouteTruthiness.ToBoolean(value);
 
     /// <summary>
     /// Resolves a property path on an object via AST delegation.
@@ -542,7 +767,7 @@ public static partial class ExpressionResolver
             // Compile the lambda expression into a delegate
             return lambda.Compile();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not ExpressionSandboxViolationException)
         {
             throw new ExpressionCompilationException($"Error compiling expression '{expression}' using AST: {ex.Message}", ex);
         }
@@ -700,6 +925,11 @@ public static partial class ExpressionResolver
                     case "/":
                         binaryMethod = typeof(ExpressionResolver).GetMethod(
                             nameof(Ast_ApplyDivision),
+                            BindingFlags.Public | BindingFlags.Static);
+                        break;
+                    case "%":
+                        binaryMethod = typeof(ExpressionResolver).GetMethod(
+                            nameof(Ast_ApplyModulo),
                             BindingFlags.Public | BindingFlags.Static);
                         break;
                     case "==":
@@ -862,6 +1092,20 @@ public static partial class ExpressionResolver
                         return SysExpression.Call(nowMethod);
                     }
 
+                    case "format":
+                        return CompileThreeArgFunction(functionNode, exchangeParam, nameof(Ast_Format));
+
+                    case "uuid":
+                    {
+                        var uuidArgs = functionNode.Arguments.Select(a => CompileAstNode(a, exchangeParam)).ToArray();
+                        var fmt = uuidArgs.Length > 0 ? BoxToObject(uuidArgs[0]) : SysExpression.Constant(null, typeof(object));
+                        var m = typeof(ExpressionResolver).GetMethod(nameof(Ast_Uuid), BindingFlags.Public | BindingFlags.Static);
+                        return SysExpression.Call(m, fmt);
+                    }
+
+                    case "datediff":
+                        return CompileThreeArgFunction(functionNode, exchangeParam, nameof(Ast_DateDiff));
+
                     case "dateformat":
                         return CompileTwoArgFunction(functionNode, exchangeParam, nameof(Ast_DateFormat));
 
@@ -880,11 +1124,30 @@ public static partial class ExpressionResolver
                     case "logical":
                         return CompileSingleArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_Logical));
 
+                    case "stats":
+                        // A literal metric name is checked while the route is being built — the
+                        // V4 rule: a condition that can never work fails at build, not on the
+                        // first message. A dynamic metric argument is checked at evaluation.
+                        if (functionNode.Arguments.Count > 1
+                            && functionNode.Arguments[1] is LiteralNode { Value: string literalMetric }
+                            && !IsKnownStatistic(literalMetric))
+                        {
+                            ReadStatistic(null!, literalMetric); // throws the ArgumentException with the known-names list
+                        }
+                        return CompileTwoArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_Stats));
+
+                    // A second argument names what to read instead of the body. Dispatching on
+                    // arity to a separate method keeps "no source given" distinguishable from "the
+                    // source evaluated to null", which one nullable parameter could not express.
                     case "jpath":
-                        return CompileSingleArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_JPath));
+                        return functionNode.Arguments.Count >= 2
+                            ? CompileTwoArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_JPathFrom))
+                            : CompileSingleArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_JPath));
 
                     case "xpath":
-                        return CompileSingleArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_XPath));
+                        return functionNode.Arguments.Count >= 2
+                            ? CompileTwoArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_XPathFrom))
+                            : CompileSingleArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_XPath));
 
                     default:
                         throw new NotImplementedException(
@@ -1042,6 +1305,21 @@ public static partial class ExpressionResolver
             : SysExpression.Constant(null, typeof(object));
         var method = typeof(ExpressionResolver).GetMethod(methodName, BindingFlags.Public | BindingFlags.Static);
         return SysExpression.Call(method, arg, exchangeParam);
+    }
+
+    /// <summary>
+    /// Compiles a two-argument function that also needs the exchange parameter.
+    /// </summary>
+    private static SysExpression CompileTwoArgFunctionWithExchange(FunctionCallNode node, ParameterExpression exchangeParam, string methodName)
+    {
+        var first = node.Arguments.Count > 0
+            ? BoxToObject(CompileAstNode(node.Arguments[0], exchangeParam))
+            : SysExpression.Constant(null, typeof(object));
+        var second = node.Arguments.Count > 1
+            ? BoxToObject(CompileAstNode(node.Arguments[1], exchangeParam))
+            : SysExpression.Constant(null, typeof(object));
+        var method = typeof(ExpressionResolver).GetMethod(methodName, BindingFlags.Public | BindingFlags.Static);
+        return SysExpression.Call(method, first, second, exchangeParam);
     }
 
     #endregion

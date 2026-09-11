@@ -164,4 +164,67 @@ public sealed class SftpClientFactoryTests
         using var client = SftpClientFactory.Create(options);
         client.Should().NotBeNull();
     }
+
+    // ── Часть B плана KAFKA_HARDENING_AND_OPTIONS_SWEEP_PLAN ──
+
+    [Fact]
+    public void Compression_PrefersZlibInTheNegotiationList()
+    {
+        // The option was declared ("Enable zlib compression on the SSH channel") and read by
+        // nothing: SSH.NET negotiated its default list regardless.
+        var options = new SftpEndpointOptions
+        {
+            Host = "localhost", Username = "u", Password = "p",
+            Compression = true,
+        };
+        using var client = SftpClientFactory.Create(options);
+
+        client.ConnectionInfo.CompressionAlgorithms.Keys.First().Should().Be("zlib@openssh.com",
+            "compression=true обязан ставить zlib первым в списке переговоров");
+        client.ConnectionInfo.CompressionAlgorithms.Keys.Should().Contain("none",
+            "сервер без компрессии всё ещё должен договориться");
+    }
+
+    [Fact]
+    public void NoCompression_KeepsTheLibraryDefault()
+    {
+        var options = new SftpEndpointOptions { Host = "localhost", Username = "u", Password = "p" };
+        using var client = SftpClientFactory.Create(options);
+
+        client.ConnectionInfo.CompressionAlgorithms.Keys.First().Should().Be("none");
+    }
+}
+
+/// <summary>Часть B: the separator option shapes remote path building; Auto also normalizes.</summary>
+public sealed class SftpSeparatorTests
+{
+    private static SftpFileOperations Ops(SftpSeparator separator) =>
+        new(new SftpEndpointOptions { Host = "h", Username = "u", Password = "p", Separator = separator });
+
+    [Fact]
+    public void Auto_NormalizesBackslashesAndJoinsWithForwardSlash()
+    {
+        var ops = Ops(SftpSeparator.Auto);
+        ops.CombinePath(@"upload\in", @"sub\file.txt").Should().Be("upload/in/sub/file.txt",
+            "Auto обязан переваривать windows-разделители во входе");
+    }
+
+    [Fact]
+    public void Unix_JoinsStrictlyWithForwardSlash()
+    {
+        var ops = Ops(SftpSeparator.Unix);
+        ops.CombinePath("upload/in", "file.txt").Should().Be("upload/in/file.txt");
+    }
+
+    [Fact]
+    public void Unix_TakesBackslashesLiterally()
+    {
+        // Unix mode is the byte-for-byte contract: a backslash is a legal character in a UNIX
+        // file name, so it must NOT be treated as a separator (that was the removed Windows
+        // mode's job, and it could never be honest - SFTP's wire separator is always "/").
+        var ops = Ops(SftpSeparator.Unix);
+        var combined = ops.CombinePath("upload/in", @"weird\name.txt");
+        combined.Should().Be(@"upload/in/weird\name.txt");
+        ops.GetFileName(combined).Should().Be(@"weird\name.txt");
+    }
 }

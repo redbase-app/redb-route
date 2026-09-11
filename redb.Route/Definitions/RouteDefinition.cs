@@ -10,8 +10,27 @@ namespace redb.Route.Definitions;
 /// adds root-only behavior — namely <see cref="CreateProcessor"/> with declarative
 /// <see cref="OnExceptionDefinition"/> hoisting (Apache Camel parity).
 /// </summary>
-public class RouteDefinition : RouteDefinitionBase<RouteDefinition>
+public class RouteDefinition : RouteDefinitionBase<RouteDefinition>, IBranchingDefinition
 {
+    /// <summary>Route-level intercepts (declared anywhere inside the route; applied to the whole route at compile).</summary>
+    internal readonly List<InterceptDefinition> Intercepts = [];
+
+    /// <summary>Route-level OnCompletion blocks.</summary>
+    internal readonly List<OnCompletionDefinition> OnCompletions = [];
+
+    /// <summary>
+    /// Intercept and OnCompletion bodies: logical children kept outside <see cref="Outputs"/>, exposed so a
+    /// generic tree walk (the route validator, AdviceWith's <c>MockEndpoints</c> / <c>Weave*</c>) reaches
+    /// the steps nested in them.
+    /// </summary>
+    public IEnumerable<IProcessorDefinition> Branches => Intercepts.Concat<IProcessorDefinition>(OnCompletions);
+
+    /// <summary>Intercepts declared on this route (read by the context at compile and by tooling).</summary>
+    public IReadOnlyList<InterceptDefinition> GetIntercepts() => Intercepts;
+
+    /// <summary>OnCompletion blocks declared on this route.</summary>
+    public IReadOnlyList<OnCompletionDefinition> GetOnCompletions() => OnCompletions;
+
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
     {

@@ -34,8 +34,8 @@ public sealed class LogStaticDefinition : ProcessorDefinition
         var logger = loggerFactory?.CreateLogger("redb.Route");
 
         // If the message contains ${...} placeholders, route through the template
-        // processor so .Log("...${header.x}...") in DSL just works without the
-        // caller having to pick LogTemplateDefinition explicitly.
+        // processor so .Log("...${header.x}...") in DSL just works — the placeholder
+        // form and the plain form share this one definition.
         if (_message.Contains("${", StringComparison.Ordinal))
             return new TemplateLogProcessor(_message, _level, logger);
 
@@ -69,79 +69,6 @@ public sealed class LogDynamicDefinition : ProcessorDefinition
         {
             var logger = loggerFactory.CreateLogger("redb.Route");
             return new LogProcessor(logger, _messageFactory, _level);
-        }
-        return new DelegateProcessor(_ => { });
-    }
-}
-
-/// <summary>
-/// Leaf definition that logs a string expression template, resolving <c>${...}</c> placeholders at runtime.
-/// </summary>
-public sealed class LogTemplateDefinition : ProcessorDefinition
-{
-    private readonly string _template;
-    private readonly LogLevel _level;
-
-    /// <summary>The log message template (with <c>${...}</c> placeholders).</summary>
-    public string Template => _template;
-
-    /// <summary>The log level.</summary>
-    public LogLevel Level => _level;
-
-    /// <summary>Creates a template log definition.</summary>
-    public LogTemplateDefinition(string template, LogLevel level = LogLevel.Information)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(template);
-        _template = template;
-        _level = level;
-    }
-
-    /// <inheritdoc />
-    public override IProcessor CreateProcessor(IRouteContext context)
-    {
-        var logger = context.GetService<ILoggerFactory>()?.CreateLogger("redb.Route");
-        return new TemplateLogProcessor(_template, _level, logger);
-    }
-}
-
-/// <summary>
-/// Leaf definition that logs multiple messages with structured header/property output.
-/// </summary>
-public sealed class RichLogDefinition : ProcessorDefinition
-{
-    private readonly IReadOnlyList<string> _messages;
-    private readonly IReadOnlyList<Func<IExchange, string>> _messageFuncs;
-    private readonly IReadOnlyList<string> _headerNames;
-    private readonly IReadOnlyList<string> _propertyNames;
-    private readonly LogLevel _level;
-    private readonly bool _showRouteId;
-
-    /// <summary>Creates a rich log definition.</summary>
-    public RichLogDefinition(
-        IReadOnlyList<string> messages,
-        IReadOnlyList<Func<IExchange, string>> messageFuncs,
-        IReadOnlyList<string> headerNames,
-        IReadOnlyList<string> propertyNames,
-        LogLevel level = LogLevel.Information,
-        bool showRouteId = false)
-    {
-        _messages = messages;
-        _messageFuncs = messageFuncs;
-        _headerNames = headerNames;
-        _propertyNames = propertyNames;
-        _level = level;
-        _showRouteId = showRouteId;
-    }
-
-    /// <inheritdoc />
-    public override IProcessor CreateProcessor(IRouteContext context)
-    {
-        var loggerFactory = context.GetService<ILoggerFactory>();
-        if (loggerFactory != null)
-        {
-            var logger = loggerFactory.CreateLogger("redb.Route");
-            return new RichLogProcessor(logger, _level, _messages, _messageFuncs,
-                _headerNames, _propertyNames, _showRouteId);
         }
         return new DelegateProcessor(_ => { });
     }

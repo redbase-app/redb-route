@@ -44,9 +44,9 @@ public sealed class ValidateProcessor : IProcessor
     }
 
     /// <inheritdoc />
-    public Task Process(IExchange exchange, CancellationToken ct = default)
+    public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
-        var result = _validator.Validate(exchange);
+        var result = await _validator.ValidateAsync(exchange).ConfigureAwait(false);
 
         // Always set properties so downstream steps can inspect them
         exchange.Properties[ValidationResultProperty] = result.IsValid;
@@ -75,8 +75,6 @@ public sealed class ValidateProcessor : IProcessor
                 throw new ValidationException(result.Errors);
             }
         }
-
-        return Task.CompletedTask;
     }
 }
 

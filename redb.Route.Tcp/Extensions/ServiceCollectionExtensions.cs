@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Tcp;
 
@@ -13,19 +13,11 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddRedbRouteTcp(this IServiceCollection services)
     {
-        services.AddSingleton<TcpComponent>();
-
-        services.AddSingleton<ITcpComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            var component = sp.GetRequiredService<TcpComponent>();
-            context.AddComponent(component);
-            return new TcpComponentRegistrar();
-        });
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteComponent<TcpComponent>();
 
         return services;
     }
 }
 
-internal interface ITcpComponentRegistrar;
-internal sealed class TcpComponentRegistrar : ITcpComponentRegistrar;

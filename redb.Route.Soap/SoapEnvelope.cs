@@ -83,22 +83,88 @@ internal static class SoapEnvelope
         return header?.Elements() ?? Enumerable.Empty<XElement>();
     }
 
-    /// <summary>Builds a SOAP Fault envelope (for a consumer returning an error).</summary>
-    public static byte[] BuildFault(string faultString, SoapVersion version, string? faultCode = null)
+    /// <summary>
+    /// Namespaces for the prefixes a fault code is most likely to use, so a route naming a standard
+    /// fault does not have to repeat the URI every time. A prefix that is not here, and whose namespace
+    /// the route did not give, is written as it was handed over — the alternative would be inventing a
+    /// namespace for it, and a wrong namespace is worse than an unresolved prefix.
+    /// </summary>
+    private static readonly Dictionary<string, string> WellKnownFaultPrefixes = new(StringComparer.Ordinal)
+    {
+        ["wst"] = "http://docs.oasis-open.org/ws-sx/ws-trust/200512",
+        ["wsse"] = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd",
+        ["wsu"] = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd",
+        ["wsa"] = "http://www.w3.org/2005/08/addressing",
+        ["wsrm"] = "http://docs.oasis-open.org/ws-rx/wsrm/200702",
+    };
+
+    /// <summary>
+    /// The fault code for "the caller sent something we cannot process", spelled for this SOAP version:
+    /// <c>soap:Sender</c> in 1.2, <c>soap:Client</c> in 1.1.
+    /// <para>
+    /// This is not cosmetic. SOAP 1.2 defines the other value, <c>Receiver</c> (the 1.1 <c>Server</c>),
+    /// as a failure "attributable to the processing of the message rather than to the contents of the
+    /// message itself" — in practice a retry hint. A request we could not even parse is the opposite:
+    /// the same bytes will fail again, so a caller that branches on the code (and a retry handler is
+    /// exactly such a caller) must be told the fault is its own, or it will re-send until it gives up.
+    /// </para>
+    /// </summary>
+    public static string SenderCode(SoapVersion version) =>
+        version == SoapVersion.Soap12 ? "soap:Sender" : "soap:Client";
+
+    /// <summary>
+    /// Builds a SOAP Fault envelope (for a consumer returning an error).
+    /// <para>
+    /// A fault code is a <b>QName</b> in both SOAP versions, so a prefixed code such as
+    /// <c>wst:FailedAuthentication</c> is only meaningful when the prefix is bound on the envelope. It is
+    /// declared here for that reason: a code whose prefix nothing declares is not a code a strict client
+    /// can resolve, and the clients that branch on fault codes are exactly the strict ones.
+    /// </para>
+    /// </summary>
+    /// <param name="faultCodeNamespace">
+    /// Namespace for the prefix in <paramref name="faultCode"/>. Optional: standard prefixes are known,
+    /// and this is for a code in a namespace of the caller's own.
+    /// </param>
+    public static byte[] BuildFault(string faultString, SoapVersion version, string? faultCode = null,
+        string? faultCodeNamespace = null)
     {
         var soap = Ns(version);
+        var code = faultCode ?? (version == SoapVersion.Soap12 ? "soap:Receiver" : "soap:Server");
+
         XElement fault = version == SoapVersion.Soap12
             ? new XElement(soap + "Fault",
-                new XElement(soap + "Code", new XElement(soap + "Value", faultCode ?? "soap:Receiver")),
+                new XElement(soap + "Code", new XElement(soap + "Value", code)),
                 new XElement(soap + "Reason", new XElement(soap + "Text", faultString)))
             : new XElement(soap + "Fault",
-                new XElement("faultcode", faultCode ?? "soap:Server"),
+                new XElement("faultcode", code),
                 new XElement("faultstring", faultString));
 
         var envelope = new XElement(soap + "Envelope",
             new XAttribute(XNamespace.Xmlns + "soap", soap.NamespaceName),
             new XElement(soap + "Body", fault));
+
+        // The `soap` prefix is already bound above, so a soap:* code needs nothing further.
+        if (ResolveFaultPrefix(code, faultCodeNamespace) is var (prefix, ns) && prefix is not null)
+            envelope.Add(new XAttribute(XNamespace.Xmlns + prefix, ns!));
+
         return Encoding.UTF8.GetBytes(new XDocument(envelope).ToString(SaveOptions.DisableFormatting));
+    }
+
+    /// <summary>
+    /// Works out which prefix a fault code uses and what to bind it to, or nothing when there is no
+    /// prefix, when it is already bound, or when its namespace is unknown and was not supplied.
+    /// </summary>
+    private static (string? Prefix, string? Namespace) ResolveFaultPrefix(string code, string? supplied)
+    {
+        var colon = code.IndexOf(':');
+        if (colon <= 0) return (null, null);
+
+        var prefix = code[..colon];
+        if (prefix == "soap") return (null, null);
+
+        if (!string.IsNullOrEmpty(supplied)) return (prefix, supplied);
+
+        return WellKnownFaultPrefixes.TryGetValue(prefix, out var ns) ? (prefix, ns) : (null, null);
     }
 
     private static object ParseBodyContent(string xml)

@@ -39,6 +39,19 @@ public sealed class FirebaseStorageEndpointOptions : EndpointOptions
     /// <summary>Cache-Control header (e.g. <c>"public, max-age=3600"</c>).</summary>
     public string? CacheControl { get; set; }
 
+    // ── Copy ──
+
+    /// <summary>Destination object name for the Copy operation. Supports <c>${...}</c> expressions.</summary>
+    public DynamicValue<string>? DestinationObjectName { get; set; }
+
+    /// <summary>Destination bucket for the Copy operation (default: source bucket).</summary>
+    public string? DestinationBucket { get; set; }
+
+    // ── Signed URLs ──
+
+    /// <summary>TTL for CreateDownloadLink signed URLs, in milliseconds. Default: 1 hour.</summary>
+    public long SignedUrlExpiration { get; set; } = 3_600_000;
+
     // ── Download ──
 
     /// <summary>Download body as Stream (true) or byte[] (false).</summary>
@@ -67,8 +80,30 @@ public sealed class FirebaseStorageEndpointOptions : EndpointOptions
     /// <summary>Move objects to this prefix after processing (copy + delete).</summary>
     public string? MoveAfterRead { get; set; }
 
+    /// <summary>
+    /// Move objects whose processing FAILED to this prefix (copy + delete) — a quarantine
+    /// pocket so the poll loop stops retrying them. When unset, a failed object stays in
+    /// place and is offered again on the next poll.
+    /// </summary>
+    public string? MoveFailed { get; set; }
+
     /// <summary>Skip previously processed objects (in-memory idempotent repository).</summary>
     public bool Idempotent { get; set; }
+
+    /// <summary>
+    /// Name of an <c>IIdempotentRepository</c> registered via
+    /// <c>context.AddIdempotentRepository(name, repo)</c> — the same contract the route-level
+    /// IdempotentConsumer EIP uses. With a persistent repository (RedbIdempotentRepository)
+    /// deduplication survives restarts and scale-out. Takes precedence over the in-memory
+    /// <see cref="Idempotent"/> flag.
+    /// </summary>
+    public string? IdempotentRepository { get; set; }
+
+    /// <summary>
+    /// Create the bucket on consumer start when it does not exist (requires
+    /// <see cref="ProjectId"/> or <c>FIREBASE_PROJECT</c>). Default: false.
+    /// </summary>
+    public bool AutoCreateBucket { get; set; }
 
     // ── Consumer: Filtering ──
 
@@ -81,12 +116,14 @@ public sealed class FirebaseStorageEndpointOptions : EndpointOptions
     /// <inheritdoc />
     public override void Validate()
     {
+        // STORAGE_EMULATOR_HOST is the env var Google.Cloud.Storage.V1 actually honors
+        // (FIREBASE_STORAGE_EMULATOR_HOST belongs to the Firebase client SDKs, not this one).
         if (string.IsNullOrWhiteSpace(CredentialPath)
             && string.IsNullOrWhiteSpace(ConnectionFactory)
             && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS"))
-            && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("FIREBASE_STORAGE_EMULATOR_HOST")))
+            && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("STORAGE_EMULATOR_HOST")))
             throw new ArgumentOutOfRangeException(nameof(CredentialPath),
-                "CredentialPath, ConnectionFactory, GOOGLE_APPLICATION_CREDENTIALS, or FIREBASE_STORAGE_EMULATOR_HOST required");
+                "CredentialPath, ConnectionFactory, GOOGLE_APPLICATION_CREDENTIALS, or STORAGE_EMULATOR_HOST required");
 
         if (Delay < 100)
             throw new ArgumentOutOfRangeException(nameof(Delay), "Delay must be >= 100ms");

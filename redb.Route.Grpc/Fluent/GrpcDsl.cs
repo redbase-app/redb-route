@@ -45,6 +45,10 @@ public sealed class GrpcBuilder
     private bool? _streaming;
     private bool? _throwOnError;
     private bool? _health;
+    private int? _maxConcurrentRequests;
+    private int? _requestQueueLimit;
+    private int? _rejectStatusCode;
+    private int? _retryAfterSeconds;
     private string? _clientCertificateMode;
     private string? _allowedClientThumbprints;
     private string? _clientCertPath;
@@ -173,6 +177,24 @@ public sealed class GrpcBuilder
     public GrpcBuilder Health(bool value = true) { _health = value; return this; }
 
     /// <summary>
+    /// Admission limit for UNARY calls: at most <paramref name="max"/> concurrent pipeline
+    /// executions; overflow beyond the optional FIFO <paramref name="queue"/> is shed with an
+    /// HTTP-level 429 before any pipeline work. Streaming and health methods are not counted.
+    /// </summary>
+    public GrpcBuilder MaxConcurrentRequests(int max, int queue = 0)
+    {
+        _maxConcurrentRequests = max;
+        if (queue > 0) _requestQueueLimit = queue;
+        return this;
+    }
+
+    /// <summary>HTTP status code for a shed request (default 429).</summary>
+    public GrpcBuilder RejectStatusCode(int statusCode) { _rejectStatusCode = statusCode; return this; }
+
+    /// <summary>Retry-After value for a shed request in seconds; 0 = do not send (default 1).</summary>
+    public GrpcBuilder RetryAfterSeconds(int seconds) { _retryAfterSeconds = seconds; return this; }
+
+    /// <summary>
     /// Require or allow a client certificate (mTLS); needs <c>.Ssl()</c>. Optionally pins the accepted
     /// certificates by thumbprint.
     /// </summary>
@@ -234,6 +256,10 @@ public sealed class GrpcBuilder
         AppendBool("plaintext", _plaintext);
         AppendInt("maxSendMessageSize", _maxSendMessageSize);
         AppendInt("maxReceiveMessageSize", _maxReceiveMessageSize);
+        AppendInt("maxConcurrentRequests", _maxConcurrentRequests);
+        AppendInt("requestQueueLimit", _requestQueueLimit);
+        AppendInt("rejectStatusCode", _rejectStatusCode);
+        AppendInt("retryAfterSeconds", _retryAfterSeconds);
         AppendStr("host", _host);
         AppendInt("port", _port);
         AppendBool("ssl", _ssl);

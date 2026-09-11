@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.Http;
@@ -48,15 +49,11 @@ public class HttpComponent : ComponentBase
         // Resolve the named ConnectionFactory right after binding — before the path is parsed, so
         // host/port taken from the URI path always win — and before Validate(), which requires
         // Username/Password when AuthScheme=Basic.
-        if (!string.IsNullOrEmpty(options.ConnectionFactory) && Context is not null)
+        if (!string.IsNullOrEmpty(options.ConnectionFactory))
         {
-            var factory = Context.GetFromRegistry<HttpConnectionFactory>(options.ConnectionFactory);
-            if (factory is not null)
-                factory.ApplyTo(options, uri);
-            else
-                Logger?.LogWarning(
-                    "HTTP: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
-                    options.ConnectionFactory);
+            // A set-but-unknown name fails loud -- never a silent fallback to URI params (Ф11 Ж-1).
+            var factory = Context.GetRequiredFromRegistry<HttpConnectionFactory>(options.ConnectionFactory);
+            factory.ApplyTo(options, uri);
         }
 
         // Support shorthand: http:GET:/path or http:POST:host:port/path

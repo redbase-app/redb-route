@@ -225,7 +225,11 @@ public static class IbmMqMessageHelper
             customHeaders[key] = value.ToString()!;
         }
 
-        if (customHeaders.Count > 0)
+        // targetClient=Mq: a legacy MQ application expects raw MQMD+body. Message properties are
+        // what materializes as an MQRFH2 for property-aware paths, so in Mq mode none are written
+        // (the MQMD fields below are fine - they are descriptor, not properties). The option was
+        // declared and read by nothing until часть B of the options sweep.
+        if (customHeaders.Count > 0 && options.TargetClient != IbmMqTargetClient.Mq)
         {
             var json = System.Text.Json.JsonSerializer.Serialize(customHeaders);
             msg.SetStringProperty(IbmMqHeaders.HeaderCatalogue, json);

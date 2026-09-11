@@ -91,6 +91,8 @@ public static class LlmRouteDefinitionExtensions
             exchange.Out.Headers[LlmHeaders.ModelId] = factory.ModelId;
             exchange.Out.Headers[LlmHeaders.TokensIn] = response.Usage.InputTokens;
             exchange.Out.Headers[LlmHeaders.TokensOut] = response.Usage.OutputTokens;
+            exchange.Out.Headers[LlmHeaders.CacheWriteTokens] = response.Usage.CacheCreationInputTokens;
+            exchange.Out.Headers[LlmHeaders.CacheReadTokens] = response.Usage.CacheReadInputTokens;
             exchange.Out.Headers[LlmHeaders.ToolIterations] = response.Iterations;
             exchange.Out.Headers[LlmHeaders.StopReason] = response.StopReason.ToString();
         });

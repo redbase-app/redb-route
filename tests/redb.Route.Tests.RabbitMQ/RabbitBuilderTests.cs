@@ -225,4 +225,34 @@ public class RabbitBuilderTests
         parsed.RawParameters["host"].Should().Be("rabbit1");
         parsed.RawParameters["exchange"].Should().Be("ex");
     }
+
+    // ── A string is a string ────────────────────────────────────────
+
+    /// <summary>
+    /// The string overloads store the string. They used to wrap it in a StringExpression and
+    /// unwrap it again, so the value went through the expression compiler for nothing: a
+    /// password such as "secret(123" — "secret(" reads as a function call — threw at build time.
+    /// </summary>
+    [Theory]
+    [InlineData("secret(123")]
+    [InlineData("p@ss>word")]
+    [InlineData("eu-west-1")]
+    [InlineData("a/b/c")]
+    [InlineData("dGVzdC1zZWNyZXQ==")]
+    public void StringOverloads_KeepAnyStringLiteral(string value)
+    {
+        var act = () => Rabbit.Queue("q").Password(value).RoutingKey(value).Host(value).Build();
+
+        act.Should().NotThrow();
+        Uri.UnescapeDataString(act()).Should().Contain("password=" + value);
+    }
+
+    [Fact]
+    public void StringOverload_WithPlaceholder_IsStillResolvedPerMessage()
+    {
+        // Build() escapes query values; the placeholder survives the round trip untouched and is
+        // resolved per message by the endpoint options, exactly as before.
+        var uri = Rabbit.Queue("q").RoutingKey("${header.region}-key").Build();
+        Uri.UnescapeDataString(uri).Should().Contain("routingKey=${header.region}-key");
+    }
 }

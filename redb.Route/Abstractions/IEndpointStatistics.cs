@@ -34,8 +34,37 @@ public interface IEndpointStatistics
     /// <summary>Number of warnings during processing.</summary>
     long Warnings { get; }
 
-    /// <summary>Total bytes processed (estimated from message bodies).</summary>
+    /// <summary>
+    /// Bytes that entered the endpoint (estimated from message bodies): what a consumer received,
+    /// and what a producer got back in reply.
+    /// </summary>
     long BytesIn { get; }
+
+    /// <summary>
+    /// Bytes that left the endpoint: what a producer sent, and what a consumer wrote back as a
+    /// reply. Counterpart of <see cref="BytesIn"/>, so the two together describe an endpoint's
+    /// volume in both directions rather than lumping it into one number.
+    /// </summary>
+    long BytesOut { get; }
+
+    /// <summary>
+    /// Requests shed by an admission limit (e.g. <c>maxConcurrentRequests</c>) BEFORE a pipeline
+    /// ran: the transport answered 429/503 and no exchange was created, so these are counted in
+    /// neither <see cref="MessagesIn"/> nor <see cref="Errors"/>.
+    /// </summary>
+    long Rejected { get; }
+
+    /// <summary>
+    /// Exchanges abandoned by a cooperative cancellation: the caller's token was cancelled while
+    /// the pipeline ran (a closed dashboard mid-poll, an aborted HTTP request). Unlike
+    /// <see cref="Rejected"/> these ARE counted in <see cref="MessagesIn"/> — the exchange had
+    /// entered the pipeline — but never in <see cref="Errors"/>: the route did nothing wrong, and
+    /// counting them there turned healthy routes red under nothing but polling churn. An
+    /// <see cref="OperationCanceledException"/> thrown while the caller's token is still live is
+    /// an internal failure and stays in <see cref="Errors"/>. A consumer endpoint's completed
+    /// count is therefore <c>MessagesIn - Errors - Cancelled</c>.
+    /// </summary>
+    long Cancelled { get; }
 
     /// <summary>Timestamp of the last message activity (in or out), or null if no activity yet.</summary>
     DateTime? LastActivity { get; }
@@ -94,6 +123,15 @@ public interface IEndpointStatistics
     /// <summary>Record processing time of a single message. Thread-safe.</summary>
     void RecordProcessingTime(TimeSpan duration);
 
+    /// <summary>Record a request shed by an admission limit before the pipeline ran. Thread-safe.</summary>
+    void RecordRejected();
+
+    /// <summary>Record an exchange abandoned by a cooperative cancellation. Thread-safe.</summary>
+    void RecordCancelled();
+
     /// <summary>Record incoming bytes (message body size). Thread-safe.</summary>
     void RecordBytesIn(long bytes);
+
+    /// <summary>Record outgoing bytes (message body size). Thread-safe.</summary>
+    void RecordBytesOut(long bytes);
 }

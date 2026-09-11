@@ -4,12 +4,13 @@ namespace redb.Route.Serialization;
 
 /// <summary>
 /// Default registry mapping content types to <see cref="IMessageSerializer"/> instances.
-/// Pre-registers JSON and XML serializers. Thread-safe for reads after initialization.
+/// Pre-registers JSON and XML serializers. Thread-safe: a format may be registered while routes
+/// are already resolving serializers (a hot-loaded module adding its own).
 /// </summary>
 public sealed class DataFormatRegistry : IDataFormatRegistry
 {
-    private readonly Dictionary<string, IMessageSerializer> _serializers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, IMessageSerializer> _profiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IMessageSerializer> _serializers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IMessageSerializer> _profiles = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Creates a registry with JSON and XML serializers pre-registered.</summary>
     public DataFormatRegistry()
@@ -20,6 +21,11 @@ public sealed class DataFormatRegistry : IDataFormatRegistry
         var xml = new XmlMessageSerializer();
         _serializers["application/xml"] = xml;
         _serializers["text/xml"] = xml;
+
+        // Byte wrappers shipped with the core (no dependencies): Marshal("application/gzip") etc.
+        Register(Base64MessageSerializer.DefaultContentType, new Base64MessageSerializer());
+        Register(GZipMessageSerializer.DefaultContentType, new GZipMessageSerializer());
+        Register(ZipMessageSerializer.DefaultContentType, new ZipMessageSerializer());
     }
 
     /// <inheritdoc />

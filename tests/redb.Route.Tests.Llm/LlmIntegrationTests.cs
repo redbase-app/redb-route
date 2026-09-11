@@ -79,11 +79,16 @@ public sealed class LlmIntegrationTests
         ex.Out!.Body.Should().Be("[stub] translate this");
         ex.Out.Headers[LlmHeaders.ProviderId].Should().Be("stub");
         ex.Out.Headers[LlmHeaders.ModelId].Should().Be("echo-1");
-        // LlmProducer.Process counts each agent turn as MessagesIn=1 / MessagesOut=1
-        // so the tsak dashboard sees throughput on `.To(LlmDsl....AsUri())` hops.
+        // Ownership audit: the connector keeps MessagesIn (a user turn arrived - no core wrapper
+        // counts that for a producer); MessagesOut/Errors/Time belong to the core (ToProcessor on
+        // a routed .To(), the ProducerTemplate for template sends). A bare producer.Process call
+        // like this one therefore moves nothing into MessagesOut - and no longer double-counts
+        // on the routed path the tsak dashboard actually watches.
         endpoint.MessagesIn.Should().Be(1);
-        endpoint.MessagesOut.Should().Be(1);
-        endpoint.BytesIn.Should().Be("translate this".Length);
+        endpoint.MessagesOut.Should().Be(0);
+        // The prompt goes out, the model's answer comes back in. Both used to compete for the one
+        // byte counter, so the prompt sat in BytesIn and the answer was discarded.
+        endpoint.BytesOut.Should().Be("translate this".Length);
     }
 
     [Fact]

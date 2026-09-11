@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using redb.Route.Abstractions;
@@ -68,7 +69,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         ArgumentNullException.ThrowIfNull(exchange);
 
         var producer = GetOrCreateProducer(endpoint);
-        producer.Process(exchange).GetAwaiter().GetResult();
+        ProcessCounted(endpoint, producer, exchange).GetAwaiter().GetResult();
     }
 
     /// <inheritdoc />
@@ -111,7 +112,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         {
             processor.Process(exchange).GetAwaiter().GetResult();
             var producer = GetOrCreateProducer(endpoint);
-            producer.Process(exchange).GetAwaiter().GetResult();
+            ProcessCounted(endpoint, producer, exchange).GetAwaiter().GetResult();
         }
         finally { exchange.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
     }
@@ -131,7 +132,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
             // ConnectableProducer-based transports demand Start() before Process();
             // idempotent — the started flag short-circuits subsequent calls.
             await producer.Start().ConfigureAwait(false);
-            await producer.Process(exchange).ConfigureAwait(false);
+            await ProcessCounted(endpoint, producer, exchange).ConfigureAwait(false);
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
     }
@@ -159,7 +160,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
             // demand Start() before Process(); idempotent — second Start is
             // a no-op on the started flag.
             await producer.Start().ConfigureAwait(false);
-            await producer.Process(exchange).ConfigureAwait(false);
+            await ProcessCounted(endpoint, producer, exchange).ConfigureAwait(false);
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
     }
@@ -187,7 +188,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         // a disposed scope; the caller must give it a live scope before replay if it needs one.
         var producer = GetOrCreateProducer(endpoint);
         await producer.Start(cancellationToken).ConfigureAwait(false);
-        await producer.Process(exchange, cancellationToken).ConfigureAwait(false);
+        await ProcessCounted(endpoint, producer, exchange, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -209,7 +210,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         exchange.Pattern = ExchangePattern.InOut;
         var producer = GetOrCreateProducer(endpoint);
         await producer.Start(cancellationToken).ConfigureAwait(false);
-        await producer.Process(exchange, cancellationToken).ConfigureAwait(false);
+        await ProcessCounted(endpoint, producer, exchange, cancellationToken).ConfigureAwait(false);
         return exchange;
     }
 
@@ -236,7 +237,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
             var producer = GetOrCreateProducer(endpoint);
             // ConnectableProducer-based transports demand Start() before Process().
             await producer.Start(cancellationToken).ConfigureAwait(false);
-            await producer.Process(exchange, cancellationToken).ConfigureAwait(false);
+            await ProcessCounted(endpoint, producer, exchange, cancellationToken).ConfigureAwait(false);
             return exchange.Out?.Body ?? exchange.In.Body;
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
@@ -264,7 +265,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
             var producer = GetOrCreateProducer(endpoint);
             // ConnectableProducer-based transports demand Start() before Process().
             await producer.Start(cancellationToken).ConfigureAwait(false);
-            await producer.Process(exchange, cancellationToken).ConfigureAwait(false);
+            await ProcessCounted(endpoint, producer, exchange, cancellationToken).ConfigureAwait(false);
             return exchange.Out?.Body ?? exchange.In.Body;
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
@@ -357,4 +358,16 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
             throw new InvalidOperationException(
                 "ProducerTemplate is not started. Call Start() before use.");
     }
+
+    /// <summary>
+    /// Runs the producer with the same endpoint statistics <see cref="Processors.ToProcessor"/>
+    /// keeps for a routed <c>.To()</c>: MessagesOut, Errors, ProcessingTime. The template used to
+    /// bypass them, so a template send was invisible unless the connector self-recorded — and a
+    /// self-recording connector then double-counted in routes. One owner now: the core records
+    /// pipeline statistics on both paths, connectors record only what the core cannot see
+    /// (wire bytes, transport-level failures, producer-side inbound operations).
+    /// </summary>
+    private static Task ProcessCounted(IEndpoint endpoint, IProducer producer, IExchange exchange,
+        CancellationToken ct = default)
+        => CountedSend.Process(endpoint, producer, exchange, ct);
 }

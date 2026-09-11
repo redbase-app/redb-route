@@ -133,10 +133,27 @@ public sealed class FirebaseStorageEndpointOptionsTests
     public void Validate_NoCredential_NoEnvVar_Throws()
     {
         Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", null);
-        Environment.SetEnvironmentVariable("FIREBASE_STORAGE_EMULATOR_HOST", null);
+        Environment.SetEnvironmentVariable("STORAGE_EMULATOR_HOST", null);
         var options = new FirebaseStorageEndpointOptions();
         var act = () => options.Validate();
         act.Should().Throw<ArgumentOutOfRangeException>().WithMessage("*CredentialPath*");
+    }
+
+    [Fact]
+    public void Validate_WithStorageEmulatorHostEnv_DoesNotThrow()
+    {
+        var prev = Environment.GetEnvironmentVariable("STORAGE_EMULATOR_HOST");
+        Environment.SetEnvironmentVariable("STORAGE_EMULATOR_HOST", "http://localhost:4443");
+        try
+        {
+            var options = new FirebaseStorageEndpointOptions();
+            var act = () => options.Validate();
+            act.Should().NotThrow();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("STORAGE_EMULATOR_HOST", prev);
+        }
     }
 
     [Fact]

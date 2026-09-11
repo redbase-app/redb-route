@@ -286,14 +286,14 @@ public class PredicateTests
         pred.Matches(CreateExchange(3)).Should().BeFalse();
     }
 
-    // ── LogicalPredicate ──
+    // ── Condition strings (LogicalPredicate was removed with the second parser) ──
 
     [Fact]
-    public void LogicalPredicate_EvaluatesExpressionString()
+    public void ConditionString_EvaluatesThroughThePredicateFactory()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["count"] = 10;
-        var pred = new LogicalPredicate("property.count == 10");
+        var pred = PredicateFactory.FromString("property.count == 10");
         pred.Matches(exchange).Should().BeTrue();
     }
 

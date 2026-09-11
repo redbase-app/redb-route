@@ -326,4 +326,19 @@ public class SmtpProducer : IProducer
 /// <param name="FileName">Attachment file name.</param>
 /// <param name="Content">Attachment content bytes.</param>
 /// <param name="ContentType">MIME content type (default: application/octet-stream).</param>
-public sealed record MailAttachment(string FileName, byte[] Content, string? ContentType = null);
+public sealed class MailAttachment(string fileName, byte[] content, string? contentType = null) : ICloneable
+{
+    /// <summary>Attachment file name.</summary>
+    public string FileName { get; } = fileName;
+
+    /// <summary>Decoded attachment payload.</summary>
+    public byte[] Content { get; } = content;
+
+    /// <summary>MIME content type, when known.</summary>
+    public string? ContentType { get; } = contentType;
+
+    // A class, not a record: records may not implement ICloneable (CS8859), and ICloneable is
+    // what Message.DeepCopyBody requires to carry this body through a checkpoint snapshot.
+    /// <summary>Deep copy for checkpoint snapshots — the payload bytes must not be shared.</summary>
+    public object Clone() => new MailAttachment(FileName, (byte[])Content.Clone(), ContentType);
+}

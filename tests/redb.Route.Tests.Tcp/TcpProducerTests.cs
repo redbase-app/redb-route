@@ -284,4 +284,27 @@ public class TcpProducerTests : IAsyncLifetime
         _lastReceivedText.Should().Be("pipe delimited");
         await producer.Stop();
     }
+
+    // ── Statistics ownership (audit follow-up) ──
+
+    [Fact]
+    public async Task HandBuiltProducer_RecordsOnlyWireBytes()
+    {
+        // Ownership audit: MessagesOut belongs to the core (ToProcessor for a routed .To(),
+        // the ProducerTemplate for template sends). A self-recording producer double-counted
+        // every routed send. The connector records only what the core cannot see: wire bytes.
+        var component = new TcpComponent();
+        var uri = new EndpointUri("tcp", $"/127.0.0.1:{_port}",
+            $"tcp:127.0.0.1:{_port}", new Dictionary<string, string> { ["framing"] = "TextLine" });
+        var endpoint = (TcpEndpoint)component.CreateEndpoint(uri);
+        var producer = (TcpProducer)endpoint.CreateProducer();
+        await producer.Start();
+
+        await producer.Process(new Exchange(new Message("hello")));
+        await Task.Delay(100);
+        await producer.Stop();
+
+        endpoint.MessagesOut.Should().Be(0, "MessagesOut пишет ядро, самозапись задваивала в маршруте");
+        endpoint.BytesOut.Should().BeGreaterThan(0, "wire-байты видит только коннектор");
+    }
 }

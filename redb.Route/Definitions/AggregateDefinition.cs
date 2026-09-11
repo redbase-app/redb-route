@@ -37,12 +37,19 @@ public class AggregateDefinition : RouteDefinitionBase<AggregateDefinition>, IRo
     /// <inheritdoc cref="IRouteScope.End"/>
     public IRouteDefinition End() => EndAggregate();
 
+    /// <summary>
+    /// Optional inactivity timeout (Apache Camel <c>completionTimeout</c>): a group that receives
+    /// nothing for this long completes with what it has. Set by the string-overload sugar
+    /// (Route-XML Ф1.3); null keeps the predicate-only behaviour.
+    /// </summary>
+    public TimeSpan? CompletionTimeout { get; internal set; }
+
     // ── IProcessorDefinition ───────────────────────────────────────────────────
 
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
     {
         IProcessor target = NodePipeline.Body(context, Outputs);
-        return new AggregatorProcessor(_correlationKey, _aggregationStrategy, _completionPredicate, target);
+        return new AggregatorProcessor(_correlationKey, _aggregationStrategy, _completionPredicate, target, CompletionTimeout);
     }
 }

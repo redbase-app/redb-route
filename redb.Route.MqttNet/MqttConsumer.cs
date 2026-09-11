@@ -66,16 +66,16 @@ internal sealed class MqttConsumer : IConsumer
 
             // Concurrent dispatch: start N workers that process messages in parallel with manual
             // ack-after-process. Serial (default) processes inline in the handler with MQTTnet auto-ack.
-            if (_options.ConcurrentConsumers > 1)
+            if (_options.ResolvedConcurrentConsumers > 1)
             {
-                _queue = Channel.CreateBounded<MqttDispatch>(new BoundedChannelOptions(_options.ConcurrentConsumers)
+                _queue = Channel.CreateBounded<MqttDispatch>(new BoundedChannelOptions(_options.ResolvedConcurrentConsumers)
                 {
                     FullMode = BoundedChannelFullMode.Wait, // backpressure: throttle the receive loop to pool capacity
                     SingleReader = false,
                     SingleWriter = true // MQTTnet invokes the received-handler serially on one client
                 });
-                _workers = new Task[_options.ConcurrentConsumers];
-                for (var i = 0; i < _options.ConcurrentConsumers; i++)
+                _workers = new Task[_options.ResolvedConcurrentConsumers];
+                for (var i = 0; i < _options.ResolvedConcurrentConsumers; i++)
                     _workers[i] = Task.Run(() => WorkerLoop(_drain.ProcessingToken));
             }
 

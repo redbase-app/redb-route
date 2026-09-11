@@ -116,6 +116,28 @@ public class HttpEndpointOptions : EndpointOptions
     /// <summary>Maximum request body size in bytes. Default: 10 MB (10485760). 0 = unlimited.</summary>
     public long MaxRequestBodySize { get; set; } = 10 * 1024 * 1024;
 
+    // ── Admission limit (HTTP_CONCURRENCY_LIMITS_PLAN) ──
+
+    /// <summary>
+    /// Maximum concurrent executions of this consumer's pipeline. 0 (default) = unlimited —
+    /// Kestrel runs as many as requests arrive. Overflow beyond the limit and
+    /// <see cref="RequestQueueLimit"/> is shed with <see cref="RejectStatusCode"/> before any
+    /// pipeline work (load shedding, not backpressure).
+    /// </summary>
+    public int MaxConcurrentRequests { get; set; }
+
+    /// <summary>
+    /// How many requests over the limit WAIT for a permit (FIFO) instead of being rejected.
+    /// 0 (default) = reject immediately once the permits are taken.
+    /// </summary>
+    public int RequestQueueLimit { get; set; }
+
+    /// <summary>Status code for a shed request. Default 429 Too Many Requests.</summary>
+    public int RejectStatusCode { get; set; } = 429;
+
+    /// <summary>Value of the <c>Retry-After</c> header on a shed request; 0 = do not send it. Default 1.</summary>
+    public int RetryAfterSeconds { get; set; } = 1;
+
     /// <summary>HTTP protocol version for the consumer. Default: Http1And2.</summary>
     public HttpProtocol Protocol { get; set; } = HttpProtocol.Http1And2;
 
@@ -191,14 +213,19 @@ public class HttpEndpointOptions : EndpointOptions
         if (MaxRequestBodySize < 0)
             throw new ArgumentException("MaxRequestBodySize must be >= 0.");
 
+        ConcurrencyLimitOptions.ValidateShape(MaxConcurrentRequests, RequestQueueLimit, RejectStatusCode, RetryAfterSeconds);
+
         if (ResponseCode is < 100 or > 599)
             throw new ArgumentException("ResponseCode must be between 100 and 599.");
 
         if (AuthScheme == HttpAuthScheme.Basic && (string.IsNullOrEmpty(Username) || string.IsNullOrEmpty(Password)))
             throw new ArgumentException("Username and Password are required when AuthScheme=Basic.");
 
-        if (Ssl && string.IsNullOrEmpty(SslCertPath))
-            throw new ArgumentException("SslCertPath is required when Ssl=true.");
+        // No SslCertPath check here on purpose. The certificate may legitimately come from a named
+        // connection factory or from the host default (HttpHostingOptions.Tls), the way a Camel
+        // endpoint resolves from global SSLContextParameters. The invariant "TLS asked for and no
+        // certificate resolves" is enforced once, at the bind, by SharedHttpServerManager — the
+        // only place that can see all three sources.
 
         // CORS configuration must be explicit. When Cors=true, the caller MUST supply either
         // a static whitelist (CorsOrigins, including "*" for public endpoints) or a resolver

@@ -50,8 +50,15 @@ internal static class FirestoreQueryHelper
 
     internal static (string field, string op, string value) ParseCondition(string condition)
     {
-        string[] operators = ["array-contains", "!=", ">=", "<=", "==", ">", "<"];
+        // `array-contains` only as a SPACED token (Г6): a field whose NAME contains the
+        // substring ("my-array-contains-x==5") must not tear the condition apart.
+        const string arrayContainsToken = " array-contains ";
+        var acIdx = condition.IndexOf(arrayContainsToken, StringComparison.Ordinal);
+        if (acIdx > 0)
+            return (condition[..acIdx].Trim(), "array-contains",
+                condition[(acIdx + arrayContainsToken.Length)..].Trim());
 
+        string[] operators = ["!=", ">=", "<=", "==", ">", "<"];
         foreach (var op in operators)
         {
             var idx = condition.IndexOf(op, StringComparison.Ordinal);
@@ -64,6 +71,10 @@ internal static class FirestoreQueryHelper
 
     internal static object ParseValue(string value)
     {
+        // Quoted literal (Г6): 'строка' — strictly a string, no type coercion ('007' stays "007").
+        if (value.Length >= 2 && value[0] == '\'' && value[^1] == '\'')
+            return value[1..^1];
+
         if (int.TryParse(value, out var intVal)) return intVal;
         if (long.TryParse(value, out var longVal)) return longVal;
         if (double.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var dblVal)) return dblVal;

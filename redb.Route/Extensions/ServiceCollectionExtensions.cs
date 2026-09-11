@@ -60,6 +60,53 @@ public static class ServiceCollectionExtensions
 
         return services;
     }
+
+    /// <summary>
+    /// Registers a component as a singleton and hooks it into the route context through
+    /// <see cref="IRouteContextConfigurator"/> — the hook <see cref="RouteHostedService"/>
+    /// applies at startup. This is THE registration primitive for connector packages
+    /// (<c>AddRedbRouteKafka()</c> and friends): a lazy marker singleton that nobody
+    /// resolves never reaches the context.
+    /// </summary>
+    /// <typeparam name="TComponent">Concrete component type.</typeparam>
+    public static IServiceCollection AddRouteComponent<TComponent>(this IServiceCollection services)
+        where TComponent : class, IComponent
+    {
+        services.TryAddSingleton<TComponent>();
+        services.AddSingleton<IRouteContextConfigurator>(sp =>
+            new ComponentConfigurator<TComponent>(sp));
+        return services;
+    }
+
+    /// <summary>
+    /// Registers an arbitrary startup callback as an <see cref="IRouteContextConfigurator"/>.
+    /// For connectors whose registration is more than a bare <c>AddComponent</c> — wiring a
+    /// shared server manager, several components, named registry entries.
+    /// </summary>
+    public static IServiceCollection AddRouteContextConfigurator(
+        this IServiceCollection services,
+        Action<IServiceProvider, RouteContext> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        services.AddSingleton<IRouteContextConfigurator>(sp =>
+            new DelegateContextConfigurator(sp, configure));
+        return services;
+    }
+}
+
+/// <summary>Applies a delegate against the context at startup (see <see cref="ServiceCollectionExtensions.AddRouteContextConfigurator"/>).</summary>
+internal sealed class DelegateContextConfigurator : IRouteContextConfigurator
+{
+    private readonly IServiceProvider _sp;
+    private readonly Action<IServiceProvider, RouteContext> _configure;
+
+    public DelegateContextConfigurator(IServiceProvider sp, Action<IServiceProvider, RouteContext> configure)
+    {
+        _sp = sp;
+        _configure = configure;
+    }
+
+    public void Configure(RouteContext context) => _configure(_sp, context);
 }
 
 /// <summary>

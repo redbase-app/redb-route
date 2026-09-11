@@ -1,18 +1,23 @@
 using redb.Core;
+using redb.Core.Exceptions;
 using redb.Core.Models.Entities;
 using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Storage.Redb.Schemas;
 using redb.Route.Llm.Telemetry;
+using redb.Route.RedbCore;
 using redb.Route.RedbCore.Extensions;
 
 namespace redb.Route.Llm.Storage.Redb;
 
 /// <summary>
 /// REDB-backed <see cref="IToolCacheStore"/>. Cache entries are keyed on the
-/// caller-supplied content hash stored in the indexed
-/// <c>_objects.value_string</c> column. TTL is honoured lazily — entries past
-/// expiry are dropped on read.
+/// caller-supplied content hash stored in <c>_objects.value_string</c> (partial
+/// index on PostgreSQL/SQLite; MSSQL cannot index NVARCHAR(MAX), lookups there
+/// scan the scheme's rows). The key also rides in <c>_objects._value_unique</c>,
+/// whose per-scheme unique index makes concurrent writers of one key converge
+/// on a single row. TTL is honoured lazily — entries past expiry are dropped on
+/// read.
 /// <para>
 /// Distinct from <see cref="RedbToolIdempotencyStore"/>: idempotency answers
 /// "have I already run this tool call (by tool_use_id)?", while this store
@@ -58,7 +63,7 @@ public sealed class RedbToolResultCache : IToolCacheStore
         var redb = Resolve(exchange);
 
         var row = await redb.Query<ToolCacheProps>()
-            .WhereRedb(o => o.ValueString == cacheKey)
+            .WhereRedb(o => o.ValueUnique == RedbUniqueKey.Normalize(cacheKey))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
 
@@ -97,7 +102,7 @@ public sealed class RedbToolResultCache : IToolCacheStore
         var redb = Resolve(exchange);
 
         var existing = await redb.Query<ToolCacheProps>()
-            .WhereRedb(o => o.ValueString == cacheKey)
+            .WhereRedb(o => o.ValueUnique == RedbUniqueKey.Normalize(cacheKey))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
 
@@ -106,9 +111,13 @@ public sealed class RedbToolResultCache : IToolCacheStore
 
         if (existing is null)
         {
+            // The cache key rides in _value_unique: of two concurrent SetAsync for one
+            // key the per-scheme unique index lets exactly one insert through — before,
+            // both inserted and readers picked an arbitrary (possibly stale) copy.
             var row = new RedbObject<ToolCacheProps>
             {
                 value_string = cacheKey,
+                ValueUnique = RedbUniqueKey.Normalize(cacheKey),
                 Props = new ToolCacheProps
                 {
                     OutputJson = outputJson,
@@ -116,7 +125,27 @@ public sealed class RedbToolResultCache : IToolCacheStore
                     ExpiresAtUtc = expiresAt
                 }
             };
-            await redb.SaveAsync(row).ConfigureAwait(false);
+            try
+            {
+                await redb.SaveAsync(row).ConfigureAwait(false);
+            }
+            catch (RedbUniqueViolationException)
+            {
+                // Lost the creation race — a cache Set is last-writer-wins, so write
+                // onto the winner's row, resolved by the key that collided.
+                var winnerKey = row.ValueUnique;
+                var winner = await redb.Query<ToolCacheProps>()
+                    .WhereRedb(o => o.ValueUnique == winnerKey)
+                    .FirstOrDefaultAsync()
+                    .ConfigureAwait(false);
+                if (winner is null) throw; // the key vanished again (evicted mid-race)
+
+                winner.Props.OutputJson = outputJson;
+                winner.Props.CreatedAtUtc = now;
+                winner.Props.ExpiresAtUtc = expiresAt;
+                winner.date_modify = now;
+                await redb.SaveAsync(winner).ConfigureAwait(false);
+            }
         }
         else
         {

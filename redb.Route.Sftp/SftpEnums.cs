@@ -40,12 +40,14 @@ public enum SftpMoveExistingStrategy
 /// </summary>
 public enum SftpSeparator
 {
-    /// <summary>Auto-detect (default: Unix forward-slash).</summary>
+    /// <summary>Default: joins with "/" and additionally normalizes backslashes in the inputs.</summary>
     Auto,
 
-    /// <summary>Unix forward-slash: /</summary>
-    Unix,
+    /// <summary>Strict Unix forward-slash: inputs are joined with "/" byte-for-byte.</summary>
+    Unix
 
-    /// <summary>Windows backslash: \ (rare for SFTP servers).</summary>
-    Windows
+    // No Windows member: the SFTP protocol defines "/" as the path separator (SSH_FXP requests
+    // carry canonical paths; servers on Windows accept "/" too). A backslash mode could never be
+    // honest - the jail check, mkdir splitting, and recursive listing all speak "/" - so it was
+    // removed the same way Binary/StepWise were (арка-ревью, H6).
 }

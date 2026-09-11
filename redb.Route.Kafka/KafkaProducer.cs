@@ -35,7 +35,7 @@ public sealed class KafkaProducer : ConnectableProducer
     /// <inheritdoc />
     protected override Task ConnectAsync(CancellationToken ct)
     {
-        var config = _options.BuildProducerConfig(_endpoint.ResolvedFactory);
+        var config = _options.BuildProducerConfig(_endpoint.ResolvedFactory, _endpoint.Uri.RawParameters);
 
         _producer = new ProducerBuilder<string, byte[]>(config)
             .SetValueSerializer(Serializers.ByteArray)
@@ -92,7 +92,7 @@ public sealed class KafkaProducer : ConnectableProducer
         if (_options.Transacted)
         {
             // Deferred transactional send — actual publish happens on commit
-            var action = new KafkaSendAction(_producer, _endpoint.TopicName, message,
+            var action = new KafkaSendAction(_producer, _endpoint, message,
                 _options.PartitionNumber, _options.RecordMetadata, exchange, Logger);
             RegisterTransactedAction(exchange, $"kafka-send-{Guid.NewGuid():N}", action);
         }
@@ -122,6 +122,10 @@ public sealed class KafkaProducer : ConnectableProducer
 
             Logger?.LogDebug("Kafka message sent: topic={Topic}, partition={Partition}, offset={Offset}",
                 result.Topic, result.Partition.Value, result.Offset.Value);
+
+            // Wire-level bytes are the connector's to record: the core's ToProcessor counts
+            // MessagesOut/Errors for a routed producer but has no idea of payload sizes (волна A5).
+            _endpoint.RecordBytesOut(message.Value.Length);
 
             if (_options.RecordMetadata)
                 AddDeliveryMetadata(exchange, result);
@@ -238,6 +242,7 @@ public sealed class KafkaProducer : ConnectableProducer
 internal sealed class KafkaSendAction : ITransactedAction
 {
     private readonly IProducer<string, byte[]> _producer;
+    private readonly KafkaEndpoint _endpoint;
     private readonly string _topicName;
     private readonly Message<string, byte[]> _message;
     private readonly int? _partition;
@@ -247,7 +252,7 @@ internal sealed class KafkaSendAction : ITransactedAction
 
     public KafkaSendAction(
         IProducer<string, byte[]> producer,
-        string topicName,
+        KafkaEndpoint endpoint,
         Message<string, byte[]> message,
         int? partition,
         bool recordMetadata,
@@ -255,7 +260,8 @@ internal sealed class KafkaSendAction : ITransactedAction
         ILogger? logger)
     {
         _producer = producer;
-        _topicName = topicName;
+        _endpoint = endpoint;
+        _topicName = endpoint.TopicName;
         _message = CloneMessage(message);
         _partition = partition;
         _recordMetadata = recordMetadata;
@@ -279,6 +285,8 @@ internal sealed class KafkaSendAction : ITransactedAction
 
         _logger?.LogDebug("Kafka transactional send committed: topic={Topic}, partition={Partition}, offset={Offset}",
             result.Topic, result.Partition.Value, result.Offset.Value);
+
+        _endpoint.RecordBytesOut(_message.Value.Length);
 
         if (_recordMetadata)
         {

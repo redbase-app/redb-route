@@ -53,12 +53,11 @@ internal sealed class SqsProducer : ConnectableProducer
             destination: _endpoint.QueueName,
             operation: "send");
 
+        // No RecordMessageOut: the core (ToProcessor / the template) owns it (ownership audit).
         if (_options.EnableBatch && exchange.In.Body is IEnumerable and not string and not byte[])
             await SendBatchAsync(exchange, ct).ConfigureAwait(false);
         else
             await SendSingleAsync(exchange, ct).ConfigureAwait(false);
-
-        _endpoint.RecordMessageOut();
     }
 
     private async Task SendSingleAsync(IExchange exchange, CancellationToken ct)

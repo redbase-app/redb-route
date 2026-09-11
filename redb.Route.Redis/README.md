@@ -68,3 +68,18 @@ From("direct://enqueue")
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new RedisConnectionFactory
+{
+    ConnectionString = "redis.internal:6379",
+    Password = secrets.RedisPassword,
+});
+// redis://cache?connectionFactory=prod
+```

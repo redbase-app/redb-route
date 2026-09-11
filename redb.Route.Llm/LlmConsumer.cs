@@ -41,6 +41,8 @@ public sealed class LlmConsumer : IConsumer
 
     private CancellationTokenSource? _cts;
     private Task? _loop;
+    // Single-threaded scheduler loop: marks a tick whose failure the core already counted.
+    private bool _tickFailedInPipeline;
 
     /// <summary>Creates a consumer.</summary>
     public LlmConsumer(LlmEndpoint endpoint, LlmEndpointOptions options, IProcessor processor)
@@ -110,27 +112,24 @@ public sealed class LlmConsumer : IConsumer
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch (Exception ex)
             {
-                _endpoint.RecordError();
+                // Ownership audit: a pipeline failure was already counted by the core's
+                // StatisticsProcessor; the consumer records only a tick that died BEFORE the
+                // exchange reached the pipeline (factory/engine/prompt resolution, the LLM call).
+                if (!_tickFailedInPipeline)
+                    _endpoint.RecordError();
                 Activity.Current?.AddTag("llm.consumer.error", ex.GetType().Name);
                 // Continue — one failed tick must not kill the consumer.
             }
         }
     }
 
-    private async Task FireOnceAsync(CancellationToken ct)
+    private Task FireOnceAsync(CancellationToken ct)
     {
-        var tickSw = Stopwatch.StartNew();
-        try
-        {
-            await FireOnceCoreAsync(ct).ConfigureAwait(false);
-            // Each scheduler tick produces exactly one downstream exchange.
-            _endpoint.RecordMessageOut();
-        }
-        finally
-        {
-            tickSw.Stop();
-            _endpoint.RecordProcessingTime(tickSw.Elapsed);
-        }
+        // No RecordMessageOut / RecordProcessingTime: the pipeline leg is wrapped by the core's
+        // StatisticsProcessor (MessagesIn, Errors, time), and MessagesOut is a producer-side
+        // counter a scheduler tick never is - self-recording doubled both (ownership audit).
+        _tickFailedInPipeline = false;
+        return FireOnceCoreAsync(ct);
     }
 
     private async Task FireOnceCoreAsync(CancellationToken ct)
@@ -198,10 +197,21 @@ public sealed class LlmConsumer : IConsumer
             exchange.Out.Headers[LlmHeaders.ModelId] = factory.ModelId;
             exchange.Out.Headers[LlmHeaders.TokensIn] = response.Usage.InputTokens;
             exchange.Out.Headers[LlmHeaders.TokensOut] = response.Usage.OutputTokens;
+            exchange.Out.Headers[LlmHeaders.CacheWriteTokens] = response.Usage.CacheCreationInputTokens;
+            exchange.Out.Headers[LlmHeaders.CacheReadTokens] = response.Usage.CacheReadInputTokens;
             exchange.Out.Headers[LlmHeaders.ToolIterations] = response.Iterations;
             exchange.Out.Headers[LlmHeaders.StopReason] = response.StopReason.ToString();
 
-            await _processor.Process(exchange, ct).ConfigureAwait(false);
+            try
+            {
+                await _processor.Process(exchange, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                // The core's StatisticsProcessor counted this one; the RunLoop catch must not.
+                _tickFailedInPipeline = true;
+                throw;
+            }
         }
         finally
         {

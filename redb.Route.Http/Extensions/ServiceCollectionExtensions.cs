@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.Http;
 
@@ -41,22 +41,14 @@ public static class ServiceCollectionExtensions
             return component;
         });
 
-        services.AddSingleton<IHttpComponentRegistrar>(sp =>
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteContextConfigurator((sp, context) =>
         {
-            var context = sp.GetRequiredService<IRouteContext>();
-
-            var httpComponent = sp.GetRequiredService<HttpComponent>();
-            context.AddComponent(httpComponent);
-
-            var httpsComponent = sp.GetRequiredService<HttpsComponent>();
-            context.AddComponent(httpsComponent);
-
-            return new HttpComponentRegistrar();
+            context.AddComponent(sp.GetRequiredService<HttpComponent>());
+            context.AddComponent(sp.GetRequiredService<HttpsComponent>());
         });
 
         return services;
     }
 }
-
-internal interface IHttpComponentRegistrar;
-internal sealed class HttpComponentRegistrar : IHttpComponentRegistrar;

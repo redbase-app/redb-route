@@ -54,6 +54,40 @@ From(TcpDsl.Listen("0.0.0.0:9443")
     .To("direct://secure-handler");
 ```
 
+A TLS **consumer** needs its certificate — from the endpoint or from a named
+`TcpConnectionFactory`, which is where the password belongs. It is loaded once when the listener
+starts: a missing file, a wrong password or no path at all fails the start with a message naming
+the listener, instead of killing every accepted connection one by one.
+
+A TLS **producer** needs no certificate of its own; `ssl=true` there means "speak TLS to the
+server", with `sslTargetHost` for SNI when the name differs from the host you dial. To reach a
+server behind a self-signed certificate (staging), say so out loud:
+
+```csharp
+.To(TcpDsl.Connect("staging:9443").Ssl().SslTargetHost("staging.internal").TrustAllCertificates())
+```
+
+It is never implied by anything else.
+
+For a server that requires mTLS, the producer presents a client certificate — a different thing
+from `sslCertPath`, which is the certificate a *consumer* serves:
+
+```csharp
+.To(TcpDsl.Connect("partner:9443").Ssl().ClientCert("/certs/client.pfx", "password"))
+```
+
+It is loaded once at start, so a reconnect does not re-read the PFX and a bad path or password is
+a start-time error. The **consumer** does not request client certificates
+(`AuthenticateAsServerAsync` with the server certificate alone), so mTLS here means "we present one
+to someone else", not "we demand one".
+
+### Bind address
+
+The consumer's host may be an IP, `0.0.0.0` for every interface, `localhost`, or a resolvable
+name; a name that resolves to nothing fails the start with a message naming it. Note that a
+`TcpListener` binds exactly one address, so `localhost` here means the **IPv4 loopback** — a client
+that dials `[::1]` explicitly needs `::1` in the URI.
+
 ## Fluent Builder API
 
 | Category | Methods |
@@ -62,7 +96,7 @@ From(TcpDsl.Listen("0.0.0.0:9443")
 | **Client** | `TcpDsl.Connect(hostPort)`, `.ConnectTimeout()`, `.Reconnect(interval, max)` |
 | **Framing** | `.TextLine()`, `.LengthPrefixed()`, `.Delimiter()`, `.Encoding()` |
 | **Socket** | `.KeepAlive()`, `.NoDelay()`, `.ReceiveBufferSize()`, `.SendBufferSize()` |
-| **TLS** | `.Ssl()`, `.SslCertPath()`, `.SslCertPassword()`, `.SslTargetHost()` |
+| **TLS** | `.Ssl()`, `.SslCertPath()`, `.SslCertPassword()`, `.SslTargetHost()`, `.TrustAllCertificates()`, `.ClientCert()` |
 
 ## Framing Modes
 
@@ -121,3 +155,19 @@ From("tcp://0.0.0.0:9443?textLine=true&ssl=true&sslCertPath=/certs/server.pfx&ss
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new TcpConnectionFactory
+{
+    Ssl = true,
+    SslCertPath = "/secrets/client.pfx",
+    SslCertPassword = secrets.CertPassword,
+});
+// tcp://gateway.internal:7000?connectionFactory=prod
+```

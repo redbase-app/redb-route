@@ -1,0 +1,1463 @@
+<xs:schema targetNamespace="urn:redb:route:1.0" elementFormDefault="qualified" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="urn:redb:route:1.0">
+  <xs:group name="step">
+    <xs:choice>
+      <xs:element ref="r:aggregate" />
+      <xs:element ref="r:beginRedbTransaction" />
+      <xs:element ref="r:beginTransaction" />
+      <xs:element ref="r:cache" />
+      <xs:element ref="r:choice" />
+      <xs:element ref="r:circuitBreaker" />
+      <xs:element ref="r:claimCheck" />
+      <xs:element ref="r:commitTransaction" />
+      <xs:element ref="r:controlBus" />
+      <xs:element ref="r:convertBody" />
+      <xs:element ref="r:debounce" />
+      <xs:element ref="r:delay" />
+      <xs:element ref="r:dynamicRouter" />
+      <xs:element ref="r:enrich" />
+      <xs:element ref="r:exceptionHandled" />
+      <xs:element ref="r:filter" />
+      <xs:element ref="r:idempotentConsumer" />
+      <xs:element ref="r:intercept" />
+      <xs:element ref="r:interceptFrom" />
+      <xs:element ref="r:interceptSendToEndpoint" />
+      <xs:element ref="r:loadBalance" />
+      <xs:element ref="r:log" />
+      <xs:element ref="r:loop" />
+      <xs:element ref="r:marshal" />
+      <xs:element ref="r:metered" />
+      <xs:element ref="r:multicast" />
+      <xs:element ref="r:normalize" />
+      <xs:element ref="r:ofType" />
+      <xs:element ref="r:onCompletion" />
+      <xs:element ref="r:onException" />
+      <xs:element ref="r:payload" />
+      <xs:element ref="r:pollEnrich" />
+      <xs:element ref="r:recipientList" />
+      <xs:element ref="r:redbDelete" />
+      <xs:element ref="r:redbGet" />
+      <xs:element ref="r:redbQuery" />
+      <xs:element ref="r:redbSave" />
+      <xs:element ref="r:removeBody" />
+      <xs:element ref="r:removeHeader" />
+      <xs:element ref="r:removeHeaders" />
+      <xs:element ref="r:removeProperties" />
+      <xs:element ref="r:removeProperty" />
+      <xs:element ref="r:replayable" />
+      <xs:element ref="r:resequence" />
+      <xs:element ref="r:rollbackAll" />
+      <xs:element ref="r:rollbackTransaction" />
+      <xs:element ref="r:routePolicy" />
+      <xs:element ref="r:routingSlip" />
+      <xs:element ref="r:saga" />
+      <xs:element ref="r:sample" />
+      <xs:element ref="r:scatterGather" />
+      <xs:element ref="r:setBody" />
+      <xs:element ref="r:setHeader" />
+      <xs:element ref="r:setHeaders" />
+      <xs:element ref="r:setProperty" />
+      <xs:element ref="r:sort" />
+      <xs:element ref="r:split" />
+      <xs:element ref="r:stop" />
+      <xs:element ref="r:streamCaching" />
+      <xs:element ref="r:threads" />
+      <xs:element ref="r:throttle" />
+      <xs:element ref="r:throwException" />
+      <xs:element ref="r:to" />
+      <xs:element ref="r:toD" />
+      <xs:element ref="r:traced" />
+      <xs:element ref="r:transaction" />
+      <xs:element ref="r:transform" />
+      <xs:element ref="r:transformJson" />
+      <xs:element ref="r:tryCatch" />
+      <xs:element ref="r:unmarshal" />
+      <xs:element ref="r:validate" />
+      <xs:element ref="r:validateJsonSchema" />
+      <xs:element ref="r:validateXsd" />
+      <xs:element ref="r:wireTap" />
+      <xs:element ref="r:xslt" />
+    </xs:choice>
+  </xs:group>
+  <xs:element name="aggregate">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="correlation" use="required" type="xs:string" />
+      <xs:attribute name="strategy" use="required" type="xs:string" />
+      <xs:attribute name="completion" type="xs:string" />
+      <xs:attribute name="completionSize" type="xs:int" />
+      <xs:attribute name="completionTimeout" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="beginRedbTransaction">
+    <xs:complexType>
+      <xs:attribute name="storage" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="beginTransaction">
+    <xs:complexType>
+      <xs:attribute name="policy">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="default" />
+            <xs:enumeration value="requiresNew" />
+            <xs:enumeration value="suppress" />
+            <xs:enumeration value="mandatory" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="cache">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="key" type="xs:string" />
+      <xs:attribute name="keyFromBody" type="xs:boolean" />
+      <xs:attribute name="ttl" type="xs:string" />
+      <xs:attribute name="sliding" type="xs:string" />
+      <xs:attribute name="region" type="xs:string" />
+      <xs:attribute name="cacheHeaders" type="xs:boolean" />
+      <xs:attribute name="provider">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="memory" />
+            <xs:enumeration value="distributed" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="choice">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="when">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="expr" type="xs:string" />
+            <xs:attribute name="predicate" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="otherwise">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="circuitBreaker">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="fallback">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="failureThreshold" type="xs:int" />
+      <xs:attribute name="resetTimeout" type="xs:string" />
+      <xs:attribute name="halfOpenMaxCalls" type="xs:int" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="claimCheck">
+    <xs:complexType>
+      <xs:attribute name="operation" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Set" />
+            <xs:enumeration value="Get" />
+            <xs:enumeration value="GetAndRemove" />
+            <xs:enumeration value="Push" />
+            <xs:enumeration value="Pop" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="key" type="xs:string" />
+      <xs:attribute name="ttl" type="xs:string" />
+      <xs:attribute name="repository" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="commitTransaction">
+    <xs:complexType>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="controlBus">
+    <xs:complexType>
+      <xs:attribute name="action" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Start" />
+            <xs:enumeration value="Stop" />
+            <xs:enumeration value="Suspend" />
+            <xs:enumeration value="Resume" />
+            <xs:enumeration value="Restart" />
+            <xs:enumeration value="Status" />
+            <xs:enumeration value="Stats" />
+            <xs:enumeration value="Fail" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="routeId" use="required" type="xs:string" />
+      <xs:attribute name="async" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="convertBody">
+    <xs:complexType>
+      <xs:attribute name="type" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="debounce">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="key" use="required" type="xs:string" />
+      <xs:attribute name="quietPeriod" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="delay">
+    <xs:complexType>
+      <xs:attribute name="duration" type="xs:string" />
+      <xs:attribute name="expr" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="dynamicRouter">
+    <xs:complexType>
+      <xs:attribute name="expr" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="enrich">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:any namespace="##targetNamespace" processContents="lax" />
+      </xs:choice>
+      <xs:attribute name="uri" type="xs:string" />
+      <xs:attribute name="strategy" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="exceptionHandled">
+    <xs:complexType>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="filter">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="expr" type="xs:string" />
+      <xs:attribute name="predicate" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="idempotentConsumer">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="key" use="required" type="xs:string" />
+      <xs:attribute name="repository" use="required" type="xs:string" />
+      <xs:attribute name="skipDuplicate" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="intercept">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="when">
+          <xs:complexType>
+            <xs:attribute name="expr" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="interceptFrom">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="when">
+          <xs:complexType>
+            <xs:attribute name="expr" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="uri" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="interceptSendToEndpoint">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="when">
+          <xs:complexType>
+            <xs:attribute name="expr" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="uri" use="required" type="xs:string" />
+      <xs:attribute name="skipSendToOriginalEndpoint" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="loadBalance">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="endpoint">
+          <xs:complexType>
+            <xs:attribute name="uri" use="required" type="xs:string" />
+            <xs:attribute name="weight" type="xs:int" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="strategy" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="roundRobin" />
+            <xs:enumeration value="random" />
+            <xs:enumeration value="failover" />
+            <xs:enumeration value="sticky" />
+            <xs:enumeration value="weighted" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="key" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="log">
+    <xs:complexType mixed="true">
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="message">
+          <xs:complexType mixed="true">
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="header">
+          <xs:complexType>
+            <xs:attribute name="name" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="property">
+          <xs:complexType>
+            <xs:attribute name="name" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="level">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Trace" />
+            <xs:enumeration value="Debug" />
+            <xs:enumeration value="Information" />
+            <xs:enumeration value="Warning" />
+            <xs:enumeration value="Error" />
+            <xs:enumeration value="Critical" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="showRouteId" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="loop">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="count" type="xs:int" />
+      <xs:attribute name="expr" type="xs:string" />
+      <xs:attribute name="while" type="xs:string" />
+      <xs:attribute name="copy" type="xs:boolean" />
+      <xs:attribute name="shareScope" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="marshal">
+    <xs:complexType>
+      <xs:attribute name="format" type="xs:string" />
+      <xs:attribute name="type" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="metered">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="name" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="multicast">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="parallel" type="xs:boolean" />
+      <xs:attribute name="maxParallelism" type="xs:int" />
+      <xs:attribute name="stopOnException" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="normalize">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="when">
+          <xs:complexType>
+            <xs:attribute name="expr" use="required" type="xs:string" />
+            <xs:attribute name="transform" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="whenContentType">
+          <xs:complexType>
+            <xs:attribute name="type" use="required" type="xs:string" />
+            <xs:attribute name="transform" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="otherwise">
+          <xs:complexType>
+            <xs:attribute name="transform" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="ofType">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="type" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="onCompletion">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="when">
+          <xs:complexType>
+            <xs:attribute name="expr" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="onCompleteOnly" type="xs:boolean" />
+      <xs:attribute name="onFailureOnly" type="xs:boolean" />
+      <xs:attribute name="modeBeforeConsumer" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="onException">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="exceptions" use="required" type="xs:string" />
+      <xs:attribute name="handled" type="xs:boolean" />
+      <xs:attribute name="maximumRedeliveries" type="xs:int" />
+      <xs:attribute name="redeliveryDelay" type="xs:string" />
+      <xs:attribute name="exponentialBackOff" type="xs:boolean" />
+      <xs:attribute name="backOffMultiplier" type="xs:double" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="payload">
+    <xs:complexType mixed="true">
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="arg">
+          <xs:complexType>
+            <xs:attribute name="name" use="required" type="xs:string" />
+            <xs:attribute name="value" type="xs:string" />
+            <xs:attribute name="expr" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="template" type="xs:string" />
+      <xs:attribute name="mediaType" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="json" />
+            <xs:enumeration value="xml" />
+            <xs:enumeration value="text" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="target" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="pollEnrich">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:any namespace="##targetNamespace" processContents="lax" />
+      </xs:choice>
+      <xs:attribute name="uri" type="xs:string" />
+      <xs:attribute name="strategy" type="xs:string" />
+      <xs:attribute name="timeout" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="recipientList">
+    <xs:complexType>
+      <xs:attribute name="expr" use="required" type="xs:string" />
+      <xs:attribute name="delimiter" type="xs:string" />
+      <xs:attribute name="parallel" type="xs:boolean" />
+      <xs:attribute name="stopOnException" type="xs:boolean" />
+      <xs:attribute name="strategy" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="redb">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="syncScheme">
+          <xs:complexType>
+            <xs:attribute name="type" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="idempotentRepository">
+          <xs:complexType>
+            <xs:attribute name="name" use="required" type="xs:string" />
+            <xs:attribute name="ttl" type="xs:string" />
+            <xs:attribute name="processorName" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="storage" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="redbDelete">
+    <xs:complexType>
+      <xs:attribute name="id" use="required" type="xs:string" />
+      <xs:attribute name="storage" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="redbGet">
+    <xs:complexType>
+      <xs:attribute name="id" use="required" type="xs:string" />
+      <xs:attribute name="type" type="xs:string" />
+      <xs:attribute name="depth" type="xs:int" />
+      <xs:attribute name="storage" type="xs:string" />
+      <xs:attribute name="target" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="redbQuery">
+    <xs:complexType mixed="true">
+      <xs:attribute name="type" use="required" type="xs:string" />
+      <xs:attribute name="where" type="xs:string" />
+      <xs:attribute name="orderBy" type="xs:string" />
+      <xs:attribute name="descending" type="xs:boolean" />
+      <xs:attribute name="take" type="xs:int" />
+      <xs:attribute name="skip" type="xs:int" />
+      <xs:attribute name="filter" type="xs:string" />
+      <xs:attribute name="storage" type="xs:string" />
+      <xs:attribute name="target" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="redbSave">
+    <xs:complexType>
+      <xs:attribute name="type" type="xs:string" />
+      <xs:attribute name="byUnique" type="xs:boolean" />
+      <xs:attribute name="storage" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="removeBody">
+    <xs:complexType>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="removeHeader">
+    <xs:complexType>
+      <xs:attribute name="name" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="removeHeaders">
+    <xs:complexType>
+      <xs:attribute name="pattern" use="required" type="xs:string" />
+      <xs:attribute name="except" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="removeProperties">
+    <xs:complexType>
+      <xs:attribute name="pattern" use="required" type="xs:string" />
+      <xs:attribute name="except" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="removeProperty">
+    <xs:complexType>
+      <xs:attribute name="name" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="replayable">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="name" use="required" type="xs:string" />
+      <xs:attribute name="exposed" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="resequence">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="key" use="required" type="xs:string" />
+      <xs:attribute name="batchSize" type="xs:int" />
+      <xs:attribute name="timeout" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="rest">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="get">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="post">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="put">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="delete">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="patch">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="head">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="path" use="required" type="xs:string" />
+      <xs:attribute name="host" type="xs:string" />
+      <xs:attribute name="port" type="xs:int" />
+      <xs:attribute name="bindingMode">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="off" />
+            <xs:enumeration value="json" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="consumes" type="xs:string" />
+      <xs:attribute name="produces" type="xs:string" />
+      <xs:attribute name="openApi" type="xs:boolean" />
+      <xs:attribute name="openApiPath" type="xs:string" />
+      <xs:attribute name="title" type="xs:string" />
+      <xs:attribute name="version" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="rollbackAll">
+    <xs:complexType>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="rollbackTransaction">
+    <xs:complexType>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="routePolicy">
+    <xs:complexType>
+      <xs:attribute name="ref" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="routingSlip">
+    <xs:complexType>
+      <xs:attribute name="expr" use="required" type="xs:string" />
+      <xs:attribute name="delimiter" type="xs:string" />
+      <xs:attribute name="ignoreInvalidEndpoints" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="saga">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="step">
+          <xs:complexType>
+            <xs:attribute name="processor" use="required" type="xs:string" />
+            <xs:attribute name="compensate" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="sample">
+    <xs:complexType>
+      <xs:attribute name="messageFrequency" type="xs:long" />
+      <xs:attribute name="period" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="scatterGather">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="recipient">
+          <xs:complexType>
+            <xs:attribute name="uri" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="timeout" type="xs:string" />
+      <xs:attribute name="parallel" type="xs:boolean" />
+      <xs:attribute name="maxDop" type="xs:int" />
+      <xs:attribute name="stopOnException" type="xs:boolean" />
+      <xs:attribute name="strategy" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="setBody">
+    <xs:complexType>
+      <xs:attribute name="value" type="xs:string" />
+      <xs:attribute name="expr" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="setHeader">
+    <xs:complexType>
+      <xs:attribute name="name" use="required" type="xs:string" />
+      <xs:attribute name="value" type="xs:string" />
+      <xs:attribute name="expr" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="setHeaders">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="header">
+          <xs:complexType>
+            <xs:attribute name="name" use="required" type="xs:string" />
+            <xs:attribute name="value" type="xs:string" />
+            <xs:attribute name="expr" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="setProperty">
+    <xs:complexType>
+      <xs:attribute name="name" use="required" type="xs:string" />
+      <xs:attribute name="value" type="xs:string" />
+      <xs:attribute name="expr" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="sort">
+    <xs:complexType>
+      <xs:attribute name="expr" use="required" type="xs:string" />
+      <xs:attribute name="by" type="xs:string" />
+      <xs:attribute name="descending" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="split">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="tokenizeLines">
+          <xs:complexType>
+            <xs:attribute name="separator" type="xs:string" />
+            <xs:attribute name="skipEmpty" type="xs:boolean" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="tokenizeXml">
+          <xs:complexType>
+            <xs:attribute name="element" use="required" type="xs:string" />
+            <xs:attribute name="inheritNamespaceFrom" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="tokenizeJsonArray">
+          <xs:complexType>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="expr" type="xs:string" />
+      <xs:attribute name="parallel" type="xs:boolean" />
+      <xs:attribute name="maxParallelism" type="xs:int" />
+      <xs:attribute name="stopOnException" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="stop">
+    <xs:complexType>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="streamCaching">
+    <xs:complexType>
+      <xs:attribute name="spoolThreshold" type="xs:long" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="threads">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="poolSize" use="required" type="xs:int" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="throttle">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="maxPerPeriod" use="required" type="xs:string" />
+      <xs:attribute name="period" type="xs:string" />
+      <xs:attribute name="key" type="xs:string" />
+      <xs:attribute name="rejectOnOverflow" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="throwException">
+    <xs:complexType>
+      <xs:attribute name="type" use="required" type="xs:string" />
+      <xs:attribute name="message" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="to">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:any namespace="##targetNamespace" processContents="lax" />
+      </xs:choice>
+      <xs:attribute name="uri" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="toD">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:any namespace="##targetNamespace" processContents="lax" />
+      </xs:choice>
+      <xs:attribute name="uri" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="traced">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="name" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="transaction">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="policy">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="default" />
+            <xs:enumeration value="requiresNew" />
+            <xs:enumeration value="suppress" />
+            <xs:enumeration value="mandatory" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="transform">
+    <xs:complexType>
+      <xs:attribute name="expr" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="transformJson">
+    <xs:complexType mixed="true">
+      <xs:attribute name="spec" type="xs:string" />
+      <xs:attribute name="output">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="string" />
+            <xs:enumeration value="node" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="tryCatch">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="try">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="catch">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="exceptions" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="finally">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="unmarshal">
+    <xs:complexType>
+      <xs:attribute name="format" type="xs:string" />
+      <xs:attribute name="type" type="xs:string" />
+      <xs:attribute name="target" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="validate">
+    <xs:complexType>
+      <xs:attribute name="expr" use="required" type="xs:string" />
+      <xs:attribute name="message" type="xs:string" />
+      <xs:attribute name="throwOnFailure" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="validateJsonSchema">
+    <xs:complexType mixed="true">
+      <xs:attribute name="file" type="xs:string" />
+      <xs:attribute name="throwOnFailure" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="validateXsd">
+    <xs:complexType mixed="true">
+      <xs:attribute name="file" type="xs:string" />
+      <xs:attribute name="targetNamespace" type="xs:string" />
+      <xs:attribute name="throwOnFailure" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="wireTap">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:any namespace="##targetNamespace" processContents="lax" />
+      </xs:choice>
+      <xs:attribute name="uri" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="xslt">
+    <xs:complexType mixed="true">
+      <xs:attribute name="file" type="xs:string" />
+      <xs:attribute name="output">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="String" />
+            <xs:enumeration value="Bytes" />
+            <xs:enumeration value="Dom" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="failOnNullBody" type="xs:boolean" />
+      <xs:attribute name="allowTemplateFromHeader" type="xs:boolean" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="bean">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="property">
+          <xs:complexType>
+            <xs:attribute name="key" use="required" type="xs:string" />
+            <xs:attribute name="value" use="required" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="constructorArg">
+          <xs:complexType>
+            <xs:choice minOccurs="0">
+              <xs:element ref="r:bean" />
+            </xs:choice>
+            <xs:attribute name="value" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="name" type="xs:string" />
+      <xs:attribute name="type" use="required" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="route">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="from">
+          <xs:complexType>
+            <xs:choice minOccurs="0">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="uri" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:group ref="r:step" minOccurs="0" maxOccurs="unbounded" />
+      </xs:sequence>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:attribute name="autoStart" type="xs:boolean" />
+      <xs:attribute name="cluster" type="xs:boolean" />
+      <xs:attribute name="messageHistory" type="xs:boolean" />
+      <xs:attribute name="processingTimeout" type="xs:string" />
+      <xs:attribute name="routePolicy" type="xs:string" />
+      <xs:attribute name="enabled" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="routes">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element ref="r:bean" />
+        <xs:element ref="r:route" />
+        <xs:element ref="r:onException" />
+        <xs:element ref="r:intercept" />
+        <xs:element ref="r:interceptFrom" />
+        <xs:element ref="r:interceptSendToEndpoint" />
+        <xs:element ref="r:onCompletion" />
+        <xs:element ref="r:rest" />
+      </xs:choice>
+      <xs:attribute name="version" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="context">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="components">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="component" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:attribute name="type" use="required" type="xs:string" />
+                  <xs:anyAttribute namespace="##other" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element ref="r:bean" />
+        <xs:element name="onInit">
+          <xs:complexType>
+            <xs:group ref="r:step" minOccurs="0" maxOccurs="unbounded" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element ref="r:redb" />
+      </xs:choice>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

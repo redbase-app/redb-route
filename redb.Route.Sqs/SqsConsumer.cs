@@ -52,8 +52,8 @@ internal sealed class SqsConsumer : DrainableConsumer
     protected override Task RunAsync(CancellationToken pollCt, CancellationToken processingCt)
     {
         // N competing receive loops — the SQS-native concurrency model (multiple receivers on one queue).
-        var workers = new Task[_options.ConcurrentConsumers];
-        for (var i = 0; i < _options.ConcurrentConsumers; i++)
+        var workers = new Task[_options.ResolvedConcurrentConsumers];
+        for (var i = 0; i < _options.ResolvedConcurrentConsumers; i++)
             workers[i] = Task.Run(() => WorkerLoop(pollCt, processingCt), CancellationToken.None);
         return Task.WhenAll(workers);
     }
@@ -132,7 +132,7 @@ internal sealed class SqsConsumer : DrainableConsumer
 
             heartbeat = StartVisibilityHeartbeat(msg.ReceiptHandle, processingCt);
 
-            _endpoint.RecordMessageIn();
+            // No RecordMessageIn: the core's StatisticsProcessor around From() owns it (ownership audit).
             await Processor.Process(exchange, processingCt).ConfigureAwait(false);
 
             // Stop the heartbeat BEFORE acknowledging so it can never re-hide a message that is about
@@ -158,7 +158,8 @@ internal sealed class SqsConsumer : DrainableConsumer
         catch (Exception ex)
         {
             // Any other failure (incl. a downstream TaskCanceledException that is NOT our shutdown token).
-            _endpoint.RecordError();
+            // No RecordError: the pipeline already counted it (StatisticsProcessor); this catch only
+            // logs and restores visibility (ownership audit).
             Logger?.LogError(ex, "SQS message processing failed on queue {Queue}, messageId={MessageId}",
                 _endpoint.QueueName, msg.MessageId);
             if (!_options.Transacted && _options.ResetVisibilityOnFailure)

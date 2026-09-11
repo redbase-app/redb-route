@@ -32,9 +32,16 @@ public sealed class XsltComponent : ComponentBase
         ArgumentNullException.ThrowIfNull(uri);
         var options = new XsltEndpointOptions();
         options.BindFromUri(uri.RawParameters);
-        options.StylesheetPath = uri.Path;
+        // Route-XML Ф1.4: the stylesheet path resolves through the context's resource resolver
+        // (absolute → ResourceRoot → AppContext.BaseDirectory → working directory), so a stylesheet
+        // inside an unpacked package is found wherever the worker process happens to run from.
+        options.StylesheetPath = string.IsNullOrWhiteSpace(uri.Path)
+            ? uri.Path
+            : ResourceResolution.Resolve(Context, uri.Path, "XSLT stylesheet");
         options.Validate();
-        return new XsltEndpoint(uri, this, options);
+        // Resolved here, where the component still has its context: the endpoint compiles the
+        // stylesheet in its constructor and would otherwise have no way to ask.
+        return new XsltEndpoint(uri, this, options, Context.GetXsltEngineFactory());
     }
 }
 
@@ -74,18 +81,24 @@ public sealed class XsltEndpoint : EndpointBase<XsltEndpointOptions>
 {
     private readonly XsltProcessor _processor;
 
-    internal XsltEndpoint(EndpointUri uri, XsltComponent component, XsltEndpointOptions options)
+    internal XsltEndpoint(
+        EndpointUri uri,
+        XsltComponent component,
+        XsltEndpointOptions options,
+        IXsltEngineFactory engines)
         : base(uri, component, options)
     {
+        ArgumentNullException.ThrowIfNull(engines);
+
         // Reuse XsltProcessor so the component gets parameters + dynamic-from-header behaviour for free.
         // The stylesheet is compiled once when the endpoint is created (Camel contentCache=true).
         _processor = new XsltProcessor(
-            XslCompiledTransformEngine.FromFile(options.StylesheetPath),
+            engines.FromFile(options.StylesheetPath),
             options.Output, options.FailOnNullBody,
             passHeadersAsParameters: true,
             allowTemplateFromHeader: options.AllowTemplateFromHeader,
-            fileEngineFactory: XslCompiledTransformEngine.FromFile,
-            contentEngineFactory: XslCompiledTransformEngine.FromContent);
+            fileEngineFactory: engines.FromFile,
+            contentEngineFactory: engines.FromContent);
     }
 
     internal XsltProcessor Processor => _processor;

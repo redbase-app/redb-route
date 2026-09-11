@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using redb.Route.Abstractions;
 using redb.Route.Core;
@@ -101,39 +102,67 @@ public class HttpControllerDispatcherResponseMetaTests
 
     // ── Exception unwrap: TIE only, never blind InnerException ───────────
 
+    // Which exception the dispatcher selects is still the subject here; only the place to observe it
+    // moved. Since BR-4 the response carries a generic sentence, and the exception goes to the log —
+    // so the log is where "the right exception was picked" is now read.
+
     [Fact]
     public async Task Sync_Exception_Is_Unwrapped_From_TargetInvocationException()
     {
-        var registry = new ControllerRegistry();
-        registry.RegisterController(typeof(FacadeResponseMetaController));
-        var dispatcher = new HttpControllerDispatcher(registry, new RouteContext());
-
-        var exchange = CreateHttpExchange("POST", "/facade/sync-throws");
-        await dispatcher.Process(exchange);
+        var (exchange, logged) = await DispatchAndCapture("/facade/sync-throws");
 
         exchange.Out!.GetHeader<int>("redbHttp.ResponseCode").Should().Be(500);
+        logged!.Message.Should().Be("sync-level error");
+
         var json = System.Text.Encoding.UTF8.GetString((byte[])exchange.Out!.Body!);
-        using var doc = JsonDocument.Parse(json);
-        doc.RootElement.GetProperty("message").GetString().Should().Be("sync-level error");
+        json.Should().NotContain("sync-level error", "the caller gets a generic message (BR-4)");
     }
 
     [Fact]
     public async Task Async_Exception_Is_NOT_Unwrapped_Past_Its_InnerException()
     {
-        var registry = new ControllerRegistry();
-        registry.RegisterController(typeof(FacadeResponseMetaController));
-        var dispatcher = new HttpControllerDispatcher(registry, new RouteContext());
-
-        var exchange = CreateHttpExchange("POST", "/facade/async-throws-nested");
-        await dispatcher.Process(exchange);
+        var (exchange, logged) = await DispatchAndCapture("/facade/async-throws-nested");
 
         exchange.Out!.GetHeader<int>("redbHttp.ResponseCode").Should().Be(500);
-        var json = System.Text.Encoding.UTF8.GetString((byte[])exchange.Out!.Body!);
-        using var doc = JsonDocument.Parse(json);
 
         // Regression: the old `ex.InnerException ?? ex` would have surfaced the SocketException
         // (connection refused) instead of the real domain-level InvalidOperationException.
         // Async path: real exception is ex; InnerException is NOT unwrapped.
-        doc.RootElement.GetProperty("message").GetString().Should().Be("outer-real-error");
+        logged!.Message.Should().Be("outer-real-error");
+    }
+
+    /// <summary>Dispatches a POST and returns the exchange together with the exception the dispatcher logged.</summary>
+    private static async Task<(IExchange Exchange, Exception? Logged)> DispatchAndCapture(string path)
+    {
+        var capture = new ExceptionCapturingProvider();
+        using var factory = LoggerFactory.Create(b => b.AddProvider(capture));
+
+        var registry = new ControllerRegistry();
+        registry.RegisterController(typeof(FacadeResponseMetaController));
+        await using var context = new RouteContext(loggerFactory: factory);
+        var dispatcher = new HttpControllerDispatcher(registry, context);
+
+        var exchange = CreateHttpExchange("POST", path);
+        await dispatcher.Process(exchange);
+        return (exchange, capture.Exceptions.SingleOrDefault());
+    }
+
+    private sealed class ExceptionCapturingProvider : ILoggerProvider
+    {
+        public List<Exception> Exceptions { get; } = [];
+
+        public ILogger CreateLogger(string categoryName) => new Sink(this);
+        public void Dispose() { }
+
+        private sealed class Sink(ExceptionCapturingProvider owner) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex, Func<TState, Exception?, string> formatter)
+            {
+                if (ex is not null) lock (owner.Exceptions) owner.Exceptions.Add(ex);
+            }
+        }
     }
 }

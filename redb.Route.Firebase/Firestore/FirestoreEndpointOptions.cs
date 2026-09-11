@@ -16,6 +16,9 @@ public sealed class FirestoreEndpointOptions : EndpointOptions
     /// <summary>Firebase/GCP project ID.</summary>
     public string? ProjectId { get; set; }
 
+    /// <summary>Firestore database id for multi-database projects (default: <c>(default)</c>).</summary>
+    public string? DatabaseId { get; set; }
+
     /// <summary>Named <see cref="IFirebaseCredentialProvider"/> reference from the registry.</summary>
     public string? ConnectionFactory { get; set; }
 
@@ -43,20 +46,29 @@ public sealed class FirestoreEndpointOptions : EndpointOptions
     /// <summary>Pagination offset.</summary>
     public int? Offset { get; set; }
 
-    // ── Set/Update ──
+    // ── Set/Update/BatchWrite ──
 
     /// <summary>Merge fields on Set instead of overwriting the entire document.</summary>
     public bool Merge { get; set; }
+
+    /// <summary>
+    /// BatchWrite: take the document id from this field of each item (the field itself is
+    /// not written to the document). Without it every item gets an auto-generated id.
+    /// </summary>
+    public string? DocumentIdField { get; set; }
 
     // ── Consumer: Realtime Listener ──
 
     /// <summary>Use snapshot listener for realtime updates (default for consumer).</summary>
     public bool Realtime { get; set; } = true;
 
-    /// <summary>Emit on metadata-only changes (e.g. pending writes).</summary>
-    public bool IncludeMetadataChanges { get; set; }
+    /// <summary>
+    /// Maximum number of document changes processed in parallel within one snapshot
+    /// (realtime mode). Default: 16.
+    /// </summary>
+    public int MaxConcurrency { get; set; } = 16;
 
-    // ── Consumer: Polling fallback ──
+    // ── Consumer: Polling (Realtime=false) ──
 
     /// <summary>Poll interval (ms) for non-realtime mode. Default: 5000.</summary>
     public int Delay { get; set; } = 5000;
@@ -81,6 +93,9 @@ public sealed class FirestoreEndpointOptions : EndpointOptions
 
         if (Delay < 100)
             throw new ArgumentOutOfRangeException(nameof(Delay), "Delay must be >= 100ms");
+
+        if (MaxConcurrency < 1)
+            throw new ArgumentOutOfRangeException(nameof(MaxConcurrency), "MaxConcurrency must be >= 1");
 
         if (Limit is not null && Limit < 1)
             throw new ArgumentOutOfRangeException(nameof(Limit), "Limit must be >= 1");

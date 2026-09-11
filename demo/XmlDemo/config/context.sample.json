@@ -1,0 +1,19 @@
+{
+  "//": [
+    "L3 deploy sample — copy as context.json NEXT TO the package on the host; never commit real secrets here.",
+    "Merged configuration, later layers win:",
+    "  L1 host appsettings: Contexts default section",
+    "  L2 host appsettings: this context's section",
+    "  L3 this file:        Contexts.default + Contexts.xmldemo",
+    "  L4 in-package:       ContextName + AutoStart only (module identity)",
+    "  L5 Override:         environment variables (secrets live here)",
+    "Every {{key}} without a {{key:default}} in the XML must receive a value from",
+    "one of these layers; `redb-route-xml pack` lists them in manifest.json",
+    "under RequiredConfigKeys, and the module fails fast at init when one is missing."
+  ],
+  "Contexts": {
+    "default": {},
+    "xmldemo": {
+    }
+  }
+}

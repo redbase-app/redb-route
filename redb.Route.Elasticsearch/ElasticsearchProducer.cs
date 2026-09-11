@@ -139,7 +139,7 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
         exchange.In.Headers[ElasticsearchHeaders.Result] = response.Result.ToString();
         exchange.In.Headers[ElasticsearchHeaders.SequenceNumber] = response.SeqNo;
         exchange.In.Headers[ElasticsearchHeaders.PrimaryTerm] = response.PrimaryTerm;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -182,7 +182,7 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
         if (hasErrors)
             exchange.In.Headers[ElasticsearchHeaders.BulkErrorItems] = JsonSerializer.Serialize(errorDetails);
 
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -209,7 +209,7 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
         exchange.Out = new Message { Body = documents, ContentType = "application/json" };
         exchange.Out.Headers[ElasticsearchHeaders.TotalHits] = response.Total;
         exchange.Pattern = ExchangePattern.InOut;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -241,7 +241,7 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
         }
 
         exchange.Pattern = ExchangePattern.InOut;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -266,7 +266,7 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
 
         exchange.In.Headers[ElasticsearchHeaders.Result] = response.Result.ToString();
         exchange.In.Headers[ElasticsearchHeaders.Version] = response.Version;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -287,7 +287,7 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
         ValidateResponse(response, "Delete");
 
         exchange.In.Headers[ElasticsearchHeaders.Result] = response.Result.ToString();
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -309,7 +309,7 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
 
         exchange.Out = new Message { Body = response.Count };
         exchange.Pattern = ExchangePattern.InOut;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -325,7 +325,7 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
 
         exchange.Out = new Message { Body = response.Exists };
         exchange.Pattern = ExchangePattern.InOut;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -436,7 +436,7 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
         exchange.Out.Headers[ElasticsearchHeaders.MultiSearchTotalHits] = totalHitsList.ToArray();
         exchange.Out.Headers[ElasticsearchHeaders.MultiSearchHasErrors] = hasErrors;
         exchange.Pattern = ExchangePattern.InOut;
-        _endpoint.RecordMessageOut();
+        // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
     }
 
     // ═══════════════════════════════════════════════════════════════════

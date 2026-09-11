@@ -6,12 +6,12 @@ using redb.Route.Llm.Storage.Redb;
 namespace redb.Route.Tests.Llm.Storage;
 
 /// <summary>Integration tests for <see cref="RedbApprovalStore"/>.</summary>
-[Collection("PostgresPro")]
+[Collection("StoragePro")]
 public sealed class RedbApprovalStoreTests
 {
-    private readonly PostgresProFixture _fx;
+    private readonly StorageProFixture _fx;
 
-    public RedbApprovalStoreTests(PostgresProFixture fx) => _fx = fx;
+    public RedbApprovalStoreTests(StorageProFixture fx) => _fx = fx;
 
     private static ApprovalRequest MakeRequest(string convId, string toolUseId, string toolName = "delete_user")
         => new()

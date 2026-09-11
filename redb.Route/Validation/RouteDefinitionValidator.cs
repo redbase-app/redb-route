@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using redb.Route.Abstractions;
 using redb.Route.Definitions;
@@ -27,7 +28,8 @@ internal static class RouteDefinitionValidator
         var errors = new List<string>();
         var warnings = new List<string>();
         if (definition is IProcessorDefinition root)
-            ValidateTree(root, errors, warnings, new List<IProcessorDefinition>());
+            ValidateTree(root, errors, warnings, new List<IProcessorDefinition>(),
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
         if (errors.Count > 0)
             throw new RouteValidationException(definition.GetRouteId() ?? "<unnamed>", errors);
@@ -39,8 +41,14 @@ internal static class RouteDefinitionValidator
         IProcessorDefinition node,
         List<string> errors,
         List<string> warnings,
-        List<IProcessorDefinition> enclosingScopes)
+        List<IProcessorDefinition> enclosingScopes,
+        HashSet<string> stepIds)
     {
+        // 0. Step ids must be unique within the route: WeaveById resolves them case-insensitively,
+        //    and a message-history node id shared by two steps makes traces unattributable.
+        if (node is ProcessorDefinition { StepId: { } stepId } && !stepIds.Add(stepId))
+            errors.Add($"Duplicate step id '{stepId}': Id(\"...\") must be unique within a route.");
+
         // 1. Per-node self-validation.
         switch (node)
         {
@@ -73,10 +81,10 @@ internal static class RouteDefinitionValidator
         var isScope = node is IRouteScope;
         if (isScope) enclosingScopes.Add(node);
         foreach (var child in node.Outputs)
-            ValidateTree(child, errors, warnings, enclosingScopes);
+            ValidateTree(child, errors, warnings, enclosingScopes, stepIds);
         if (node is IBranchingDefinition branching)
             foreach (var branch in branching.Branches)
-                ValidateTree(branch, errors, warnings, enclosingScopes);
+                ValidateTree(branch, errors, warnings, enclosingScopes, stepIds);
         if (isScope) enclosingScopes.RemoveAt(enclosingScopes.Count - 1);
     }
 }

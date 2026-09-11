@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 using redb.Route.Http;
 using redb.Route.Telemetry;
@@ -19,6 +21,7 @@ public sealed class SoapConsumer : IConsumer
     private readonly IProcessor _processor;
     private readonly SharedHttpServerManager _server;
     private RouteRegistration? _registration;
+    private ILogger? _logger;
 
     public IEndpoint Endpoint => _endpoint;
 
@@ -32,11 +35,83 @@ public sealed class SoapConsumer : IConsumer
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
+        _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
         var o = _endpoint.SoapOptions;
+        var factory = ResolveFactory();
+
         // Publish the WSDL on GET ?wsdl when the factory carries one (camel-cxf parity); POST-only otherwise.
-        var methods = string.IsNullOrWhiteSpace(ResolveFactory()?.Wsdl) ? "POST" : "POST,GET";
-        _registration = _server.RegisterRoute(o.Host, o.Port, o.Path, methods, HandleRequest, o.UseTls);
+        var methods = string.IsNullOrWhiteSpace(factory?.Wsdl) ? "POST" : "POST,GET";
+
+        // TLS material: the URI wins where it says something, the named factory fills the rest. That is
+        // the point of the factory — a certificate password put in a URI travels into logs, telemetry and
+        // the dashboard, because the URI is the route key and gets handled as an ordinary string.
+        var ssl = o.UseTls || (factory?.Ssl ?? false);
+        var certPath = o.SslCertPath ?? factory?.SslCertPath;
+        var certPassword = o.SslCertPassword ?? factory?.SslCertPassword;
+
+        var certMode = o.ClientCertificateMode != SoapClientCertificateMode.NoCertificate
+            ? o.ClientCertificateMode
+            : factory?.ClientCertificateMode ?? SoapClientCertificateMode.NoCertificate;
+
+        var thumbprints = o.AllowedClientThumbprints ?? factory?.AllowedClientThumbprints;
+
+        // Fail here rather than inside Kestrel: without a certificate the listener falls back to the
+        // ASP.NET development certificate, which is present on a developer's machine and absent in
+        // production. That turns a configuration mistake into either a service that silently serves a
+        // certificate nobody trusts, or one that fails on a box with an error naming neither this route
+        // nor TLS.
+        if (ssl && string.IsNullOrWhiteSpace(certPath))
+            throw new InvalidOperationException(
+                $"SOAP consumer on {o.Host}:{o.Port}{o.Path} is set to serve TLS but has no certificate. " +
+                "Set sslCertPath on the endpoint URI, or SslCertPath on the connection factory it names.");
+
+        if (certMode != SoapClientCertificateMode.NoCertificate && !ssl)
+            throw new InvalidOperationException(
+                $"SOAP consumer on {o.Host}:{o.Port}{o.Path} asks for client certificates without TLS. " +
+                "A client certificate is presented during the TLS handshake, so there is nowhere to " +
+                "present it — use the soaps scheme, or drop clientCertificateMode.");
+
+        _registration = _server.RegisterRoute(
+            o.Host, o.Port, o.Path, methods, HandleRequest,
+            ssl, certPath, certPassword,
+            corsOptions: null,                 // SOAP is not a browser transport
+            maxRequestBodySize: 0,             // unchanged: the connector caps nothing itself
+            clientCertificateMode: MapClientCertificateMode(certMode),
+            clientCertificateValidation: BuildThumbprintValidator(thumbprints),
+            concurrencyLimit: ConcurrencyLimitOptions.FromEndpoint(
+                o.MaxConcurrentRequests, o.RequestQueueLimit,
+                o.RejectStatusCode, o.RetryAfterSeconds,
+                onRejected: _endpoint.RecordRejected));
+
         await _server.EnsureStarted(o.Host, o.Port, ct).ConfigureAwait(false);
+    }
+
+    private static Microsoft.AspNetCore.Server.Kestrel.Https.ClientCertificateMode? MapClientCertificateMode(
+        SoapClientCertificateMode mode) => mode switch
+    {
+        SoapClientCertificateMode.AllowCertificate =>
+            Microsoft.AspNetCore.Server.Kestrel.Https.ClientCertificateMode.AllowCertificate,
+        SoapClientCertificateMode.RequireCertificate =>
+            Microsoft.AspNetCore.Server.Kestrel.Https.ClientCertificateMode.RequireCertificate,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Builds the allow-list check for client certificates. Chain validation is Kestrel's job; this adds
+    /// "and it must be one of ours", which is what pins a partner in a service-to-service contour.
+    /// </summary>
+    private static Func<System.Security.Cryptography.X509Certificates.X509Certificate2,
+        System.Security.Cryptography.X509Certificates.X509Chain?,
+        System.Net.Security.SslPolicyErrors, bool>? BuildThumbprintValidator(string? allowedThumbprints)
+    {
+        if (string.IsNullOrWhiteSpace(allowedThumbprints)) return null;
+
+        var allowed = allowedThumbprints!
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => t.Replace(" ", string.Empty))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return (cert, _, _) => allowed.Contains(cert.Thumbprint);
     }
 
     /// <inheritdoc />
@@ -88,16 +163,20 @@ public sealed class SoapConsumer : IConsumer
             }
             catch (Exception ex)
             {
+                // The text stays: SoapMultipart throws our own messages about the caller's own multipart
+                // framing, so it discloses nothing about this process and is the only thing that lets an
+                // integrator find a missing boundary. What changes is the code — see WriteFault below.
                 _endpoint.RecordError(ex);
-                await WriteFault(http, version, $"Malformed MTOM request: {ex.Message}").ConfigureAwait(false);
+                await WriteFault(http, version, $"Malformed MTOM request: {ex.Message}",
+                    SoapEnvelope.SenderCode(version)).ConfigureAwait(false);
                 return;
             }
         }
 
         using var span = RouteTelemetryExtensions.StartTransportSpan(
             "soap receive", ActivityKind.Server, "rpc.system", "soap", _endpoint.Uri.NormalizedKey);
-        _endpoint.RecordMessageIn();
-        _endpoint.RecordBytesIn(wireLen);
+        // Pipeline statistics (MessagesIn/BytesIn) are the core StatisticsProcessor's - the
+        // ownership audit removed the double. Transport-level failures above stay recorded here.
 
         // WS-Security decrypt (Ф4b): if the Body is encrypted and we hold the private key, decrypt first,
         // so signature verification and parsing below see the plaintext. Skipped in Message (transparent
@@ -118,8 +197,20 @@ public sealed class SoapConsumer : IConsumer
             }
             catch (Exception ex)
             {
+                // This one is different from the two parse failures around it, and the difference is not
+                // style. CryptographicException describes OUR key and OUR configuration, not the caller's
+                // bytes; and text that varies with the reason decryption failed is a decryption oracle.
+                // WS-Security says so outright — a fault here "could be used as part of a denial of
+                // service or cryptographic attack" — and gives exactly one code for every cause,
+                // wsse:FailedCheck ("the signature or decryption was invalid"). One code, one sentence,
+                // no gradations: an attacker learns nothing by varying the ciphertext. The exception goes
+                // to the log, and the caller gets the request id to quote at us.
+                _logger?.LogError(ex, "SOAP decryption failed for {Path} (request {RequestId})",
+                    http.Request.Path, http.TraceIdentifier);
                 _endpoint.RecordError(ex);
-                await WriteFault(http, version, $"Decryption failed: {ex.Message}").ConfigureAwait(false);
+                await WriteFault(http, version,
+                    $"Security check failed (ref: {http.TraceIdentifier}).",
+                    "wsse:FailedCheck").ConfigureAwait(false);
                 return;
             }
         }
@@ -134,8 +225,13 @@ public sealed class SoapConsumer : IConsumer
                 parsed = new SoapParseResult(false, null, null, string.Empty);
             else
             {
+                // XmlException here reads "'<' is an unexpected token. Line 1, position 5." — a description
+                // of the bytes the caller sent us, not of anything on this side. Stripping it would cost
+                // an integrator the one clue that finds a BOM, a wrong encoding or a truncated stream,
+                // and buy no secrecy: we would only be refusing to quote the caller their own input.
                 _endpoint.RecordError(ex);
-                await WriteFault(http, version, $"Malformed SOAP request: {ex.Message}").ConfigureAwait(false);
+                await WriteFault(http, version, $"Malformed SOAP request: {ex.Message}",
+                    SoapEnvelope.SenderCode(version)).ConfigureAwait(false);
                 return;
             }
         }
@@ -193,6 +289,8 @@ public sealed class SoapConsumer : IConsumer
         }
         catch { /* non-XML / headerless body — no envelope header plane */ }
 
+        SurfaceConnection(http, message, _endpoint.SoapOptions.EmitHttpCompatHeaders);
+
         var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         exchange.Pattern = ExchangePattern.InOut;
 
@@ -203,8 +301,38 @@ public sealed class SoapConsumer : IConsumer
 
             if (exchange.Exception is not null && !exchange.ExceptionHandled)
             {
-                _endpoint.RecordError(exchange.Exception);
-                await WriteFault(http, version, exchange.Exception.Message).ConfigureAwait(false);
+                // No RecordError: the core StatisticsProcessor saw the same exchange.Exception.
+
+                // A route that threw SoapFaultException has already said what kind of failure this is.
+                // Flattening it to soap:Server would leave the caller only prose to branch on, and prose
+                // is not a contract: WS-Trust clients, for one, treat wst:FailedAuthentication and
+                // wst:InvalidRequest as different outcomes.
+                // FaultString, not Message: Exception.Message on a SoapFaultException is the composed
+                // "SOAP fault: <code> - <reason>" text, so using it would send the caller our rendering
+                // of a fault instead of the reason the route actually gave.
+                // Anything that is NOT a SoapFaultException is an unhandled failure, and its Message is
+                // written by whoever threw it — a file path, a connection string, the name of an inner
+                // service. That text never goes to the caller (BR-4); the fault carries the exchange id
+                // to quote, and the core StatisticsProcessor keeps the exception for diagnostics.
+                // A request that could not be BOUND is the caller's fault in SOAP's literal sense:
+                // MalformedRequestException carries a message about the caller's own bytes (the
+                // BR-4 rule allows exactly that class of text out), and the code must be Sender —
+                // a Receiver fault is a retry hint, and these bytes will fail identically forever.
+                if (exchange.Exception is MalformedRequestException malformed)
+                {
+                    await WriteFault(http, version, malformed.Message, SoapEnvelope.SenderCode(version))
+                        .ConfigureAwait(false);
+                    return;
+                }
+
+                var chosen = exchange.Exception as SoapFaultException;
+                await WriteFault(
+                        http, version,
+                        chosen?.FaultString
+                            ?? $"An unexpected error occurred while processing the request (ref: {exchange.ExchangeId}).",
+                        chosen?.FaultCode,
+                        chosen?.FaultCodeNamespace)
+                    .ConfigureAwait(false);
                 return;
             }
 
@@ -267,7 +395,50 @@ public sealed class SoapConsumer : IConsumer
     {
         var name = _endpoint.SoapOptions.ConnectionFactory;
         if (string.IsNullOrEmpty(name)) return null;
-        return (_endpoint.Component as ComponentBase)?.Context?.GetFromRegistry<SoapConnectionFactory>(name);
+        // A set-but-unknown name fails loud -- never a silent fallback (Ф11 Ж-1).
+        return ((_endpoint.Component as ComponentBase)?.Context).GetRequiredFromRegistry<SoapConnectionFactory>(name);
+    }
+
+    /// <summary>
+    /// Surfaces what the connection itself says: who called, and what the handshake proved about them.
+    /// <para>
+    /// A route had no way to learn any of this before — not the caller's address, not their certificate.
+    /// The address is what every IP-keyed protection keys on (rate limiting, brute-force lockout, audit
+    /// of where a request came from), and its absence did not make those protections fail: they saw
+    /// nothing and quietly did nothing, which is the worse of the two outcomes.
+    /// </para>
+    /// </summary>
+    private static void SurfaceConnection(HttpContext http, Message message, bool emitHttpCompat)
+    {
+        var remote = http.Connection.RemoteIpAddress;
+        if (remote is not null)
+        {
+            var ip = remote.IsIPv4MappedToIPv6 ? remote.MapToIPv4().ToString() : remote.ToString();
+            message.Headers[SoapHeaders.RemoteAddress] = ip;
+            message.Headers[SoapHeaders.RemotePort] = http.Connection.RemotePort;
+
+            // Opt-in bridge for processors written against the HTTP transport, the same one the gRPC
+            // consumer offers. Off by default: writing into another transport's namespace is a
+            // deliberate act, not a side effect of choosing SOAP.
+            if (emitHttpCompat)
+                message.Headers["redbHttp.RemoteAddress"] = ip;
+        }
+
+        if (emitHttpCompat)
+        {
+            message.Headers["redbHttp.Path"] = http.Request.Path.Value ?? string.Empty;
+            message.Headers["redbHttp.Method"] = http.Request.Method;
+        }
+
+        // mTLS: what the handshake proved about the caller. Chain and allow-list checks already ran in
+        // Kestrel, so a certificate reaching here is one the listener accepted.
+        var clientCert = http.Connection.ClientCertificate;
+        if (clientCert is not null)
+        {
+            message.Headers[SoapHeaders.ClientCertThumbprint] = clientCert.Thumbprint;
+            message.Headers[SoapHeaders.ClientCertSubject] = clientCert.Subject;
+            message.Headers[SoapHeaders.ClientCertNotAfter] = clientCert.NotAfter.ToUniversalTime().ToString("O");
+        }
     }
 
     /// <summary>Serves the configured WSDL (address rewritten to the caller's URL), or 404 when none is set.</summary>
@@ -304,9 +475,11 @@ public sealed class SoapConsumer : IConsumer
         return (end < 0 ? rest : rest[..end]).Trim().Trim('"');
     }
 
-    private static async Task WriteFault(HttpContext http, SoapVersion version, string message)
+    private static async Task WriteFault(
+        HttpContext http, SoapVersion version, string message, string? faultCode = null,
+        string? faultCodeNamespace = null)
     {
-        var fault = SoapEnvelope.BuildFault(message, version);
+        var fault = SoapEnvelope.BuildFault(message, version, faultCode, faultCodeNamespace);
         http.Response.StatusCode = version == SoapVersion.Soap12 ? 200 : 500; // 1.1 fault ⇒ HTTP 500 (SOAP convention)
         http.Response.ContentType = SoapEnvelope.ContentType(version, null);
         await http.Response.Body.WriteAsync(fault, http.RequestAborted).ConfigureAwait(false);

@@ -69,5 +69,8 @@ public static class As2Headers
         // HTTP hop-by-hop
         "Connection", "Keep-Alive", "Transfer-Encoding", "TE", "Trailer", "Upgrade",
         "Proxy-Authorization", "Proxy-Authenticate",
+        // Belongs to THIS request's target: bridging it from an inbound http consumer turned
+        // every From(http) -> To(as2) route into an accidental preserve-host proxy.
+        "Host",
     };
 }

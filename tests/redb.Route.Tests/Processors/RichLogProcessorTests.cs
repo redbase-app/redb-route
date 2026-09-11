@@ -214,6 +214,36 @@ public class RichLogProcessorTests
     }
 
     [Fact]
+    public async Task DSL_RichLog_ParameterlessLog_DefaultsToInformation()
+    {
+        var context = new RouteContext();
+        IExchange? received = null;
+        RichLogScopeDefinition? scope = null;
+
+        context.AddRoutes(r =>
+        {
+            // Canonical form: .Log().Message().Header().Property()....EndLog()
+            scope = r.From("direct://rich-log-noarg").Log();
+            scope.Message("no-arg log")
+                    .Header("correlationId")
+                    .Property("traceId")
+                    .ShowRouteId()
+                .EndLog()
+                .Process(ex => received = ex);
+        });
+
+        await context.Start();
+
+        scope!.Level.Should().Be(LogLevel.Information, "parameterless .Log() opens the scope at Information");
+        var producer = context.GetEndpoint("direct://rich-log-noarg").CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("data")));
+
+        received.Should().NotBeNull();
+        await context.DisposeAsync();
+    }
+
+    [Fact]
     public async Task DSL_RichLog_WithHeadersAndProperties()
     {
         var context = new RouteContext();

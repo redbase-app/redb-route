@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.MqttNet.Connection;
 
 namespace redb.Route.MqttNet;
@@ -35,23 +35,20 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMqttBrokerRegistry>(builder.BuildRegistry());
         services.AddSingleton<IMqttClientFactory>(builder.BuildClientFactory());
         services.AddSingleton<MqttComponent>();
-
-        services.AddSingleton<IMqttComponentRegistrar>(sp =>
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteContextConfigurator((sp, context) =>
         {
-            var context = sp.GetRequiredService<IRouteContext>();
             var component = sp.GetRequiredService<MqttComponent>();
             component.BrokerRegistry = sp.GetRequiredService<IMqttBrokerRegistry>();
             component.ClientFactory = sp.GetRequiredService<IMqttClientFactory>();
             context.AddComponent(component);
-            return new MqttComponentRegistrar();
         });
 
         return services;
     }
 }
 
-internal interface IMqttComponentRegistrar;
-internal sealed class MqttComponentRegistrar : IMqttComponentRegistrar;
 
 /// <summary>
 /// Fluent builder for MQTT DI configuration.

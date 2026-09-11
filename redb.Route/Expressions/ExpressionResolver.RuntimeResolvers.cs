@@ -42,15 +42,24 @@ public static partial class ExpressionResolver
         }
         else if (propertyName.StartsWith("property."))
         {
+            // Smart resolution: literal name first (dots included), then a nested member path.
+            // This is the same rule the value path has always used; without it the AST branch
+            // answered null for "property.cfg.limit" while the value branch answered 5.
             var actualPropertyName = propertyName.Substring(PROPERTY_PREFIX.Length);
             DebugLog($"Getting property: '{actualPropertyName}'");
-            return exchange.getProperty<object>(actualPropertyName);
+            return actualPropertyName.Contains('.')
+                ? ResolvePropertySmart(exchange, actualPropertyName)
+                : exchange.getProperty<object>(actualPropertyName);
         }
         else if (propertyName.StartsWith("header."))
         {
+            // Same smart rule for headers: "header.user.Age" is the Age member of the "user"
+            // header unless a header literally named "user.Age" exists.
             var headerName = propertyName.Substring(HEADER_PREFIX.Length);
             DebugLog($"Getting header: '{headerName}'");
-            return exchange.In.getHeader<object>(headerName);
+            return headerName.Contains('.')
+                ? ResolveHeaderSmart(exchange, headerName)
+                : exchange.In.getHeader<object>(headerName);
         }
         else if (propertyName.StartsWith("body."))
         {
@@ -62,6 +71,13 @@ public static partial class ExpressionResolver
         {
             DebugLog($"Getting body");
             return exchange.In.getBody<object>();
+        }
+        else if (propertyName == "contentType")
+        {
+            // The removed hand-written branch resolved contentType; the unified engine has to
+            // keep every accessor the language documents.
+            DebugLog("Getting contentType");
+            return exchange.In.ContentType;
         }
         else
         {
@@ -183,7 +199,7 @@ public static partial class ExpressionResolver
             DebugLog($"ResolveBodyProperty: result = {result}");
             return result;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not ExpressionSandboxViolationException)
         {
             DebugLog($"ResolveBodyProperty: error - {ex.Message}");
             return null;
@@ -382,7 +398,7 @@ public static partial class ExpressionResolver
                         {
                             return indexerProperty.GetValue(current, new object[] { part });
                         }
-                        catch (Exception ex)
+                        catch (Exception ex) when (ex is not ExpressionSandboxViolationException)
                         {
                             DebugLog($"Error using string indexer: {ex.Message}");
                         }
@@ -435,7 +451,7 @@ public static partial class ExpressionResolver
                 DebugLog($"Failed to find property, field or indexer '{part}' in type {current.GetType().Name}");
                 return null;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not ExpressionSandboxViolationException)
             {
                 DebugLog($"Error resolving path part '{part}': {ex.Message}");
                 return null;
@@ -473,12 +489,21 @@ public static partial class ExpressionResolver
                 {
                     // Access object's property
                     var property = current.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                    if (property == null)
+                    if (property != null)
                     {
-                        DebugLog($"Property '{propertyName}' not found");
-                        return null;
+                        targetObject = property.GetValue(current);
                     }
-                    targetObject = property.GetValue(current);
+                    else
+                    {
+                        // Same rule as the plain member step: a public field is a member too.
+                        var field = current.GetType().GetField(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                        if (field == null)
+                        {
+                            DebugLog($"Member '{propertyName}' not found");
+                            return null;
+                        }
+                        targetObject = field.GetValue(current);
+                    }
                 }
 
                 if (targetObject == null)
@@ -519,6 +544,16 @@ public static partial class ExpressionResolver
         {
             var value = normalProperty.GetValue(current);
             DebugLog($"Found property '{part}', value: {value}");
+            return value;
+        }
+
+        // A public field is a member like any other: header.x.Field, property.x.Field and
+        // body.Field must all read it. Until 2026-08-29 only one of the three paths did.
+        var normalField = current.GetType().GetField(part, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+        if (normalField != null)
+        {
+            var value = normalField.GetValue(current);
+            DebugLog($"Found field '{part}', value: {value}");
             return value;
         }
 
@@ -791,11 +826,14 @@ public static partial class ExpressionResolver
                     return ResolveIndexOf(current, parameters);
                     
                 default:
-                    // Try to find method via reflection
+                    // Anything beyond the built-in helpers is a reflection call on the object: refused
+                    // inside a sandbox (templates), where an expression reads members but never runs code.
+                    if (ExpressionSandbox.IsActive)
+                        throw new ExpressionSandboxViolationException(methodName, current.GetType());
                     return ResolveMethodByReflection(current, methodName, parameters);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not ExpressionSandboxViolationException)
         {
             DebugLog($"Error calling method '{methodName}': {ex.Message}");
             return null;

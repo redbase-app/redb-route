@@ -2,6 +2,7 @@ using FluentAssertions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Expressions;
+using redb.Route.Predicates;
 
 namespace redb.Route.Tests.Expressions;
 
@@ -21,6 +22,14 @@ public class ExpressionResolverTests : IDisposable
     {
         ExpressionResolver.ClearAllCaches();
     }
+
+    // The hand-written logical branch was removed on 2026-08-28 - one language, one parser.
+    // The semantic tests below migrated to the surviving condition path via these helpers.
+    private static bool EvaluateCondition(string condition, IExchange exchange)
+        => PredicateFactory.FromString(condition).Matches(exchange);
+
+    private static Func<IExchange, bool> CompileCondition(string condition)
+        => PredicateFactory.FromString(condition).Matches;
 
     private static IExchange CreateExchange(object? body = null)
         => new Exchange(new Message(body));
@@ -90,76 +99,76 @@ public class ExpressionResolverTests : IDisposable
         result.Should().Be("request: payload [42]");
     }
 
-    // ── Logical expressions ──
+    // ── Condition strings (migrated from the removed logical branch) ──
 
     [Fact]
-    public void EvaluateLogicalExpression_SimpleEquality_True()
+    public void Condition_SimpleEquality_True()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["status"] = "active";
-        var result = ExpressionResolver.EvaluateLogicalExpression(
+        var result = EvaluateCondition(
             "property.status == 'active'", exchange);
         result.Should().BeTrue();
     }
 
     [Fact]
-    public void EvaluateLogicalExpression_SimpleEquality_False()
+    public void Condition_SimpleEquality_False()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["status"] = "inactive";
-        var result = ExpressionResolver.EvaluateLogicalExpression(
+        var result = EvaluateCondition(
             "property.status == 'active'", exchange);
         result.Should().BeFalse();
     }
 
     [Fact]
-    public void EvaluateLogicalExpression_ContentTypeEquality()
+    public void Condition_ContentTypeEquality()
     {
         var exchange = CreateExchange("body");
         exchange.In.ContentType = "application/json";
-        var result = ExpressionResolver.EvaluateLogicalExpression(
+        var result = EvaluateCondition(
             "contentType == 'application/json'", exchange);
         result.Should().BeTrue();
     }
 
     [Fact]
-    public void EvaluateLogicalExpression_NumericComparison()
+    public void Condition_NumericComparison()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["count"] = 10;
-        var result = ExpressionResolver.EvaluateLogicalExpression(
+        var result = EvaluateCondition(
             "property.count > 5", exchange);
         result.Should().BeTrue();
     }
 
     [Fact]
-    public void EvaluateLogicalExpression_AndOperator()
+    public void Condition_AndOperator()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["a"] = 10;
         exchange.Properties["b"] = 20;
-        var result = ExpressionResolver.EvaluateLogicalExpression(
+        var result = EvaluateCondition(
             "property.a > 5 AND property.b > 15", exchange);
         result.Should().BeTrue();
     }
 
     [Fact]
-    public void EvaluateLogicalExpression_OrOperator()
+    public void Condition_OrOperator()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["a"] = 3;
         exchange.Properties["b"] = 20;
-        var result = ExpressionResolver.EvaluateLogicalExpression(
+        var result = EvaluateCondition(
             "property.a > 5 OR property.b > 15", exchange);
         result.Should().BeTrue();
     }
 
     [Fact]
-    public void EvaluateLogicalExpression_NotOperator()
+    public void Condition_NotOperator()
     {
         var exchange = CreateExchange("body");
         exchange.Properties["flag"] = false;
-        var result = ExpressionResolver.EvaluateLogicalExpression(
+        var result = EvaluateCondition(
             "NOT property.flag", exchange);
         result.Should().BeTrue();
     }
@@ -245,28 +254,44 @@ public class ExpressionResolverTests : IDisposable
     {
         ExpressionResolver.ClearAllCaches();
         ExpressionResolver.GetCompiledTemplate("test ${body}");
-        ExpressionResolver.GetCompiledLogicalExpression("property.x == 1");
+        ExpressionResolver.GetCompiledValueExpression("property.x");
         var stats = ExpressionResolver.GetCacheStatistics();
         stats.TemplateCount.Should().BeGreaterThanOrEqualTo(1);
-        stats.LogicalExpressionCount.Should().BeGreaterThanOrEqualTo(1);
+        stats.ValueExpressionCount.Should().BeGreaterThanOrEqualTo(1);
     }
 
+    /// <summary>
+    /// Proved per entry, by delegate identity, not by the size of the cache: the caches are process
+    /// state, and a route test in another collection compiles a template between the clear and any
+    /// count we could read, so "the cache is empty" is not observable here. The text is unique to this
+    /// test, so nobody else can put it back — whatever else the process is doing, a hit on it after a
+    /// clear is impossible.
+    /// </summary>
     [Fact]
-    public void ClearAllCaches_EmptiesAll()
+    public void ClearAllCaches_DropsWhatWasCached()
     {
-        ExpressionResolver.GetCompiledTemplate("test ${body}");
+        var unique = Guid.NewGuid().ToString("N");
+        var template = $"clear-probe-{unique} ${{body}}";
+        var value = $"property.clear_probe_{unique} + 1";
+
+        var compiledTemplate = ExpressionResolver.GetCompiledTemplate(template);
+        var compiledValue = ExpressionResolver.GetCompiledValueExpression(value);
+        ExpressionResolver.GetCompiledTemplate(template).Should().BeSameAs(compiledTemplate, "the template entry is cached before the clear");
+        ExpressionResolver.GetCompiledValueExpression(value).Should().BeSameAs(compiledValue, "the value entry is cached before the clear");
+
         ExpressionResolver.ClearAllCaches();
-        var stats = ExpressionResolver.GetCacheStatistics();
-        stats.TemplateCount.Should().Be(0);
-        stats.LogicalExpressionCount.Should().Be(0);
+
+        // Both caches, not just the template one: "all" is the claim under test.
+        ExpressionResolver.GetCompiledTemplate(template).Should().NotBeSameAs(compiledTemplate, "the clear dropped the template entry, so it is compiled afresh");
+        ExpressionResolver.GetCompiledValueExpression(value).Should().NotBeSameAs(compiledValue, "the clear dropped the value entry too");
     }
 
-    // ── CompileLogicalPredicate ──
+    // ── CompileCondition ──
 
     [Fact]
-    public void CompileLogicalPredicate_ReturnsReusableDelegate()
+    public void CompileCondition_ReturnsReusableDelegate()
     {
-        var pred = ExpressionResolver.CompileLogicalPredicate("property.val > 5");
+        var pred = CompileCondition("property.val > 5");
         var ex1 = CreateExchange("body");
         ex1.Properties["val"] = 10;
         pred(ex1).Should().BeTrue();

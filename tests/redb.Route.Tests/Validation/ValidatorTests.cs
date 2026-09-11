@@ -368,7 +368,8 @@ public class ValidatorTests
     [Fact]
     public void PredicateValidator_NullPredicate_Throws()
     {
-        var act = () => new PredicateValidator(null!);
+        // The cast only picks the overload: both the predicate and the delegate constructors reject null.
+        var act = () => new PredicateValidator((redb.Route.Abstractions.IPredicate)null!);
         act.Should().Throw<ArgumentNullException>();
     }
 

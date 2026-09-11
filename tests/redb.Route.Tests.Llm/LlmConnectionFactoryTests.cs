@@ -9,7 +9,6 @@ public sealed class LlmConnectionFactoryTests
         f.Provider.Should().Be("stub");
         f.ModelId.Should().Be("stub-model");
         f.RequestTimeoutMs.Should().Be(120_000);
-        f.Retries.Should().Be(2);
     }
 
     [Fact]

@@ -104,6 +104,10 @@ public sealed class HttpBuilder
     private string? _corsOrigins;
     private bool _corsCredentials;
     private string? _maxRequestBodySize;
+    private string? _maxConcurrentRequests;
+    private string? _requestQueueLimit;
+    private string? _rejectStatusCode;
+    private string? _retryAfterSeconds;
     private string? _protocol;
     private bool _ssl;
     private string? _sslCertPath;
@@ -147,7 +151,10 @@ public sealed class HttpBuilder
     }
 
     /// <summary>Use HTTP Basic authentication (template strings, support <c>${...}</c>).</summary>
-    public HttpBuilder BasicAuth(string username, string password) => BasicAuth(new StringExpression(username), new StringExpression(password));
+    public HttpBuilder BasicAuth(string username, string password)
+    {
+        _authScheme = "Basic"; _username = username; _password = password; return this;
+    }
 
     /// <summary>Use Bearer token authentication. Token is resolved via AuthToken option at runtime.</summary>
     public HttpBuilder BearerAuth() { _authScheme = "Bearer"; return this; }
@@ -162,7 +169,7 @@ public sealed class HttpBuilder
     public HttpBuilder AuthToken(IExpression token) { _authToken = token.ToTemplateString(); return this; }
 
     /// <summary>Bearer/API-key token value (template string, supports <c>${...}</c>).</summary>
-    public HttpBuilder AuthToken(string token) => AuthToken(new StringExpression(token));
+    public HttpBuilder AuthToken(string token) { _authToken = token; return this; }
 
     /// <summary>Disable following HTTP redirects. Default is to follow.</summary>
     public HttpBuilder NoFollowRedirects() { _followRedirects = false; return this; }
@@ -191,7 +198,7 @@ public sealed class HttpBuilder
     /// <summary>
     /// Target host (template string, supports <c>${...}</c>). Producer: part of request URL. Consumer: Kestrel bind address.
     /// </summary>
-    public HttpBuilder Host(string host) => Host(new StringExpression(host));
+    public HttpBuilder Host(string host) { _host = host; return this; }
 
     /// <summary>
     /// Target port. Producer: part of request URL. Consumer: Kestrel bind port.
@@ -220,6 +227,24 @@ public sealed class HttpBuilder
     /// <summary>Maximum request body size from an expression.</summary>
     public HttpBuilder MaxRequestBodySize(IExpression bytes) { _maxRequestBodySize = bytes.ToTemplateString(); return this; }
 
+    /// <summary>
+    /// Admission limit: at most <paramref name="max"/> concurrent pipeline executions; overflow
+    /// beyond the optional FIFO <paramref name="queue"/> is shed with 429 + Retry-After before
+    /// any pipeline work (consumer side).
+    /// </summary>
+    public HttpBuilder MaxConcurrentRequests(int max, int queue = 0)
+    {
+        _maxConcurrentRequests = max.ToString();
+        if (queue > 0) _requestQueueLimit = queue.ToString();
+        return this;
+    }
+
+    /// <summary>Status code for a shed request (default 429).</summary>
+    public HttpBuilder RejectStatusCode(int statusCode) { _rejectStatusCode = statusCode.ToString(); return this; }
+
+    /// <summary>Retry-After value for a shed request in seconds; 0 = do not send (default 1).</summary>
+    public HttpBuilder RetryAfterSeconds(int seconds) { _retryAfterSeconds = seconds.ToString(); return this; }
+
     /// <summary>HTTP protocol version: Http1, Http2, Http1And2, Http3, Http1And2And3.</summary>
     public HttpBuilder Protocol(string protocol) { _protocol = protocol; return this; }
 
@@ -231,7 +256,9 @@ public sealed class HttpBuilder
 
     /// <summary>Enable SSL/TLS with the given certificate (template strings, support <c>${...}</c>).</summary>
     public HttpBuilder SslCert(string certPath, string? certPassword = null)
-        => SslCert(new StringExpression(certPath), certPassword is null ? null : new StringExpression(certPassword));
+    {
+        _ssl = true; _sslCertPath = certPath; _sslCertPassword = certPassword; return this;
+    }
 
     /// <summary>Default HTTP response status code. Default 200.</summary>
     public HttpBuilder ResponseCode(int code) { _responseCode = code.ToString(); return this; }
@@ -343,6 +370,10 @@ public sealed class HttpBuilder
         AppendIf("corsOrigins", _corsOrigins);
         AppendBool("corsCredentials", _corsCredentials);
         AppendIf("maxRequestBodySize", _maxRequestBodySize);
+        AppendIf("maxConcurrentRequests", _maxConcurrentRequests);
+        AppendIf("requestQueueLimit", _requestQueueLimit);
+        AppendIf("rejectStatusCode", _rejectStatusCode);
+        AppendIf("retryAfterSeconds", _retryAfterSeconds);
         AppendIf("protocol", _protocol);
         AppendBool("ssl", _ssl);
         AppendIf("sslCertPath", _sslCertPath);

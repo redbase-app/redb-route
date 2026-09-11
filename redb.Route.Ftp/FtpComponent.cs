@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.Ftp;
@@ -31,15 +32,11 @@ public sealed class FtpComponent : ComponentBase
         options.BindFromUri(uri.RawParameters);
 
         // Named ConnectionFactory keeps the server password out of the route URI.
-        if (!string.IsNullOrEmpty(options.ConnectionFactory) && Context is not null)
+        if (!string.IsNullOrEmpty(options.ConnectionFactory))
         {
-            var factory = Context.GetFromRegistry<FtpConnectionFactory>(options.ConnectionFactory);
-            if (factory is not null)
-                factory.ApplyTo(options, uri);
-            else
-                Logger?.LogWarning(
-                    "FTP: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
-                    options.ConnectionFactory);
+            // A set-but-unknown name fails loud -- never a silent fallback to URI params (Ф11 Ж-1).
+            var factory = Context.GetRequiredFromRegistry<FtpConnectionFactory>(options.ConnectionFactory);
+            factory.ApplyTo(options, uri);
         }
 
         options.Validate();

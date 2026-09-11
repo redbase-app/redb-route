@@ -85,3 +85,35 @@ Raw URIs work too: `sqs://orders?waitTimeSeconds=20&concurrentConsumers=4`,
 ## Part of
 
 Part of the [redb.Route](https://github.com/redbase-app/redb) enterprise integration framework.
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new AwsConnectionFactory
+{
+    Region = "eu-west-1",
+    AccessKey = "svc",
+    SecretKey = secrets.AwsSecret,
+});
+// sqs://orders?connectionFactory=prod
+```
+
+## Concurrency
+
+The default is **1** concurrent consumer — the industry norm (Camel, Spring, the Azure SDK all
+ship 1): a single consumer preserves ordering and your handlers need no thread safety.
+Parallelism is an explicit opt-in:
+
+```
+concurrentConsumers=4       # a fixed worker count
+concurrentConsumers=auto    # max(CPU count, 2) — the NServiceBus formula
+```
+
+Anything else — `0`, a negative, a typo — fails at endpoint creation naming the option (the old
+int-typed option silently fell back to 1). Raising the value trades ordering for throughput:
+messages from the same queue are processed out of order, and your processors must be safe to
+run in parallel.

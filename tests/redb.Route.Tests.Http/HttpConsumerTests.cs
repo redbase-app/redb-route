@@ -404,7 +404,8 @@ public class HttpConsumerTests : IAsyncLifetime
 
         response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
         var body = await response.Content.ReadAsStringAsync();
-        body.Should().Contain("test error");
+        // BR-4: the exception's own text stays in the log; the caller gets a reference to quote.
+        body.Should().NotContain("test error").And.Contain("ref: ");
     }
 
     [Fact]

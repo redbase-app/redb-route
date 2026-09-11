@@ -25,6 +25,15 @@ public sealed class TcpConnectionFactory
     /// <summary>Expected TLS target host name (SNI / certificate validation).</summary>
     public string? SslTargetHost { get; set; }
 
+    /// <summary>Producer only: accept any server certificate, including a self-signed one.</summary>
+    public bool TrustAllCertificates { get; set; }
+
+    /// <summary>Producer only: PFX client certificate for a server that requires mTLS.</summary>
+    public string? ClientCertPath { get; set; }
+
+    /// <summary>Password for <see cref="ClientCertPath"/>.</summary>
+    public string? ClientCertPassword { get; set; }
+
     /// <summary>Connect timeout in milliseconds.</summary>
     public int ConnectTimeout { get; set; } = 10_000;
 
@@ -42,6 +51,12 @@ public sealed class TcpConnectionFactory
             options.SslCertPassword = SslCertPassword;
         if (!supplied.ContainsKey(nameof(options.SslTargetHost)))
             options.SslTargetHost = SslTargetHost;
+        if (!supplied.ContainsKey(nameof(options.TrustAllCertificates)))
+            options.TrustAllCertificates = TrustAllCertificates;
+        if (!supplied.ContainsKey(nameof(options.ClientCertPath)))
+            options.ClientCertPath = ClientCertPath;
+        if (!supplied.ContainsKey(nameof(options.ClientCertPassword)))
+            options.ClientCertPassword = ClientCertPassword;
         if (!supplied.ContainsKey(nameof(options.ConnectTimeout)))
             options.ConnectTimeout = ConnectTimeout;
     }

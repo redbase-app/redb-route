@@ -56,7 +56,7 @@ public sealed class AmqpConsumer : IConsumer
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
-        var workerCount = Math.Max(1, _options.ConcurrentConsumers);
+        var workerCount = Math.Max(1, _options.ResolvedConcurrentConsumers);
 
         _cts = new CancellationTokenSource();
         _drain.Start(ct);
@@ -184,6 +184,9 @@ public sealed class AmqpConsumer : IConsumer
             }
             catch (Exception ex)
             {
+                // Transport-level failure - invisible to the core's statistics wrappers, so the
+                // endpoint records it itself. Pipeline errors stay with StatisticsProcessor.
+                _endpoint.RecordError(ex);
                 _logger?.LogError(ex, "Error in AMQP receive loop: address={Address}",
                     _endpoint.Address);
 
@@ -213,9 +216,18 @@ public sealed class AmqpConsumer : IConsumer
         var ackAction = new AmqpAckAction(receiver, msg, _logger);
         RegisterTransactedAction(exchange, $"amqp-ack-{Guid.NewGuid():N}", ackAction);
 
+        var pipelineFailed = false;
         try
         {
-            await _processor.Process(exchange, ct).ConfigureAwait(false);
+            try
+            {
+                await _processor.Process(exchange, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                pipelineFailed = true;
+                throw;
+            }
 
             // RPC reply
             if (!string.IsNullOrEmpty(msg.Properties?.ReplyTo))
@@ -234,6 +246,11 @@ public sealed class AmqpConsumer : IConsumer
         }
         catch (Exception ex)
         {
+            // A pipeline failure is already counted by the core's StatisticsProcessor; a settle
+            // failure AFTER a successful pipeline is invisible to the core, so the transport
+            // records it (ревью дуги, M13).
+            if (!pipelineFailed)
+                _endpoint.RecordError(ex);
             _logger?.LogError(ex, "AMQP message processing error: address={Address}, messageId={MessageId}",
                 _endpoint.Address, msg.Properties?.MessageId);
 

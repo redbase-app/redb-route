@@ -67,7 +67,10 @@ public class GrpcConsumer : IConsumer
         var host = _options.Host;
         var port = _options.Port;
 
-        _registration = RegisterRoute(_options.MethodPath, http => HandleRequest(http, _options.Streaming));
+        // Решение В-3б плана лимитов: the admission limit counts UNARY calls only — a long-lived
+        // stream would hold a permit forever, and shed health probes would flap orchestrators.
+        _registration = RegisterRoute(_options.MethodPath, http => HandleRequest(http, _options.Streaming),
+            limited: !_options.Streaming);
 
         // A URI with no method address ("grpc:host:port") is the generic service, and that service has
         // always answered both its unary and its streaming method. Keep serving both so those endpoints
@@ -88,7 +91,7 @@ public class GrpcConsumer : IConsumer
         _logger?.LogInformation("gRPC consumer started: {Host}:{Port}{Method}", host, port, _options.MethodPath);
     }
 
-    private RouteRegistration RegisterRoute(string path, Func<HttpContext, Task> handler) =>
+    private RouteRegistration RegisterRoute(string path, Func<HttpContext, Task> handler, bool limited = false) =>
         Server.RegisterRoute(
             _options.Host,
             _options.Port,
@@ -102,7 +105,13 @@ public class GrpcConsumer : IConsumer
             maxRequestBodySize: 0,                    // message size is enforced per frame, not per body
             protocol: HttpProtocol.Http2,
             clientCertificateMode: MapClientCertificateMode(_options.ClientCertificateMode),
-            clientCertificateValidation: BuildThumbprintValidator());
+            clientCertificateValidation: BuildThumbprintValidator(),
+            concurrencyLimit: limited
+                ? ConcurrencyLimitOptions.FromEndpoint(
+                    _options.MaxConcurrentRequests, _options.RequestQueueLimit,
+                    _options.RejectStatusCode, _options.RetryAfterSeconds,
+                    onRejected: _endpoint.RecordRejected)
+                : null);
 
     private static KestrelClientCertificateMode? MapClientCertificateMode(GrpcClientCertificateMode mode) => mode switch
     {
@@ -161,7 +170,7 @@ public class GrpcConsumer : IConsumer
     {
         using var span = RouteTelemetryExtensions.StartTransportSpan(
             "grpc receive", ActivityKind.Server, "rpc.system", "grpc", _endpoint.Uri.NormalizedKey);
-        _endpoint.RecordMessageIn();
+        // MessagesIn is counted by the core StatisticsProcessor around the routed pipeline.
 
         // Content type must be on the response before anything is written, otherwise a client sees a
         // non-gRPC reply and reports a protocol error instead of our status.
@@ -188,6 +197,7 @@ public class GrpcConsumer : IConsumer
         string? detail = null;
         IExchange? exchange = null;
         IMessage? outMessage = null;
+        var pipelineFailed = false;
 
         try
         {
@@ -199,15 +209,23 @@ public class GrpcConsumer : IConsumer
                               .ConfigureAwait(false)
                           ?? throw new GrpcProtocolException(StatusCode.Internal, "Request carried no message.");
 
-            _endpoint.RecordBytesIn(payload.Length);
-
+            // BytesIn is the core StatisticsProcessor's estimate of the same payload.
             exchange = BuildExchange(http, payload);
             exchange.Pattern = _options.InOut ? ExchangePattern.InOut : ExchangePattern.InOnly;
 
-            await _processor.Process(exchange, ct).ConfigureAwait(false);
+            try
+            {
+                await _processor.Process(exchange, ct).ConfigureAwait(false);
 
-            if (exchange.Exception is not null && !exchange.ExceptionHandled)
-                throw exchange.Exception;
+                if (exchange.Exception is not null && !exchange.ExceptionHandled)
+                    throw exchange.Exception;
+            }
+            catch
+            {
+                // Counted by the core's StatisticsProcessor - the transport catch below must not.
+                pipelineFailed = true;
+                throw;
+            }
 
             // Identity's convention: a processor may answer on Out or write back into In. Same fallback
             // the SOAP consumer uses. InOut only selects the exchange pattern the route sees — the reply
@@ -227,9 +245,13 @@ public class GrpcConsumer : IConsumer
         {
             var deadlineHit = deadline is { IsCancellationRequested: true }
                               && !http.RequestAborted.IsCancellationRequested;
-            (status, detail) = GrpcWire.FromException(ex, deadlineHit);
+            (status, detail) = GrpcWire.FromException(ex, deadlineHit, exchange?.ExchangeId);
 
-            _endpoint.RecordError(ex);
+            // Pipeline failures are already counted by the core; everything else here - a failure
+            // before the exchange existed (wire read, deserialization) or after the pipeline
+            // succeeded (reply encoding/writing) - is invisible to the core, so the transport records it.
+            if (!pipelineFailed)
+                _endpoint.RecordError(ex);
             _logger?.LogError(ex, "gRPC request failed: method={Method} peer={Peer} status={Status}",
                 _options.MethodPath, http.Connection.RemoteIpAddress, status);
         }
@@ -277,14 +299,13 @@ public class GrpcConsumer : IConsumer
             {
                 var frame = Encode(item, outMessage);
                 await GrpcWire.WriteMessageAsync(http.Response, frame, compress, ct).ConfigureAwait(false);
-                _endpoint.RecordMessageOut();
             }
             return;
         }
 
         var single = Encode(outMessage.Body, outMessage);
         await GrpcWire.WriteMessageAsync(http.Response, single, compress, ct).ConfigureAwait(false);
-        _endpoint.RecordMessageOut();
+        // MessagesOut per exchange is the core's; frame-level counting doubled it.
     }
 
     /// <summary>

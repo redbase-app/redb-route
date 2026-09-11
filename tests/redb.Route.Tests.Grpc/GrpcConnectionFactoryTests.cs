@@ -55,7 +55,7 @@ public sealed class GrpcConnectionFactoryTests
     }
 
     [Fact]
-    public void MissingFactory_FallsBackToUriParameters()
+    public void MissingFactory_FailsLoud()
     {
         var context = new RouteContext();
         var component = new GrpcComponent();
@@ -64,6 +64,8 @@ public sealed class GrpcConnectionFactoryTests
         var uri = EndpointUriParser.Parse("grpc://0.0.0.0:50051?connectionFactory=absent");
         var act = () => component.CreateEndpoint(uri);
 
-        act.Should().NotThrow();
+        // Ф11 Ж-1: опечатка в connectionFactory обязана падать громко, а не молча фолбэчиться
+        act.Should().Throw<InvalidOperationException>()
+            .Which.Message.Should().Contain("absent");
     }
 }

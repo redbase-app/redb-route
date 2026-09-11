@@ -25,6 +25,7 @@ public sealed class KafkaConnectionFactory
     public string? SaslUsername { get; set; }
 
     /// <summary>SASL password.</summary>
+    [redb.Route.Core.Sensitive]
     public string? SaslPassword { get; set; }
 
     // ── SSL/TLS ──
@@ -39,6 +40,7 @@ public sealed class KafkaConnectionFactory
     public string? SslKeyLocation { get; set; }
 
     /// <summary>Client private key passphrase.</summary>
+    [redb.Route.Core.Sensitive]
     public string? SslKeyPassword { get; set; }
 
     /// <summary>SSL endpoint identification algorithm (e.g., "https" for hostname verification). Empty = disabled.</summary>
@@ -77,7 +79,11 @@ public sealed class KafkaConnectionFactory
     /// <summary>Partition assignment strategy: Range, RoundRobin, CooperativeSticky. CooperativeSticky avoids stop-the-world rebalance.</summary>
     public string? PartitionAssignmentStrategy { get; set; }
 
-    /// <summary>Isolation level for transactional consumers: ReadUncommitted, ReadCommitted (default). Must be ReadCommitted for exactly-once.</summary>
+    /// <summary>
+    /// Isolation level: ReadUncommitted, ReadCommitted. ReadCommitted hides records of aborted
+    /// transactions written by EOS producers elsewhere; this connector itself is at-least-once
+    /// (see docs/KAFKA_TRANSACTIONS_TODO.md).
+    /// </summary>
     public string? IsolationLevel { get; set; }
 
     // ── Producer tuning ──
@@ -213,34 +219,23 @@ public sealed class KafkaConnectionFactory
 
     // ── Helpers ──
 
+    // Волна A1: strict parses shared with the endpoint options — a typo throws instead of
+    // silently keeping the default (for securityProtocol the default is plaintext).
     private Confluent.Kafka.AutoOffsetReset ParseAutoOffsetReset() =>
-        AutoOffsetReset?.Trim().ToLowerInvariant() switch
-        {
-            "earliest" => Confluent.Kafka.AutoOffsetReset.Earliest,
-            "latest" => Confluent.Kafka.AutoOffsetReset.Latest,
-            "error" => Confluent.Kafka.AutoOffsetReset.Error,
-            _ => Confluent.Kafka.AutoOffsetReset.Latest
-        };
+        KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.AutoOffsetReset>(AutoOffsetReset, "autoOffsetReset");
 
-    private Confluent.Kafka.Acks ParseAcks() =>
-        Acks?.Trim().ToLowerInvariant() switch
-        {
-            "none" or "0" => Confluent.Kafka.Acks.None,
-            "leader" or "1" => Confluent.Kafka.Acks.Leader,
-            "all" or "-1" => Confluent.Kafka.Acks.All,
-            _ => Confluent.Kafka.Acks.Leader
-        };
+    private Confluent.Kafka.Acks ParseAcks() => KafkaOptionParsers.ParseAcks(Acks);
 
     private void ApplySecurity(ClientConfig config)
     {
-        if (Enum.TryParse<Confluent.Kafka.SecurityProtocol>(SecurityProtocol, true, out var proto))
-            config.SecurityProtocol = proto;
+        config.SecurityProtocol =
+            KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.SecurityProtocol>(SecurityProtocol, "securityProtocol");
 
         if (!string.IsNullOrWhiteSpace(SaslMechanism))
         {
-            if (Enum.TryParse<Confluent.Kafka.SaslMechanism>(SaslMechanism, true, out var mechanism))
-                config.SaslMechanism = mechanism;
-
+            var mechanism = KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.SaslMechanism>(SaslMechanism, "saslMechanism");
+            KafkaOptionParsers.RequireSaslCredentials(mechanism, SaslUsername, SaslPassword);
+            config.SaslMechanism = mechanism;
             config.SaslUsername = SaslUsername;
             config.SaslPassword = SaslPassword;
         }
@@ -265,28 +260,12 @@ public sealed class KafkaConnectionFactory
     }
 
     private Confluent.Kafka.PartitionAssignmentStrategy ParsePartitionAssignment() =>
-        PartitionAssignmentStrategy?.Trim().ToLowerInvariant() switch
-        {
-            "range" => Confluent.Kafka.PartitionAssignmentStrategy.Range,
-            "roundrobin" => Confluent.Kafka.PartitionAssignmentStrategy.RoundRobin,
-            "cooperativesticky" => Confluent.Kafka.PartitionAssignmentStrategy.CooperativeSticky,
-            _ => Confluent.Kafka.PartitionAssignmentStrategy.Range
-        };
+        KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.PartitionAssignmentStrategy>(
+            PartitionAssignmentStrategy!, "partitionAssignmentStrategy");
 
     private Confluent.Kafka.IsolationLevel ParseIsolationLevel() =>
-        IsolationLevel?.Trim().ToLowerInvariant() switch
-        {
-            "readcommitted" or "read_committed" => Confluent.Kafka.IsolationLevel.ReadCommitted,
-            _ => Confluent.Kafka.IsolationLevel.ReadUncommitted
-        };
+        KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.IsolationLevel>(IsolationLevel!, "isolationLevel");
 
     private Confluent.Kafka.CompressionType ParseCompressionType() =>
-        CompressionType?.Trim().ToLowerInvariant() switch
-        {
-            "gzip" => Confluent.Kafka.CompressionType.Gzip,
-            "snappy" => Confluent.Kafka.CompressionType.Snappy,
-            "lz4" => Confluent.Kafka.CompressionType.Lz4,
-            "zstd" => Confluent.Kafka.CompressionType.Zstd,
-            _ => Confluent.Kafka.CompressionType.None
-        };
+        KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.CompressionType>(CompressionType!, "compressionType");
 }

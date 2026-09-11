@@ -57,6 +57,7 @@ Set the environment variable and run — no other infrastructure needed.
 | `telegram://answer?token=TOKEN` | Producer | Answers a callback query (removes button spinner) |
 | `telegram://edit?token=TOKEN&chatId=ID` | Producer | Edits text of an existing message |
 | `telegram://delete?token=TOKEN&chatId=ID` | Producer | Deletes a message |
+| `telegram://download?token=TOKEN` | Producer | Downloads a file the user sent (`getFile` + transfer); bytes land in `Out.Body` |
 
 All query parameters support `${...}` expressions.
 
@@ -85,6 +86,8 @@ telegram://send?token=${env:TELEGRAM_TOKEN}&chatId=${header.telegram.chatId}&par
 | `messageId` | string | Message to `edit`/`delete`. Constant id or a `${...}` expression, e.g. `${header.telegram.sentMessageId}` |
 | `showAlert` | bool | `answer` mode: show the text as a modal alert instead of a toast (default `false`) |
 | `bodyIsFileId` | bool | Treat string body as an existing Telegram `file_id` in `document`/`photo` mode (default `false`) |
+| `fileId` | string | Which file `download` fetches. Constant id or a `${...}` expression; without it the mode takes `telegram.attachment.fileId` |
+| `maxDownloadBytes` | long | Ceiling on a `download` (default `20971520` = 20 MiB, the Bot API's own limit; `0` lifts it) |
 | `sendTimeoutSeconds` | int | Per-send timeout, 1–600 (default `120`). Linked with the pipeline cancellation token. |
 
 ### Consumer query parameters
@@ -137,7 +140,7 @@ From(Tg.Receive(token))
     .Process(...);
 ```
 
-See [CONCURRENCY.md](../../CONCURRENCY.md) for the full model.
+See [CONCURRENCY.md](../CONCURRENCY.md) for the full model.
 
 ---
 
@@ -174,7 +177,7 @@ Present only when the message has one; a plain text message gets none of them.
 | Header | Type | Description |
 |---|---|---|
 | `telegram.attachment.kind` | `string` | `voice`, `audio`, `videoNote`, `video`, `animation`, `document`, `photo`, `sticker` |
-| `telegram.attachment.fileId` | `string` | Telegram `file_id` — pass it to `getFile` to download |
+| `telegram.attachment.fileId` | `string` | Telegram `file_id` — `telegram://download` takes it from here |
 | `telegram.attachment.mimeType` | `string?` | MIME type, when Telegram reports one |
 | `telegram.attachment.fileSize` | `long?` | Size in bytes, when reported |
 | `telegram.attachment.duration` | `int?` | Seconds — voice, audio, video, video note |
@@ -233,7 +236,7 @@ Set these on the exchange before `.To(Tg.Send/...)` to control per-message behav
 | `telegram.messageId` | `int` | Target for `edit` / `delete` modes. Wins over the `messageId` option |
 | `telegram.caption` | `string` | Per-message caption override for `document` / `photo` |
 | `telegram.showAlert` | `bool` | Per-message override for `showAlert` in `answer` mode |
-| `telegram.fileId` | `string` | Reuse an existing Telegram file in `document` / `photo` mode instead of uploading |
+| `telegram.fileId` | `string` | The file this call is about: reuse an already-hosted file in `document` / `photo`, or name the one to fetch in `download` |
 | `telegram.fileName` | `string` | File name when body is `Stream` / `byte[]` |
 | `telegram.callbackQueryId` | `string` | Required for `answer` mode (set by consumer on `CallbackQuery`) |
 
@@ -243,6 +246,50 @@ resulting message id back to the exchange:
 | Header | Type | Description |
 |---|---|---|
 | `telegram.sentMessageId` | `int` | `Message.MessageId` returned by Telegram — use for follow-up `edit` / `delete` |
+
+---
+
+## Downloading what the user sent (`download`)
+
+The consumer reports an attachment (`telegram.attachment.fileId`) but never fetches
+it — a route that only wants to know a voice note arrived should not pay for the
+transfer. `telegram://download` is the second half: `getFile` plus the transfer,
+with the bytes on `Out.Body` as a `byte[]`.
+
+```csharp
+From(Tg.Receive(token))
+    .Filter(e => e.In.Headers.ContainsKey(TelegramHeaders.AttachmentFileId))
+    .To(Tg.Download(token))          // attachment file_id → bytes
+    .To("stt://local")               // bytes → text (redb.Route.Llm)
+    .To(Tg.Send(token).ChatId(Header(TelegramHeaders.ChatId)));
+```
+
+Which file it fetches, in priority order: the `telegram.fileId` header, then the
+`fileId` option (a constant or a `${...}` expression), then
+`telegram.attachment.fileId`, then a bare string body. The attachment header is the
+default rather than the override — the common case ("download what the user just
+sent") needs no configuration, and a route that names a file is still obeyed.
+
+Needs no `chatId`: like `answer`, this mode is addressed by an id of its own.
+
+Afterwards:
+
+| Header | Type | Description |
+|---|---|---|
+| `telegram.file.path` | `string` | Server-side path `getFile` reported, e.g. `voice/file_42.oga` |
+| `telegram.file.size` | `long` | Bytes actually downloaded (≠ `telegram.attachment.fileSize`, which is what the update claimed) |
+| `telegram.file.uniqueId` | `string` | `file_unique_id` — stable across bots and time; the id to deduplicate by |
+
+The download URL embeds the bot token, so it is built inside the client and never
+reaches the exchange: a header travels into logs, audits and dead letters.
+
+**Two ceilings, and both are needed.** `maxDownloadBytes` (default 20 MiB, the Bot
+API's own limit) is checked against the size `getFile` reports *before* the transfer,
+and again while reading. `file_size` is optional in the Bot API — trusting it alone
+would leave "how much memory does one message cost" to the sender.
+
+Bot downloads are capped at 20 MB by Telegram regardless of this option; above that
+`getFile` answers without a `file_path` and the producer says so.
 
 **Note on `edit` mode:** the Bot API's `editMessageText` does not accept
 `disable_notification`; editing a message never produces a notification, so the
@@ -278,6 +325,10 @@ From(Tg.Receive(token))
 
 // Reuse an existing Telegram file_id instead of uploading
 .To(Tg.Document(token).ChatId(chatId).BodyIsFileId())
+
+// Download what the user sent — takes telegram.attachment.fileId with no configuration
+.To(Tg.Download(token))
+.To(Tg.Download(token).FileId(Header(TelegramHeaders.AttachmentFileId)).MaxDownloadBytes(2_000_000))
 
 // Tighter per-send timeout (default 120s)
 .To(Tg.Send(token).ChatId(chatId).Timeout(30))
@@ -512,3 +563,17 @@ instance yourself before the `.To(Tg.Send(...))` step.
 | FSM / conversation state | Application layer — use your own state store |
 | At-least-once delivery / redelivery | Persist updates to a queue as the first route step (see [Delivery semantics](#delivery-semantics-at-most-once)) |
 | Batching | Not supported by Telegram Bot API — each message is a separate HTTP call |
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new TelegramConnectionFactory
+{
+    Token = secrets.BotToken,
+});
+// telegram://bot?connectionFactory=prod
+```

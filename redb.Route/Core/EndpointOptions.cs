@@ -162,6 +162,26 @@ public abstract class EndpointOptions
     }
 
     private static object? ConvertValue(string rawValue, Type targetType)
+        => OptionValueConverter.Convert(rawValue, targetType);
+
+    /// <summary>
+    /// Registers the <see cref="SensitiveAttribute"/>-marked property names of an arbitrary type
+    /// with the URI redaction set — the same harvest <see cref="BindFromUri"/> performs for options
+    /// types, reusable by components that bind URI parameters onto user objects (<c>bean:</c>).
+    /// </summary>
+    internal static void RegisterSensitiveKeysFor(Type type) => RegisterSensitiveKeys(type);
+}
+
+/// <summary>
+/// The one string-to-typed-value converter behind <see cref="EndpointOptions.BindFromUri"/>,
+/// extracted for reuse (Route-XML Ф1: <c>bean:</c> property binding, the XML loader's value
+/// conversion). Invariant culture throughout; an unconvertible value yields null and the caller
+/// decides whether that is an error or an unmapped parameter.
+/// </summary>
+internal static class OptionValueConverter
+{
+    /// <summary>Converts a raw URI/attribute string to <paramref name="targetType"/>, or null.</summary>
+    internal static object? Convert(string rawValue, Type targetType)
     {
         try
         {
@@ -189,12 +209,15 @@ public abstract class EndpointOptions
             // Nullable<T>
             var underlying = Nullable.GetUnderlyingType(targetType);
             if (underlying != null)
-                return ConvertValue(rawValue, underlying);
+                return Convert(rawValue, underlying);
 
-            return Convert.ChangeType(rawValue, targetType, System.Globalization.CultureInfo.InvariantCulture);
+            return System.Convert.ChangeType(rawValue, targetType, System.Globalization.CultureInfo.InvariantCulture);
         }
-        catch
+        catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
         {
+            // Not convertible to the requested type: the caller treats null as "unmapped" (options)
+            // or as a declaration error (bean:). Anything else — reflection failures, type-load
+            // errors — keeps flying.
             return null;
         }
     }

@@ -361,7 +361,7 @@ public static partial class ExpressionResolver
             DebugLog($"Method '{methodName}' invocation successful: {result}");
             return result;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not ExpressionSandboxViolationException)
         {
             DebugLog($"Error invoking method '{methodName}': {ex.Message}");
             return null;

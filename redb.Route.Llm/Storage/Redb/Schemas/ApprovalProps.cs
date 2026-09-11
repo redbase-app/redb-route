@@ -7,8 +7,10 @@ namespace redb.Route.Llm.Storage.Redb.Schemas;
 /// (<see cref="ConversationId"/>, <see cref="ToolName"/>, <see cref="Approved"/>,
 /// <see cref="DecidedAtUtc"/>) at the top level allows reviewer queries
 /// ("show every denial last week for tool X") without scanning value rows.
-/// The approval id itself lives on the indexed <c>value_string</c> column of
-/// <c>_objects</c>, not in props.
+/// The approval id itself lives on the <c>value_string</c> column of
+/// <c>_objects</c> (partial index on PostgreSQL/SQLite; no index on MSSQL) and,
+/// normalized, in <c>value_unique</c> (per-scheme unique — one decision per id),
+/// not in props.
 /// </summary>
 [RedbScheme("LLM Approval")]
 public class ApprovalProps

@@ -252,3 +252,18 @@ All headers use the `redbEs.` prefix.
 - **Elasticsearch 8.x** (tested with 8.17.0)
 - .NET 8.0 / 9.0 / 10.0
 - `Elastic.Clients.Elasticsearch` 8.19.18
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new ElasticsearchConnectionFactory
+{
+    Nodes = "https://es1:9200,https://es2:9200",
+    ApiKey = secrets.EsApiKey,
+});
+// es://logs?connectionFactory=prod
+```

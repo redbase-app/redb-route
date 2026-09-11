@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Extensions;
 using redb.Route.Llm.Abstractions.Tools;
 using redb.Route.Llm.Engine;
 using redb.Route.Llm.Engine.Governance;
@@ -89,13 +90,9 @@ public static class LlmServiceCollectionExtensions
         services.TryAddSingleton<IKnowledgeStore, InMemoryKnowledgeStore>();
         services.TryAddSingleton<IBatchStore, InMemoryBatchStore>();
 
-        services.AddSingleton<ILlmComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            var component = sp.GetRequiredService<LlmComponent>();
-            context.AddComponent(component);
-            return new LlmComponentRegistrar();
-        });
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteComponent<LlmComponent>();
 
         return services;
     }
@@ -277,28 +274,18 @@ public static class LlmServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(configure);
 
-        services.AddSingleton<ILlmFactoryRegistrar>(sp =>
+        // One configurator per named factory: each AddLlmConnectionFactory call lands its
+        // own registry entry when RouteHostedService applies the configurators at startup.
+        services.AddRouteContextConfigurator((sp, context) =>
         {
             var factory = new LlmConnectionFactory { Name = name };
             configure(factory);
             factory.Name = name; // re-assert in case configure overwrote it
             factory.LoggerFactory ??= sp.GetService<ILoggerFactory>(); // for provider diagnostics
-            sp.GetRequiredService<IRouteContext>().AddToRegistry(name, factory);
-            return new LlmFactoryRegistrar();
+            context.AddToRegistry(name, factory);
         });
 
         return services;
     }
 }
 
-/// <summary>Marker interface for component DI registration.</summary>
-internal interface ILlmComponentRegistrar;
-
-/// <summary>Marker registration for component DI.</summary>
-internal sealed class LlmComponentRegistrar : ILlmComponentRegistrar;
-
-/// <summary>Marker interface for factory DI registration.</summary>
-internal interface ILlmFactoryRegistrar;
-
-/// <summary>Marker registration for factory DI.</summary>
-internal sealed class LlmFactoryRegistrar : ILlmFactoryRegistrar;

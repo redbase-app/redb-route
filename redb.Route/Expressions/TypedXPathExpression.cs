@@ -18,10 +18,30 @@ public sealed class TypedXPathExpression<TValue> : Expression
     /// Initializes a new instance of the <see cref="TypedXPathExpression{TValue}"/> class.
     /// </summary>
     /// <param name="xpath">The XPath expression string.</param>
-    public TypedXPathExpression(string xpath)
+    /// <param name="result">
+    /// The XPath-level type of the result, applied before conversion to <typeparamref name="TValue"/>.
+    /// </param>
+    /// <param name="source">What to run the path against; <c>null</c> means the message body.</param>
+    public TypedXPathExpression(string xpath, XPathResult result = XPathResult.NodeSet, IExpression? source = null)
+        : this(new XPathExpression(xpath, null, result, source))
     {
-        _inner = new XPathExpression(xpath);
     }
+
+    private TypedXPathExpression(XPathExpression inner) => _inner = inner;
+
+    /// <inheritdoc cref="XPathExpression.From(IExpression)"/>
+    public TypedXPathExpression<TValue> From(IExpression source) => new(_inner.From(source));
+
+    /// <inheritdoc cref="XPathExpression.WithNamespaces"/>
+    public TypedXPathExpression<TValue> WithNamespaces(params (string Prefix, string Uri)[] namespaces)
+        => new(_inner.WithNamespaces(namespaces));
+
+    /// <inheritdoc cref="XPathExpression.Trimmed(bool)"/>
+    public TypedXPathExpression<TValue> Trimmed(bool trim = true) => new(_inner.Trimmed(trim));
+
+    /// <inheritdoc cref="XPathExpression.WithParameters"/>
+    public TypedXPathExpression<TValue> WithParameters(params (string Name, IExpression Value)[] parameters)
+        => new(_inner.WithParameters(parameters));
 
     /// <inheritdoc />
     public override T Evaluate<T>(IExchange exchange)

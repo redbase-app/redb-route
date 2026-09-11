@@ -27,8 +27,6 @@ public sealed class LlmConnectionFactory
     /// <summary>Model identifier passed to the provider (e.g. "claude-haiku-4.5", "gpt-4o-mini").</summary>
     public string ModelId { get; set; } = "stub-model";
 
-    /// <summary>Optional pinned model version for deterministic deploys.</summary>
-    public string? ModelVersion { get; set; }
 
     /// <summary>
     /// Optional Anthropic contract-tier override (<c>legacy</c>/<c>transitional</c>/<c>modern</c>).
@@ -54,14 +52,26 @@ public sealed class LlmConnectionFactory
     /// <summary>Default max output tokens.</summary>
     public int? MaxTokens { get; set; }
 
+    /// <summary>
+    /// Effort level for models that think by default (Anthropic Claude 4.6+ / Sonnet 5 / Opus 5:
+    /// <c>low</c>, <c>medium</c>, <c>high</c>, <c>xhigh</c>, <c>max</c>; sent as
+    /// <c>output_config.effort</c>). <c>null</c> — the provider's default (<c>high</c> on
+    /// Anthropic). Thinking tokens count against <see cref="MaxTokens"/>: at the default effort
+    /// a hard question can spend the whole budget on thinking and return NO text (seen
+    /// 2026-09-07 with max_tokens 4096 on Sonnet 5) — <c>medium</c> or <c>low</c> keeps the
+    /// answer inside the budget. Models without the effort ladder (Haiku 4.5) reject the field
+    /// with 400, so set it per factory, not globally.
+    /// </summary>
+    public string? Effort { get; set; }
+
     /// <summary>Default top-p sampling parameter.</summary>
     public double? TopP { get; set; }
 
     /// <summary>Per-call request timeout in milliseconds (default: 120 000).</summary>
     public int RequestTimeoutMs { get; set; } = 120_000;
 
-    /// <summary>Number of automatic retries on transient errors (default: 2).</summary>
-    public int Retries { get; set; } = 2;
+    // Retries was removed (Ф11 мелочи): it was never read, and the Llm engine's resilience
+    // policy is deliberately fallback-to-another-factory, not retry-the-same-provider.
 
     /// <summary>
     /// Optional pre-built provider instance. When set, <see cref="Build"/> returns it

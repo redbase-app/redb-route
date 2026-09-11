@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
     <ProjectReference Include="..\..\redb.Route.Http\redb.Route.Http.csproj" />
+    <ProjectReference Include="..\..\redb.Route.TestKit\redb.Route.TestKit.csproj" />
   </ItemGroup>
 
   <ItemGroup>

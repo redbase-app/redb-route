@@ -65,6 +65,16 @@ public class SagaDefinition : RouteDefinitionBase<SagaDefinition>, ISagaDefiniti
     }
 
     /// <inheritdoc />
+    public ISagaDefinition Step(IProcessor action, IProcessor? compensate = null)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        _entries.Add(new SagaStepEntry(
+            action.Process,
+            compensate is null ? null : compensate.Process));
+        return this;
+    }
+
+    /// <inheritdoc />
     public ISagaDefinition OnCompletion(Action<IExchange> callback)
     {
         ArgumentNullException.ThrowIfNull(callback);

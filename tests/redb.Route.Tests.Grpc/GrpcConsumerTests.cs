@@ -246,7 +246,8 @@ public class GrpcConsumerTests : IAsyncLifetime
         var act = async () => await client.ProcessAsync(request);
         var ex = await act.Should().ThrowAsync<global::Grpc.Core.RpcException>();
         ex.Which.StatusCode.Should().Be(global::Grpc.Core.StatusCode.Internal);
-        ex.Which.Status.Detail.Should().Contain("test error");
+        // BR-4: the action's own text never becomes the status detail; the caller gets a reference to quote.
+        ex.Which.Status.Detail.Should().NotContain("test error").And.Contain("ref: ");
     }
 
     [Fact]

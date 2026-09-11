@@ -180,13 +180,6 @@ the same consumer semantics as the poll path:
 | `timeout` | `30` | RPC timeout (seconds) |
 | `correlationPattern` | `MsgId` | `MsgId` or `CorrelId` |
 
-### Dead Letter
-
-| Option | Default | Description |
-|---|---|---|
-| `deadLetterQueue` | — | DLQ name |
-| `maxRedeliveries` | `0` | Max redeliveries |
-
 ### SSL/TLS
 
 | Option | Default | Description |
@@ -244,3 +237,40 @@ Default dev credentials:
 - **Web Console**: `https://localhost:9443/ibmmq/console` (`admin` / `passw0rd`)
 
 Pre-created queues: `DEV.QUEUE.1` … `DEV.QUEUE.5`, `DEV.DEAD.LETTER.QUEUE`.
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new IbmMqConnectionFactory
+{
+    Host = "mq.internal",
+    QueueManager = "QM1",
+    Channel = "DEV.APP.SVRCONN",
+    Password = secrets.MqPassword,
+});
+// wmq://DEV.QUEUE.1?connectionFactory=prod
+```
+
+## Concurrency
+
+The default is **1** concurrent consumer — the industry norm (Camel, Spring, the Azure SDK all
+ship 1): a single consumer preserves ordering and your handlers need no thread safety.
+Parallelism is an explicit opt-in:
+
+```
+concurrentConsumers=4       # a fixed worker count
+concurrentConsumers=auto    # max(CPU count, 2) — the NServiceBus formula
+```
+
+Anything else — `0`, a negative, a typo — fails at endpoint creation naming the option (the old
+int-typed option silently fell back to 1). Raising the value trades ordering for throughput:
+messages from the same queue are processed out of order, and your processors must be safe to
+run in parallel.
+
+IBM MQ specifics: `concurrentConsumers` on a TOPIC clamps to 1 — parallel non-durable
+subscriptions would each receive a full copy of every message (duplicate delivery), not share
+the load. Use a QUEUE destination for competing consumers.

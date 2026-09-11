@@ -1,3 +1,4 @@
+using redb.Route.Http;
 using redb.Route.Core;
 
 namespace redb.Route.Grpc;
@@ -206,17 +207,41 @@ public class GrpcEndpointOptions : EndpointOptions
     /// </summary>
     public GrpcCompression Compression { get; set; } = GrpcCompression.None;
 
+    // ── Admission limit (HTTP_CONCURRENCY_LIMITS_PLAN) ──
+
+    /// <summary>
+    /// Maximum concurrent executions of this consumer's pipeline for UNARY calls. 0 (default) =
+    /// unlimited. Streaming methods are deliberately not counted — a long-lived stream would hold
+    /// a permit for its whole life and starve the limit (a dedicated maxConcurrentStreams may come
+    /// later); the health method is not counted either, so orchestrator probes never flap under
+    /// load. Overflow beyond the limit and <see cref="RequestQueueLimit"/> is shed with
+    /// <see cref="RejectStatusCode"/> before any pipeline work.
+    /// </summary>
+    public int MaxConcurrentRequests { get; set; }
+
+    /// <summary>Requests over the limit that WAIT for a permit (FIFO). 0 (default) = reject immediately.</summary>
+    public int RequestQueueLimit { get; set; }
+
+    /// <summary>HTTP status code for a shed request. Default 429 (gRPC clients see an HTTP-level error).</summary>
+    public int RejectStatusCode { get; set; } = 429;
+
+    /// <summary>Value of the <c>Retry-After</c> header on a shed request; 0 = do not send it. Default 1.</summary>
+    public int RetryAfterSeconds { get; set; } = 1;
+
     /// <inheritdoc />
     public override void Validate()
     {
+        ConcurrencyLimitOptions.ValidateShape(MaxConcurrentRequests, RequestQueueLimit, RejectStatusCode, RetryAfterSeconds);
+
         if (Deadline < 0)
             throw new ArgumentException("Deadline must be >= 0.");
 
         if (Port is < 0 or > 65535)
             throw new ArgumentException("Port must be between 0 and 65535.");
 
-        if (Ssl && string.IsNullOrEmpty(SslCertPath))
-            throw new ArgumentException("SslCertPath is required when Ssl=true.");
+        // No SslCertPath check here on purpose: the certificate may come from a named connection
+        // factory or from the host default (HttpHostingOptions.Tls). The invariant "TLS asked for
+        // and no certificate resolves" is enforced once, at the bind, by SharedHttpServerManager.
 
         if (ClientCertificateMode != GrpcClientCertificateMode.NoCertificate && !Ssl)
             throw new ArgumentException("clientCertificateMode requires ssl=true — mTLS needs a TLS handshake.");

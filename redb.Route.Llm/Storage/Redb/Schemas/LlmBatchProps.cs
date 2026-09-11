@@ -5,9 +5,11 @@ namespace redb.Route.Llm.Storage.Redb.Schemas;
 /// <summary>
 /// A submitted async-batch job tracked by <see cref="redb.Route.Llm.Engine.Storage.IBatchStore"/>.
 /// Carries the provider-issued batch identifier on
-/// <c>_objects.value_string</c> for direct lookup, and an optional conversation
-/// id on <c>_objects.value_long</c> when the caller pre-bound the batch to a
-/// conversation. Status transitions ("submitted", "running", "completed",
+/// <c>_objects.value_string</c> for direct lookup (partial index on
+/// PostgreSQL/SQLite; no index on MSSQL) and, normalized, in
+/// <c>value_unique</c> (per-scheme unique — one row per batch id), plus an
+/// optional conversation id on <c>_objects.value_long</c> when the caller
+/// pre-bound the batch to a conversation. Status transitions ("submitted", "running", "completed",
 /// "failed") are written by <see cref="redb.Route.Llm.Engine.Storage.IBatchStore.MarkCompletedAsync"/>
 /// and friends — the framework does not poll on its own; status is updated
 /// either when the corresponding webhook arrives or when the host explicitly

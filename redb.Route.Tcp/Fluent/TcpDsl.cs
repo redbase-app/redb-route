@@ -51,6 +51,9 @@ public sealed class TcpBuilder
 
     // TLS
     private bool _ssl;
+    private bool _trustAllCertificates;
+    private string? _clientCertPath;
+    private string? _clientCertPassword;
     private string? _sslCertPath;
     private string? _sslCertPassword;
     private string? _connectionFactory;
@@ -126,6 +129,16 @@ public sealed class TcpBuilder
     /// <summary>Target host name for SSL validation.</summary>
     public TcpBuilder SslTargetHost(string host) { _sslTargetHost = host; return this; }
 
+    /// <summary>
+    /// Producer: accept any server certificate, including a self-signed one. Explicit on purpose --
+    /// turning certificate validation off should never be a side effect of another option.
+    /// </summary>
+    public TcpBuilder TrustAllCertificates() { _trustAllCertificates = true; return this; }
+
+    /// <summary>Producer: PFX client certificate presented to a server that requires mTLS.</summary>
+    public TcpBuilder ClientCert(string path, string? password = null)
+    { _clientCertPath = path; _clientCertPassword = password; return this; }
+
     // ── Build ───────────────────────────────────────────────────────
 
     public string Build()
@@ -161,6 +174,9 @@ public sealed class TcpBuilder
         AppendStr("sslCertPassword", _sslCertPassword);
         AppendStr("connectionFactory", _connectionFactory);
         AppendStr("sslTargetHost", _sslTargetHost);
+        AppendBool("trustAllCertificates", _trustAllCertificates);
+        AppendStr("clientCertPath", _clientCertPath);
+        AppendStr("clientCertPassword", _clientCertPassword);
 
         return sb.ToString();
     }

@@ -964,4 +964,30 @@ public sealed class FtpIntegrationTests : IAsyncLifetime
 
         await CleanupDirAsync(rawClient, fullDir);
     }
+
+    // ── Часть B плана KAFKA_HARDENING_AND_OPTIONS_SWEEP_PLAN: transferType ──
+
+    [Fact]
+    public async Task TransferTypeAscii_ReachesTheClientConfig()
+    {
+        // The option was declared, documented ("Binary (raw bytes, default) or Ascii") and read
+        // by nothing: FluentFTP stayed on its own default for both directions.
+        var options = new FtpEndpointOptions
+        {
+            Host = Host, Port = Port, Username = Username, Password = Password,
+            TransferType = FtpTransferType.Ascii,
+        };
+        var ops = new FtpFileOperations(options);
+        await ops.ConnectAsync();
+        try
+        {
+            ops.Client!.Config.UploadDataType.Should().Be(FtpDataType.ASCII,
+                "transferType=Ascii обязан доехать до клиента, а не быть мёртвой опцией");
+            ops.Client.Config.DownloadDataType.Should().Be(FtpDataType.ASCII);
+        }
+        finally
+        {
+            await ops.DisconnectAsync();
+        }
+    }
 }

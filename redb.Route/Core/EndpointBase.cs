@@ -33,6 +33,9 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
     private long _messagesOut;
     private long _errors;
     private long _bytesIn;
+    private long _bytesOut;
+    private long _rejected;
+    private long _cancelled;
     private long _lastActivityTicks;
     private readonly DateTime _startTime = DateTime.UtcNow;
 
@@ -95,6 +98,15 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
 
     /// <inheritdoc />
     public long BytesIn => Interlocked.Read(ref _bytesIn);
+
+    /// <inheritdoc />
+    public long BytesOut => Interlocked.Read(ref _bytesOut);
+
+    /// <inheritdoc />
+    public long Rejected => Interlocked.Read(ref _rejected);
+
+    /// <inheritdoc />
+    public long Cancelled => Interlocked.Read(ref _cancelled);
 
     /// <inheritdoc />
     public DateTime? LastActivity
@@ -215,6 +227,9 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
         Interlocked.Exchange(ref _messagesOut, 0);
         Interlocked.Exchange(ref _errors, 0);
         Interlocked.Exchange(ref _bytesIn, 0);
+        Interlocked.Exchange(ref _bytesOut, 0);
+        Interlocked.Exchange(ref _rejected, 0);
+        Interlocked.Exchange(ref _cancelled, 0);
         Interlocked.Exchange(ref _lastActivityTicks, 0);
         Interlocked.Exchange(ref _lastErrorTicks, 0);
         _lastErrorMessage = "";
@@ -294,9 +309,33 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
         Interlocked.Add(ref _bytesIn, bytes);
     }
 
+    /// <summary>Record outgoing bytes (message body size). Thread-safe.</summary>
+    public void RecordBytesOut(long bytes)
+    {
+        Interlocked.Add(ref _bytesOut, bytes);
+    }
+
+    /// <inheritdoc />
+    public void RecordRejected()
+    {
+        Interlocked.Increment(ref _rejected);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Bumps activity but neither the error counter nor the last-error stamp: cancellation must
+    /// not feed the health calculation, whose "recent errors" window would otherwise mark an
+    /// endpoint degraded for five minutes per closed dashboard tab.
+    /// </remarks>
+    public void RecordCancelled()
+    {
+        Interlocked.Increment(ref _cancelled);
+        Interlocked.Exchange(ref _lastActivityTicks, DateTime.UtcNow.Ticks);
+    }
+
     // ── Utility ──
 
-    /// <summary>Estimate size of exchange body in bytes (for BytesIn tracking).</summary>
+    /// <summary>Estimate size of exchange body in bytes (for byte-volume tracking).</summary>
     internal static int EstimateBodySize(object? body)
     {
         if (body is null) return 0;

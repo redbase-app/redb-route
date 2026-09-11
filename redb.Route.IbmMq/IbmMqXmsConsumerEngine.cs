@@ -109,7 +109,7 @@ internal sealed class IbmMqXmsConsumerEngine
             _connection.ExceptionListener = OnConnectionException;
 
             var isTopic = _options.DestinationType == IbmMqDestinationType.Topic;
-            var workerCount = Math.Max(1, _options.ConcurrentConsumers);
+            var workerCount = Math.Max(1, _options.ResolvedConcurrentConsumers);
 
             // Topics can't be load-balanced across competing subscribers: each non-durable subscription
             // gets its OWN copy of every message, so N subscribers would DUPLICATE delivery, not share it.
@@ -369,6 +369,12 @@ internal sealed class IbmMqXmsConsumerEngine
             // ours (IllegalStateException). A plain queue destination by name is an ordinary send.
             var replyDest = session.CreateQueue(replyTo.Name);
 
+            // targetClient=Mq promises raw MQMD+body on EVERY leg: without this, XMS attaches an
+            // MQRFH2 (jms/mcd folders) to the reply and the legacy requester's body parser breaks
+            // - the exact thing the option exists to prevent (ревью дуги, M11).
+            if (_options.TargetClient == IbmMqTargetClient.Mq)
+                replyDest.SetIntProperty(XMSC.WMQ_TARGET_CLIENT, XMSC.WMQ_TARGET_DEST_MQ);
+
             var producer = session.CreateProducer(replyDest);
             // Reply non-persistent: RPC reply queues are typically temporary dynamic queues, which reject
             // persistent messages (MQRC_PERSISTENT_NOT_ALLOWED). XMS defaults a producer to Persistent
@@ -467,6 +473,10 @@ internal sealed class IbmMqXmsConsumerEngine
 
         if (!string.IsNullOrEmpty(options.SslCipherSpec))
             factory.SetStringProperty(XMSC.WMQ_SSL_CIPHER_SPEC, options.SslCipherSpec);
+
+        // Bytes before the SSL secret key is renegotiated - a dead option until часть B.
+        if (options.SslKeyResetCount > 0)
+            factory.SetIntProperty(XMSC.WMQ_SSL_KEY_RESETCOUNT, options.SslKeyResetCount);
 
         return factory;
     }

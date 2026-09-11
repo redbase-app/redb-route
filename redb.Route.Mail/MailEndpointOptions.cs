@@ -131,10 +131,15 @@ public class MailEndpointOptions : EndpointOptions
     /// <summary>Whether to download message body (false = headers only for envelope scanning).</summary>
     public bool FetchBody { get; set; } = true;
 
-    /// <summary>Whether to download attachments.</summary>
+    /// <summary>Whether to carry attachment payloads on the exchange (names/count always stay).</summary>
     public bool FetchAttachments { get; set; } = true;
 
-    /// <summary>Maximum attachment size in bytes to download (0 = unlimited).</summary>
+    /// <summary>
+    /// Maximum DECODED attachment size in bytes carried on the exchange (0 = unlimited).
+    /// Caps the copy handed to the route, not the network transfer: the MIME message is already
+    /// in memory when the cap is applied; an oversized attachment keeps its name in
+    /// AttachmentNames but its payload is dropped.
+    /// </summary>
     public long MaxAttachmentSize { get; set; }
 
     /// <summary>Whether to peek at messages (IMAP: don't set \Seen flag on fetch).</summary>

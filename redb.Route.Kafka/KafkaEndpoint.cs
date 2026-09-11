@@ -15,21 +15,14 @@ public sealed class KafkaEndpoint : EndpointBase<KafkaEndpointOptions>
     /// <summary>Resolved connection factory from the registry (null if not configured).</summary>
     internal KafkaConnectionFactory? ResolvedFactory { get; }
 
-    /// <summary>Creates a Kafka endpoint.</summary>
-    public KafkaEndpoint(EndpointUri uri, KafkaComponent component, KafkaEndpointOptions options)
+    /// <summary>Creates a Kafka endpoint. The factory is resolved by the component
+    /// BEFORE options validation (it may be the only source of the brokers).</summary>
+    public KafkaEndpoint(EndpointUri uri, KafkaComponent component, KafkaEndpointOptions options,
+        KafkaConnectionFactory? resolvedFactory = null)
         : base(uri, component, options)
     {
         TopicName = uri.Path;
-
-        // Resolve named ConnectionFactory from registry if specified
-        if (!string.IsNullOrEmpty(options.ConnectionFactory) && component.Context is not null)
-        {
-            ResolvedFactory = component.Context.GetFromRegistry<KafkaConnectionFactory>(options.ConnectionFactory);
-        }
-
-        // If brokers not set in URI but factory provides them, apply
-        if (string.IsNullOrWhiteSpace(options.Brokers) && ResolvedFactory is not null)
-            options.Brokers = ResolvedFactory.Brokers;
+        ResolvedFactory = resolvedFactory;
     }
 
     /// <inheritdoc />

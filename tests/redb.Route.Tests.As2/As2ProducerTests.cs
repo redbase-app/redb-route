@@ -114,6 +114,69 @@ public class As2ProducerTests
         return MimeEntity.Load(stream);
     }
 
+    [Fact]
+    public void ProducerName_MasksUserInfoPassword()
+    {
+        // Same invariant as HttpProducer: the name is logged as "producer started"; a userinfo
+        // password lives in the authority, where no [Sensitive] attribute can reach it, so the
+        // name must go through EndpointUri.Sanitize.
+        var context = new RouteContext();
+        context.AddComponent(new As2Component());
+        context.AddToRegistry("partner", new As2ConnectionFactory
+        {
+            As2From = "US", As2To = "THEM", Sign = false, Encrypt = false,
+        });
+        var endpoint = context.GetEndpoint(
+            As2Dsl.Send("http://edi:s3cr3t@partner.example/as2").ConnectionFactory("partner"));
+        var producer = endpoint.CreateProducer();
+
+        var name = (string?)typeof(ConnectableProducer)
+            .GetProperty("ProducerName", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(producer);
+        name.Should().NotContain("s3cr3t", "пароль из userinfo не должен попадать в логи started/stopped");
+    }
+
+    [Fact]
+    public async Task Send_DoesNotBridgeTheHostHeader()
+    {
+        // From(http) -> To(as2) used to be an accidental preserve-host proxy: the inbound Host
+        // rode the header bridge onto the outgoing POST. The partner must see its own host.
+        var port = FreePort();
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+
+        string? seenHost = null;
+        var capture = Task.Run(async () =>
+        {
+            var ctx = await listener.GetContextAsync();
+            seenHost = ctx.Request.Headers["Host"];
+            ctx.Response.StatusCode = 200;
+            ctx.Response.Close();
+        });
+
+        await using var context = new RouteContext();
+        context.AddComponent(new As2Component());
+        context.AddToRegistry("partner", new As2ConnectionFactory
+        {
+            As2From = "US", As2To = "THEM",
+            Sign = false, Encrypt = false, MdnMode = As2MdnMode.None,
+        });
+
+        var endpoint = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/as2").ConnectionFactory("partner"));
+        var producer = endpoint.CreateProducer();
+        await producer.Start();
+
+        var msg = new Message("ISA*00*...EDI~") { ContentType = "application/edi-x12" };
+        msg.Headers["Host"] = "upstream.example.com";
+        await producer.Process(new Exchange(msg));
+        await capture.WaitAsync(TimeSpan.FromSeconds(5));
+        await producer.Stop();
+
+        seenHost.Should().Be($"127.0.0.1:{port}",
+            "Host — hop-by-hop заголовок HTTP-транспорта, а не полезная нагрузка AS2-моста");
+    }
+
     private static int FreePort()
     {
         var l = new TcpListener(IPAddress.Loopback, 0);

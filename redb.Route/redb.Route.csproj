@@ -11,6 +11,13 @@
     <None Include="README.md" Pack="true" PackagePath="\" Condition="Exists('README.md')" />
     <InternalsVisibleTo Include="redb.Route.Tests" />
     <InternalsVisibleTo Include="redb.Route.Tests.Core" />
+    <InternalsVisibleTo Include="redb.Route.TestKit" />
+    <InternalsVisibleTo Include="redb.Route.Tests.TestKit" />
+    <InternalsVisibleTo Include="redb.Route.Xml" />
+    <InternalsVisibleTo Include="redb.Route.Tests.Xml" />
+    <InternalsVisibleTo Include="redb.Route.Xml.CodeGen" />
+    <InternalsVisibleTo Include="redb.Route.XPath2" />
+    <InternalsVisibleTo Include="redb.Route.Tests.XPath2" />
   </ItemGroup>
 
   <!-- Microsoft.Extensions: version per target framework -->
@@ -40,9 +47,8 @@
 
   <!-- Cross-framework dependencies -->
   <ItemGroup>
-    <PackageReference Include="JsonPath.Net" Version="2.0.0" />
+    <PackageReference Include="JsonPath.Net" Version="3.0.2" />
     <PackageReference Include="JsonSchema.Net" Version="7.3.4" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
 </Project>

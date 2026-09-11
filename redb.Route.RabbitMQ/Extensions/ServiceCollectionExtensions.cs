@@ -1,6 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using redb.Route.Abstractions;
+using redb.Route.Extensions;
 
 namespace redb.Route.RabbitMQ;
 
@@ -24,22 +24,11 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddRedbRouteRabbitMQ(this IServiceCollection services)
     {
-        services.AddSingleton<RabbitMQComponent>();
-
-        services.AddSingleton<IRabbitMQComponentRegistrar>(sp =>
-        {
-            var context = sp.GetRequiredService<IRouteContext>();
-            var component = sp.GetRequiredService<RabbitMQComponent>();
-            context.AddComponent(component);
-            return new RabbitMQComponentRegistrar();
-        });
+        // IRouteContextConfigurator is applied by RouteHostedService at startup --
+        // the correct registration hook (a lazy marker singleton never fires).
+        services.AddRouteComponent<RabbitMQComponent>();
 
         return services;
     }
 }
 
-/// <summary>Marker interface for DI registration.</summary>
-internal interface IRabbitMQComponentRegistrar;
-
-/// <summary>Marker registration for DI.</summary>
-internal sealed class RabbitMQComponentRegistrar : IRabbitMQComponentRegistrar;

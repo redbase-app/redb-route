@@ -17,10 +17,13 @@ public sealed class ToDynamicProcessor : IProcessor
         _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
     }
 
+    /// <summary>The resolver this node sends through; shared with an interception wrapper so the target is evaluated once per message.</summary>
+    internal DynamicEndpointResolver Resolver => _resolver;
+
     /// <inheritdoc />
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
-        var producer = await _resolver.ResolveProducerAsync(exchange, ct).ConfigureAwait(false);
-        await producer.Process(exchange, ct).ConfigureAwait(false);
+        var (endpoint, producer) = await _resolver.ResolvePairAsync(exchange, ct).ConfigureAwait(false);
+        await Core.CountedSend.Process(endpoint, producer, exchange, ct).ConfigureAwait(false);
     }
 }

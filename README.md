@@ -1578,7 +1578,7 @@ For transports that support transactions, combine with `.Transacted()` to wrap p
 | `redb.Route.Controllers` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Controllers?label=)](https://www.nuget.org/packages/redb.Route.Controllers) | Controller dispatch — attribute routing, DI, InOut |
 | `redb.Route.Validation.Adapters` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Validation.Adapters?label=)](https://www.nuget.org/packages/redb.Route.Validation.Adapters) | Validation adapters — FluentValidation + DataAnnotations |
 
-36 packages total: core engine + 29 transports (incl. `llm:` and `mcp:`) + 6 support libraries (Core, Controllers, GenericFile, Validation.Adapters, Llm.Abstractions, Llm.Tools).
+37 packages total: core engine + 29 transports (incl. `llm:` and `mcp:`) + 7 support libraries (Core, Controllers, GenericFile, Http.Hosting, Validation.Adapters, Llm.Abstractions, Llm.Tools).
 
 ---
 

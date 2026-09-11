@@ -4,12 +4,12 @@ using redb.Route.Llm.Storage.Redb;
 namespace redb.Route.Tests.Llm.Storage;
 
 /// <summary>Integration tests for <see cref="RedbCostBudgetStore"/>.</summary>
-[Collection("PostgresPro")]
+[Collection("StoragePro")]
 public sealed class RedbCostBudgetStoreTests
 {
-    private readonly PostgresProFixture _fx;
+    private readonly StorageProFixture _fx;
 
-    public RedbCostBudgetStoreTests(PostgresProFixture fx) => _fx = fx;
+    public RedbCostBudgetStoreTests(StorageProFixture fx) => _fx = fx;
 
     [Fact]
     public async Task GetUsage_Empty_ReturnsZero()

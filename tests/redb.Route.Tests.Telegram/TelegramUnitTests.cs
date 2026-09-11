@@ -555,6 +555,7 @@ public class TelegramUnitTests
     [InlineData("answer")]
     [InlineData("edit")]
     [InlineData("delete")]
+    [InlineData("download")]
     public void Endpoint_ProducerModes_CreateProducer(string mode)
     {
         var endpoint = new TelegramComponent()

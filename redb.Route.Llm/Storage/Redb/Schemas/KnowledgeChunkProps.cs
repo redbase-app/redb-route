@@ -9,7 +9,9 @@ namespace redb.Route.Llm.Storage.Redb.Schemas;
 /// means a chunk row reads / writes one table (<c>_objects</c>) with zero
 /// <c>_props</c> rows.
 /// <list type="bullet">
-///   <item><c>value_string</c> — stable chunk id (business key, indexed).</item>
+///   <item><c>value_string</c> — stable chunk id (business key; partial index on
+///         PostgreSQL/SQLite, no index on MSSQL). Rides normalized in
+///         <c>value_unique</c> on new rows (per-scheme unique race barrier).</item>
 ///   <item><c>name</c> — collection / namespace partition.</item>
 ///   <item><c>note</c> — JSON envelope <c>{"text":"...","meta":"..."}</c>
 ///         (chunk text plus optional metadata). Keyword search

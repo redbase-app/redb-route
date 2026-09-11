@@ -17,7 +17,7 @@ public sealed class IbmMqEndpointOptionsTests
         opts.Channel.Should().Be("DEV.APP.SVRCONN");
         opts.QueueManager.Should().Be("QM1");
         opts.DestinationType.Should().Be(IbmMqDestinationType.Queue);
-        opts.ConcurrentConsumers.Should().Be(1);
+        opts.ResolvedConcurrentConsumers.Should().Be(1);
         opts.WaitInterval.Should().Be(5000);
         opts.BatchSize.Should().Be(0);
         opts.Transacted.Should().BeFalse();
@@ -64,7 +64,7 @@ public sealed class IbmMqEndpointOptionsTests
         var opts = new IbmMqEndpointOptions();
         opts.BindFromUri(uri.RawParameters);
 
-        opts.ConcurrentConsumers.Should().Be(4);
+        opts.ResolvedConcurrentConsumers.Should().Be(4);
         opts.WaitInterval.Should().Be(10000);
         opts.BatchSize.Should().Be(10);
         opts.BackoutThreshold.Should().Be(5);
@@ -208,7 +208,7 @@ public sealed class IbmMqEndpointOptionsTests
     [Fact]
     public void Validate_InvalidConcurrentConsumers_Throws()
     {
-        var opts = new IbmMqEndpointOptions { ConcurrentConsumers = 0 };
+        var opts = new IbmMqEndpointOptions { ConcurrentConsumers = "0" };
         var act = () => opts.Validate();
         act.Should().Throw<ArgumentException>().WithMessage("*concurrentConsumers*");
     }

@@ -61,7 +61,7 @@ public sealed class MqttConnectionFactoryTests
     }
 
     [Fact]
-    public void MissingFactory_FallsBackToUriParameters()
+    public void MissingFactory_FailsLoud()
     {
         var context = new RouteContext();
         var component = new MqttComponent();
@@ -70,7 +70,9 @@ public sealed class MqttConnectionFactoryTests
         var uri = EndpointUriParser.Parse("mqtt://sensors/temp?connectionFactory=absent&server=direct");
         var act = () => component.CreateEndpoint(uri);
 
-        act.Should().NotThrow();
+        // Ф11 Ж-1: опечатка в connectionFactory обязана падать громко, а не молча фолбэчиться
+        act.Should().Throw<InvalidOperationException>()
+            .Which.Message.Should().Contain("absent");
     }
 
     [Fact]

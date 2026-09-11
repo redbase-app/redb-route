@@ -55,6 +55,19 @@ public sealed class SoapComponent : ComponentBase
 
 // ── Options ──────────────────────────────────────────────────────────────────
 
+/// <summary>Whether the consumer requires, allows, or ignores a client certificate (mTLS).</summary>
+public enum SoapClientCertificateMode
+{
+    /// <summary>No client certificate is requested. Default.</summary>
+    NoCertificate,
+
+    /// <summary>A certificate is requested; the call proceeds when the client presents none.</summary>
+    AllowCertificate,
+
+    /// <summary>A certificate is required; the handshake fails without one.</summary>
+    RequireCertificate,
+}
+
 /// <summary>Options for a SOAP endpoint.</summary>
 public sealed class SoapEndpointOptions : EndpointOptions
 {
@@ -79,10 +92,56 @@ public sealed class SoapEndpointOptions : EndpointOptions
     /// <summary>HTTPS/TLS. Set automatically when the URI scheme is <c>soaps</c>.</summary>
     public bool UseTls { get; set; }
 
+    /// <summary>
+    /// Path to the PFX certificate the consumer serves TLS with. Required alongside
+    /// <see cref="UseTls"/> unless a named <see cref="SoapConnectionFactory"/> supplies it.
+    /// </summary>
+    public string? SslCertPath { get; set; }
+
+    /// <summary>Password for the PFX certificate.</summary>
+    [Sensitive]
+    public string? SslCertPassword { get; set; }
+
+    /// <summary>Client-certificate policy (mTLS) for the consumer. Requires <see cref="UseTls"/>.</summary>
+    public SoapClientCertificateMode ClientCertificateMode { get; set; } = SoapClientCertificateMode.NoCertificate;
+
+    /// <summary>
+    /// Comma-separated thumbprints of accepted client certificates. When set, a presented certificate
+    /// whose thumbprint is not listed is rejected even if its chain validates.
+    /// </summary>
+    public string? AllowedClientThumbprints { get; set; }
+
+    /// <summary>
+    /// Also publish the caller's address, path and method under <c>redbHttp.*</c>, so processors written
+    /// against the HTTP transport (rate limiting, lockout, device metadata) work unchanged behind a SOAP
+    /// endpoint. Default: false — the connector's own <c>redbSoap.*</c> headers always carry the same
+    /// facts, and writing into another transport's namespace should be asked for.
+    /// </summary>
+    public bool EmitHttpCompatHeaders { get; set; }
+
+    // ── Admission limit (HTTP_CONCURRENCY_LIMITS_PLAN) ──
+
+    /// <summary>
+    /// Maximum concurrent executions of this consumer's pipeline. 0 (default) = unlimited.
+    /// Overflow beyond the limit and <see cref="RequestQueueLimit"/> is shed with
+    /// <see cref="RejectStatusCode"/> before any pipeline work.
+    /// </summary>
+    public int MaxConcurrentRequests { get; set; }
+
+    /// <summary>Requests over the limit that WAIT for a permit (FIFO). 0 (default) = reject immediately.</summary>
+    public int RequestQueueLimit { get; set; }
+
+    /// <summary>Status code for a shed request. Default 429 Too Many Requests.</summary>
+    public int RejectStatusCode { get; set; } = 429;
+
+    /// <summary>Value of the <c>Retry-After</c> header on a shed request; 0 = do not send it. Default 1.</summary>
+    public int RetryAfterSeconds { get; set; } = 1;
+
     /// <inheritdoc />
     public override void Validate()
     {
         // Ф0: minimal. Full fail-fast (version/operation/cert checks) lands with the producer/consumer.
+        ConcurrencyLimitOptions.ValidateShape(MaxConcurrentRequests, RequestQueueLimit, RejectStatusCode, RetryAfterSeconds);
     }
 }
 

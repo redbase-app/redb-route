@@ -16,7 +16,7 @@ internal sealed class DynamicRouterProcessor : IProcessor, IAsyncDisposable
 {
     private readonly IRouteContext _context;
     private readonly Func<IExchange, string?> _routingFunction;
-    private readonly ConcurrentDictionary<string, IProducer> _producerCache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (IEndpoint Endpoint, IProducer Producer)> _producerCache = new(StringComparer.Ordinal);
     private readonly ILogger? _logger;
 
     /// <summary>Creates a dynamic router processor.</summary>
@@ -54,12 +54,12 @@ internal sealed class DynamicRouterProcessor : IProcessor, IAsyncDisposable
                     $"DynamicRouter exceeded maximum hop count ({maxHops}). " +
                     "Possible infinite routing loop detected.");
 
-            var producer = await GetOrCreateProducerAsync(nextUri, ct).ConfigureAwait(false);
-            await producer.Process(exchange, ct).ConfigureAwait(false);
+            var (endpoint, producer) = await GetOrCreatePairAsync(nextUri, ct).ConfigureAwait(false);
+            await Core.CountedSend.Process(endpoint, producer, exchange, ct).ConfigureAwait(false);
         }
     }
 
-    private async Task<IProducer> GetOrCreateProducerAsync(string uri, CancellationToken ct)
+    private async Task<(IEndpoint Endpoint, IProducer Producer)> GetOrCreatePairAsync(string uri, CancellationToken ct)
     {
         if (_producerCache.TryGetValue(uri, out var cached))
             return cached;
@@ -70,14 +70,14 @@ internal sealed class DynamicRouterProcessor : IProcessor, IAsyncDisposable
         (_context as RouteContext)?.TrackProducer(producer);
 
         // Use TryAdd to avoid overwriting if another thread added concurrently
-        if (!_producerCache.TryAdd(uri, producer))
+        if (!_producerCache.TryAdd(uri, (endpoint, producer)))
         {
             // Another thread won the race — stop our duplicate and use theirs
             await producer.Stop(ct).ConfigureAwait(false);
             return _producerCache[uri];
         }
 
-        return producer;
+        return (endpoint, producer);
     }
 
     /// <summary>Stops all cached producers.</summary>
@@ -87,7 +87,7 @@ internal sealed class DynamicRouterProcessor : IProcessor, IAsyncDisposable
         {
             try
             {
-                await kvp.Value.Stop().ConfigureAwait(false);
+                await kvp.Value.Producer.Stop().ConfigureAwait(false);
             }
             catch
             {

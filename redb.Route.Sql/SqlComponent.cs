@@ -22,6 +22,9 @@ public class SqlComponent : ComponentBase
     /// <inheritdoc />
     public override string Scheme => "sql";
 
+    /// <summary>The path of a sql: URI IS the query text — the structured XML form takes it from CDATA content (Route-XML Ф0 §7.2).</summary>
+    public override bool PathIsText => true;
+
     /// <summary>Gets or sets the named query registry for resolving ref: queries.</summary>
     internal ISqlNamedQueryRegistry? NamedQueryRegistry { get; set; }
 

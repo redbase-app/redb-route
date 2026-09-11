@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 using StackExchange.Redis;
 
@@ -132,19 +133,14 @@ public sealed class RedisEndpoint : EndpointBase<RedisEndpointOptions>, IDisposa
 
     private ConfigurationOptions BuildConfiguration()
     {
-        // 1. Try named factory from registry
+        // 1. Named factory from registry — a set-but-unknown name fails loud, never a
+        // silent fallback to URI parameters (Ф11 Ж-1).
         if (!string.IsNullOrEmpty(Options.ConnectionFactory))
         {
-            var component = Component as RedisComponent;
-            var registryFactory = component?.Context?.GetFromRegistry<RedisConnectionFactory>(Options.ConnectionFactory);
-            if (registryFactory is not null)
-            {
-                Logger?.LogDebug("Redis: using ConnectionFactory '{Name}' from registry", Options.ConnectionFactory);
-                return registryFactory.Build();
-            }
-
-            Logger?.LogWarning("Redis: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
-                Options.ConnectionFactory);
+            var context = (Component as RedisComponent)?.Context;
+            var registryFactory = context.GetRequiredFromRegistry<RedisConnectionFactory>(Options.ConnectionFactory);
+            Logger?.LogDebug("Redis: using ConnectionFactory '{Name}' from registry", Options.ConnectionFactory);
+            return registryFactory.Build();
         }
 
         // 2. Fallback: build from URI parameters

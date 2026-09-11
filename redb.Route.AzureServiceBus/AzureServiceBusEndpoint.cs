@@ -1,5 +1,6 @@
 using Azure.Messaging.ServiceBus;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.AzureServiceBus;
@@ -38,16 +39,15 @@ internal sealed class AzureServiceBusEndpoint : EndpointBase<AzureServiceBusEndp
         {
             if (_client is not null) return _client;
 
-            if (!string.IsNullOrWhiteSpace(Options.ConnectionFactory)
-                && Component is ComponentBase cb && cb.Context is not null)
+            if (!string.IsNullOrWhiteSpace(Options.ConnectionFactory))
             {
-                var factory = cb.Context.GetFromRegistry<AzureServiceBusConnectionFactory>(
+                // A set-but-unknown name fails loud — a typo must never silently
+                // fall back to URI parameters (Ф11 Ж-1).
+                var context = (Component as ComponentBase)?.Context;
+                var factory = context.GetRequiredFromRegistry<AzureServiceBusConnectionFactory>(
                     Options.ConnectionFactory);
-                if (factory is not null)
-                {
-                    _client = factory.Build();
-                    return _client;
-                }
+                _client = factory.Build();
+                return _client;
             }
 
             _client = BuildClientFromOptions();

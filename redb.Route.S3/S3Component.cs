@@ -3,6 +3,7 @@ using Amazon.Runtime;
 using Amazon.S3;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.S3;
@@ -142,29 +143,21 @@ public sealed class S3Endpoint : EndpointBase<S3EndpointOptions>, IDisposable
 
     private IAmazonS3 BuildClient()
     {
-        // 1. Try named factory from registry
+        // 1. Named factory from registry — a set-but-unknown name fails loud, never a
+        // silent fallback to URI parameters (Ф11 Ж-1).
         if (!string.IsNullOrEmpty(Options.ConnectionFactory))
         {
-            var component = Component as S3Component;
-            var registryFactory = component?.Context?.GetFromRegistry<S3ConnectionFactory>(Options.ConnectionFactory);
-            if (registryFactory is not null)
-            {
-                Logger?.LogDebug("S3: using ConnectionFactory '{Name}' from registry", Options.ConnectionFactory);
-                return registryFactory.Build();
-            }
-
-            Logger?.LogWarning("S3: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
-                Options.ConnectionFactory);
+            var context = (Component as S3Component)?.Context;
+            var registryFactory = context.GetRequiredFromRegistry<S3ConnectionFactory>(Options.ConnectionFactory);
+            Logger?.LogDebug("S3: using ConnectionFactory '{Name}' from registry", Options.ConnectionFactory);
+            return registryFactory.Build();
         }
 
         // 2. Build from URI parameters
-        var config = new AmazonS3Config
-        {
-            ForcePathStyle = Options.ForcePathStyle,
-            Timeout = TimeSpan.FromMilliseconds(Options.ConnectionTimeout),
-            MaxConnectionsPerServer = Options.MaxConnections,
-            MaxErrorRetry = Options.RetryCount,
-        };
+        var config = new AmazonS3Config { ForcePathStyle = Options.ForcePathStyle };
+        S3ClientConfigSupport.Apply(config,
+            Options.ConnectionTimeout, Options.SocketTimeout, Options.MaxConnections,
+            Options.RetryCount, Options.RetryMode, Options.TrustAllCertificates);
 
         if (!string.IsNullOrEmpty(Options.ServiceUrl))
         {
@@ -189,9 +182,8 @@ public sealed class S3Endpoint : EndpointBase<S3EndpointOptions>, IDisposable
     private AWSCredentials ResolveCredentials()
     {
         if (Options.UseDefaultCredentialsProvider)
-#pragma warning disable CS0618 // FallbackCredentialsFactory is deprecated but still functional
-            return FallbackCredentialsFactory.GetCredentials();
-#pragma warning restore CS0618
+            // SDK v4: the non-deprecated default-chain resolver (env -> profile -> IMDS etc.)
+            return Amazon.Runtime.Credentials.DefaultAWSCredentialsIdentityResolver.GetCredentials();
 
         if (!string.IsNullOrEmpty(Options.ProfileName))
         {

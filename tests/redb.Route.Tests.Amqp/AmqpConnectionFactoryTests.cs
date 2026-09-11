@@ -22,9 +22,6 @@ public sealed class AmqpConnectionFactoryTests
         factory.KeepAlive.Should().BeFalse();
         factory.Ssl.Should().BeFalse();
         factory.SaslMechanism.Should().Be(SaslMechanism.Auto);
-        factory.Reconnect.Should().BeFalse();
-        factory.ReconnectInterval.Should().Be(5000);
-        factory.MaxReconnectAttempts.Should().Be(0);
     }
 
     [Fact]

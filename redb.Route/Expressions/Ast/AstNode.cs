@@ -128,6 +128,7 @@ public class BinaryOperationNode : AstNode
             case "-": return ExpressionResolver.Ast_ApplySubtraction(left, right);
             case "*": return ExpressionResolver.Ast_ApplyMultiplication(left, right);
             case "/": return ExpressionResolver.Ast_ApplyDivision(left, right);
+            case "%": return ExpressionResolver.Ast_ApplyModulo(left, right);
             case "==": return ExpressionResolver.Ast_AreEqual(left, right);
             case "!=": return !ExpressionResolver.Ast_AreEqual(left, right);
             case ">": return ExpressionResolver.Ast_CompareNumeric(left, right) > 0;
@@ -338,26 +339,43 @@ public class FunctionCallNode : AstNode
                 }
                 return false;
 
+            case "stats":
+                // Same evaluator as the compiled branch — the format() lesson: a function that
+                // lives in one engine branch only is a documented lie.
+                return evaluatedArgs.Length >= 2
+                    ? ExpressionResolver.Ast_Stats(evaluatedArgs[0], evaluatedArgs[1], exchange)
+                    : throw new InvalidOperationException(
+                        "stats() needs a target ('current' or an endpoint URI) and a metric name.");
+
+            // One argument reads the body; a second names what to read instead. The path stays
+            // first at both arities — deliberately not Camel's jsonpath(input,exp), where the
+            // first argument means different things depending on how many there are.
             case "jpath":
-                if (evaluatedArgs.Length == 1)
+                if (evaluatedArgs.Length >= 1)
                 {
                     var pathValue = evaluatedArgs[0]?.ToString();
                     if (pathValue != null)
                     {
                         var jPathExpr = new JsonPathExpression(pathValue);
-                        return jPathExpr.Evaluate<object>(exchange);
+                        // Lenient about a source that produced nothing, matching the one-argument
+                        // form on a null body — the compiled branch does the same in Ast_JPathFrom.
+                        return evaluatedArgs.Length >= 2
+                            ? evaluatedArgs[1] is { } jsonSource ? jPathExpr.EvaluateOn<object>(jsonSource, fromSource: true) : null
+                            : jPathExpr.Evaluate<object>(exchange);
                     }
                 }
                 return null;
 
             case "xpath":
-                if (evaluatedArgs.Length == 1)
+                if (evaluatedArgs.Length >= 1)
                 {
                     var xpathValue = evaluatedArgs[0]?.ToString();
                     if (xpathValue != null)
                     {
                         var xPathExpr = new XPathExpression(xpathValue);
-                        return xPathExpr.Evaluate<object>(exchange);
+                        return evaluatedArgs.Length >= 2
+                            ? evaluatedArgs[1] is { } xmlSource ? xPathExpr.EvaluateOn<object>(xmlSource, fromSource: true) : null
+                            : xPathExpr.Evaluate<object>(exchange);
                     }
                 }
                 return null;
@@ -423,17 +441,14 @@ public class FunctionCallNode : AstNode
                 return null;
 
             case "min":
-                if (evaluatedArgs.Length >= 2
-                    && ExpressionResolver.TryConvertToDouble(evaluatedArgs[0], out var minA)
-                    && ExpressionResolver.TryConvertToDouble(evaluatedArgs[1], out var minB))
-                    return Math.Min(minA, minB);
+                // One implementation for both evaluation modes: two scalars or one collection.
+                if (evaluatedArgs.Length >= 1)
+                    return ExpressionResolver.Ast_Min(evaluatedArgs[0], evaluatedArgs.Length > 1 ? evaluatedArgs[1] : null);
                 return null;
 
             case "max":
-                if (evaluatedArgs.Length >= 2
-                    && ExpressionResolver.TryConvertToDouble(evaluatedArgs[0], out var maxA)
-                    && ExpressionResolver.TryConvertToDouble(evaluatedArgs[1], out var maxB))
-                    return Math.Max(maxA, maxB);
+                if (evaluatedArgs.Length >= 1)
+                    return ExpressionResolver.Ast_Max(evaluatedArgs[0], evaluatedArgs.Length > 1 ? evaluatedArgs[1] : null);
                 return null;
 
             case "contains":
@@ -479,6 +494,24 @@ public class FunctionCallNode : AstNode
 
             case "now":
                 return DateTime.UtcNow;
+
+            case "format":
+                // Same helper as the compiled branch: one answer for one form.
+                return ExpressionResolver.Ast_Format(
+                    evaluatedArgs.Length >= 1 ? evaluatedArgs[0] : null,
+                    evaluatedArgs.Length >= 2 ? evaluatedArgs[1] : null,
+                    evaluatedArgs.Length >= 3 ? evaluatedArgs[2] : null);
+
+            case "uuid":
+                // Same helper as the compiled branch: one answer for one form.
+                return ExpressionResolver.Ast_Uuid(evaluatedArgs.Length >= 1 ? evaluatedArgs[0] : null);
+
+            case "datediff":
+                // Same helper as the compiled branch: one answer for one form.
+                return ExpressionResolver.Ast_DateDiff(
+                    evaluatedArgs.Length >= 1 ? evaluatedArgs[0] : null,
+                    evaluatedArgs.Length >= 2 ? evaluatedArgs[1] : null,
+                    evaluatedArgs.Length >= 3 ? evaluatedArgs[2] : null);
 
             case "dateformat":
                 if (evaluatedArgs.Length >= 2)

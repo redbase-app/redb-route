@@ -1,13 +1,15 @@
 using FluentAssertions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using static redb.Route.Core.RouteBuilder;
+using redb.Route.Expressions;
 using redb.Route.Definitions;
 
 namespace redb.Route.Tests.Expressions;
 
 /// <summary>
-/// Tests for Expression DSL Phase 1: LoopExpression, DelayExpression, ThrottleExpression,
-/// SetPropertyExpression, SetBodyExpression, SetHeaderExpression, TransformExpression.
+/// Tests for the expression DSL: string forms of Loop / Delay / Throttle and the Expr(...) forms of
+/// SetProperty / SetBody / SetHeader / Transform.
 /// </summary>
 public class ExpressionDslPhase1Tests : IAsyncDisposable
 {
@@ -19,16 +21,16 @@ public class ExpressionDslPhase1Tests : IAsyncDisposable
         GC.SuppressFinalize(this);
     }
 
-    // ─── SetPropertyExpression ───
+    // ─── SetProperty(Expr(...)) ───
 
     [Fact]
-    public async Task SetPropertyExpression_ResolvesFromHeader()
+    public async Task SetPropertyExpr_ResolvesFromHeader()
     {
         object? captured = null;
         _context.AddRoutes(r =>
         {
             r.From("direct://set-prop-expr")
-                .SetPropertyExpression("greeting", "${header.name}")
+                .SetProperty("greeting", Expr("${header.name}"))
                 .Process(e => captured = e.Properties["greeting"]);
         });
 
@@ -44,13 +46,13 @@ public class ExpressionDslPhase1Tests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task SetPropertyExpression_ResolvesTemplate()
+    public async Task SetPropertyExpr_ResolvesTemplate()
     {
         object? captured = null;
         _context.AddRoutes(r =>
         {
             r.From("direct://set-prop-tmpl")
-                .SetPropertyExpression("msg", "Hello ${header.name}!")
+                .SetProperty("msg", Expr("Hello ${header.name}!"))
                 .Process(e => captured = e.Properties["msg"]);
         });
 
@@ -74,7 +76,7 @@ public class ExpressionDslPhase1Tests : IAsyncDisposable
         _context.AddRoutes(r =>
         {
             r.From("direct://loop-expr")
-                .LoopExpression("${header.count}", sub =>
+                .LoopExpression(new StringExpression("${header.count}"), sub =>
                 {
                     sub.Process(_ => Interlocked.Increment(ref counter));
                 });
@@ -98,7 +100,7 @@ public class ExpressionDslPhase1Tests : IAsyncDisposable
         _context.AddRoutes(r =>
         {
             r.From("direct://loop-expr-str")
-                .LoopExpression("${header.count}", sub =>
+                .LoopExpression(new StringExpression("${header.count}"), sub =>
                 {
                     sub.Process(_ => Interlocked.Increment(ref counter));
                 });
@@ -122,7 +124,7 @@ public class ExpressionDslPhase1Tests : IAsyncDisposable
         _context.AddRoutes(r =>
         {
             r.From("direct://loop-expr-copy")
-                .LoopExpression("${header.count}", sub =>
+                .LoopExpression(new StringExpression("${header.count}"), sub =>
                 {
                     sub.Process(e =>
                     {
@@ -153,7 +155,7 @@ public class ExpressionDslPhase1Tests : IAsyncDisposable
         _context.AddRoutes(r =>
         {
             r.From("direct://delay-expr")
-                .DelayExpression("${header.delayMs}")
+                .Delay("${header.delayMs}")
                 .Process(e => captured = e.In.Body);
         });
 
@@ -181,7 +183,7 @@ public class ExpressionDslPhase1Tests : IAsyncDisposable
         _context.AddRoutes(r =>
         {
             r.From("direct://throttle-expr")
-                .ThrottleExpression("${header.rate}", TimeSpan.FromSeconds(1))
+                .Throttle("${header.rate}", TimeSpan.FromSeconds(1))
                 .Process(_ => Interlocked.Increment(ref count));
         });
 
@@ -196,16 +198,16 @@ public class ExpressionDslPhase1Tests : IAsyncDisposable
         count.Should().Be(1);
     }
 
-    // ─── SetBodyExpression ───
+    // ─── SetBody(Expr(...)) ───
 
     [Fact]
-    public async Task SetBodyExpression_ResolvesTemplate()
+    public async Task SetBodyExpr_ResolvesTemplate()
     {
         object? captured = null;
         _context.AddRoutes(r =>
         {
             r.From("direct://setbody-expr")
-                .SetBodyExpression("${header.greeting} ${header.name}")
+                .SetBody(Expr("${header.greeting} ${header.name}"))
                 .Process(e => captured = e.In.Body);
         });
 
@@ -221,16 +223,16 @@ public class ExpressionDslPhase1Tests : IAsyncDisposable
         captured.Should().Be("Hello World");
     }
 
-    // ─── TransformExpression ───
+    // ─── Transform(Expr(...)) ───
 
     [Fact]
-    public async Task TransformExpression_ResolvesTemplate()
+    public async Task TransformExpr_ResolvesTemplate()
     {
         object? captured = null;
         _context.AddRoutes(r =>
         {
             r.From("direct://transform-expr")
-                .TransformExpression("Processed: ${body}")
+                .Transform(Expr("Processed: ${body}"))
                 .Process(e => captured = e.In.Body);
         });
 
@@ -244,16 +246,16 @@ public class ExpressionDslPhase1Tests : IAsyncDisposable
         captured.Should().Be("Processed: data");
     }
 
-    // ─── SetHeaderExpression ───
+    // ─── SetHeader(Expr(...)) ───
 
     [Fact]
-    public async Task SetHeaderExpression_ResolvesFromBody()
+    public async Task SetHeaderExpr_ResolvesFromBody()
     {
         object? captured = null;
         _context.AddRoutes(r =>
         {
             r.From("direct://sethdr-expr")
-                .SetHeaderExpression("bodyRef", "${body}")
+                .SetHeader("bodyRef", Expr("${body}"))
                 .Process(e => captured = e.In.Headers["bodyRef"]);
         });
 

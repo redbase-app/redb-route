@@ -96,7 +96,8 @@ public sealed class GrpcConsumerFeatureTests : IAsyncLifetime
 
         var ex = await act.Should().ThrowAsync<RpcException>();
         ex.Which.StatusCode.Should().Be(StatusCode.Internal);
-        ex.Which.Status.Detail.Should().Contain("boom");
+        // BR-4: generic detail with a reference, not the exception text.
+        ex.Which.Status.Detail.Should().NotContain("boom").And.Contain("ref: ");
     }
 
     [Fact]

@@ -44,7 +44,7 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
         {
             ReceiveMode = _options.ParsedReceiveMode,
             MaxConcurrentSessions = _options.MaxConcurrentSessions,
-            MaxConcurrentCallsPerSession = _options.MaxConcurrentCalls,
+            MaxConcurrentCallsPerSession = _options.ResolvedMaxConcurrentCalls,
             PrefetchCount = _options.PrefetchCount,
             MaxAutoLockRenewalDuration = TimeSpan.FromSeconds(_options.MaxAutoLockRenewalDuration),
             AutoCompleteMessages = false
@@ -68,7 +68,7 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
 
         _logger?.LogInformation(
             "ASB session consumer started: entity={Entity}, sessions={MaxSessions}, callsPerSession={Calls}",
-            _endpoint.EntityName, _options.MaxConcurrentSessions, _options.MaxConcurrentCalls);
+            _endpoint.EntityName, _options.MaxConcurrentSessions, _options.ResolvedMaxConcurrentCalls);
     }
 
     public async Task Stop(CancellationToken ct = default)
@@ -96,6 +96,7 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
     {
         _drain.Increment();
         Exchange? exchange = null;
+        var pipelineFailed = false;
         try
         {
             exchange = CreateExchange(args.Message, args);
@@ -106,14 +107,21 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
                     new AzureServiceBusSessionAckAction(args));
             }
 
-            await _pipeline.Process(exchange, args.CancellationToken).ConfigureAwait(false);
+            // No RecordMessageIn: the core's StatisticsProcessor around From() owns it (ownership audit).
+            try
+            {
+                await _pipeline.Process(exchange, args.CancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                pipelineFailed = true;
+                throw;
+            }
 
             if (_options.ParsedReceiveMode == ServiceBusReceiveMode.PeekLock && !_options.Transacted)
             {
                 await AcknowledgeAsync(args, exchange).ConfigureAwait(false);
             }
-
-            _endpoint.RecordMessageIn();
         }
         catch (Exception ex)
         {
@@ -130,7 +138,10 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
                 }
             }
 
-            _endpoint.RecordError(ex);
+            // A pipeline failure is already counted by the core; only what the core cannot see
+            // (exchange building, settlement) is the transport's to record (ownership audit).
+            if (!pipelineFailed)
+                _endpoint.RecordError(ex);
             throw;
         }
         finally

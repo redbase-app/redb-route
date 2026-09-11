@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.DataFormats.Avro</PackageId>
+    <Description>Apache Avro data format for redb.Route (Chr.Avro): binary Marshal/Unmarshal with the schema built from the CLR type or given as JSON, optional Confluent Schema Registry wire framing; registered as application/avro.</Description>
+    <PackageTags>esb;messaging;avro;kafka;dataformat;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Chr.Avro" Version="10.13.1" />
+    <PackageReference Include="Chr.Avro.Binary" Version="10.13.1" />
+    <PackageReference Include="Chr.Avro.Json" Version="10.13.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

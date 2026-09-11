@@ -1,6 +1,7 @@
 using Elastic.Clients.Elasticsearch;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Extensions;
 using redb.Route.Core;
 
 namespace redb.Route.Elasticsearch;
@@ -125,22 +126,16 @@ public sealed class ElasticsearchEndpoint : EndpointBase<ElasticsearchEndpointOp
 
     private ElasticsearchClient BuildClient()
     {
-        // 1. Try named factory from registry
+        // 1. Named factory from registry — a set-but-unknown name fails loud, never a
+        // silent fallback to URI parameters (Ф11 Ж-1).
         if (!string.IsNullOrEmpty(Options.ConnectionFactory))
         {
-            var component = Component as ElasticsearchComponent;
-            var registryFactory = component?.Context?.GetFromRegistry<ElasticsearchConnectionFactory>(
+            var context = (Component as ElasticsearchComponent)?.Context;
+            var registryFactory = context.GetRequiredFromRegistry<ElasticsearchConnectionFactory>(
                 Options.ConnectionFactory);
-            if (registryFactory is not null)
-            {
-                Logger?.LogDebug("Elasticsearch: using ConnectionFactory '{Name}' from registry",
-                    Options.ConnectionFactory);
-                return registryFactory.Build();
-            }
-
-            Logger?.LogWarning(
-                "Elasticsearch: ConnectionFactory '{Name}' not found in registry, falling back to URI parameters",
+            Logger?.LogDebug("Elasticsearch: using ConnectionFactory '{Name}' from registry",
                 Options.ConnectionFactory);
+            return registryFactory.Build();
         }
 
         // 2. Build from options

@@ -87,7 +87,12 @@ public sealed class AnthropicProvider : ILlmProvider
         var body = BuildRequestBody(request, stream: false);
         using var http = new HttpRequestMessage(HttpMethod.Post, _endpoint)
         {
-            Content = JsonContent.Create(body, options: JsonOpts)
+            Content = JsonContent.Create(body, options: JsonOpts),
+            // HttpClient's DefaultRequestVersion applies only to messages the client creates
+            // itself; a hand-built message starts at HTTP/1.1. Carry the client's defaults over,
+            // otherwise the HTTP/2 keep-alive pings of BuildDefaultHandler never happen.
+            Version = _http.DefaultRequestVersion,
+            VersionPolicy = _http.DefaultVersionPolicy,
         };
         ApplyHeaders(http);
 
@@ -111,7 +116,12 @@ public sealed class AnthropicProvider : ILlmProvider
         var body = BuildRequestBody(request, stream: true);
         using var http = new HttpRequestMessage(HttpMethod.Post, _endpoint)
         {
-            Content = JsonContent.Create(body, options: JsonOpts)
+            Content = JsonContent.Create(body, options: JsonOpts),
+            // HttpClient's DefaultRequestVersion applies only to messages the client creates
+            // itself; a hand-built message starts at HTTP/1.1. Carry the client's defaults over,
+            // otherwise the HTTP/2 keep-alive pings of BuildDefaultHandler never happen.
+            Version = _http.DefaultRequestVersion,
+            VersionPolicy = _http.DefaultVersionPolicy,
         };
         http.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         ApplyHeaders(http);
@@ -128,6 +138,8 @@ public sealed class AnthropicProvider : ILlmProvider
         string? rawStop = null;
         int inputTokens = 0;
         int outputTokens = 0;
+        int cacheWriteTokens = 0;
+        int cacheReadTokens = 0;
 
         string? currentEvent = null;
 
@@ -169,6 +181,8 @@ public sealed class AnthropicProvider : ILlmProvider
                     {
                         inputTokens = uStart["input_tokens"]?.GetValue<int>() ?? 0;
                         outputTokens = uStart["output_tokens"]?.GetValue<int>() ?? 0;
+                        cacheWriteTokens = uStart["cache_creation_input_tokens"]?.GetValue<int>() ?? 0;
+                        cacheReadTokens = uStart["cache_read_input_tokens"]?.GetValue<int>() ?? 0;
                     }
                     break;
 
@@ -262,7 +276,7 @@ public sealed class AnthropicProvider : ILlmProvider
         yield return new LlmStreamChunk(
             finalBlocks,
             finalStop ?? LlmStopReason.EndTurn,
-            new LlmUsage(inputTokens, outputTokens));
+            new LlmUsage(inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens));
     }
 
     private sealed class BlockAccumulator
@@ -273,14 +287,37 @@ public sealed class AnthropicProvider : ILlmProvider
         public StringBuilder Buffer { get; } = new();
     }
 
-    private static HttpClient BuildDefaultClient(LlmConnectionFactory factory)
+    internal static HttpClient BuildDefaultClient(LlmConnectionFactory factory)
     {
         ArgumentNullException.ThrowIfNull(factory);
-        return new HttpClient
+        return new HttpClient(BuildDefaultHandler())
         {
-            Timeout = TimeSpan.FromMilliseconds(Math.Max(1000, factory.RequestTimeoutMs))
+            Timeout = TimeSpan.FromMilliseconds(Math.Max(1000, factory.RequestTimeoutMs)),
+            // HTTP/2 when the server offers it (api.anthropic.com does), so the keep-alive pings
+            // below have a frame to ride on; HTTP/1.1 stays the fallback.
+            DefaultRequestVersion = HttpVersion.Version20,
+            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         };
     }
+
+    /// <summary>
+    /// Transport of the default client. A non-streaming completion is one POST whose response
+    /// arrives only when the model has finished — tens of seconds during which NOTHING crosses the
+    /// wire. Middleboxes (VPN tunnels, NAT, corporate proxies) routinely drop a TLS connection that
+    /// has been silent for ~50 s, and the caller then sees "The response ended prematurely" at
+    /// exactly that mark: a long answer never arrives, and no retry helps because the retry is
+    /// just as long. HTTP/2 PING frames sent while a request is in flight keep the connection
+    /// visibly alive without touching the request itself; on HTTP/1.1 they are simply not sent.
+    /// Measured 2026-09-04 through a sing-tun/xray tunnel: 45 s of silence survived, 55 s was
+    /// cut; with a ping every 15 s four consecutive 50-second waits all completed.
+    /// </summary>
+    internal static SocketsHttpHandler BuildDefaultHandler() => new()
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        KeepAlivePingDelay = TimeSpan.FromSeconds(15),
+        KeepAlivePingTimeout = TimeSpan.FromSeconds(20),
+        KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
+    };
 
     private void ApplyHeaders(HttpRequestMessage http)
     {
@@ -302,7 +339,20 @@ public sealed class AnthropicProvider : ILlmProvider
         };
 
         if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
-            body["system"] = request.SystemPrompt;
+        {
+            // A plain string is the ordinary shape. Caching needs the block form, because
+            // cache_control is a property OF a content block — there is nowhere to hang it on a
+            // bare string. One block, marked: the provider caches everything rendered up to that
+            // point, which is tools + system, and later turns re-read it instead of re-paying.
+            body["system"] = request.CacheSystemPrompt
+                ? new JsonArray(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = request.SystemPrompt,
+                    ["cache_control"] = new JsonObject { ["type"] = "ephemeral" },
+                })
+                : request.SystemPrompt;
+        }
 
         // The sampling knobs (temperature/top_p) changed contract across Anthropic
         // generations: Claude 3.x accepts both, Claude 4.0–4.6 accepts at most one (both
@@ -314,6 +364,11 @@ public sealed class AnthropicProvider : ILlmProvider
             ? _factoryProfile
             : AnthropicModelProfile.Resolve(model, _factory.ModelContractTier);
         ApplySampling(body, request, model, profile);
+
+        // Effort ladder (Claude 4.6+ / Sonnet 5 / Opus 5): output_config.effort. Only when the
+        // factory asks for it — the field is unknown to older models and to Haiku 4.5.
+        if (!string.IsNullOrWhiteSpace(_factory.Effort))
+            body["output_config"] = new JsonObject { ["effort"] = _factory.Effort.Trim() };
 
         if (request.StopSequences is { Count: > 0 } stops)
         {
@@ -411,7 +466,9 @@ public sealed class AnthropicProvider : ILlmProvider
             {
                 switch (b)
                 {
-                    case LlmTextBlock tb when !string.IsNullOrEmpty(tb.Text):
+                    // Whitespace-only text is rejected by the API the same way as empty text
+                    // ("text content blocks must be non-empty"), so it is dropped here too.
+                    case LlmTextBlock tb when !string.IsNullOrWhiteSpace(tb.Text):
                         content.Add(new JsonObject
                         {
                             ["type"] = "text",
@@ -442,8 +499,20 @@ public sealed class AnthropicProvider : ILlmProvider
                 }
             }
 
+            // A message with nothing left to say is not sent at all. It used to become an empty
+            // text block, and the API rejects those with 400 "text content blocks must be
+            // non-empty" — so ONE empty assistant reply persisted in a conversation (the model
+            // spent its whole max_tokens on thinking and produced no text) made every later call
+            // of that conversation fail until the history was edited by hand (2026-09-07).
+            // Skipping is safe: the API merges consecutive same-role turns.
             if (content.Count == 0)
-                content.Add(new JsonObject { ["type"] = "text", ["text"] = string.Empty });
+                continue;
+
+            // A message-level breakpoint lands on the message's LAST block: cache_control is a
+            // property of a content block, and the cache prefix runs up to the marked block
+            // inclusive.
+            if (m.CacheBreakpoint)
+                content[^1]!.AsObject()["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
 
             arr.Add(new JsonObject
             {
@@ -451,6 +520,18 @@ public sealed class AnthropicProvider : ILlmProvider
                 ["content"] = content
             });
         }
+
+        // The API also rejects an empty messages array; that can only happen when every
+        // message was empty, and then the honest request is a single empty-handed user turn.
+        if (arr.Count == 0)
+        {
+            arr.Add(new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = "…" })
+            });
+        }
+
         return arr;
     }
 
@@ -508,7 +589,11 @@ public sealed class AnthropicProvider : ILlmProvider
         {
             var inT = u["input_tokens"]?.GetValue<int>() ?? 0;
             var outT = u["output_tokens"]?.GetValue<int>() ?? 0;
-            usage = new LlmUsage(inT, outT);
+            usage = new LlmUsage(
+                inT,
+                outT,
+                u["cache_creation_input_tokens"]?.GetValue<int>() ?? 0,
+                u["cache_read_input_tokens"]?.GetValue<int>() ?? 0);
         }
 
         return new LlmResponse

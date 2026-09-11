@@ -78,7 +78,7 @@ public sealed class LlmProducerTests
     }
 
     [Fact]
-    public async Task Process_RecordsBytesInForUserPrompt()
+    public async Task Process_RecordsThePromptAsBytesOut()
     {
         var fake = new FakeProvider().EnqueueText("ok");
         var (_, endpoint) = Build(fake);
@@ -88,7 +88,23 @@ public sealed class LlmProducerTests
         var prompt = "abcdefghij"; // 10 bytes
         await producer.Process(new Exchange(new Message(prompt)));
 
-        endpoint.BytesIn.Should().Be(prompt.Length);
+        // The prompt LEAVES the endpoint. It was recorded as BytesIn while RecordBytesOut did not
+        // exist — the one byte counter had to hold both directions.
+        endpoint.BytesOut.Should().Be(prompt.Length);
+    }
+
+    [Fact]
+    public async Task Process_CountsThePromptInUtf8Bytes()
+    {
+        var fake = new FakeProvider().EnqueueText("ok");
+        var (_, endpoint) = Build(fake);
+        var producer = (LlmProducer)endpoint.CreateProducer();
+        await producer.Start();
+
+        var prompt = "привет"; // 6 UTF-16 chars, 12 UTF-8 bytes
+        await producer.Process(new Exchange(new Message(prompt)));
+
+        endpoint.BytesOut.Should().Be(12, "счётчик называется Bytes, а считались символы UTF-16");
     }
 
     [Fact]

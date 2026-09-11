@@ -515,11 +515,14 @@ public sealed class TelegramIntegrationTests
         finally { await producer.Stop(); }
     }
 
-    // ── Producer: records outbound statistics (fix §5) ────────────────
+    // ── Producer: statistics ownership (audit follow-up) ──────────────
 
     [Fact]
-    public async Task Producer_RecordsMessageOut()
+    public async Task Producer_DoesNotSelfRecord_MessagesOut()
     {
+        // Ownership audit: MessagesOut belongs to the core (ToProcessor for a routed .To(),
+        // the ProducerTemplate for template sends) - the old per-send self-recording here
+        // doubled every routed number. A hand-built Process moves nothing into MessagesOut.
         var mock = Substitute.For<ITelegramBotClient>();
         mock.SendRequest(Arg.Any<IRequest<TgMessage>>(), Arg.Any<CancellationToken>())
             .Returns(_ => Task.FromResult(SentMessage()));
@@ -532,7 +535,7 @@ public sealed class TelegramIntegrationTests
         {
             await producer.Process(new Exchange(new Message("hi")));
             await producer.Process(new Exchange(new Message("hi2")));
-            endpoint.MessagesOut.Should().Be(2, "the producer records each successful send on the endpoint");
+            endpoint.MessagesOut.Should().Be(0, "MessagesOut пишет ядро, самозапись задваивала в маршруте");
         }
         finally { await producer.Stop(); }
     }

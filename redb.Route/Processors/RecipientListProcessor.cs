@@ -16,7 +16,7 @@ internal sealed class RecipientListProcessor : IProcessor, IAsyncDisposable
     private readonly bool _parallelProcessing;
     private readonly bool _stopOnException;
     private readonly Func<IExchange, IExchange, IExchange>? _aggregationStrategy;
-    private readonly Dictionary<string, IProducer> _producerCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (IEndpoint Endpoint, IProducer Producer)> _producerCache = new(StringComparer.Ordinal);
     private readonly object _cacheLock = new();
 
     /// <summary>Creates a recipient list processor.</summary>
@@ -65,11 +65,11 @@ internal sealed class RecipientListProcessor : IProcessor, IAsyncDisposable
                 ct.ThrowIfCancellationRequested();
                 var copy = exchange.CloneLinked();
                 copies.Add(copy);
-                var producer = GetOrCreateProducer(uri);
+                var (endpoint, producer) = GetOrCreateProducer(uri);
 
                 try
                 {
-                    await producer.Process(copy, ct).ConfigureAwait(false);
+                    await Core.CountedSend.Process(endpoint, producer, copy, ct).ConfigureAwait(false);
 
                     if (copy.Exception != null && _stopOnException)
                     {
@@ -116,10 +116,10 @@ internal sealed class RecipientListProcessor : IProcessor, IAsyncDisposable
             {
                 var copy = exchange.Clone();
                 lock (copies) copies.Add(copy);
-                var producer = GetOrCreateProducer(uri);
+                var (endpoint, producer) = GetOrCreateProducer(uri);
                 try
                 {
-                    await producer.Process(copy, ct).ConfigureAwait(false);
+                    await Core.CountedSend.Process(endpoint, producer, copy, ct).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -168,7 +168,7 @@ internal sealed class RecipientListProcessor : IProcessor, IAsyncDisposable
         }
     }
 
-    private IProducer GetOrCreateProducer(string uri)
+    private (IEndpoint Endpoint, IProducer Producer) GetOrCreateProducer(string uri)
     {
         lock (_cacheLock)
         {
@@ -177,15 +177,15 @@ internal sealed class RecipientListProcessor : IProcessor, IAsyncDisposable
 
             var endpoint = _context.GetEndpoint(uri);
             var producer = endpoint.CreateProducer();
-            _producerCache[uri] = producer;
-            return producer;
+            _producerCache[uri] = (endpoint, producer);
+            return (endpoint, producer);
         }
     }
 
     /// <summary>Stops all cached producers.</summary>
     public async ValueTask DisposeAsync()
     {
-        KeyValuePair<string, IProducer>[] snapshot;
+        KeyValuePair<string, (IEndpoint Endpoint, IProducer Producer)>[] snapshot;
         lock (_cacheLock)
         {
             snapshot = _producerCache.ToArray();
@@ -196,7 +196,7 @@ internal sealed class RecipientListProcessor : IProcessor, IAsyncDisposable
         {
             try
             {
-                await kvp.Value.Stop().ConfigureAwait(false);
+                await kvp.Value.Producer.Stop().ConfigureAwait(false);
             }
             catch
             {

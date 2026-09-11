@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.SignalR;
 
 namespace redb.Route.Tests.SignalR;
@@ -133,8 +134,28 @@ public class SignalRComponentTests
         var endpoint = (SignalREndpoint)_component.CreateEndpoint(uri);
         var consumer = new SignalRConsumer(endpoint, processor, endpoint.EndpointOptions);
 
-        _component.RegisterConsumer("key1", consumer);
-        _component.GetConsumer("key1").Should().BeSameAs(consumer);
+        _component.RegisterConsumer(consumer);
+        _component.GetConsumer("127.0.0.1", 5000, "/hub").Should().BeSameAs(consumer);
+    }
+
+    [Fact]
+    public void ConsumerRegistry_FoundByProducerUriWithDifferentParameters()
+    {
+        var processor = Substitute.For<IProcessor>();
+        var consumerUri = new EndpointUri("signalr", "/127.0.0.1:5000/hub",
+            "signalr://127.0.0.1:5000/hub", new Dictionary<string, string>());
+        var endpoint = (SignalREndpoint)_component.CreateEndpoint(consumerUri);
+        var consumer = new SignalRConsumer(endpoint, processor, endpoint.EndpointOptions);
+        _component.RegisterConsumer(consumer);
+
+        // The normalized key carries sorted parameters, and a server-mode producer always adds at
+        // least mode=server — so keying the registry on it made this lookup impossible.
+        var producerUri = EndpointUriParser.Parse("signalr://127.0.0.1:5000/hub?mode=Server&method=Push");
+        var producerEndpoint = (SignalREndpoint)_component.CreateEndpoint(producerUri);
+
+        _component.GetConsumer(producerEndpoint.EndpointOptions.Host,
+                producerEndpoint.EndpointOptions.Port, producerEndpoint.HubPath)
+            .Should().BeSameAs(consumer);
     }
 
     [Fact]
@@ -146,14 +167,14 @@ public class SignalRComponentTests
         var endpoint = (SignalREndpoint)_component.CreateEndpoint(uri);
         var consumer = new SignalRConsumer(endpoint, processor, endpoint.EndpointOptions);
 
-        _component.RegisterConsumer("key1", consumer);
-        _component.UnregisterConsumer("key1");
-        _component.GetConsumer("key1").Should().BeNull();
+        _component.RegisterConsumer(consumer);
+        _component.UnregisterConsumer(consumer);
+        _component.GetConsumer("127.0.0.1", 5000, "/hub").Should().BeNull();
     }
 
     [Fact]
     public void ConsumerRegistry_GetNonExistent_ReturnsNull()
     {
-        _component.GetConsumer("nonexistent").Should().BeNull();
+        _component.GetConsumer("127.0.0.1", 5000, "/nonexistent").Should().BeNull();
     }
 }

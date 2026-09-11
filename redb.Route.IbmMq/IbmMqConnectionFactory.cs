@@ -90,6 +90,10 @@ public sealed class IbmMqConnectionFactory
         if (!string.IsNullOrEmpty(SslCipherSpec))
             props[MQC.SSL_CIPHER_SPEC_PROPERTY] = SslCipherSpec;
 
+        // Bytes before the SSL secret key is renegotiated - a dead option until часть B.
+        if (SslKeyResetCount > 0)
+            props[MQC.SSL_RESET_COUNT_PROPERTY] = SslKeyResetCount;
+
         if (!string.IsNullOrEmpty(SslCertLabel))
             props[MQC.SSL_CERT_STORE_PROPERTY] = SslCertLabel;
 

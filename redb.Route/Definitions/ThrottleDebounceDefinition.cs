@@ -13,15 +13,21 @@ namespace redb.Route.Definitions;
 /// </summary>
 public class ThrottleDefinition : RouteDefinitionBase<ThrottleDefinition>, IRouteScope
 {
-    private readonly int _maxPerPeriod;
+    private readonly Func<IExchange, int> _maxPerPeriod;
     private TimeSpan? _period;
     private bool _rejectOnOverflow;
 
     internal ThrottleDefinition(int maxPerPeriod)
+        : this(_ => maxPerPeriod)
     {
         if (maxPerPeriod <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxPerPeriod), "Must be > 0.");
-        _maxPerPeriod = maxPerPeriod;
+    }
+
+    /// <summary>Creates a throttle whose limit is computed per exchange by <paramref name="maxPerPeriodFactory"/>.</summary>
+    internal ThrottleDefinition(Func<IExchange, int> maxPerPeriodFactory)
+    {
+        _maxPerPeriod = maxPerPeriodFactory ?? throw new ArgumentNullException(nameof(maxPerPeriodFactory));
     }
 
     // ── Options ─────────────────────────────────────────────────────────────────
@@ -146,8 +152,24 @@ public class KeyedThrottleDefinition : RouteDefinitionBase<KeyedThrottleDefiniti
         if (maxPerPeriod <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxPerPeriod), "Must be > 0.");
         _maxPerPeriod = maxPerPeriod;
+        MaxPerPeriodFactory = _ => maxPerPeriod;
         _period = period;
     }
+
+    internal KeyedThrottleDefinition(Func<IExchange, string> keyExtractor, Func<IExchange, int> maxPerPeriodFactory, TimeSpan? period)
+    {
+        _keyExtractor = keyExtractor ?? throw new ArgumentNullException(nameof(keyExtractor));
+        MaxPerPeriodFactory = maxPerPeriodFactory ?? throw new ArgumentNullException(nameof(maxPerPeriodFactory));
+        _maxPerPeriod = 0;   // dynamic: read per message
+        _period = period;
+    }
+
+    /// <summary>
+    /// Limit per key evaluated on each message (key <b>and</b> limit come from the message:
+    /// "gold customers 100 per second, others 10, each under its own key"). The fixed <c>int</c>
+    /// form is the constant factory; <see cref="MaxPerPeriod"/> is <c>0</c> when the limit is dynamic.
+    /// </summary>
+    public Func<IExchange, int> MaxPerPeriodFactory { get; }
 
     // ── Options ─────────────────────────────────────────────────────────────────
 
@@ -181,7 +203,7 @@ public class KeyedThrottleDefinition : RouteDefinitionBase<KeyedThrottleDefiniti
         IProcessor downstream = BuildPipeline(Outputs, context);
         var loggerFactory = context.GetService<ILoggerFactory>();
         var logger = loggerFactory?.CreateLogger<KeyedThrottleProcessor>();
-        return new KeyedThrottleProcessor(downstream, _keyExtractor, _maxPerPeriod, _period, _rejectOnOverflow, logger);
+        return new KeyedThrottleProcessor(downstream, _keyExtractor, MaxPerPeriodFactory, _period, _rejectOnOverflow, logger);
     }
 
     private static IProcessor BuildPipeline(IList<IProcessorDefinition> outputs, IRouteContext context)

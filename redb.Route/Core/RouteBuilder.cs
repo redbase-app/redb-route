@@ -31,6 +31,8 @@ public abstract class RouteBuilder : IRouteBuilder
 {
     private readonly List<RouteDefinition> _definitions = [];
     private readonly List<OnExceptionDefinition> _exceptionDefinitions = [];
+    private readonly List<InterceptDefinition> _intercepts = [];
+    private readonly List<OnCompletionDefinition> _onCompletions = [];
 
     /// <summary>Gets the route definitions created during <see cref="Configure"/>.</summary>
     public IReadOnlyList<RouteDefinition> Definitions => _definitions;
@@ -38,17 +40,48 @@ public abstract class RouteBuilder : IRouteBuilder
     /// <summary>Gets the global exception handler definitions registered via <see cref="OnException{TException}"/>.</summary>
     public IReadOnlyList<OnExceptionDefinition> ExceptionDefinitions => _exceptionDefinitions;
 
+    /// <summary>Intercepts declared on this builder — they apply to every route it defines.</summary>
+    public IReadOnlyList<InterceptDefinition> Intercepts => _intercepts;
+
+    /// <summary>OnCompletion blocks declared on this builder — they apply to every route it defines.</summary>
+    public IReadOnlyList<OnCompletionDefinition> OnCompletions => _onCompletions;
+
+    /// <summary>Steps that run before every step of every route in this builder (Camel <c>intercept()</c>).</summary>
+    public InterceptDefinition Intercept() => Register(new InterceptDefinition(InterceptKind.EveryStep, null));
+
+    /// <summary>Steps that run when a message enters any route of this builder whose <c>From</c> matches the mask (all routes when <c>null</c>).</summary>
+    public InterceptDefinition InterceptFrom(string? uriPattern = null) => Register(new InterceptDefinition(InterceptKind.From, uriPattern));
+
+    /// <summary>Steps that run before any <c>To</c> / <c>ToD</c> in this builder whose target matches the mask; <c>.SkipSendToOriginalEndpoint()</c> replaces the send.</summary>
+    public InterceptDefinition InterceptSendToEndpoint(string uriPattern) => Register(new InterceptDefinition(InterceptKind.SendToEndpoint, uriPattern));
+
+    /// <summary>Steps that run after any route of this builder finished with an exchange (on a copy, outside the route's transaction).</summary>
+    public OnCompletionDefinition OnCompletion()
+    {
+        var def = new OnCompletionDefinition();
+        _onCompletions.Add(def);
+        return def;
+    }
+
+    private InterceptDefinition Register(InterceptDefinition def)
+    {
+        _intercepts.Add(def);
+        return def;
+    }
+
     /// <summary>
     /// Override this method to define routes using <see cref="From"/>.
     /// </summary>
     protected abstract void Configure();
 
     /// <summary>
-    /// Starts a new route definition with the given source endpoint.
+    /// Starts a new route definition with the given source endpoint. Public so that DSL layers built
+    /// on top of routes (the REST DSL, generators) can add routes to a builder from outside
+    /// <see cref="Configure"/>; inside a subclass it reads as before.
     /// </summary>
     /// <param name="uri">Source endpoint URI (e.g., "direct://input", "timer://ping?period=1000").</param>
     /// <returns>The new route definition for fluent chaining.</returns>
-    protected IRouteDefinition From(string uri)
+    public IRouteDefinition From(string uri)
     {
         var def = new RouteDefinition();
         def._context = Context;
@@ -105,9 +138,15 @@ public abstract class RouteBuilder : IRouteBuilder
     {
         _definitions.Clear();
         _exceptionDefinitions.Clear();
+        _intercepts.Clear();
+        _onCompletions.Clear();
         Context = context;
         Configure();
+        IsBuilt = true;
     }
+
+    /// <summary>Whether <see cref="Configure"/> has run at least once (AdviceWith builds early; a builder added later has not been built yet).</summary>
+    internal bool IsBuilt { get; private set; }
 
     /// <inheritdoc />
     void IRouteBuilder.Configure(IRouteContext context) => InternalBuild(context);
@@ -131,7 +170,17 @@ public abstract class RouteBuilder : IRouteBuilder
 
     /// <summary>Creates an XPath expression for extracting data from an XML message body.</summary>
     /// <param name="path">XPath 1.0 expression.</param>
+    /// <remarks>
+    /// In a condition the result is a node-set, so the expression asks whether the path matched
+    /// rather than what the matched node says. Use <see cref="XPath(string, XPathResult)"/> or
+    /// <see cref="XPath{T}(string)"/> to ask the other question.
+    /// </remarks>
     protected static XPathExpression XPath(string path) => new(path);
+
+    /// <summary>Creates an XPath expression with an explicit XPath-level result type.</summary>
+    /// <param name="path">XPath 1.0 expression.</param>
+    /// <param name="result">The XPath-level type of the result: node-set, node, string, number or boolean.</param>
+    protected static XPathExpression XPath(string path, XPathResult result) => new(path, result);
 
     /// <summary>Creates a typed XPath expression that converts the result to <typeparamref name="T"/>.</summary>
     protected static TypedXPathExpression<T> XPath<T>(string path) => new(path);
@@ -139,6 +188,10 @@ public abstract class RouteBuilder : IRouteBuilder
     /// <inheritdoc cref="XPath(string)"/>
     /// <remarks>Java-style alias.</remarks>
     protected static XPathExpression xpath(string path) => new(path);
+
+    /// <inheritdoc cref="XPath(string, XPathResult)"/>
+    /// <remarks>Java-style alias.</remarks>
+    protected static XPathExpression xpath(string path, XPathResult result) => new(path, result);
 
     /// <inheritdoc cref="XPath{T}(string)"/>
     /// <remarks>Java-style alias.</remarks>
@@ -168,7 +221,14 @@ public abstract class RouteBuilder : IRouteBuilder
     /// <example><c>.SetBody(Expr("${header.source}"))</c></example>
     /// </summary>
     /// <param name="template">Expression string with <c>${...}</c> placeholders or raw expression.</param>
-    protected static StringExpression Expr(string template) => new(template);
+    /// <summary>
+    /// A <c>${...}</c> template (or any expression text) as an <see cref="IExpression"/>:
+    /// <c>SetBody(Expr("Hello ${header.name}"))</c>. Public and static, so it also reads well from the
+    /// lambda style, where a protected member of the builder would be out of reach:
+    /// <c>ctx.AddRoutes(b =&gt; b.From("...").SetBody(RouteBuilder.Expr("${header.x}")))</c>.
+    /// Equivalent to <c>new StringExpression(template)</c>.
+    /// </summary>
+    public static StringExpression Expr(string template) => new(template);
 
     // ── Streaming tokenizer helpers ─────────────────────────────────────────
 
@@ -205,10 +265,6 @@ public sealed class InlineRouteBuilder : RouteBuilder
         _configure = configure ?? throw new ArgumentNullException(nameof(configure));
     }
 
-    /// <summary>Starts a new route definition (public wrapper for inline usage).</summary>
-    /// <param name="uri">Source endpoint URI.</param>
-    /// <returns>Route definition for fluent chaining.</returns>
-    public new IRouteDefinition From(string uri) => base.From(uri);
 
     /// <inheritdoc />
     protected override void Configure() => _configure(this);

@@ -252,13 +252,22 @@ internal static class GrpcWire
     /// Maps an unhandled exception onto a status. <see cref="RpcException"/> keeps its own status so a
     /// processor can be explicit; cancellation splits into deadline vs. caller-abort.
     /// </summary>
-    public static (StatusCode Status, string Detail) FromException(Exception ex, bool deadlineExceeded) => ex switch
+    /// <param name="reference">
+    /// Identifier the caller may quote (the exchange id). An unhandled exception's own text never goes
+    /// out as the status detail: it is written by whoever threw it and routinely carries a file path, a
+    /// connection string or the name of an inner service (BR-4). The exception is logged by the consumer
+    /// under the same id. Statuses the framework itself chose — an <see cref="RpcException"/> the route
+    /// raised deliberately, a protocol error, a deadline, a cancellation — keep their text: it is ours.
+    /// </param>
+    public static (StatusCode Status, string Detail) FromException(Exception ex, bool deadlineExceeded, string? reference = null) => ex switch
     {
         RpcException rpc => (rpc.StatusCode, rpc.Status.Detail),
         GrpcProtocolException gpe => (gpe.Status, gpe.Message),
         OperationCanceledException when deadlineExceeded => (StatusCode.DeadlineExceeded, "Deadline exceeded."),
         OperationCanceledException => (StatusCode.Cancelled, "Call cancelled."),
-        _ => (StatusCode.Internal, ex.Message),
+        _ => (StatusCode.Internal, reference is null
+            ? "An unexpected error occurred while processing the request."
+            : $"An unexpected error occurred while processing the request (ref: {reference})."),
     };
 
     // ── header hygiene (G3) ──────────────────────────────────

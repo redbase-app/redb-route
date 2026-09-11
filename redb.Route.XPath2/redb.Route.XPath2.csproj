@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>redb.Route.XPath2</PackageId>
+    <Description>XPath 2.0 expressions for redb.Route: regular-expression, sequence, date and type functions that XPath 1.0 does not have, usable in every position that takes an expression. Built on XPath2.Net (MS-PL), with no transitive dependencies.</Description>
+    <PackageTags>esb;routing;xpath;xpath2;xml</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <!-- MS-PL, and the only dependency in the graph: the base package has none of its own.
+         XPath2.Extensions is deliberately NOT referenced — it is MIT but pulls Newtonsoft.Json,
+         which this framework removed on purpose, and it adds only non-official extras we do not use. -->
+    <PackageReference Include="XPath2" Version="1.1.5" />
+  </ItemGroup>
+
+</Project>

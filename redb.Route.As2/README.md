@@ -113,6 +113,34 @@ AS2 wire headers (`AS2-From`, `AS2-To`, `Message-ID`, `Subject`, `Disposition-No
 onto the message verbatim. The S/MIME **wrapper** `Content-Type` is deliberately *not* copied into the
 headers — only the inner business content type reaches `Message.ContentType`.
 
+### Receiving over TLS
+
+Two different certificates are in play, and they are not interchangeable:
+`As2ConnectionFactory.OurCertificate` is the S/MIME key that signs and decrypts the **message**;
+the one below secures the **connection**.
+
+```csharp
+// certificate on the endpoint
+From(As2.Receive("/inbound/orders").Host("0.0.0.0").Port(4443)
+        .Tls("/certs/as2-server.pfx", "password")
+        .ConnectionFactory("walmart"))
+
+// or keep its password in the registry with the rest of the partner config
+context.AddToRegistry("walmart", new As2ConnectionFactory
+{
+    OurCertificate = ourSmimeKey,          // signs and decrypts the payload
+    SslCertPath = "/certs/as2-server.pfx", // presented on the TLS connection
+    SslCertPassword = secrets.PfxPassword,
+});
+From(As2.Receive("/inbound/orders").Host("0.0.0.0").Port(4443).Tls().ConnectionFactory("walmart"))
+```
+
+The certificate may also come from the host
+(`AddRedbRouteHttpHosting(o => o.Tls.DefaultCertificatePath = ...)`), which is the usual choice when
+several transports share one port. A TLS receiver that finds a certificate in none of the three
+places **refuses to bind**. Previously it opened a plaintext port while advertising `https://` to
+the trading partner.
+
 ---
 
 ## MDN modes
@@ -193,3 +221,22 @@ mechanics. Interop is **validated against a live OpenAS2 v4.9.0 in both directio
 and phase plan live in `../../docs/as2`.
 
 Part of the redb.Route connector family.
+
+## Concurrency limits
+
+Kestrel executes as many handlers as requests arrive; without a limit a route has no ceiling.
+The admission limit caps concurrent pipeline executions per endpoint and sheds the overflow
+BEFORE any pipeline work (load shedding, not backpressure):
+
+| Parameter | Default | Description |
+|---|---|---|
+| `maxConcurrentRequests` | `0` (unlimited) | Max concurrent pipeline executions |
+| `requestQueueLimit` | `0` | Requests over the limit that WAIT (FIFO) instead of being rejected |
+| `rejectStatusCode` | `429` | Status for a shed request |
+| `retryAfterSeconds` | `1` | `Retry-After` header value; `0` = do not send |
+
+A shed request is answered before an exchange exists: it appears in the endpoint's `Rejected`
+counter, not in `MessagesIn` or `Errors`. The limit is strictly per endpoint — other routes on
+the same listener keep their own budget. For "slow down but do not drop" semantics use
+`.Threads(n)` in the route instead; the two compose (the limit sheds at the door, Threads
+paces inside).

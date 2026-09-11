@@ -1,11 +1,13 @@
 using System.Collections.Concurrent;
 using redb.Core;
+using redb.Core.Exceptions;
 using redb.Core.Models.Contracts;
 using redb.Core.Models.Entities;
 using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Providers;
 using redb.Route.Llm.Storage.Redb.Schemas;
+using redb.Route.RedbCore;
 using redb.Route.RedbCore.Extensions;
 
 namespace redb.Route.Llm.Storage.Redb;
@@ -16,9 +18,14 @@ namespace redb.Route.Llm.Storage.Redb;
 /// (<c>TreeQuery&lt;T&gt;(root)</c> for descendants, <c>GetPathToRootAsync</c>
 /// for breadcrumbs — root → leaf order) — server-side tree traversal, not
 /// client-side rebuilding.
-/// Per-row business identifiers live on indexed <c>_objects</c> columns —
-/// <c>value_string</c> for the conversation/message id and <c>value_long</c>
-/// on each message for the conversation FK (== root <c>_objects.id</c>).
+/// Per-row business identifiers live on <c>_objects</c> base columns —
+/// <c>value_string</c> for the conversation/message id (partial index on
+/// PostgreSQL/SQLite; MSSQL cannot index NVARCHAR(MAX)) and <c>value_long</c>
+/// on each message for the conversation FK (== root <c>_objects.id</c>, indexed
+/// on every provider). The conversation id also rides, normalized, in the
+/// root's <c>_objects._value_unique</c>: the per-scheme unique index makes
+/// concurrent creators of one conversation converge on a single root instead
+/// of splitting the transcript.
 /// <para>
 /// <b>Conversation isolation is enforced by the <c>value_long</c> FK, not by tree
 /// shape.</b> Head detection and message lookup are scoped by it explicitly, so a
@@ -103,19 +110,24 @@ public sealed class RedbConversationStore : IConversationStore
         var (redb, redbName) = Resolve(exchange);
 
         var rootId = await GetOrCreateRootIdAsync(redb, redbName, conversationId, ct).ConfigureAwait(false);
-        var rootObj = await redb.LoadAsync<ConversationProps>(rootId).ConfigureAwait(false)
-            ?? throw new InvalidOperationException($"Conversation root {conversationId} disappeared between lookup and load.");
 
-        IRedbObject parentObj = rootObj;
+        // The root object itself is needed only as the tree parent of a first-level
+        // message; the counter update below re-reads it under its own lock anyway,
+        // so threaded appends (parent supplied) skip the full root load entirely.
+        IRedbObject parentObj;
         if (parentMessageId is not null)
         {
             // Scoped by rootId on purpose: the lookup is by an opaque caller-supplied
             // id over the whole schema, so an unscoped resolve would happily attach
             // this message under another conversation's node — a cross-conversation
             // write that no later read can undo.
-            var parentMsg = await FindMessageByValueStringAsync(redb, parentMessageId, rootId).ConfigureAwait(false)
+            parentObj = await FindMessageByValueStringAsync(redb, parentMessageId, rootId).ConfigureAwait(false)
                 ?? throw new InvalidOperationException($"Parent message {parentMessageId} not found in conversation {conversationId}.");
-            parentObj = parentMsg;
+        }
+        else
+        {
+            parentObj = await redb.LoadAsync<ConversationProps>(rootId).ConfigureAwait(false)
+                ?? throw new InvalidOperationException($"Conversation root {conversationId} disappeared between lookup and load.");
         }
 
         var newId = Guid.NewGuid().ToString("N");
@@ -157,13 +169,33 @@ public sealed class RedbConversationStore : IConversationStore
 
         await redb.CreateChildAsync(child, parentObj).ConfigureAwait(false);
 
-        rootObj.Props.LastActivityAtUtc = meta.CreatedAtUtc;
-        rootObj.Props.TotalInputTokens += meta.Usage.InputTokens;
-        rootObj.Props.TotalOutputTokens += meta.Usage.OutputTokens;
-        // Framework does not auto-stamp date_modify; mirror LastActivityAtUtc.
-        rootObj.date_modify = new DateTimeOffset(
-            DateTime.SpecifyKind(meta.CreatedAtUtc, DateTimeKind.Utc));
-        await redb.SaveAsync(rootObj).ConfigureAwait(false);
+        // Counter update is a read-modify-write shared by every concurrent append
+        // (parallel tool branches, other nodes) — serialise it on the root row the
+        // same way RedbCostBudgetStore does, or increments get lost.
+        await redb.Context.ExecuteAtomicAsync(async () =>
+        {
+            await redb.LockForUpdateAsync(rootId).ConfigureAwait(false);
+            // Re-read BY QUERY after the lock, not redb.LoadAsync. The core has since
+            // stopped serving the zero-DB cache shortcut inside a transaction
+            // (docs/BUG_REDB_CORE_CACHE_AND_AMBIENT_TX.md п.1), but the query path
+            // guarantees a fresh row read regardless of cache mode or core version —
+            // and a stale pre-lock copy here would lose another node's increments,
+            // the exact defect this lock exists to prevent.
+            var fresh = await redb.Query<ConversationProps>()
+                .WhereRedb(o => o.Id == rootId)
+                .FirstOrDefaultAsync()
+                .ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    $"Conversation root {conversationId} disappeared during counter update.");
+
+            var activityAt = new DateTimeOffset(DateTime.SpecifyKind(meta.CreatedAtUtc, DateTimeKind.Utc));
+            fresh.Props.LastActivityAtUtc = activityAt;
+            fresh.Props.TotalInputTokens += meta.Usage.InputTokens;
+            fresh.Props.TotalOutputTokens += meta.Usage.OutputTokens;
+            // Framework does not auto-stamp date_modify; mirror LastActivityAtUtc.
+            fresh.date_modify = activityAt;
+            await redb.SaveAsync(fresh).ConfigureAwait(false);
+        }).ConfigureAwait(false);
 
         return newId;
     }
@@ -324,7 +356,7 @@ public sealed class RedbConversationStore : IConversationStore
             return cached.Id;
 
         var hit = await redb.Query<ConversationProps>()
-            .WhereRedb(x => x.ValueString == conversationId)
+            .WhereRedb(x => x.ValueUnique == RedbUniqueKey.Normalize(conversationId))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
 
@@ -334,9 +366,14 @@ public sealed class RedbConversationStore : IConversationStore
             return hit.id;
         }
 
+        // The conversation key rides in _value_unique too: of two concurrent creators
+        // (parallel exchanges, cluster nodes) the per-scheme unique index lets exactly
+        // one root through — without it each writer minted its own root and the
+        // conversation split in two, every reader seeing an arbitrary half.
         var root = new RedbObject<ConversationProps>
         {
             value_string = conversationId,
+            ValueUnique = RedbUniqueKey.Normalize(conversationId),
             Props = new ConversationProps
             {
                 TenantId = string.Empty,
@@ -345,7 +382,25 @@ public sealed class RedbConversationStore : IConversationStore
                 LastActivityAtUtc = now
             }
         };
-        var id = await redb.SaveAsync(root).ConfigureAwait(false);
+
+        long id;
+        try
+        {
+            id = await redb.SaveAsync(root).ConfigureAwait(false);
+        }
+        catch (RedbUniqueViolationException)
+        {
+            // Lost the creation race. Resolve the winner by the collided key — exactly
+            // one row can hold it — and cache THAT id, never our stillborn row's.
+            var winnerKey = root.ValueUnique;
+            var winner = await redb.Query<ConversationProps>()
+                .WhereRedb(x => x.ValueUnique == winnerKey)
+                .FirstOrDefaultAsync()
+                .ConfigureAwait(false);
+            if (winner is null) throw; // the key vanished again (purged mid-race) — surface the original failure
+            id = winner.id;
+        }
+
         _rootIds[key] = new CachedRoot(id, now + RootCacheTtl);
         return id;
     }
@@ -361,6 +416,8 @@ public sealed class RedbConversationStore : IConversationStore
     private static async Task<TreeRedbObject<MessageProps>?> FindMessageByValueStringAsync(
         IRedbService redb, string messageId, long rootId)
     {
+        // Deliberately NOT ValueUnique (the one value_string lookup left after Ф4): messages carry
+        // no unique key — messageId is only unique within its conversation, scoped by rootId here.
         var hit = await redb.Query<MessageProps>()
             .WhereRedb(x => x.ValueString == messageId && x.ValueLong == rootId)
             .FirstOrDefaultAsync()

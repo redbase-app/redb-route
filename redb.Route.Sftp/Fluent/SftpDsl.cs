@@ -84,10 +84,8 @@ public sealed class SftpBuilder
     private string? _doneFileName;
 
     // Transfer
-    private bool? _binary;
     private bool _streamBody;
     private string? _charset;
-    private bool? _stepWise;
     private string? _separator;
     private bool _ignoreFileNotFoundOrPermissionError;
     private bool? _startingDirectoryMustExist;
@@ -121,7 +119,7 @@ public sealed class SftpBuilder
     /// <summary>SFTP server hostname. Default "localhost".</summary>
     public SftpBuilder Host(IExpression host) { _host = host.ToTemplateString(); return this; }
     /// <summary>SFTP server hostname (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder Host(string host) => Host(new StringExpression(host));
+    public SftpBuilder Host(string host) { _host = host; return this; }
 
     /// <summary>SFTP server port. Default 22.</summary>
     public SftpBuilder Port(int port) { _port = port.ToString(); return this; }
@@ -131,12 +129,12 @@ public sealed class SftpBuilder
     /// <summary>Username for authentication.</summary>
     public SftpBuilder Username(IExpression username) { _username = username.ToTemplateString(); return this; }
     /// <summary>Username for authentication (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder Username(string username) => Username(new StringExpression(username));
+    public SftpBuilder Username(string username) { _username = username; return this; }
 
     /// <summary>Password for authentication.</summary>
     public SftpBuilder Password(IExpression password) { _password = password.ToTemplateString(); return this; }
     /// <summary>Password for authentication (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder Password(string password) => Password(new StringExpression(password));
+    public SftpBuilder Password(string password) { _password = password; return this; }
 
     /// <summary>
     /// References a named <see cref="SftpConnectionFactory"/> from the route registry instead of
@@ -159,7 +157,7 @@ public sealed class SftpBuilder
     /// <summary>Expected server host key fingerprint.</summary>
     public SftpBuilder ServerFingerprint(IExpression fingerprint) { _serverFingerprint = fingerprint.ToTemplateString(); return this; }
     /// <summary>Expected server host key fingerprint (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder ServerFingerprint(string fingerprint) => ServerFingerprint(new StringExpression(fingerprint));
+    public SftpBuilder ServerFingerprint(string fingerprint) { _serverFingerprint = fingerprint; return this; }
 
     /// <summary>Enable strict host key checking.</summary>
     public SftpBuilder StrictHostKeyChecking() { _strictHostKeyChecking = true; return this; }
@@ -279,7 +277,7 @@ public sealed class SftpBuilder
     /// <summary>Move processed file to this directory.</summary>
     public SftpBuilder MoveTo(IExpression directory) { _moveTo = directory.ToTemplateString(); return this; }
     /// <summary>Move processed file to this directory (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder MoveTo(string directory) => MoveTo(new StringExpression(directory));
+    public SftpBuilder MoveTo(string directory) { _moveTo = directory; return this; }
 
     /// <summary>Strategy when file exists in move target: Override, Append, Fail, Ignore, Move, TryRename.</summary>
     public SftpBuilder MoveExisting(string strategy) { _moveExisting = strategy; return this; }
@@ -287,29 +285,27 @@ public sealed class SftpBuilder
     /// <summary>Pre-move directory (temporary move before processing).</summary>
     public SftpBuilder PreMove(IExpression directory) { _preMove = directory.ToTemplateString(); return this; }
     /// <summary>Pre-move directory (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder PreMove(string directory) => PreMove(new StringExpression(directory));
+    public SftpBuilder PreMove(string directory) { _preMove = directory; return this; }
 
     /// <summary>Directory for files that failed processing.</summary>
     public SftpBuilder MoveFailed(IExpression directory) { _moveFailed = directory.ToTemplateString(); return this; }
     /// <summary>Directory for files that failed processing (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder MoveFailed(string directory) => MoveFailed(new StringExpression(directory));
+    public SftpBuilder MoveFailed(string directory) { _moveFailed = directory; return this; }
 
     // ── Idempotency ───────────────────────────────────────────────────
 
     /// <summary>Enable idempotent consumer with optional key expression.</summary>
     public SftpBuilder Idempotent(IExpression? key = null) { _idempotent = true; _idempotentKey = key?.ToTemplateString(); return this; }
     /// <summary>Enable idempotent consumer with a key (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder Idempotent(string key) => Idempotent(new StringExpression(key));
+    public SftpBuilder Idempotent(string key) { _idempotent = true; _idempotentKey = key; return this; }
 
     /// <summary>Done file name pattern.</summary>
     public SftpBuilder DoneFileName(IExpression name) { _doneFileName = name.ToTemplateString(); return this; }
     /// <summary>Done file name pattern (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder DoneFileName(string name) => DoneFileName(new StringExpression(name));
+    public SftpBuilder DoneFileName(string name) { _doneFileName = name; return this; }
 
     // ── Transfer ──────────────────────────────────────────────────────
 
-    /// <summary>Binary transfer mode. Default true.</summary>
-    public SftpBuilder Binary(bool binary = true) { _binary = binary; return this; }
 
     /// <summary>Set exchange body to SftpFileStream instead of byte[] (consumer only).</summary>
     public SftpBuilder StreamBody() { _streamBody = true; return this; }
@@ -317,10 +313,8 @@ public sealed class SftpBuilder
     /// <summary>Character encoding for text mode. Default "utf-8".</summary>
     public SftpBuilder Charset(string charset) { _charset = charset; return this; }
 
-    /// <summary>Step-wise (cd into each directory). Default true.</summary>
-    public SftpBuilder StepWise(bool stepWise = true) { _stepWise = stepWise; return this; }
 
-    /// <summary>Path separator: Auto, Unix, Windows.</summary>
+    /// <summary>Input path normalization: Auto (backslashes become "/") or Unix (byte-for-byte).</summary>
     public SftpBuilder Separator(string sep) { _separator = sep; return this; }
 
     /// <summary>Ignore file-not-found or permission errors.</summary>
@@ -340,7 +334,7 @@ public sealed class SftpBuilder
     /// <summary>Output file name or expression (e.g. <c>Header("CamelFileName")</c>).</summary>
     public SftpBuilder FileName(IExpression name) { _fileName = name.ToTemplateString(); return this; }
     /// <summary>Output file name (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder FileName(string name) => FileName(new StringExpression(name));
+    public SftpBuilder FileName(string name) { _fileName = name; return this; }
 
     /// <summary>Strategy when target file exists: Override, Append, Fail, Ignore, Move, TryRename.</summary>
     public SftpBuilder FileExist(string strategy) { _fileExist = strategy; return this; }
@@ -351,12 +345,12 @@ public sealed class SftpBuilder
     /// <summary>Temporary file prefix during write.</summary>
     public SftpBuilder TempPrefix(IExpression prefix) { _tempPrefix = prefix.ToTemplateString(); return this; }
     /// <summary>Temporary file prefix during write (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder TempPrefix(string prefix) => TempPrefix(new StringExpression(prefix));
+    public SftpBuilder TempPrefix(string prefix) { _tempPrefix = prefix; return this; }
 
     /// <summary>Temporary file name during write.</summary>
     public SftpBuilder TempFileName(IExpression name) { _tempFileName = name.ToTemplateString(); return this; }
     /// <summary>Temporary file name during write (template string, supports <c>${...}</c>).</summary>
-    public SftpBuilder TempFileName(string name) => TempFileName(new StringExpression(name));
+    public SftpBuilder TempFileName(string name) { _tempFileName = name; return this; }
 
     /// <summary>File permissions (e.g. "644").</summary>
     public SftpBuilder Chmod(string permissions) { _chmod = permissions; return this; }
@@ -467,10 +461,8 @@ public sealed class SftpBuilder
         AppendIf("doneFileName", _doneFileName);
 
         // Transfer
-        AppendBoolExplicit("binary", _binary);
         AppendBool("streamBody", _streamBody);
         AppendIf("charset", _charset);
-        AppendBoolExplicit("stepWise", _stepWise);
         AppendIf("separator", _separator);
         AppendBool("ignoreFileNotFoundOrPermissionError", _ignoreFileNotFoundOrPermissionError);
         AppendBoolExplicit("startingDirectoryMustExist", _startingDirectoryMustExist);

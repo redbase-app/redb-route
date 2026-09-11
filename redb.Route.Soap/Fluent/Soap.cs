@@ -71,7 +71,16 @@ public sealed class SoapConsumerBuilder
     private readonly string _path;
     private string _host = "0.0.0.0";
     private int _port;
+    private int _maxConcurrentRequests;
+    private int _requestQueueLimit;
+    private int? _rejectStatusCode;
+    private int? _retryAfterSeconds;
     private string? _connectionFactory;
+    private bool _ssl;
+    private string? _sslCertPath;
+    private SoapClientCertificateMode _clientCertificateMode = SoapClientCertificateMode.NoCertificate;
+    private string? _allowedClientThumbprints;
+    private bool _emitHttpCompatHeaders;
 
     internal SoapConsumerBuilder(string path)
     {
@@ -88,10 +97,60 @@ public sealed class SoapConsumerBuilder
     /// <summary>References a registered <see cref="SoapConnectionFactory"/>.</summary>
     public SoapConsumerBuilder ConnectionFactory(string name) { _connectionFactory = name; return this; }
 
-    /// <summary>Builds the <c>soap:/path?...</c> URI.</summary>
+    /// <summary>
+    /// Serves the endpoint over TLS. The certificate path may be given here or left to the connection
+    /// factory; the password belongs on the factory only, so it never becomes part of the route key.
+    /// </summary>
+    public SoapConsumerBuilder Ssl(string? certPath = null)
+    {
+        _ssl = true;
+        _sslCertPath = certPath;
+        return this;
+    }
+
+    /// <summary>Requires or allows a client certificate (mTLS). Only meaningful together with TLS.</summary>
+    public SoapConsumerBuilder ClientCertificate(
+        SoapClientCertificateMode mode, string? allowedThumbprints = null)
+    {
+        _clientCertificateMode = mode;
+        _allowedClientThumbprints = allowedThumbprints;
+        return this;
+    }
+
+    /// <summary>
+    /// Also publishes the caller's address, path and method under <c>redbHttp.*</c>, so processors
+    /// written against the HTTP transport work unchanged behind this endpoint.
+    /// </summary>
+    public SoapConsumerBuilder HttpCompatHeaders(bool enabled = true)
+    {
+        _emitHttpCompatHeaders = enabled;
+        return this;
+    }
+
+    /// <summary>
+    /// Admission limit: at most <paramref name="max"/> concurrent pipeline executions; overflow
+    /// beyond the optional FIFO <paramref name="queue"/> is shed with 429 + Retry-After before
+    /// any envelope work.
+    /// </summary>
+    public SoapConsumerBuilder MaxConcurrentRequests(int max, int queue = 0)
+    {
+        _maxConcurrentRequests = max;
+        _requestQueueLimit = queue;
+        return this;
+    }
+
+    /// <summary>Status code for a shed request (default 429).</summary>
+    public SoapConsumerBuilder RejectStatusCode(int statusCode) { _rejectStatusCode = statusCode; return this; }
+
+    /// <summary>Retry-After value for a shed request in seconds; 0 = do not send (default 1).</summary>
+    public SoapConsumerBuilder RetryAfterSeconds(int seconds) { _retryAfterSeconds = seconds; return this; }
+
+    /// <summary>Builds the <c>soap:/path?...</c> (or <c>soaps:</c>) URI.</summary>
     public string Build()
     {
-        var sb = new StringBuilder("soap:").Append(_path);
+        // The scheme is what the component reads the TLS decision from, so TLS changes the scheme rather
+        // than adding a parameter — the same spelling a hand-written URI uses.
+        var sb = new StringBuilder(_ssl ? "soaps:" : "soap:").Append(_path);
         var sep = '?';
         void Append(string key, string value)
         {
@@ -101,6 +160,16 @@ public sealed class SoapConsumerBuilder
         Append("host", _host);
         Append("port", _port.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (!string.IsNullOrEmpty(_connectionFactory)) Append("connectionFactory", _connectionFactory);
+        if (!string.IsNullOrEmpty(_sslCertPath)) Append("sslCertPath", _sslCertPath!);
+        if (_clientCertificateMode != SoapClientCertificateMode.NoCertificate)
+            Append("clientCertificateMode", _clientCertificateMode.ToString());
+        if (_emitHttpCompatHeaders) Append("emitHttpCompatHeaders", "true");
+        if (_maxConcurrentRequests > 0) Append("maxConcurrentRequests", _maxConcurrentRequests.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (_requestQueueLimit > 0) Append("requestQueueLimit", _requestQueueLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (_rejectStatusCode is { } rsc) Append("rejectStatusCode", rsc.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (_retryAfterSeconds is { } ras) Append("retryAfterSeconds", ras.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (!string.IsNullOrEmpty(_allowedClientThumbprints))
+            Append("allowedClientThumbprints", _allowedClientThumbprints!);
         return sb.ToString();
     }
 

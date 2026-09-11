@@ -30,7 +30,7 @@ internal sealed class RoutingSlipProcessor : IProcessor, IAsyncDisposable
     private readonly Func<IExchange, IEnumerable<string>> _slipFactory;
     private readonly bool _ignoreInvalidEndpoints;
     private readonly ILogger? _logger;
-    private readonly ConcurrentDictionary<string, IProducer> _producerCache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (IEndpoint Endpoint, IProducer Producer)> _producerCache = new(StringComparer.Ordinal);
 
     public RoutingSlipProcessor(
         IRouteContext context,
@@ -58,10 +58,10 @@ internal sealed class RoutingSlipProcessor : IProcessor, IAsyncDisposable
 
             var uri = uris[i];
 
-            IProducer producer;
+            (IEndpoint Endpoint, IProducer Producer) pair;
             try
             {
-                producer = await GetOrCreateProducerAsync(uri, ct).ConfigureAwait(false);
+                pair = await GetOrCreatePairAsync(uri, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (_ignoreInvalidEndpoints)
             {
@@ -72,7 +72,7 @@ internal sealed class RoutingSlipProcessor : IProcessor, IAsyncDisposable
             exchange.Properties[SlipEndpointProperty] = uri;
             _logger?.LogDebug("Routing Slip: hop {Hop}/{Total} → {Uri}", i + 1, uris.Count, uri);
 
-            await producer.Process(exchange, ct).ConfigureAwait(false);
+            await Core.CountedSend.Process(pair.Endpoint, pair.Producer, exchange, ct).ConfigureAwait(false);
 
             // Pipeline EIP: the Out of an intermediate hop becomes the In of the next; the final
             // hop's Out is left intact for an InOut caller (direct-vm / replyTo / RPC).
@@ -88,7 +88,7 @@ internal sealed class RoutingSlipProcessor : IProcessor, IAsyncDisposable
         }
     }
 
-    private async Task<IProducer> GetOrCreateProducerAsync(string uri, CancellationToken ct)
+    private async Task<(IEndpoint Endpoint, IProducer Producer)> GetOrCreatePairAsync(string uri, CancellationToken ct)
     {
         if (_producerCache.TryGetValue(uri, out var cached))
             return cached;
@@ -98,14 +98,14 @@ internal sealed class RoutingSlipProcessor : IProcessor, IAsyncDisposable
         await producer.Start(ct).ConfigureAwait(false);
         (_context as RouteContext)?.TrackProducer(producer);
 
-        if (!_producerCache.TryAdd(uri, producer))
+        if (!_producerCache.TryAdd(uri, (endpoint, producer)))
         {
             // Lost the race — stop our duplicate and use the one already cached.
             await producer.Stop(ct).ConfigureAwait(false);
             return _producerCache[uri];
         }
 
-        return producer;
+        return (endpoint, producer);
     }
 
     /// <summary>Stops all cached producers (best-effort).</summary>
@@ -113,7 +113,7 @@ internal sealed class RoutingSlipProcessor : IProcessor, IAsyncDisposable
     {
         foreach (var kvp in _producerCache)
         {
-            try { await kvp.Value.Stop().ConfigureAwait(false); }
+            try { await kvp.Value.Producer.Stop().ConfigureAwait(false); }
             catch { /* best-effort cleanup during disposal */ }
         }
 

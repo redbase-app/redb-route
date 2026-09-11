@@ -1,18 +1,22 @@
 using redb.Core;
+using redb.Core.Exceptions;
 using redb.Core.Models.Contracts;
 using redb.Core.Models.Entities;
 using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Governance;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Storage.Redb.Schemas;
+using redb.Route.RedbCore;
 using redb.Route.RedbCore.Extensions;
 
 namespace redb.Route.Llm.Storage.Redb;
 
 /// <summary>
 /// REDB-backed <see cref="IEvalRunStore"/>. One <see cref="EvalRunProps"/>
-/// row per run; the run id lives on the indexed <c>_objects.value_string</c>
-/// column for direct lookup. Per-iteration metrics are kept as a typed
+/// row per run; the run id lives in <c>_objects.value_string</c> (partial index
+/// on PostgreSQL/SQLite; MSSQL cannot index NVARCHAR(MAX)) and, normalized, in
+/// <c>_objects._value_unique</c> — concurrent saves of one run converge on a
+/// single row. Per-iteration metrics are kept as a typed
 /// nested array on the row — REDB persists them natively, no JSON roundtrip.
 /// <para>
 /// The store does not own an <see cref="IRedbService"/> instance — each call
@@ -54,7 +58,7 @@ public sealed class RedbEvalRunStore : IEvalRunStore
         var redb = Resolve(exchange);
 
         var existing = await redb.Query<EvalRunProps>()
-            .WhereRedb(o => o.ValueString == record.RunId)
+            .WhereRedb(o => o.ValueUnique == RedbUniqueKey.Normalize(record.RunId))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
 
@@ -62,12 +66,31 @@ public sealed class RedbEvalRunStore : IEvalRunStore
 
         if (existing is null)
         {
+            // The run id rides in _value_unique: concurrent saves of one run race to a
+            // single row — the loser re-saves onto the winner (last-writer-wins upsert).
             var row = new RedbObject<EvalRunProps>
             {
                 value_string = record.RunId,
+                ValueUnique = RedbUniqueKey.Normalize(record.RunId),
                 Props = props
             };
-            await redb.SaveAsync(row).ConfigureAwait(false);
+            try
+            {
+                await redb.SaveAsync(row).ConfigureAwait(false);
+            }
+            catch (RedbUniqueViolationException)
+            {
+                var winnerKey = row.ValueUnique;
+                var winner = await redb.Query<EvalRunProps>()
+                    .WhereRedb(o => o.ValueUnique == winnerKey)
+                    .FirstOrDefaultAsync()
+                    .ConfigureAwait(false);
+                if (winner is null) throw; // the key vanished again (deleted mid-race)
+
+                winner.Props = props;
+                winner.date_modify = DateTimeOffset.UtcNow;
+                await redb.SaveAsync(winner).ConfigureAwait(false);
+            }
         }
         else
         {
@@ -82,15 +105,25 @@ public sealed class RedbEvalRunStore : IEvalRunStore
     {
         ArgumentNullException.ThrowIfNull(records);
 
+        // One record per run id even within one call — the last entry wins. Two fresh
+        // records sharing an id would otherwise self-collide on the unique index
+        // inside a single bulk save (the pre-barrier code silently inserted both).
         var input = records
             .Where(r => r is not null && !string.IsNullOrWhiteSpace(r.RunId))
+            .GroupBy(r => r.RunId, StringComparer.Ordinal)
+            .Select(g => g.Last())
             .ToList();
         if (input.Count == 0) return;
 
         var redb = Resolve(exchange);
+        await SaveManyCoreAsync(redb, input, retryOnRace: true, ct).ConfigureAwait(false);
+    }
 
-        // ONE indexed IN-clause lookup for all run ids, then ONE bulk SaveAsync —
-        // SaveAsync handles insert/update streams internally.
+    private static async Task SaveManyCoreAsync(
+        IRedbService redb, List<EvalRunRecord> input, bool retryOnRace, CancellationToken ct)
+    {
+        // ONE IN-clause lookup for all run ids (partial index on PG/SQLite; a scan
+        // on MSSQL), then ONE bulk SaveAsync — insert/update streams are internal.
         var keys = input.Select(r => r.RunId).ToArray();
         var existingByKey = (await redb.Query<EvalRunProps>()
                 .WhereRedb(o => keys.Contains(o.ValueString))
@@ -98,6 +131,22 @@ public sealed class RedbEvalRunStore : IEvalRunStore
                 .ConfigureAwait(false))
             .Where(o => o.value_string is not null)
             .ToDictionary(o => o.value_string!, StringComparer.Ordinal);
+
+        if (!retryOnRace)
+        {
+            // Retry pass after a lost creation race: the winners hold the unique key —
+            // resolve by it too, so every collided run id becomes an update.
+            var normByKey = input.ToDictionary(r => r.RunId, r => RedbUniqueKey.Normalize(r.RunId), StringComparer.Ordinal);
+            var norms = normByKey.Values.ToArray();
+            var keyByNorm = normByKey.ToDictionary(kv => kv.Value, kv => kv.Key, StringComparer.Ordinal);
+            var byUnique = await redb.Query<EvalRunProps>()
+                .WhereRedb(o => norms.Contains(o.ValueUnique))
+                .ToListAsync()
+                .ConfigureAwait(false);
+            foreach (var row in byUnique)
+                if (row.ValueUnique is { } u && keyByNorm.TryGetValue(u, out var k))
+                    existingByKey.TryAdd(k, row);
+        }
 
         var rowsToSave = new List<IRedbObject>(input.Count);
         var now = DateTimeOffset.UtcNow;
@@ -111,10 +160,12 @@ public sealed class RedbEvalRunStore : IEvalRunStore
             if (existingByKey.TryGetValue(record.RunId, out var existing))
             {
                 // Hash-pre-check skips no-op upserts so SaveAsync’s change-tracking
-                // doesn't re-read originals from DB for unchanged rows.
+                // doesn't re-read originals from DB for unchanged rows. On the retry
+                // pass it is skipped: the first pass already mutated instances, and a
+                // pre-check comparing a copy to itself would silently drop the update.
                 var hashBefore = existing.ComputeHash();
                 existing.Props = props;
-                if (existing.ComputeHash() == hashBefore)
+                if (retryOnRace && existing.ComputeHash() == hashBefore)
                     continue;
                 existing.date_modify = now;
                 rowsToSave.Add(existing);
@@ -124,13 +175,25 @@ public sealed class RedbEvalRunStore : IEvalRunStore
                 rowsToSave.Add(new RedbObject<EvalRunProps>
                 {
                     value_string = record.RunId,
+                    ValueUnique = RedbUniqueKey.Normalize(record.RunId),
                     Props = props
                 });
             }
         }
 
         if (rowsToSave.Count == 0) return;
-        await redb.SaveAsync(rowsToSave).ConfigureAwait(false);
+
+        try
+        {
+            await redb.SaveAsync(rowsToSave).ConfigureAwait(false);
+        }
+        catch (RedbUniqueViolationException) when (retryOnRace)
+        {
+            // A concurrent writer claimed one of the fresh run ids after our lookup and
+            // the batch rolled back whole. The winners are visible now: rebuild from a
+            // fresh lookup and retry once — a second violation is a real error.
+            await SaveManyCoreAsync(redb, input, retryOnRace: false, ct).ConfigureAwait(false);
+        }
     }
 
     private static EvalRunProps ToProps(EvalRunRecord record) => new()
@@ -164,7 +227,7 @@ public sealed class RedbEvalRunStore : IEvalRunStore
         var redb = Resolve(exchange);
 
         var row = await redb.Query<EvalRunProps>()
-            .WhereRedb(o => o.ValueString == runId)
+            .WhereRedb(o => o.ValueUnique == RedbUniqueKey.Normalize(runId))
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
 

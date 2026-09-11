@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using redb.Route.Definitions;
 using redb.Route.Expressions;
+using redb.Route.Predicates;
 
 namespace redb.Route.Abstractions;
 
@@ -37,26 +39,21 @@ public static class RouteDefinitionCamelDslExtensions
     public static IRouteDefinition Filter(this IRouteDefinition self, IExpression expression, Action<FilterDefinition> configure)
         => RunNested(self.Filter(expression), configure);
 
-    /// <summary>Apache Camel: Filter using a Simple language string template (e.g. <c>"${header.enabled}"</c>).</summary>
+    /// <summary>
+    /// Apache Camel: Filter using a Simple language condition, either a template
+    /// (<c>"${header.enabled}"</c>) or a boolean expression (<c>"header.amount > 1000"</c>).
+    /// </summary>
     public static FilterDefinition Filter(this IRouteDefinition self, string simpleTemplate)
     {
-        var def = self.Filter(new StringExpression(simpleTemplate));
+        ArgumentNullException.ThrowIfNull(self);
+        var def = self.Filter(PredicateFactory.FromString(simpleTemplate));
         def.SourceTemplate = simpleTemplate;
         return def;
     }
 
-    /// <summary>Apache Camel: Filter using a Simple template plus a nested configurator.</summary>
+    /// <summary>Apache Camel: Filter using a Simple condition plus a nested configurator.</summary>
     public static IRouteDefinition Filter(this IRouteDefinition self, string simpleTemplate, Action<FilterDefinition> configure)
-        => RunNested(self.Filter(new StringExpression(simpleTemplate)), configure);
-
-    /// <summary>Apache Camel: Filter using an <see cref="IPredicate"/>.</summary>
-    public static FilterDefinition Filter(this IRouteDefinition self, IPredicate predicate)
-    {
-        ArgumentNullException.ThrowIfNull(predicate);
-        var def = self.Filter(predicate.Matches);
-        def.SourcePredicate = predicate;
-        return def;
-    }
+        => RunNested(self.Filter(simpleTemplate), configure);
 
     /// <summary>Apache Camel: Filter using an <see cref="IPredicate"/> with nested configurator.</summary>
     public static IRouteDefinition Filter(this IRouteDefinition self, IPredicate predicate, Action<FilterDefinition> configure)
@@ -64,42 +61,24 @@ public static class RouteDefinitionCamelDslExtensions
 
     // ── When / OrIfElse adapters ──────────────────────────────────────────────
 
-    /// <summary>Apache Camel: When using an <see cref="IPredicate"/>.</summary>
-    public static WhenDefinition When(this ChoiceDefinition self, IPredicate predicate)
-    {
-        ArgumentNullException.ThrowIfNull(self);
-        ArgumentNullException.ThrowIfNull(predicate);
-        var w = self.When(predicate.Matches);
-        w.SourcePredicate = predicate;
-        return w;
-    }
-
-    /// <summary>Apache Camel: When using a Simple string template.</summary>
+    /// <summary>
+    /// Apache Camel: When using a Simple language condition, either a template
+    /// (<c>"${header.flag}"</c>) or a boolean expression (<c>"header.type == 'vip'"</c>).
+    /// </summary>
     public static WhenDefinition When(this ChoiceDefinition self, string simpleTemplate)
     {
         ArgumentNullException.ThrowIfNull(self);
-        var expr = new StringExpression(simpleTemplate);
-        var w = self.When(expr);
-        w.SourceExpression = simpleTemplate;
+        var w = self.When(PredicateFactory.FromString(simpleTemplate));
+        w.SourceTemplate = simpleTemplate;
         return w;
     }
 
-    /// <summary>Apache Camel: When using an <see cref="IPredicate"/> (from WhenDefinition).</summary>
-    public static WhenDefinition When(this WhenDefinition self, IPredicate predicate)
-    {
-        ArgumentNullException.ThrowIfNull(self);
-        ArgumentNullException.ThrowIfNull(predicate);
-        var w = self.When(predicate.Matches);
-        w.SourcePredicate = predicate;
-        return w;
-    }
-
-    /// <summary>Apache Camel: When using a Simple string template (from WhenDefinition).</summary>
+    /// <summary>Apache Camel: When using a Simple language condition (from WhenDefinition).</summary>
     public static WhenDefinition When(this WhenDefinition self, string simpleTemplate)
     {
         ArgumentNullException.ThrowIfNull(self);
-        var w = self.When(new StringExpression(simpleTemplate));
-        w.SourceExpression = simpleTemplate;
+        var w = self.When(PredicateFactory.FromString(simpleTemplate));
+        w.SourceTemplate = simpleTemplate;
         return w;
     }
 
@@ -175,30 +154,24 @@ public static class RouteDefinitionCamelDslExtensions
     public static IRouteDefinition Loop(this IRouteDefinition self, Func<IExchange, int> countFactory, Action<LoopDefinition> configure)
         => RunNested(self.Loop(countFactory), configure);
 
-    /// <summary>Apache Camel: opens a Loop scope whose iteration count is computed from a Simple template (e.g. <c>"${header.count}"</c>).</summary>
-    public static LoopDefinition LoopExpression(this IRouteDefinition self, string simpleTemplate)
-    {
-        var expr = new StringExpression(simpleTemplate);
-        return self.Loop(ex => expr.Evaluate<int>(ex));
-    }
-
-    /// <summary>Apache Camel: LoopExpression with a nested configurator that runs against the opened scope.</summary>
-    public static IRouteDefinition LoopExpression(this IRouteDefinition self, string simpleTemplate, Action<LoopDefinition> configure)
-        => RunNested(self.LoopExpression(simpleTemplate), configure);
-
-    /// <summary>Apache Camel: LoopExpression with a nested configurator and a <c>copy</c> flag.</summary>
-    public static IRouteDefinition LoopExpression(
-        this IRouteDefinition self,
-        string simpleTemplate,
-        Action<LoopDefinition> configure,
-        bool copy = false,
-        bool shareScope = true)
+    /// <summary>
+    /// Apache Camel parity: opens a Loop scope that repeats while the condition string holds.
+    /// The counterpart of <c>Loop(string)</c>, which takes an
+    /// iteration count rather than a condition. The condition is compiled the same way as in
+    /// Filter and When.
+    /// </summary>
+    public static LoopDefinition LoopWhile(this IRouteDefinition self, string condition,
+        bool copy = false, bool shareScope = true)
     {
         ArgumentNullException.ThrowIfNull(self);
-        var expr = new StringExpression(simpleTemplate);
-        var loop = self.Loop(ex => expr.Evaluate<int>(ex), copy, shareScope);
-        return RunNested(loop, configure);
+        var predicate = PredicateFactory.FromString(condition);
+        return self.Loop(predicate, copy, shareScope);
     }
+
+    /// <summary>Apache Camel parity: LoopWhile with a nested configurator that runs against the opened scope.</summary>
+    public static IRouteDefinition LoopWhile(this IRouteDefinition self, string condition,
+        Action<LoopDefinition> configure, bool copy = false, bool shareScope = true)
+        => RunNested(self.LoopWhile(condition, copy, shareScope), configure);
 
     /// <summary>Apache Camel: LoopExpression with a nested configurator (IExpression overload).</summary>
     public static IRouteDefinition LoopExpression(
@@ -268,9 +241,7 @@ public static class RouteDefinitionCamelDslExtensions
         bool skipDuplicate = true)
     {
         ArgumentNullException.ThrowIfNull(self);
-        if (self is not RouteDefinition rd)
-            throw new InvalidOperationException("IdempotentConsumer named-registry overload requires a concrete RouteDefinition.");
-        return rd.IdempotentConsumer(keyExtractor, repositoryName, skipDuplicate);
+        return self.IdempotentConsumer(keyExtractor, repositoryName, skipDuplicate);
     }
 
     /// <summary>Apache Camel idempotent consumer overload with nested configurator (registry name).</summary>
@@ -280,9 +251,8 @@ public static class RouteDefinitionCamelDslExtensions
         string repositoryName,
         Action<IdempotentConsumerDefinition> configure)
     {
-        if (self is not RouteDefinition rd)
-            throw new InvalidOperationException("IdempotentConsumer named-registry overload requires a concrete RouteDefinition.");
-        return RunNested(rd.IdempotentConsumer(keyExtractor, repositoryName), configure);
+        ArgumentNullException.ThrowIfNull(self);
+        return RunNested(self.IdempotentConsumer(keyExtractor, repositoryName), configure);
     }
 
     /// <summary>Apache Camel idempotent consumer overload with nested configurator (repository instance).</summary>
@@ -301,45 +271,37 @@ public static class RouteDefinitionCamelDslExtensions
         Action<IdempotentConsumerDefinition> configure)
         => RunNested(self.IdempotentConsumer(repository, keyExtractor), configure);
 
+    // ── Validate (string condition) ───────────────────────────────────────────
+
+    /// <summary>
+    /// Apache Camel parity: validates the exchange against a condition string, throwing or
+    /// flagging when it does not hold. Uses the same condition compilation as Filter and When.
+    /// </summary>
+    public static IRouteDefinition Validate(this IRouteDefinition self, string condition,
+        string errorMessage = "Validation failed", bool throwOnFailure = true)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        var predicate = PredicateFactory.FromString(condition);
+        return self.Validate(predicate, errorMessage, throwOnFailure);
+    }
+
     // ── String-template expression aliases ────────────────────────────────────
 
-    /// <summary>Apache Camel: SetBody from a Simple language string template (e.g. <c>"${header.greeting}"</c>).</summary>
-    public static IRouteDefinition SetBodyExpression(this IRouteDefinition self, string simpleTemplate)
-        => self.SetBody(new StringExpression(simpleTemplate));
+    // SetBodyExpression / SetHeaderExpression / SetPropertyExpression used to be declared here as
+    // extensions too. They were unreachable — the same names are members of IRouteDefinition, and a
+    // member always wins over an extension — and, until the template engines were unified, they
+    // led into a different dialect than the members did. Removed 2026-08-28.
+    //
+    // TransformExpression(string) went the same way in 4.0 (docs/V4/09-BREAKING.md §4, option б):
+    // the suffix means "takes an IExpression" everywhere else in the DSL, and a string form of the
+    // same thing is a second way to say it. Write Transform(Expr("${...}")).
 
-    /// <summary>Apache Camel: SetHeader from a Simple language string template.</summary>
-    public static IRouteDefinition SetHeaderExpression(this IRouteDefinition self, string name, string simpleTemplate)
-        => self.SetHeader(name, new StringExpression(simpleTemplate));
-
-    /// <summary>Apache Camel: SetProperty from a Simple language string template.</summary>
-    public static IRouteDefinition SetPropertyExpression(this IRouteDefinition self, string name, string simpleTemplate)
-        => self.SetProperty(name, new StringExpression(simpleTemplate));
-
-    /// <summary>Apache Camel: Transform body from a Simple language string template.</summary>
-    public static IRouteDefinition TransformExpression(this IRouteDefinition self, string simpleTemplate)
-        => self.Transform(new StringExpression(simpleTemplate));
-
-    /// <summary>Apache Camel: Throttle using a Simple language string template for the rate.</summary>
-    public static ThrottleDefinition ThrottleExpression(this IRouteDefinition self, string simpleTemplate, TimeSpan period)
+    /// <summary>Apache Camel: Throttle whose limit comes from an <see cref="IExpression"/>, evaluated on every message.</summary>
+    public static ThrottleDefinition ThrottleExpression(this IRouteDefinition self, IExpression expression, TimeSpan period)
     {
-        var expr = new StringExpression(simpleTemplate);
-        // ThrottleDefinition currently takes a fixed maxPerPeriod; evaluate the template once at definition time
-        // against an empty exchange context (it must be a constant rate). Tests use static "${header.rate}" only
-        // for parity-API and assert configuration, not dynamic recomputation per message.
-        // If the template cannot be resolved at definition time (e.g. header not yet present),
-        // fall back to a large default so the route still installs and runtime traffic is not blocked.
-        int maxPerPeriod;
-        try
-        {
-            maxPerPeriod = expr.Evaluate<int>(new redb.Route.Core.Exchange());
-            if (maxPerPeriod <= 0) maxPerPeriod = int.MaxValue;
-        }
-        catch
-        {
-            maxPerPeriod = int.MaxValue;
-        }
-        var def = self.Throttle(maxPerPeriod);
-        return def;
+        ArgumentNullException.ThrowIfNull(self);
+        ArgumentNullException.ThrowIfNull(expression);
+        return self.Throttle(ex => expression.Evaluate<int>(ex)).Period(period);
     }
 
     // ── OnException scope alias (RedeliveryDelay after pipeline downgrade) ────
@@ -377,4 +339,210 @@ public static class RouteDefinitionCamelDslExtensions
     public static IRouteDefinition Property(this IRouteDefinition self, string propertyName)
         => throw new InvalidOperationException(
             "Property() must be called inside a Log() scope.");
+
+    // ── Route-XML Ф1.3: string overloads for the remaining lambda-only EIPs ───
+    // The rule set by the 4.0 breaking bundle: the string form lives on the verb itself, never
+    // under an *Expression name. Every string compiles at declaration (StringExpression), so a
+    // malformed expression fails while the route is built, not on the first message.
+
+    /// <summary>
+    /// Recipient List from a route-language expression. The expression may yield a collection of
+    /// URIs or a single delimited string (<c>"${header.targets}"</c> with <c>"direct:a,direct:b"</c>).
+    /// </summary>
+    public static IRouteDefinition RecipientList(
+        this IRouteDefinition self,
+        string recipientsExpression,
+        string delimiter = ",",
+        bool parallelProcessing = false,
+        bool stopOnException = false,
+        Func<IExchange, IExchange, IExchange>? aggregationStrategy = null)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        ArgumentException.ThrowIfNullOrWhiteSpace(recipientsExpression);
+        ArgumentException.ThrowIfNullOrEmpty(delimiter);
+        var expression = new StringExpression(recipientsExpression);
+        return self.RecipientList(
+            e => SplitUris(expression.Evaluate<object>(e), delimiter),
+            parallelProcessing, stopOnException, aggregationStrategy);
+    }
+
+    /// <summary>
+    /// Dynamic Router from a route-language expression evaluated before every hop: the next URI,
+    /// or null/empty to stop routing (<c>"property.step == 0 ? 'direct:a' : null"</c>).
+    /// </summary>
+    public static IRouteDefinition DynamicRouter(this IRouteDefinition self, string routingExpression)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        ArgumentException.ThrowIfNullOrWhiteSpace(routingExpression);
+        var expression = new StringExpression(routingExpression);
+        return self.DynamicRouter(e =>
+        {
+            var uri = expression.Evaluate<object>(e)?.ToString();
+            return string.IsNullOrWhiteSpace(uri) ? null : uri;
+        });
+    }
+
+    /// <summary>Resequencer keyed by a route-language expression (<c>"header.seqNum"</c>), converted to a long.</summary>
+    public static ResequenceDefinition Resequence(
+        this IRouteDefinition self,
+        string keyExpression,
+        int batchSize = 100,
+        TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyExpression);
+        var expression = new StringExpression(keyExpression);
+        return self.Resequence(e => expression.Evaluate<long>(e), batchSize, timeout);
+    }
+
+    /// <summary>Debounce keyed by a route-language expression (<c>"header.deviceId"</c>).</summary>
+    public static DebounceDefinition Debounce(
+        this IRouteDefinition self,
+        string keyExpression,
+        TimeSpan quietPeriod)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyExpression);
+        var expression = new StringExpression(keyExpression);
+        return self.Debounce(e => expression.Evaluate<object>(e)?.ToString() ?? string.Empty, quietPeriod);
+    }
+
+    /// <summary>Idempotent consumer from a key expression and a repository registry name.</summary>
+    public static IdempotentConsumerDefinition IdempotentConsumer(
+        this IRouteDefinition self,
+        string keyExpression,
+        string repositoryName,
+        bool skipDuplicate = true)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyExpression);
+        var expression = new StringExpression(keyExpression);
+        return self.IdempotentConsumer(
+            e => expression.Evaluate<object>(e)?.ToString() ?? string.Empty,
+            repositoryName, skipDuplicate);
+    }
+
+    /// <summary>
+    /// Aggregate from a correlation expression, with completion by condition, size, an inactivity
+    /// timeout (Apache Camel <c>completionTimeout</c>: the clock restarts on every arrival for the
+    /// group), or any combination — whichever fires first completes the group. At least one
+    /// completion criterion is required: an aggregate that can never complete is a leak, not a
+    /// default.
+    /// </summary>
+    public static AggregateDefinition Aggregate(
+        this IRouteDefinition self,
+        string correlationExpression,
+        Func<IExchange, IExchange, IExchange> aggregationStrategy,
+        string? completionCondition = null,
+        int? completionSize = null,
+        TimeSpan? completionTimeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        ArgumentException.ThrowIfNullOrWhiteSpace(correlationExpression);
+        ArgumentNullException.ThrowIfNull(aggregationStrategy);
+        if (completionCondition is null && completionSize is null && completionTimeout is null)
+            throw new ArgumentException(
+                "Aggregate needs at least one completion criterion: completionCondition, completionSize or completionTimeout.");
+        if (completionSize is < 1)
+            throw new ArgumentOutOfRangeException(nameof(completionSize), "completionSize must be at least 1.");
+
+        var correlation = new StringExpression(correlationExpression);
+        var conditionPredicate = completionCondition is null ? null : PredicateFactory.FromString(completionCondition);
+
+        // completionSize rides a counter on the accumulated exchange: the strategy wrapper stamps
+        // it after every merge, the predicate reads it. The __-prefixed key is invisible to
+        // templates, like every engine-internal exchange property.
+        const string countKey = "__redb_agg:size";
+        var strategy = aggregationStrategy;
+        if (completionSize is not null)
+        {
+            strategy = (accumulated, incoming) =>
+            {
+                var count = accumulated.Properties.TryGetValue(countKey, out var v) && v is int i ? i : 1;
+                var merged = aggregationStrategy(accumulated, incoming);
+                merged.Properties[countKey] = count + 1;
+                return merged;
+            };
+        }
+
+        bool Complete(IExchange e)
+        {
+            if (completionSize is { } size)
+            {
+                var count = e.Properties.TryGetValue(countKey, out var v) && v is int i ? i : 1;
+                if (count >= size) return true;
+            }
+            return conditionPredicate?.Matches(e) == true;
+        }
+
+        var definition = self.Aggregate(
+            e => correlation.Evaluate<object>(e)?.ToString() ?? string.Empty,
+            strategy,
+            Complete);
+        definition.CompletionTimeout = completionTimeout;
+        return definition;
+    }
+
+    /// <summary>
+    /// Non-generic <c>OfType</c> (Route-XML Ф1.3): opens the same guarded section as
+    /// <c>OfType&lt;T&gt;()</c> for a type known only at load time — following steps run only for
+    /// matching bodies, exactly like the generic form. Cold path: the generic method is closed by
+    /// reflection once, while the route is being built.
+    /// </summary>
+    public static IRouteDefinition OfType(this IRouteDefinition self, Type bodyType)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        ArgumentNullException.ThrowIfNull(bodyType);
+        var open = typeof(IRouteDefinition).GetMethod(nameof(IRouteDefinition.OfType))
+            ?? throw new InvalidOperationException("IRouteDefinition.OfType<T>() not found.");
+        var section = open.MakeGenericMethod(bodyType).Invoke(self, null)
+            ?? throw new InvalidOperationException($"OfType({bodyType}) returned null.");
+        return (IRouteDefinition)section;
+    }
+
+    /// <summary>Sticky load balancing keyed by a route-language expression (<c>"header.customerId"</c>).</summary>
+    public static ILoadBalancerDefinition UseSticky(this ILoadBalancerDefinition self, string keyExpression)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyExpression);
+        var expression = new StringExpression(keyExpression);
+        return self.UseSticky(e => expression.Evaluate<object>(e)?.ToString() ?? string.Empty);
+    }
+
+    /// <summary>Normalizer clause from a condition string (compiled like <c>Filter(string)</c>).</summary>
+    public static INormalizerDefinition When(
+        this INormalizerDefinition self,
+        string condition,
+        Func<IExchange, object?> transform)
+    {
+        ArgumentNullException.ThrowIfNull(self);
+        ArgumentException.ThrowIfNullOrWhiteSpace(condition);
+        ArgumentNullException.ThrowIfNull(transform);
+        var predicate = PredicateFactory.FromString(condition);
+        return self.When(predicate.Matches, transform);
+    }
+
+    private static IEnumerable<string> SplitUris(object? value, string delimiter)
+    {
+        switch (value)
+        {
+            case null:
+                return [];
+            case string text:
+                return text.Split(delimiter, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            case IEnumerable<string> strings:
+                return strings;
+            case System.Collections.IEnumerable items:
+                return EnumerateUris(items);
+            default:
+                return [value.ToString() ?? string.Empty];
+        }
+
+        static IEnumerable<string> EnumerateUris(System.Collections.IEnumerable items)
+        {
+            foreach (var item in items)
+                if (item?.ToString() is { Length: > 0 } uri)
+                    yield return uri;
+        }
+    }
 }

@@ -230,16 +230,20 @@ public class S3EndpointOptions : EndpointOptions
     // ── Idempotency ─────────────────────────────────────────────────
 
     /// <summary>
-    /// Enable idempotent consumer — skip objects already processed (tracked by key).
-    /// Uses an in-memory repository by default. (default: false)
+    /// Enable idempotent consumer — skip objects already processed
+    /// (tracked by <c>key|ETag|size</c>). Uses an in-memory repository by default.
+    /// (default: false)
     /// </summary>
     public bool Idempotent { get; set; }
 
     /// <summary>
-    /// Expression for the idempotent key. Default uses key + ETag + size.
-    /// Supports <c>${header.xxx}</c> expressions.
+    /// Name of an <c>IIdempotentRepository</c> registered via
+    /// <c>context.AddIdempotentRepository(name, repo)</c> — the same contract the route-level
+    /// IdempotentConsumer EIP uses. With a persistent repository (RedbIdempotentRepository)
+    /// deduplication survives restarts and scale-out. Takes precedence over the in-memory
+    /// <see cref="Idempotent"/> flag.
     /// </summary>
-    public string IdempotentKey { get; set; } = "";
+    public string IdempotentRepository { get; set; } = "";
 
     // ═══════════════════════════════════════════════════════════════════
     //  PRODUCER (uploading/operations)
@@ -285,9 +289,6 @@ public class S3EndpointOptions : EndpointOptions
     /// </summary>
     public long PartSize { get; set; } = 26_214_400;
 
-    /// <summary>Delete the source file/body after successful S3 upload. (default: false)</summary>
-    public bool DeleteAfterWrite { get; set; }
-
     /// <summary>
     /// If true, upload only succeeds if the object key does not already exist.
     /// Uses conditional writes (x-amz-if-none-match). (default: false)
@@ -301,9 +302,6 @@ public class S3EndpointOptions : EndpointOptions
 
     /// <summary>KMS key ID for SSE-KMS encryption.</summary>
     public string KmsKeyId { get; set; } = "";
-
-    /// <summary>Customer encryption algorithm for SSE-C (e.g. "AES256").</summary>
-    public string CustomerAlgorithm { get; set; } = "";
 
     /// <summary>Customer encryption key (base64-encoded) for SSE-C.</summary>
     public string CustomerKeyId { get; set; } = "";
@@ -319,28 +317,12 @@ public class S3EndpointOptions : EndpointOptions
     /// </summary>
     public long PresignedUrlExpiration { get; set; } = 3_600_000;
 
-    // ── Streaming Upload Mode ───────────────────────────────────────
-
-    /// <summary>
-    /// Enable streaming upload mode: accumulate messages and flush to S3
-    /// as a single object. (default: false)
-    /// </summary>
-    public bool StreamingUploadMode { get; set; }
-
-    /// <summary>Number of messages in a streaming upload batch before flush. (default: 10)</summary>
-    public int BatchMessageNumber { get; set; } = 10;
-
-    /// <summary>Maximum batch size in bytes for streaming upload. (default: 1048576 = 1 MB)</summary>
-    public long BatchSize { get; set; } = 1_048_576;
-
-    /// <summary>Buffer size in bytes for streaming upload. (default: 1048576 = 1 MB)</summary>
-    public long BufferSize { get; set; } = 1_048_576;
-
-    /// <summary>Timeout in milliseconds to flush a streaming batch. 0 = no timeout. (default: 0)</summary>
-    public long StreamingUploadTimeout { get; set; }
-
-    /// <summary>Naming strategy for streaming upload. (default: Progressive)</summary>
-    public S3NamingStrategy NamingStrategy { get; set; } = S3NamingStrategy.Progressive;
+    // The Streaming Upload Mode block (StreamingUploadMode, BatchMessageNumber, BatchSize,
+    // BufferSize, StreamingUploadTimeout, NamingStrategy) is gone - часть B of the options sweep.
+    // Six options and a DSL verb promised camel-style accumulate-and-flush, and NOTHING read them
+    // beyond Validate(): the mode was never implemented. Accumulate-then-write is the route's job
+    // in this framework, and the core Aggregate(...) EIP already does it with completion by
+    // count, size and timeout: .Aggregate(...).To(S3.Bucket(...)) - see the README recipe.
 
     // ── Metadata ────────────────────────────────────────────────────
 
@@ -422,14 +404,6 @@ public class S3EndpointOptions : EndpointOptions
 
         if (ServerSideEncryption == S3ServerSideEncryption.CustomerKey && string.IsNullOrEmpty(CustomerKeyId))
             throw new ArgumentException("CustomerKeyId is required when ServerSideEncryption=CustomerKey.");
-
-        if (StreamingUploadMode && BatchMessageNumber < 1)
-            throw new ArgumentOutOfRangeException(nameof(BatchMessageNumber), BatchMessageNumber,
-                "BatchMessageNumber must be at least 1 in streaming upload mode.");
-
-        if (StreamingUploadMode && BatchSize < 1)
-            throw new ArgumentOutOfRangeException(nameof(BatchSize), BatchSize,
-                "BatchSize must be at least 1 in streaming upload mode.");
 
         if (ProxyPort is < 0 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(ProxyPort), ProxyPort,

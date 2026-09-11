@@ -58,4 +58,15 @@ public sealed class As2ConnectionFactory
 
     /// <summary>URL the partner posts asynchronous MDNs to (our receiver).</summary>
     public string? AsyncMdnUrl { get; set; }
+
+    // ── Transport security ───────────────────────────────────────────────────
+    /// <summary>
+    /// PFX certificate our receive server presents to the partner over TLS. Distinct from
+    /// <see cref="OurCertificate"/>, which is the S/MIME key for the payload: one secures the
+    /// connection, the other the message. Lives here so its password stays out of the route URI.
+    /// </summary>
+    public string? SslCertPath { get; set; }
+
+    /// <summary>Password for <see cref="SslCertPath"/>.</summary>
+    public string? SslCertPassword { get; set; }
 }

@@ -176,6 +176,10 @@ public sealed class RabbitMQProducer : ConnectableProducer
             }
             finally { _publishLock.Release(); }
 
+            // Wire-level bytes are the connector's to record: the core's ToProcessor counts
+            // MessagesOut/Errors for a routed producer but has no idea of payload sizes.
+            _endpoint.RecordBytesOut(body.Length);
+
             Logger?.LogDebug("RabbitMQ immediate publish: exchange={Exchange}, routingKey={RoutingKey}, bodySize={Size}",
                 resolvedExchange, resolvedRoutingKey, body.Length);
         }
@@ -409,7 +413,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
 
         _replyQueueName = result.QueueName;
 
-        await _channel.BasicQosAsync(0, (ushort)(_options.ConcurrentConsumers * 3), false, ct)
+        await _channel.BasicQosAsync(0, (ushort)(_options.ResolvedConcurrentConsumers * 3), false, ct)
             .ConfigureAwait(false);
 
         _responseConsumer = new AsyncEventingBasicConsumer(_channel);

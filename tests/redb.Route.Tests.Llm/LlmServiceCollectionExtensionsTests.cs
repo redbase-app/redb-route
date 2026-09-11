@@ -16,9 +16,9 @@ public sealed class LlmServiceCollectionExtensionsTests
 
         sp.GetRequiredService<IAgentEngine>().Should().BeOfType<AgentEngine>();
         sp.GetRequiredService<IToolDescriptorRegistry>().Should().BeOfType<ToolDescriptorRegistry>();
-
-        // Trigger registrar so it pushes the component into the route context.
-        sp.GetRequiredService<ILlmComponentRegistrar>();
+        // The startup hook RouteHostedService applies
+        foreach (var configurator in sp.GetServices<IRouteContextConfigurator>())
+            configurator.Configure(ctx);
 
         ctx.GetComponent<LlmComponent>("llm").Should().NotBeNull();
     }
@@ -37,7 +37,8 @@ public sealed class LlmServiceCollectionExtensionsTests
         });
 
         var sp = services.BuildServiceProvider();
-        sp.GetRequiredService<ILlmFactoryRegistrar>();
+        foreach (var configurator in sp.GetServices<IRouteContextConfigurator>())
+            configurator.Configure(ctx);
 
         var factory = ctx.GetFromRegistry<LlmConnectionFactory>("claude");
         factory.Should().NotBeNull();
@@ -60,7 +61,8 @@ public sealed class LlmServiceCollectionExtensionsTests
         });
 
         var sp = services.BuildServiceProvider();
-        sp.GetRequiredService<ILlmFactoryRegistrar>();
+        foreach (var configurator in sp.GetServices<IRouteContextConfigurator>())
+            configurator.Configure(ctx);
 
         var factory = ctx.GetFromRegistry<LlmConnectionFactory>("registered-name");
         factory.Should().NotBeNull();

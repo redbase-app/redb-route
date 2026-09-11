@@ -13,6 +13,14 @@ namespace redb.Route.Tests.Telemetry;
 /// <summary>
 /// Tests for processor-level metrics (ProcessorMetrics).
 /// Verifies that each processor increments the correct counters.
+/// <para>
+/// <b>Only lower bounds.</b> A <see cref="MeterListener"/> is process state and the processor counters
+/// carry no route tag, so every measurement of every test in flight lands in the same sum. An
+/// assertion may therefore say "at least one" (nobody else can subtract) and never "exactly N" or
+/// "unchanged" — those were the flaky ones. Traces have the discriminator metrics lack
+/// (<c>redb.route.id</c> on the span, see <c>RouteTelemetryProbe</c>); giving the counters the same
+/// per-route attribution is a separate piece of work, noted in <c>docs/Route-XML/BOUNDARIES.md</c> §2.11.
+/// </para>
 /// </summary>
 [Collection("Telemetry")]
 public class ProcessorMetricsTests : IDisposable
@@ -107,16 +115,17 @@ public class ProcessorMetricsTests : IDisposable
     }
 
     [Fact]
-    public async Task Filter_PassedExchange_DoesNotIncrementDropped()
+    public async Task Filter_PassedExchange_ForwardsAndCountsNothingOfItsOwn()
     {
         var next = Substitute.For<IProcessor>();
         var filter = new FilterProcessor(_ => true, next);
-        var before = Sum("redb.route.filter.dropped");
 
         await filter.Process(new Exchange(new Message("test")));
 
-        _listener.RecordObservableInstruments();
-        Sum("redb.route.filter.dropped").Should().Be(before);
+        // The observable claim is the behaviour: a passing predicate forwards. The counter is process
+        // state without a route tag, so "it did not move" can never be proved here — another test's
+        // filter may drop a message in the same instant. See the class remark on lower bounds.
+        await next.Received(1).Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>());
     }
 
     // ═══════════════════════════════════════════════════════════════════

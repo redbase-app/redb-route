@@ -31,7 +31,9 @@ internal sealed class As2Producer : ConnectableProducer
     }
 
     protected override IEndpoint ProducerEndpoint => _endpoint;
-    protected override string ProducerName => $"as2:{_options.PartnerUrl}";
+    // Same invariant as HttpProducer: the name reaches started/stopped logs, and a partner URL
+    // with basic-auth carries a userinfo password no [Sensitive] attribute can reach.
+    protected override string ProducerName => $"as2:{EndpointUri.Sanitize(_options.PartnerUrl)}";
 
     /// <inheritdoc />
     protected override Task ConnectAsync(CancellationToken ct)
@@ -145,7 +147,7 @@ internal sealed class As2Producer : ConnectableProducer
 
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException(
-                $"AS2 POST to {profile.PartnerUrl} failed: {(int)response.StatusCode} {response.ReasonPhrase}");
+                $"AS2 POST to {EndpointUri.Sanitize(profile.PartnerUrl)} failed: {(int)response.StatusCode} {response.ReasonPhrase}");
 
         // Synchronous MDN: parse the receipt, verify its signature, and confirm the partner's
         // Received-Content-MIC matches what we sent. The MDN lands on exchange.Out (InOut).
