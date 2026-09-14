@@ -1,0 +1,9 @@
+# Build outputs
+bin/
+obj/
+
+# .tpkg packaging output
+output/
+
+# What the debug host writes: archive, AS2 certificates, partner folders, reports
+runtime/

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The product's yearly quota is 40 000; after SNREQ_GLOBEX_0001 only 10 000 are left. -->
+<SerialNumberRequest>
+  <RequestId>GLOBEX-7002</RequestId>
+  <Gtin>04607009990001</Gtin>
+  <Quantity>20000</Quantity>
+</SerialNumberRequest>

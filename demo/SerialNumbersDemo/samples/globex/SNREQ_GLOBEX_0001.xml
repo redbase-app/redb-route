@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<SerialNumberRequest>
+  <RequestId>GLOBEX-7001</RequestId>
+  <Gtin>04607009990001</Gtin>
+  <Quantity>30000</Quantity>
+</SerialNumberRequest>

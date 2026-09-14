@@ -1,0 +1,16 @@
+<Project>
+
+  <!-- Shared settings for every project of the demo. Having this file here also stops MSBuild
+       from importing the framework repository's own Directory.Build.props, so the folder can be
+       copied out and used as a template as it is. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!-- One place for the redb package version. -->
+    <RedbVersion>4.0.0</RedbVersion>
+  </PropertyGroup>
+
+</Project>

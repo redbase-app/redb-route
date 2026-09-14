@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<SerialNumberRequest>
+  <RequestId>ACME-2026-0006</RequestId>
+  <Gtin>04607001234567</Gtin>
+  <Quantity>100</Quantity>

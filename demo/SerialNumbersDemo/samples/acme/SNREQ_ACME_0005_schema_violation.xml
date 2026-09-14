@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Well-formed XML that breaks the schema: the GTIN is too short and the quantity is not a number. -->
+<SerialNumberRequest>
+  <RequestId>ACME-2026-0005</RequestId>
+  <Gtin>4607001</Gtin>
+  <Quantity>many</Quantity>
+</SerialNumberRequest>

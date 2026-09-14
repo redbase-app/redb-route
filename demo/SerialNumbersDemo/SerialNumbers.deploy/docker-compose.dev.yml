@@ -1,0 +1,20 @@
+# Local infrastructure for the demo: SQL Server and an SFTP server.
+# The debug host's settings (SerialNumbers.Worker/appsettings.json) match these values.
+#
+#   docker compose -f SerialNumbers.deploy/docker-compose.dev.yml up -d
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Demo_Passw0rd"
+    ports:
+      - "1433:1433"
+
+  sftp:
+    image: atmoz/sftp:latest
+    # user:password:uid:gid:directory - the partner folders are created under /upload
+    command: testuser:secret:::upload
+    ports:
+      - "2222:22"

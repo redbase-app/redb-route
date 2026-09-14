@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The business model: redb entities and the rules that decide a request.
+       It knows nothing about routes or transports, so the rules can be tested on their own. -->
+  <PropertyGroup>
+    <RootNamespace>SerialNumbers.Domain</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="redb.Core" Version="$(RedbVersion)" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,22 @@
+{
+  "ContextName": "serial-numbers",
+  "AutoStart": true,
+  "Archive": {
+    "Directory": "data/serials/archive"
+  },
+  "Sftp": {
+    "Host": "localhost",
+    "Port": 22,
+    "Username": "serials"
+  },
+  "As2": {
+    "Id": "SERIALS-HUB",
+    "ReceivePort": 4080,
+    "CertificateDirectory": "data/serials/certs"
+  },
+  "Report": {
+    "Directory": "data/serials/reports",
+    "Cron": "0 0 6 * * ?",
+    "TimeZone": "UTC"
+  }
+}

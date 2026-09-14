@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A production information file: valid XML, but this module has no route for it yet. Parked. -->
+<ProductionInformation>
+  <BatchNumber>B-2026-0917</BatchNumber>
+  <Gtin>04607001234567</Gtin>
+  <ManufacturedOn>2026-09-17</ManufacturedOn>
+  <UsedFirstSerial>000000000001</UsedFirstSerial>
+  <UsedLastSerial>000000029950</UsedLastSerial>
+</ProductionInformation>
