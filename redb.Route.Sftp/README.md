@@ -56,6 +56,7 @@ From(Sftp.Directory("/data")
 | **Proxy** | `.Proxy(type, host, port)`, `.ProxyAuth(user, pass)` |
 | **Reconnect** | `.MaximumReconnectAttempts()`, `.ReconnectDelay()`, `.Disconnect()` |
 | **Consumer** | `.Delay()`, `.InitialDelay()`, `.Include()`, `.Exclude()`, `.Recursive()`, `.MaxDepth()`, `.MinDepth()`, `.SortBy()`, `.MaxMessagesPerPoll()`, `.MinAge()`, `.MaxAge()` |
+| **Poll backoff** | `.BackoffMultiplier()`, `.BackoffIdleThreshold()`, `.BackoffErrorThreshold()`, `.BackoffOnFailedExchanges()` |
 | **Post-process** | `.Noop()`, `.Delete()`, `.MoveTo()`, `.MoveExisting()`, `.PreMove()`, `.MoveFailed()` |
 | **Idempotency** | `.Idempotent()`, `.DoneFileName()` |
 | **Transfer** | `.Charset()`, `.Separator()` |

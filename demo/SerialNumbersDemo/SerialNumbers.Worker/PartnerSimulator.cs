@@ -85,16 +85,16 @@ public static class PartnerSimulator
             Directory.CreateDirectory(Path.Combine(partnersDirectory, partner, "inbox"));
         }
 
-        CreateAcmeSftpFolders(hub);
+        EnsureAcmeSftpFolders(hub);
         return context;
     }
 
     /// <summary>
     /// On a real SFTP server the partner's folders are set up once, with the account. The hub treats a
     /// missing inbound folder as a misconfiguration and logs every poll of it, so the demo creates them
-    /// before anything starts.
+    /// before anything starts, and <c>seed</c> creates them before the module runs under Tsak.
     /// </summary>
-    private static void CreateAcmeSftpFolders(ModuleSettings hub)
+    public static void EnsureAcmeSftpFolders(ModuleSettings hub)
     {
         using var sftp = new SftpClient(hub.SftpHost, hub.SftpPort, hub.SftpUsername, hub.SftpPasswordFor("acme"));
         sftp.Connect();

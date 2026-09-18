@@ -66,6 +66,9 @@ public sealed class EnrichProcessor : IProcessor
         }
         finally
         {
+            // As Apache Camel's Enrich hands the resource exchange's completions over: a streamed body merged into the
+            // original keeps its connection until the original ends, not until this copy is disposed.
+            ExchangeResources.HandOver(resourceExchange, exchange);
             if (resourceExchange is IAsyncDisposable d) await d.DisposeAsync().ConfigureAwait(false);
         }
     }
@@ -164,6 +167,9 @@ public sealed class PollEnrichProcessor : IProcessor
         }
         finally
         {
+            // The polled exchange's resources go with the original, as in Process.
+            if (pollExchange is not null)
+                ExchangeResources.HandOver(pollExchange, exchange);
             if (pollExchange is IAsyncDisposable d) await d.DisposeAsync().ConfigureAwait(false);
         }
     }

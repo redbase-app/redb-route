@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The same integration as SerialNumbers.Core, spelled in XML: the flow lives in
+       routes/*.route.xml and context.xml. The code here is only what markup cannot express -
+       the beans the routes call and the module bootstrap (AS2 certificates, demo database).
+       The package entry point is THIS assembly: SerialNumbers.Core travels as a dependency,
+       so its C# RouteBuilders are never scanned and the module has one set of routes. -->
+  <PropertyGroup>
+    <RootNamespace>SerialNumbers.Xml</RootNamespace>
+    <RoutePackageName>serial-numbers-xml</RoutePackageName>
+    <RouteContextName>serial-numbers-xml</RouteContextName>
+    <!-- The build-time pack gate reads connectors and markup contributions from TargetDir. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SerialNumbers.Core\SerialNumbers.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="redb.Route.Xml" Version="$(RedbVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="routes/**/*.route.xml" />
+    <None Include="context.xml" />
+    <None Include="resources/**/*" />
+    <None Update="config/*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

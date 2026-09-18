@@ -41,7 +41,10 @@ public static class As2Headers
     public const string MicAlg = Prefix + "micalg";
     /// <summary>Resolved partner (connection-factory) name.</summary>
     public const string PartnerName = Prefix + "partner";
-    /// <summary>Whether the inbound signature verified.</summary>
+    /// <summary>
+    /// True only when a signature was present and verified against the partner certificate; false for an
+    /// unsigned message or MDN, where nothing was verified.
+    /// </summary>
     public const string SignatureValid = Prefix + "signatureValid";
     /// <summary>Remote peer address.</summary>
     public const string RemoteAddress = Prefix + "remoteAddress";

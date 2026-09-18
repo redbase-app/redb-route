@@ -289,6 +289,11 @@ public sealed class OpenAiProvider : ILlmProvider
             });
         }
 
+        // Reasoning goes back on the assistant messages of a request that declares tools: the tool
+        // loop is where a thinking model needs its earlier reasoning. A request without tools does
+        // not carry the field, so a deployment that runs no tool loop never sends it.
+        var includeReasoning = request.Tools.Count > 0;
+
         foreach (var m in request.Messages)
         {
             // Any message containing tool_result blocks must be split into one
@@ -314,8 +319,12 @@ public sealed class OpenAiProvider : ILlmProvider
             if (hasToolResults && m.Content.All(b => b is LlmToolResultBlock))
                 continue;
 
-            // Otherwise emit a normal assistant/user message (without tool_result blocks).
-            messages.Add(MapAssistantOrUser(m));
+            // Otherwise emit a normal assistant/user message (without tool_result blocks), unless it has
+            // nothing to say. Content may be null only beside tool_calls, so a message with no text and
+            // no tool call is refused, and one refused message in the history breaks every later call of
+            // the conversation. The turn stays in the record; it is not sent.
+            if (MapAssistantOrUser(m, includeReasoning) is { } mapped)
+                messages.Add(mapped);
         }
 
         var body = new JsonObject
@@ -348,10 +357,11 @@ public sealed class OpenAiProvider : ILlmProvider
         return body;
     }
 
-    private static JsonObject MapAssistantOrUser(LlmMessage m)
+    private static JsonObject? MapAssistantOrUser(LlmMessage m, bool includeReasoning)
     {
         var toolUses = new List<LlmToolUseBlock>();
         var text = new System.Text.StringBuilder();
+        LlmThinkingBlock? thinking = null;
 
         foreach (var block in m.Content)
         {
@@ -359,8 +369,12 @@ public sealed class OpenAiProvider : ILlmProvider
             {
                 case LlmTextBlock tb: text.Append(tb.Text); break;
                 case LlmToolUseBlock tu: toolUses.Add(tu); break;
+                // The wire's only place for thinking is reasoning_content, and its payload is the text.
+                case LlmThinkingBlock th when !string.IsNullOrEmpty(th.Text): thinking ??= th; break;
             }
         }
+
+        if (text.Length == 0 && toolUses.Count == 0) return null;
 
         var msg = new JsonObject { ["role"] = m.Role };
         msg["content"] = text.Length > 0 ? text.ToString() : null;
@@ -384,9 +398,17 @@ public sealed class OpenAiProvider : ILlmProvider
             msg["tool_calls"] = calls;
         }
 
+        if (includeReasoning && thinking is not null)
+            msg["reasoning_content"] = thinking.Text;
+
         return msg;
     }
 
+    /// <summary>
+    /// Projects a capability into the provider's <c>tools[]</c> entry. Only the name, the description
+    /// and the input schema travel: <see cref="LlmToolSafety"/> is server-side metadata and never
+    /// appears on the wire.
+    /// </summary>
     private static JsonObject MapTool(LlmToolCapability cap)
     {
         JsonNode parameters;
@@ -422,6 +444,16 @@ public sealed class OpenAiProvider : ILlmProvider
                       ?? throw new InvalidOperationException("OpenAI response: no message in choice.");
 
         var blocks = new List<LlmContentBlock>();
+
+        // DeepSeek's thinking models answer with the chain of thought in reasoning_content beside
+        // the visible content. It is a block, not text: callers asked for the answer, and the
+        // reasoning belongs to the round trip back to the provider.
+        if (message["reasoning_content"] is JsonValue rc
+            && rc.TryGetValue<string>(out var reasoningContent)
+            && !string.IsNullOrEmpty(reasoningContent))
+        {
+            blocks.Add(new LlmThinkingBlock(reasoningContent));
+        }
 
         if (message["content"] is JsonValue v && v.TryGetValue<string>(out var textContent) && !string.IsNullOrEmpty(textContent))
             blocks.Add(new LlmTextBlock(textContent));

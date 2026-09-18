@@ -72,6 +72,28 @@ public sealed class LlmEndpointOptions : EndpointOptions
     public int MaxIterations { get; set; } = 8;
 
     /// <summary>
+    /// Per-run input-token budget (summed across iterations). Null = no ceiling; <c>0</c> also means no
+    /// ceiling (the enforcer only enforces positive limits). Distinct from <see cref="MaxTokens"/>, which
+    /// caps what the provider may generate in a single call.
+    /// URI form: <c>llm://factory?budgetInputTokens=20000</c>.
+    /// </summary>
+    public int? BudgetInputTokens { get; set; }
+
+    /// <summary>
+    /// Per-run output-token budget (summed across iterations). Null or <c>0</c> = no ceiling.
+    /// URI form: <c>llm://factory?budgetOutputTokens=4000</c>.
+    /// </summary>
+    public int? BudgetOutputTokens { get; set; }
+
+    /// <summary>
+    /// Per-run cost ceiling in USD. Null or <c>0</c> = no ceiling. A positive value requires an
+    /// <see cref="Engine.Governance.ICostCalculator"/> that can price the model — the run fails fast
+    /// before the first provider call when the registered calculator cannot.
+    /// URI form: <c>llm://factory?budgetCostUsd=0.5</c>.
+    /// </summary>
+    public decimal? BudgetCostUsd { get; set; }
+
+    /// <summary>
     /// Tool exposure filter. Recognised values:
     /// <c>null</c>/empty — no tools exposed (default; explicit opt-in required);
     /// <c>"*"</c> — every descriptor in the registry;
@@ -151,5 +173,25 @@ public sealed class LlmEndpointOptions : EndpointOptions
 
         if (Temperature is < 0 or > 2)
             throw new ArgumentException("Temperature must be between 0 and 2.", nameof(Temperature));
+
+        // Streaming bypasses the agent engine entirely (no tool loop, no governance, no conversation
+        // persistence), so a tool-using agent configured to stream would run its tools nowhere while
+        // reporting success. See docs/LLM/ROADMAP.md (Phase 3) for the streaming tool loop; this check
+        // disappears with it. ArgumentException like the other option checks in this method: the option
+        // combination is the problem, and the offending option is named.
+        if (Stream && !string.IsNullOrWhiteSpace(Tools))
+            throw new ArgumentException(
+                "'stream=true' bypasses the agent engine, so tools cannot be dispatched. "
+                + "Use the non-streaming path for tool-using agents, or drop 'tools=' to stream plain completions.",
+                nameof(Stream));
+
+        if (BudgetInputTokens is < 0)
+            throw new ArgumentException("BudgetInputTokens must be >= 0.", nameof(BudgetInputTokens));
+
+        if (BudgetOutputTokens is < 0)
+            throw new ArgumentException("BudgetOutputTokens must be >= 0.", nameof(BudgetOutputTokens));
+
+        if (BudgetCostUsd is < 0m)
+            throw new ArgumentException("BudgetCostUsd must be >= 0.", nameof(BudgetCostUsd));
     }
 }

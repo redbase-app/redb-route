@@ -212,9 +212,9 @@ public sealed class AmqpConsumer : IConsumer
             return;
         }
 
-        // Register deferred accept action for transacted mode
+        // The delivery is settled by this consumer once the whole unit of work ended well, not by the route
+        // transaction: the transaction owns the database and the outgoing sends.
         var ackAction = new AmqpAckAction(receiver, msg, _logger);
-        RegisterTransactedAction(exchange, $"amqp-ack-{Guid.NewGuid():N}", ackAction);
 
         var pipelineFailed = false;
         try
@@ -222,6 +222,7 @@ public sealed class AmqpConsumer : IConsumer
             try
             {
                 await _processor.Process(exchange, ct).ConfigureAwait(false);
+                exchange.ThrowIfUnhandledFailure();
             }
             catch
             {
@@ -237,9 +238,10 @@ public sealed class AmqpConsumer : IConsumer
             }
 
             // Accept (settle) the message
-            if (_options.AutoAccept && receiver is { IsClosed: false })
+            // Settle through the ack action: a route-level .Transacted() may already have accepted it (Settled).
+            if (_options.AutoAccept && !ackAction.Settled && receiver is { IsClosed: false })
             {
-                receiver.Accept(msg);
+                await ackAction.Commit(ct).ConfigureAwait(false);
             }
 
             Interlocked.Increment(ref _processedCount);
@@ -256,7 +258,7 @@ public sealed class AmqpConsumer : IConsumer
 
             if (receiver is { IsClosed: false })
             {
-                try { receiver.Release(msg); }
+                try { await ackAction.Rollback(ct).ConfigureAwait(false); }
                 catch (Exception releaseEx) { _logger?.LogWarning(releaseEx, "Error releasing AMQP message"); }
             }
         }
@@ -447,24 +449,16 @@ public sealed class AmqpConsumer : IConsumer
         }
     }
 
-    // ── Transacted action registration ──
-
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (!exchange.Properties.TryGetValue("TRANSACT_ACTION", out var raw) ||
-            raw is not ConcurrentDictionary<string, ITransactedAction> dict)
-        {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties["TRANSACT_ACTION"] = dict;
-        }
-
-        dict[key] = action;
-    }
 }
 
 /// <summary>Deferred AMQP acknowledgement action.</summary>
 internal sealed class AmqpAckAction : ITransactedAction
 {
+    private int _settled;
+
+    /// <summary>True once the delivery was accepted or released, by either the deferred (transaction) or the inline path.</summary>
+    public bool Settled => Volatile.Read(ref _settled) == 1;
+
     private readonly ReceiverLink _receiver;
     private readonly AmqpMessage _msg;
     private readonly ILogger? _logger;
@@ -479,6 +473,7 @@ internal sealed class AmqpAckAction : ITransactedAction
     /// <inheritdoc />
     public Task Commit(CancellationToken ct = default)
     {
+        if (Interlocked.Exchange(ref _settled, 1) != 0) return Task.CompletedTask;
         _receiver.Accept(_msg);
         _logger?.LogDebug("AMQP ack committed");
         return Task.CompletedTask;
@@ -487,6 +482,7 @@ internal sealed class AmqpAckAction : ITransactedAction
     /// <inheritdoc />
     public Task Rollback(CancellationToken ct = default)
     {
+        if (Interlocked.Exchange(ref _settled, 1) != 0) return Task.CompletedTask;
         _receiver.Release(_msg);
         _logger?.LogDebug("AMQP nack (release/rollback)");
         return Task.CompletedTask;

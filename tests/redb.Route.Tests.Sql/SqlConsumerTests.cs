@@ -1,6 +1,8 @@
+using System.Text.Json;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Sql;
+using redb.Route.Tests.Sql.E2E.Infrastructure;
 
 namespace redb.Route.Tests.Sql;
 
@@ -192,7 +194,7 @@ public class SqlConsumerTests : IDisposable
         {
             ["delay"] = "100",
             ["repeatCount"] = "1",
-            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = @id"
+            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id"
         });
         var processor = Substitute.For<IProcessor>();
         processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
@@ -205,6 +207,38 @@ public class SqlConsumerTests : IDisposable
         var rows = _db.Query("SELECT processed FROM outbox WHERE id = 1");
         rows.Should().HaveCount(1);
         rows[0]["processed"].Should().Be(1L);
+    }
+
+    [Fact]
+    public async Task Consumer_OnSuccess_ValuesNormalisedLikeTheProducer()
+    {
+        InsertOutboxRow("msg-1");
+        InsertOutboxRow("msg-2");
+        _db.Execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, note TEXT)");
+
+        var endpoint = CreateEndpoint(new()
+        {
+            ["repeatCount"] = "1",
+            ["onSuccess"] = "INSERT INTO notes(id, note) VALUES(:#id, :#note)"
+        });
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var exchange = ci.Arg<IExchange>();
+                exchange.In.Headers["note"] = Convert.ToInt64(exchange.In.Headers["id"]) == 1
+                    ? ""
+                    : JsonDocument.Parse("\"from json\"").RootElement;
+                return Task.CompletedTask;
+            });
+
+        var consumer = (SqlConsumer)endpoint.CreateConsumer(processor);
+        await consumer.Poll(CancellationToken.None);
+
+        var notes = _db.Query("SELECT id, note FROM notes ORDER BY id");
+        notes.Should().HaveCount(2, "lifecycle SQL binds under the producer's rule; a value it cannot bind is not a silent failure");
+        (notes[0]["note"] is null or DBNull).Should().BeTrue("an empty string binds NULL, as in the producer");
+        notes[1]["note"].Should().Be("from json", "a JSON value binds as its scalar, as in the producer");
     }
 
     // ── OnFailure ───────────────────────────────────────────────────
@@ -226,7 +260,7 @@ public class SqlConsumerTests : IDisposable
         {
             ["delay"] = "100",
             ["repeatCount"] = "1",
-            ["onFailure"] = "INSERT INTO error_log(msg, err) VALUES(@message, @redbError)"
+            ["onFailure"] = "INSERT INTO error_log(msg, err) VALUES(:#message, :#redbError)"
         });
         var processor = Substitute.For<IProcessor>();
         processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
@@ -239,6 +273,55 @@ public class SqlConsumerTests : IDisposable
         errors.Should().HaveCount(1);
         errors[0]["msg"].Should().Be("msg-1");
         errors[0]["err"]!.ToString().Should().Contain("Processing failed!");
+    }
+
+    [Fact]
+    public async Task Consumer_OnSuccess_MissingParameter_IsAnError()
+    {
+        InsertOutboxRow("msg-1");
+        _db.Execute("CREATE TABLE lifecycle_error_log (msg TEXT, err TEXT)");
+
+        var endpoint = CreateEndpoint(new()
+        {
+            ["delay"] = "100",
+            ["repeatCount"] = "1",
+            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id AND message = :#nosuch",
+            ["onFailure"] = "INSERT INTO lifecycle_error_log(msg, err) VALUES(:#message, :#redbError)"
+        });
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var consumer = (SqlConsumer)endpoint.CreateConsumer(processor);
+        await consumer.Poll(CancellationToken.None);
+
+        // As in Apache Camel: a placeholder with no value is an error; onFailure records it instead of a silent NULL.
+        var errors = _db.Query("SELECT msg, err FROM lifecycle_error_log");
+        errors.Should().ContainSingle();
+        errors[0]["err"]!.ToString().Should().Contain(":#nosuch");
+        _db.Query("SELECT processed FROM outbox WHERE id = 1")[0]["processed"].Should().Be(0L);
+    }
+
+    [Fact]
+    public async Task Consumer_OnSuccess_RedbErrorWithoutException_BindsNull()
+    {
+        InsertOutboxRow("msg-1");
+
+        var endpoint = CreateEndpoint(new()
+        {
+            ["delay"] = "100",
+            ["repeatCount"] = "1",
+            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id AND :#redbError IS NULL"
+        });
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var consumer = (SqlConsumer)endpoint.CreateConsumer(processor);
+        await consumer.Poll(CancellationToken.None);
+
+        _db.Query("SELECT processed FROM outbox WHERE id = 1")[0]["processed"].Should().Be(1L,
+            ":#redbError always has a value: the error message, or NULL when nothing failed");
     }
 
     // ── OnBatchComplete ─────────────────────────────────────────────
@@ -279,7 +362,7 @@ public class SqlConsumerTests : IDisposable
             ["delay"] = "100",
             ["repeatCount"] = "1",
             ["transacted"] = "true",
-            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = @id"
+            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id"
         });
         var processor = Substitute.For<IProcessor>();
         processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
@@ -462,7 +545,7 @@ public class SqlConsumerTests : IDisposable
             ["delay"] = "100",
             ["repeatCount"] = "1",
             ["transacted"] = "true",
-            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = @id"
+            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id"
         });
         var callCount = 0;
         var processor = Substitute.For<IProcessor>();
@@ -632,12 +715,15 @@ public class SqlConsumerTests : IDisposable
         InsertOutboxRow("os1");
         InsertOutboxRow("os2");
 
+        // As in Apache Camel, onSuccess of a streaming poll runs on the reader's connection only inside a transaction; outside
+        // one it takes a connection of its own, which SQLite blocks from writing the table the open reader holds.
         var endpoint = CreateEndpoint(new()
         {
             ["delay"] = "100",
             ["repeatCount"] = "1",
             ["outputType"] = "StreamList",
-            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = @id"
+            ["transacted"] = "true",
+            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id"
         });
         var processor = Substitute.For<IProcessor>();
         processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
@@ -670,7 +756,7 @@ public class SqlConsumerTests : IDisposable
             ["delay"] = "100",
             ["repeatCount"] = "1",
             ["outputType"] = "StreamList",
-            ["onFailure"] = "INSERT INTO stream_error_log(msg, err) VALUES(@message, @redbError)"
+            ["onFailure"] = "INSERT INTO stream_error_log(msg, err) VALUES(:#message, :#redbError)"
         });
         var processor = Substitute.For<IProcessor>();
         processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
@@ -771,7 +857,7 @@ public class SqlConsumerTests : IDisposable
             ["repeatCount"] = "1",
             ["outputType"] = "StreamList",
             ["transacted"] = "true",
-            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = @id"
+            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id"
         });
         var callCount = 0;
         var processor = Substitute.For<IProcessor>();

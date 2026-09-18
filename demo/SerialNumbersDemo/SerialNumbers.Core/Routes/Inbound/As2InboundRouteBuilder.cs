@@ -31,7 +31,7 @@ public sealed class As2InboundRouteBuilder : RouteBuilder
                 .SetHeader(SerialHeaders.Partner, code)
                 .SetHeader(SerialHeaders.Transport, Transports.As2)
                 .SetHeader(SerialHeaders.FileName, e => ArchivePaths.FromAs2MessageId(e.In.GetHeader<string>(As2Headers.MessageId)))
-                .SetHeader(SerialHeaders.MessageKey, e => $"{code}/{e.In.Headers[As2Headers.MessageId]}")
+                .Log("${header.serials.partner}: received ${header.serials.fileName} over AS2")
                 .To(RouteUris.Intake);
         }
     }

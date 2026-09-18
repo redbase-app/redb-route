@@ -33,6 +33,17 @@ public class SqlIdempotentRepositoryTests : IDisposable
         opts.CreateTable.Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData("x; DROP TABLE y")]
+    [InlineData("keys'")]
+    [InlineData("")]
+    public void SqlIdempotentOptions_TableName_IsValidated(string tableName)
+    {
+        var act = () => new SqlIdempotentOptions { TableName = tableName };
+
+        act.Should().Throw<ArgumentException>("the name goes into DDL and, on SQL Server, into a string literal");
+    }
+
     // ── Add ─────────────────────────────────────────────────────────
 
     [Fact]

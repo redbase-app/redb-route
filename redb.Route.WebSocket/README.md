@@ -101,7 +101,14 @@ services.AddRedbRouteWebSocket(o => o.Authenticate = async ctx =>
 ```
 
 Null rejects the upgrade with 401. The principal's `NameIdentifier` reaches the route as the
-`redbWs.UserId` header.
+`redbWs.UserId` header, and the principal itself is on every exchange the socket produces
+(`ExchangePrincipal.Get(exchange)`). Build the identity with an authentication type
+(`new ClaimsIdentity(claims, "Bearer")`): code that reads the principal treats an identity that is not
+authenticated as anonymous.
+
+Without this delegate, a caller identified by the shared host
+(`AddRedbRouteHttpHosting(o => o.ResolvePrincipal = ...)`) is used in the same way, but an anonymous
+handshake is not rejected. When the delegate is set, it takes precedence.
 
 ## Schemes
 

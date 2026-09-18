@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.GenericFile;
 
 namespace redb.Route.Tests.GenericFile;
 
@@ -303,5 +304,98 @@ public class GenericFileConsumerTests : GenericFileTestBase
         await consumer.PollOnceAsync();
 
         bodies.Should().ContainSingle().Which.Should().Be("old");
+    }
+
+    // ── Poll backoff: exchange count feeds idle/success classification ──
+
+    [Fact]
+    public async Task PollCount_EmptyDirectory_IsZero()
+    {
+        var endpoint = Endpoint();
+        var (processor, _, _) = Collector();
+        var consumer = (TestFileConsumer)endpoint.CreateConsumer(processor);
+
+        (await consumer.PollOnceAsync()).Created.Should().Be(0, "no files → idle poll");
+    }
+
+    [Fact]
+    public async Task PollCount_OneFile_IsOne()
+    {
+        Ops.AddFile("/in/a.csv", "x");
+        var endpoint = Endpoint(new() { ["noop"] = "true" });
+        var (processor, _, _) = Collector();
+        var consumer = (TestFileConsumer)endpoint.CreateConsumer(processor);
+
+        (await consumer.PollOnceAsync()).Created.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task PollCount_IdempotentDuplicate_IsZeroOnSecondPoll()
+    {
+        Ops.AddFile("/in/a.csv", "x");
+        var endpoint = Endpoint(new() { ["idempotent"] = "true", ["noop"] = "true" });
+        var (processor, _, _) = Collector();
+        var consumer = (TestFileConsumer)endpoint.CreateConsumer(processor);
+
+        (await consumer.PollOnceAsync()).Created.Should().Be(1, "first sighting creates an exchange");
+        (await consumer.PollOnceAsync()).Created.Should().Be(0, "the duplicate is filtered → idle");
+    }
+
+    [Fact]
+    public async Task PollTally_AllExchangesFail_CountsCreatedAndFailed()
+    {
+        Ops.AddFile("/in/a.csv", "x");
+        Ops.AddFile("/in/b.csv", "y");
+        var endpoint = Endpoint(new() { ["noop"] = "true" });
+        // Processor that fails every exchange the way an unhandled route error does.
+        var (processor, _, _) = Collector(onProcess: ex => ex.Exception = new InvalidOperationException("down"));
+        var consumer = (TestFileConsumer)endpoint.CreateConsumer(processor);
+
+        var tally = await consumer.PollOnceAsync();
+
+        tally.Created.Should().Be(2);
+        tally.Failed.Should().Be(2, "both exchanges failed unhandled");
+        // With BackoffOnFailedExchanges on, this tally classifies as Error; off (default) it is Success.
+        PollBackoff.Classify(tally, backoffOnFailedExchanges: true).Should().Be(PollOutcome.Error);
+        PollBackoff.Classify(tally, backoffOnFailedExchanges: false).Should().Be(PollOutcome.Success);
+    }
+
+    // ── Poll backoff: option validation and URI binding ──
+
+    [Fact]
+    public void Backoff_MultiplierWithoutThreshold_ThrowsAtCreation()
+    {
+        var act = () => Endpoint(new() { ["backoffMultiplier"] = "3" });
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void Backoff_ThresholdWithoutMultiplier_ThrowsAtCreation()
+    {
+        var act = () => Endpoint(new() { ["backoffErrorThreshold"] = "2" });
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void Backoff_NegativeMultiplier_ThrowsAtCreation()
+    {
+        var act = () => Endpoint(new() { ["backoffMultiplier"] = "-1", ["backoffErrorThreshold"] = "1" });
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public void Backoff_UriKeys_BindToOptions()
+    {
+        var options = new TestFileEndpointOptions();
+        options.BindFromUri(new Dictionary<string, string>
+        {
+            ["backoffMultiplier"] = "3",
+            ["backoffIdleThreshold"] = "2",
+            ["backoffErrorThreshold"] = "1",
+        });
+
+        options.BackoffMultiplier.Should().Be(3);
+        options.BackoffIdleThreshold.Should().Be(2);
+        options.BackoffErrorThreshold.Should().Be(1);
     }
 }

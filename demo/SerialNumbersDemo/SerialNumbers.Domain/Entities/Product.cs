@@ -1,4 +1,5 @@
 using redb.Core.Attributes;
+using SerialNumbers.Domain.Services;
 
 namespace SerialNumbers.Domain.Entities;
 
@@ -12,6 +13,12 @@ public sealed class Product
     public string Gtin { get; set; } = "";
 
     public string Name { get; set; } = "";
+
+    /// <summary>
+    /// One of <see cref="ProductStatuses"/>. A new product starts as a draft: requests for it wait
+    /// until someone activates it.
+    /// </summary>
+    public string Status { get; set; } = ProductStatuses.Draft;
 
     /// <summary>The largest quantity a single request may ask for.</summary>
     public int MaxPerRequest { get; set; }

@@ -23,9 +23,10 @@ public interface IBudgetEnforcer
         CancellationToken ct = default);
 
     /// <summary>
-    /// Records usage produced by the iteration and returns a decision whether
-    /// the agent may continue. Implementations should accumulate usage on the
-    /// underlying <see cref="Storage.ICostBudgetStore"/> when wired.
+    /// Records usage produced by the iteration and returns a decision whether the agent may
+    /// continue. The engine passes per-iteration and running totals; accumulating them on an
+    /// <see cref="Storage.ICostBudgetStore"/> is up to the implementation — see
+    /// <see cref="StoreBudgetEnforcer"/>, the one shipped enforcer that does.
     /// </summary>
     ValueTask<BudgetDecision> RecordAndCheckAsync(
         string? conversationId,
@@ -81,9 +82,9 @@ public sealed class NoopBudgetEnforcer : IBudgetEnforcer
 }
 
 /// <summary>
-/// In-process budget enforcer — checks <see cref="AgentBudget"/> components against
-/// the running total. Does NOT persist between runs; use the redb-backed
-/// <c>ICostBudgetStore</c> implementation for cross-run budgets.
+/// In-process budget enforcer — checks <see cref="AgentBudget"/> components against the running
+/// total. Does NOT persist between runs and takes no store: cross-run budgets need a custom
+/// <see cref="IBudgetEnforcer"/> over an <see cref="Storage.ICostBudgetStore"/>.
 /// </summary>
 public sealed class InMemoryBudgetEnforcer : IBudgetEnforcer
 {

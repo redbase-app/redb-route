@@ -209,11 +209,13 @@ public sealed class WsConsumer : IConsumer
         }
 
         // Host-supplied authentication, before the upgrade: a rejected handshake never becomes a
-        // socket, and an accepted one carries its principal into every exchange it produces.
-        string? userId = null;
+        // socket, and an accepted one carries its principal into every exchange it produces. The
+        // component's own delegate decides on its paths; without one, the caller is whoever the
+        // shared host's resolver (HttpHostingOptions.ResolvePrincipal) identified, if anyone.
+        System.Security.Claims.ClaimsPrincipal? principal;
         if ((_endpoint.Component as WsComponent)?.Authenticate is { } authenticate)
         {
-            var principal = await authenticate(httpContext).ConfigureAwait(false);
+            principal = await authenticate(httpContext).ConfigureAwait(false);
             if (principal is null)
             {
                 httpContext.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -221,9 +223,14 @@ public sealed class WsConsumer : IConsumer
             }
 
             httpContext.User = principal;
-            userId = principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
-                     ?? principal.Identity?.Name;
         }
+        else
+        {
+            principal = SharedHttpServerManager.GetResolvedPrincipal(httpContext);
+        }
+
+        var userId = principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                     ?? principal?.Identity?.Name;
 
         // Throttle connections
         if (_connectionSemaphore is not null)
@@ -256,7 +263,7 @@ public sealed class WsConsumer : IConsumer
         try
         {
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(httpContext.RequestAborted, _cts?.Token ?? CancellationToken.None);
-            await HandleWebSocket(ws, connectionId, remoteEp, localEp, userId, linkedCts.Token)
+            await HandleWebSocket(ws, connectionId, remoteEp, localEp, principal, userId, linkedCts.Token)
                 .ConfigureAwait(false);
         }
         finally
@@ -268,7 +275,8 @@ public sealed class WsConsumer : IConsumer
     }
 
     private async Task HandleWebSocket(System.Net.WebSockets.WebSocket ws, string connectionId,
-        string remoteEp, string localEp, string? userId, CancellationToken ct)
+        string remoteEp, string localEp, System.Security.Claims.ClaimsPrincipal? principal, string? userId,
+        CancellationToken ct)
     {
         var buffer = new byte[_options.ReceiveBufferSize];
 
@@ -300,7 +308,7 @@ public sealed class WsConsumer : IConsumer
             // Pipeline statistics (MessagesIn/BytesIn/Errors) belong to the core: the routed
             // processor chain is wrapped in StatisticsProcessor, and recording here as well
             // double-counted every frame (the statistics-ownership audit).
-            var exchange = BuildExchange(data, msgType, connectionId, remoteEp, localEp, userId);
+            var exchange = BuildExchange(data, msgType, connectionId, remoteEp, localEp, principal, userId);
 
             _drain.Increment();
             try
@@ -348,7 +356,8 @@ public sealed class WsConsumer : IConsumer
     }
 
     private IExchange BuildExchange(byte[] data, WebSocketMessageType msgType,
-        string connectionId, string remoteEp, string localEp, string? userId)
+        string connectionId, string remoteEp, string localEp,
+        System.Security.Claims.ClaimsPrincipal? principal, string? userId)
     {
         object body = msgType == WebSocketMessageType.Text
             ? _encoding.GetString(data)
@@ -371,6 +380,7 @@ public sealed class WsConsumer : IConsumer
 
         var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         exchange.Pattern = _options.InOut ? ExchangePattern.InOut : ExchangePattern.InOnly;
+        ExchangePrincipal.Set(exchange, principal);
         return exchange;
     }
 

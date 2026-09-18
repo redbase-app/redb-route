@@ -47,7 +47,9 @@ public class WsComponent : ComponentBase
     /// <summary>
     /// Authenticates a handshake before the socket is upgraded. Supplied by the host through
     /// <c>AddRedbRouteWebSocket(o =&gt; o.Authenticate = ...)</c>; null means every connection is
-    /// accepted, which is the historical behaviour.
+    /// accepted, which is the historical behaviour. The principal is put on every exchange the socket
+    /// produces (<c>ExchangePrincipal</c>); build its identity with an authentication type, because code
+    /// that reads it treats an identity that is not authenticated as anonymous.
     /// </summary>
     public Func<Microsoft.AspNetCore.Http.HttpContext, Task<System.Security.Claims.ClaimsPrincipal?>>? Authenticate { get; set; }
 

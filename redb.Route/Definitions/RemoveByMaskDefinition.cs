@@ -44,12 +44,13 @@ public sealed class RemoveByMaskDefinition : ProcessorDefinition
         => new DelegateProcessor(exchange =>
         {
             var store = Target == RemoveTarget.Headers ? exchange.In.Headers : exchange.Properties;
-            // The exchange keeps its DI scopes under __redb_scope:* properties; they are bookkeeping, not
-            // user data, and dropping them would leave ReleaseScopes nothing to dispose — a scope leak.
+            // The exchange keeps its DI scopes (__redb_scope:*) and registered resources (__redb_resource:*) as
+            // properties; they are bookkeeping, not user data, and dropping them would leave ReleaseScopes nothing to
+            // dispose — a scope or connection leak.
             var doomed = store.Keys
                 .Where(key => UriMask.IsMatch(Pattern, key)
                     && !Except.Contains(key, StringComparer.OrdinalIgnoreCase)
-                    && !(Target == RemoveTarget.Properties && key.StartsWith("__redb_scope:", StringComparison.Ordinal)))
+                    && !(Target == RemoveTarget.Properties && ExchangeResources.IsOwnedByExchange(key)))
                 .ToList();
             foreach (var key in doomed)
                 store.Remove(key);

@@ -7,3 +7,6 @@ output/
 
 # What the debug host writes: archive, AS2 certificates, partner folders, reports
 runtime/
+
+# Local secrets for docker-compose.tsak.yml
+SerialNumbers.deploy/.env

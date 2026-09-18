@@ -41,7 +41,10 @@ public class OnExceptionProcessorTests
         await processor.Process(exchange);
 
         handled.Should().BeTrue();
-        exchange.ExceptionHandled.Should().BeTrue();
+        // handled:false (default) — the handler ran but the failure is NOT suppressed (Camel handled(false)),
+        // so the consumer (which checks Exception != null && !ExceptionHandled) still sees the failure.
+        exchange.ExceptionHandled.Should().BeFalse();
+        exchange.Exception.Should().NotBeNull();
     }
 
     /// <summary>No matching handler — exception rethrows.</summary>
@@ -54,6 +57,23 @@ public class OnExceptionProcessorTests
 
         var act = () => processor.Process(new Exchange());
         await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    /// <summary>Most-specific handler wins regardless of declaration order (Camel: nearest supertype).</summary>
+    [Fact]
+    public async Task Process_MostSpecificHandler_WinsRegardlessOfOrder()
+    {
+        string? picked = null;
+        var processor = new OnExceptionProcessor(
+                new DelegateProcessor(_ => throw new InvalidOperationException("boom")))
+            // General handler declared FIRST, specific one SECOND — specificity must win, not order.
+            .Handle<Exception>(new DelegateProcessor(_ => picked = "general"), handled: true)
+            .Handle<InvalidOperationException>(new DelegateProcessor(_ => picked = "specific"), handled: true);
+
+        await processor.Process(new Exchange());
+
+        picked.Should().Be("specific",
+            "the most-derived matching handler must win even when declared after the general one");
     }
 
     /// <summary>Redelivery retries before invoking handler.</summary>
@@ -130,7 +150,7 @@ public class OnExceptionProcessorTests
         var exchange = new Exchange();
         await processor.Process(exchange);
 
-        exchange.ExceptionHandled.Should().BeTrue();
+        exchange.ExceptionHandled.Should().BeFalse("Handled=false must not suppress the failure (Camel handled(false))");
         exchange.Exception.Should().NotBeNull("Handled=false should keep exception on exchange");
     }
 
@@ -148,6 +168,7 @@ public class OnExceptionProcessorTests
         await processor.Process(exchange);
 
         exchange.ExceptionHandled.Should().BeTrue();
+        exchange.Exception.Should().BeNull("Continued suppresses the exception and resumes routing");
     }
 
     // ── OnWhen predicate ──
@@ -219,7 +240,8 @@ public class OnExceptionProcessorTests
         await processor.Process(exchange);
 
         attempts.Should().Be(2); // 1 original + 1 retry
-        exchange.ExceptionHandled.Should().BeTrue();
+        // handler is handled:false — after retries are exhausted the failure is not suppressed.
+        exchange.ExceptionHandled.Should().BeFalse();
     }
 
     // ── DSL integration: fluent chain scope ──

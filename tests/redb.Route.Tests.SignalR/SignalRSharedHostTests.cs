@@ -183,6 +183,111 @@ public sealed class SignalRSharedHostTests : IAsyncLifetime
             .Should().Be("user-42", "UserIdentifier берётся из HttpContext.User, который ставит наш делегат");
     }
 
+    // ── The caller's identity on the exchange ──
+
+    private static string TokenOf(HttpContext ctx)
+    {
+        var header = ctx.Request.Headers.Authorization.ToString();
+        return header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? header["Bearer ".Length..]
+            : ctx.Request.Query["access_token"].ToString();
+    }
+
+    private static ClaimsPrincipal User(string id) =>
+        new(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, id)], "test"));
+
+    private async Task<IExchange> InvokeThroughAsync(SignalRComponent component, int port, string? accessToken)
+    {
+        var endpoint = CreateEndpoint(component, port, "/who", "inOut=true");
+        await endpoint.Start();
+        var captured = new CapturingProcessor();
+        _consumer = (SignalRConsumer)endpoint.CreateConsumer(captured);
+        await _consumer.Start();
+
+        var connection = await ConnectAsync(port, "/who", accessToken: accessToken);
+        await connection.InvokeAsync<object?>("Invoke", "Send", new object?[] { "hello" });
+
+        captured.LastExchange.Should().NotBeNull();
+        return captured.LastExchange!;
+    }
+
+    [Fact]
+    public async Task HostResolver_PrincipalAndUserIdentifierReachTheExchange()
+    {
+        var port = GetFreePort();
+        await using var manager = new SharedHttpServerManager(new HttpHostingOptions
+        {
+            ResolvePrincipal = ctx => Task.FromResult(TokenOf(ctx) == "good" ? User("host-user") : null),
+        });
+
+        try
+        {
+            var exchange = await InvokeThroughAsync(new SignalRComponent { ServerManager = manager }, port, "good");
+
+            ExchangePrincipal.Get(exchange)!.FindFirst(ClaimTypes.NameIdentifier)!.Value.Should().Be("host-user");
+            exchange.In.GetHeader<string>(SignalRHeaders.UserId).Should().Be("host-user",
+                "the host's principal is handed to SignalR, so UserIdentifier and Clients.User work too");
+        }
+        finally
+        {
+            foreach (var c in _connections) await c.DisposeAsync();
+            _connections.Clear();
+            await _consumer!.Stop();
+            _consumer = null;
+        }
+    }
+
+    [Fact]
+    public async Task AnonymousHubConnection_CarriesNoIdentity()
+    {
+        var port = GetFreePort();
+        await using var manager = new SharedHttpServerManager(new HttpHostingOptions
+        {
+            ResolvePrincipal = _ => Task.FromResult<ClaimsPrincipal?>(null),
+        });
+
+        try
+        {
+            var exchange = await InvokeThroughAsync(new SignalRComponent { ServerManager = manager }, port, null);
+
+            ExchangePrincipal.Get(exchange).Should().BeNull(
+                "SignalR's empty default user identifies nobody and must not show up as an identity");
+        }
+        finally
+        {
+            foreach (var c in _connections) await c.DisposeAsync();
+            _connections.Clear();
+            await _consumer!.Stop();
+            _consumer = null;
+        }
+    }
+
+    [Fact]
+    public async Task ComponentAuthenticate_TakesPrecedenceOverTheHostResolver()
+    {
+        var port = GetFreePort();
+        await using var manager = new SharedHttpServerManager(new HttpHostingOptions
+        {
+            ResolvePrincipal = _ => Task.FromResult<ClaimsPrincipal?>(User("host-user")),
+        });
+
+        try
+        {
+            var component = new SignalRComponent { ServerManager = manager, Authenticate = TokenAuth("good") };
+            var exchange = await InvokeThroughAsync(component, port, "good");
+
+            ExchangePrincipal.Get(exchange)!.FindFirst(ClaimTypes.NameIdentifier)!.Value.Should().Be("user-42",
+                "the transport's own hook is the more specific decision on its path");
+        }
+        finally
+        {
+            foreach (var c in _connections) await c.DisposeAsync();
+            _connections.Clear();
+            await _consumer!.Stop();
+            _consumer = null;
+        }
+    }
+
     // ── Волна 4: MessagePack really negotiates ──
 
     [Fact]

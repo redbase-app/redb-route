@@ -331,6 +331,95 @@ public class FileConsumerTests : IDisposable
         System.IO.File.ReadAllText(Path.Combine(archiveDir, "moveme.txt")).Should().Be("content");
     }
 
+    // ── Failure handling: MoveFailed ────────────────────────────────
+
+    [Fact]
+    public async Task Consumer_ProcessingFails_WithMoveFailed_QuarantinesFile()
+    {
+        CreateFile("poison.txt", "bad");
+        var failedDir = Path.Combine(_tempDir, "failed");
+
+        // The processor "fails" the way a route with .OnException() (handled:false) does: it leaves an
+        // exception on the exchange (ExceptionHandled stays false), which the consumer treats as a failure.
+        var endpoint = CreateEndpoint(new() { ["moveFailed"] = failedDir, ["delay"] = "100" });
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask)
+            .AndDoes(x => x.Arg<IExchange>().Exception = new InvalidOperationException("boom"));
+
+        var consumer = (FileConsumer)endpoint.CreateConsumer(processor);
+        await consumer.Start();
+        await WaitForCondition(() => System.IO.File.Exists(Path.Combine(failedDir, "poison.txt")), 3000);
+        await consumer.Stop();
+
+        System.IO.File.Exists(Path.Combine(failedDir, "poison.txt"))
+            .Should().BeTrue("a failed file must be quarantined to the MoveFailed directory");
+        System.IO.File.Exists(Path.Combine(_inputDir, "poison.txt"))
+            .Should().BeFalse("the poison file must leave the poll directory so it is not re-picked forever");
+    }
+
+    [Fact]
+    public async Task Consumer_ProcessingFails_WithoutMoveFailed_LeavesFileInPlace()
+    {
+        CreateFile("stay.txt", "bad");
+        var filePath = Path.Combine(_inputDir, "stay.txt");
+        var calls = 0;
+
+        var endpoint = CreateEndpoint(new() { ["delay"] = "100" });
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask)
+            .AndDoes(x =>
+            {
+                Interlocked.Increment(ref calls);
+                x.Arg<IExchange>().Exception = new InvalidOperationException("boom");
+            });
+
+        var consumer = (FileConsumer)endpoint.CreateConsumer(processor);
+        await consumer.Start();
+        await WaitForCondition(() => calls >= 1, 3000);
+        await consumer.Stop();
+
+        System.IO.File.Exists(filePath)
+            .Should().BeTrue("without MoveFailed a failed file is left in place (the caller opts into quarantine)");
+    }
+
+    [Fact]
+    public async Task Consumer_PoisonFile_DoesNotBlockLaterFiles_AndIsQuarantined()
+    {
+        // The processor THROWS on the first file (as a route with no matching OnException does — the
+        // exception escapes the pipeline). A single poison file must NOT abort the poll batch and leave
+        // the files after it unprocessed; it must be quarantined via MoveFailed and the batch must go on.
+        CreateFile("001-poison.txt", "bad");
+        CreateFile("002-good.txt", "ok");
+        var failedDir = Path.Combine(_tempDir, "failed");
+
+        var processedNames = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var endpoint = CreateEndpoint(new() { ["moveFailed"] = failedDir, ["sortBy"] = "Name", ["delay"] = "100" });
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask)
+            .AndDoes(x =>
+            {
+                var e = x.Arg<IExchange>();
+                var name = e.In.Headers[FileHeaders.FileName]?.ToString() ?? "";
+                processedNames.Add(name);
+                if (name.StartsWith("001")) throw new InvalidOperationException("poison");
+            });
+
+        var consumer = (FileConsumer)endpoint.CreateConsumer(processor);
+        await consumer.Start();
+        await WaitForCondition(() => processedNames.Contains("002-good.txt"), 3000);
+        await consumer.Stop();
+
+        processedNames.Should().Contain("002-good.txt",
+            "a poison file that throws must not abort the batch — later files still get processed");
+        System.IO.File.Exists(Path.Combine(failedDir, "001-poison.txt"))
+            .Should().BeTrue("the file that threw is quarantined via MoveFailed");
+        System.IO.File.Exists(Path.Combine(_inputDir, "001-poison.txt"))
+            .Should().BeFalse("the poison file leaves the poll directory");
+    }
+
     // ── Post-processing: Noop ───────────────────────────────────────
 
     [Fact]

@@ -9,8 +9,8 @@ public sealed class SqlConnectionOptions
     public string ConnectionString { get; set; } = string.Empty;
 
     /// <summary>
-    /// Read replica connection string. If set, SELECT queries use this connection.
-    /// If not set, all queries go through <see cref="ConnectionString"/>.
+    /// Read replica connection string. Used only by endpoints with <c>readOnly=true</c> (<see cref="SqlEndpointOptions.ReadOnly"/>);
+    /// every other statement, and every statement when this is not set, goes through <see cref="ConnectionString"/>.
     /// </summary>
     public string? ReadConnectionString { get; set; }
 

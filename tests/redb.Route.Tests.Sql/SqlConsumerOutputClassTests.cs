@@ -128,7 +128,7 @@ public class SqlConsumerOutputClassTests : IAsyncLifetime, IDisposable
             {
                 ["repeatCount"] = "1",
                 ["outputClass"] = typeof(OutboxRow).AssemblyQualifiedName!,
-                ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = @id"
+                ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id"
             });
 
         _consumer = (SqlConsumer)endpoint.CreateConsumer(CaptureProcessor());

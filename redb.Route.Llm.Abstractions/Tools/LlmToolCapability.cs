@@ -1,10 +1,17 @@
 namespace redb.Route.Llm.Abstractions.Tools;
 
 /// <summary>
-/// Capability descriptor for a tool exposed to the LLM. The agent engine projects
-/// these capabilities into the provider request as <c>tools[]</c> and uses
-/// <see cref="Safety"/> to enforce approval, idempotency, caching and budget policies
-/// before invoking the underlying <see cref="ILlmToolDescriptor"/>.
+/// Capability descriptor for a tool exposed to the LLM. The engine projects the
+/// <see cref="Name"/>, <see cref="Description"/> and <see cref="InputSchema"/> into the provider
+/// request as <c>tools[]</c>; <see cref="Safety"/> is server-side metadata and is never sent on
+/// the wire.
+/// <para>
+/// What the engine consults in <see cref="Safety"/>: <see cref="LlmToolSafety.RequiresApproval"/>
+/// (the approval gate), <see cref="LlmToolSafety.RequiredClaims"/> (claims, fail closed),
+/// <see cref="LlmToolSafety.Caching"/> (tool-result cache, read-only tools only) and
+/// <see cref="LlmToolSafety.SideEffect"/> (replay de-duplication and the caching gate). Each field
+/// states its own status; <see cref="LlmToolSafety.Cost"/> is the one still reserved.
+/// </para>
 /// </summary>
 public sealed class LlmToolCapability
 {

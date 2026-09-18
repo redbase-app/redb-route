@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using redb.Route.Sql;
 using redb.Route.Expressions;
 using redb.Route.Expressions;
@@ -199,6 +200,42 @@ public class SqlBuilderTests
     }
 
     [Fact]
+    public void PlaceholderStyle_SetsParam_AndDefaultWritesNothing()
+    {
+        SqlDsl.Execute("SELECT 1").DataSource(C("main")).PlaceholderStyle(SqlPlaceholderStyle.Colon).Build()
+            .Should().Contain("placeholderStyle=Colon");
+        SqlDsl.Execute("SELECT 1").DataSource(C("main")).Build()
+            .Should().NotContain("placeholderStyle", "the default style is left to the options");
+    }
+
+    [Fact]
+    public void BackslashEscapes_SetsParam_AndDefaultWritesNothing()
+    {
+        SqlDsl.Execute("SELECT 1").DataSource(C("main")).BackslashEscapes().Build()
+            .Should().Contain("backslashEscapes=true");
+        SqlDsl.Execute("SELECT 1").DataSource(C("main")).Build()
+            .Should().NotContain("backslashEscapes", "standard SQL literals are left to the options");
+    }
+
+    [Fact]
+    public void ReadOnly_SetsParam_AndDefaultWritesNothing()
+    {
+        SqlDsl.Execute("SELECT 1").DataSource(C("main")).ReadOnly().Build()
+            .Should().Contain("readOnly=true");
+        SqlDsl.Execute("SELECT 1").DataSource(C("main")).Build()
+            .Should().NotContain("readOnly", "the primary database is the default");
+    }
+
+    [Fact]
+    public void PollDelivery_SetsParam_AndDefaultWritesNothing()
+    {
+        SqlDsl.Poll("SELECT 1").DataSource(C("main")).PollDelivery(SqlPollDelivery.List).Build()
+            .Should().Contain("pollDelivery=List");
+        SqlDsl.Poll("SELECT 1").DataSource(C("main")).Build()
+            .Should().NotContain("pollDelivery", "the default is left to the options");
+    }
+
+    [Fact]
     public void SendEmptyMessageWhenIdle_SetsParam()
     {
         var uri = SqlDsl.Poll("SELECT 1").DataSource(C("main")).SendEmptyMessageWhenIdle().Build();
@@ -212,7 +249,7 @@ public class SqlBuilderTests
     {
         var uri = SqlDsl.Poll("SELECT * FROM outbox")
             .DataSource(C("main"))
-            .OnSuccess("UPDATE outbox SET done=1 WHERE id=@id")
+            .OnSuccess("UPDATE outbox SET done=1 WHERE id=:#id")
             .Build();
 
         uri.Should().Contain("onSuccess=");
@@ -223,7 +260,7 @@ public class SqlBuilderTests
     {
         var uri = SqlDsl.Poll("SELECT 1")
             .DataSource(C("main"))
-            .OnFailure("INSERT INTO err(msg) VALUES(@redbError)")
+            .OnFailure("INSERT INTO err(msg) VALUES(:#redbError)")
             .Build();
 
         uri.Should().Contain("onFailure=");
@@ -245,14 +282,14 @@ public class SqlBuilderTests
     [Fact]
     public void Batch_SetsParam()
     {
-        var uri = SqlDsl.Execute("INSERT INTO t(x) VALUES(@x)").DataSource(C("main")).Batch(100).Build();
+        var uri = SqlDsl.Execute("INSERT INTO t(x) VALUES(:#x)").DataSource(C("main")).Batch(100).Build();
         uri.Should().Contain("batchSize=100");
     }
 
     [Fact]
     public void BreakBatchOnError_SetsParam()
     {
-        var uri = SqlDsl.Execute("INSERT INTO t(x) VALUES(@x)")
+        var uri = SqlDsl.Execute("INSERT INTO t(x) VALUES(:#x)")
             .DataSource(C("main")).BreakBatchOnError().Build();
         uri.Should().Contain("breakBatchOnError=true");
     }
@@ -355,8 +392,8 @@ public class SqlBuilderTests
             .InitialDelay(1000)
             .Transacted()
             .MaxMessagesPerPoll(100)
-            .OnSuccess("UPDATE outbox SET processed = 1 WHERE id = @id")
-            .OnFailure("INSERT INTO errors(msg) VALUES(@redbError)")
+            .OnSuccess("UPDATE outbox SET processed = 1 WHERE id = :#id")
+            .OnFailure("INSERT INTO errors(msg) VALUES(:#redbError)")
             .Build();
 
         uri.Should().StartWith("sql:SELECT * FROM outbox");
@@ -373,7 +410,7 @@ public class SqlBuilderTests
     [Fact]
     public void FullExecuteChain_GeneratesValidUri()
     {
-        var uri = SqlDsl.Execute("INSERT INTO audit(event) VALUES(@event)")
+        var uri = SqlDsl.Execute("INSERT INTO audit(event) VALUES(:#event)")
             .DataSource(C("main"))
             .CommandTimeout(120)
             .Transacted()
@@ -419,7 +456,7 @@ public class SqlBuilderTests
     [Fact]
     public void OnSuccess_WithSpecialChars_UrlEncoded()
     {
-        var onSuccess = "UPDATE t SET done=1 WHERE id=@id AND status='OK'";
+        var onSuccess = "UPDATE t SET done=1 WHERE id=:#id AND status='OK'";
         var uri = SqlDsl.Poll("SELECT 1").DataSource(C("main")).OnSuccess(onSuccess).Build();
         // The value should be URL-encoded
         uri.Should().Contain("onSuccess=");
@@ -429,19 +466,69 @@ public class SqlBuilderTests
     // ── Explicit Parameters (.Param) ────────────────────────────────
 
     [Fact]
-    public void Param_WithAtPrefix_SetsParamInUri()
+    public void Param_WithPlaceholderPrefix_SetsParamInUri()
     {
-        var uri = SqlDsl.Execute("INSERT INTO t(x) VALUES(@x)")
+        var uri = SqlDsl.Execute("INSERT INTO t(x) VALUES(:#x)")
             .DataSource(C("main"))
-            .Param("@x", 42)
+            .Param(":#x", 42)
             .Build();
         uri.Should().Contain("param.x=42");
     }
 
     [Fact]
+    public void Param_ObjectValue_IsWrittenInvariantly()
+    {
+        var culture = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = new CultureInfo("ru-RU");
+        try
+        {
+            var uri = SqlDsl.Execute("SELECT 1").DataSource(C("main"))
+                .Param("price", 12.5)
+                .Param("at", new DateTime(2026, 9, 16, 10, 0, 0, DateTimeKind.Utc))
+                .Build();
+
+            uri.Should().Contain("param.price=12.5", "a constant is written the way the database reads it, whatever the process culture");
+            uri.Should().Contain(Uri.EscapeDataString("2026-09-16T10:00:00.0000000Z"), "a date is written as ISO 8601 round-trip text");
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = culture;
+        }
+    }
+
+    [Fact]
+    public void DataSource_WithDynamicExpression_IsRejected()
+    {
+        var act = () => SqlDsl.Execute("SELECT 1").DataSource(new HeaderExpression("ds"));
+
+        act.Should().Throw<ArgumentException>("the data source is fixed per endpoint, as in Apache Camel")
+            .WithMessage("*dataSource*");
+        SqlDsl.Execute("SELECT 1").DataSource(C("main")).Build().Should().Contain("dataSource=main");
+    }
+
+    [Fact]
+    public void ConnectionString_Constant_SetsParam()
+    {
+        SqlDsl.Execute("SELECT 1").ConnectionString("Data Source=:memory:").Build()
+            .Should().Contain("connectionString=" + Uri.EscapeDataString("Data Source=:memory:"));
+
+        var act = () => SqlDsl.Execute("SELECT 1").ConnectionString(new HeaderExpression("cs"));
+        act.Should().Throw<ArgumentException>().WithMessage("*connectionString*");
+    }
+
+    [Fact]
+    public void Param_WithAtPrefix_IsRejected()
+    {
+        var act = () => SqlDsl.Execute("INSERT INTO t(x) VALUES(:#x)").DataSource(C("main")).Param("@x", 42);
+
+        act.Should().Throw<ArgumentException>("@ is not a placeholder any more; a param named @x would never match :#x")
+            .WithMessage("*:#x*");
+    }
+
+    [Fact]
     public void Param_WithoutAtPrefix_SetsParamInUri()
     {
-        var uri = SqlDsl.Execute("INSERT INTO t(x) VALUES(@x)")
+        var uri = SqlDsl.Execute("INSERT INTO t(x) VALUES(:#x)")
             .DataSource(C("main"))
             .Param("x", "hello")
             .Build();
@@ -451,11 +538,11 @@ public class SqlBuilderTests
     [Fact]
     public void Param_MultipleParams_AllPresent()
     {
-        var uri = SqlDsl.Execute("INSERT INTO t(a,b,c) VALUES(@a,@b,@c)")
+        var uri = SqlDsl.Execute("INSERT INTO t(a,b,c) VALUES(:#a,:#b,:#c)")
             .DataSource(C("main"))
-            .Param("@a", 1)
-            .Param("@b", "text")
-            .Param("@c", true)
+            .Param(":#a", 1)
+            .Param(":#b", "text")
+            .Param(":#c", true)
             .Build();
         uri.Should().Contain("param.a=1");
         uri.Should().Contain("param.b=text");
@@ -465,9 +552,9 @@ public class SqlBuilderTests
     [Fact]
     public void Param_NullValue_SetsEmptyString()
     {
-        var uri = SqlDsl.Execute("INSERT INTO t(x) VALUES(@x)")
+        var uri = SqlDsl.Execute("INSERT INTO t(x) VALUES(:#x)")
             .DataSource(C("main"))
-            .Param("@x", (object?)null)
+            .Param(":#x", (object?)null)
             .Build();
         uri.Should().Contain("param.x=");
     }
@@ -476,7 +563,7 @@ public class SqlBuilderTests
     public void Param_Chainable()
     {
         var builder = SqlDsl.Execute("SELECT 1").DataSource(C("main"));
-        var result = builder.Param("@x", 1);
+        var result = builder.Param(":#x", 1);
         result.Should().BeSameAs(builder);
     }
 
@@ -485,9 +572,9 @@ public class SqlBuilderTests
     [Fact]
     public void Param_WithExpression_SetsTemplateString()
     {
-        var uri = SqlDsl.Execute("UPDATE t SET x=@x WHERE id=@id")
+        var uri = SqlDsl.Execute("UPDATE t SET x=:#x WHERE id=:#id")
             .DataSource(C("main"))
-            .Param("@x", new HeaderExpression("myValue"))
+            .Param(":#x", new HeaderExpression("myValue"))
             .Build();
         uri.Should().Contain("param.x=%24%7Bheader.myValue%7D");
     }
@@ -495,9 +582,9 @@ public class SqlBuilderTests
     [Fact]
     public void Param_WithConstantExpression_SetsValue()
     {
-        var uri = SqlDsl.Execute("UPDATE t SET x=@x WHERE id=@id")
+        var uri = SqlDsl.Execute("UPDATE t SET x=:#x WHERE id=:#id")
             .DataSource(C("main"))
-            .Param("@x", C("42"))
+            .Param(":#x", C("42"))
             .Build();
         uri.Should().Contain("param.x=42");
     }
@@ -506,7 +593,7 @@ public class SqlBuilderTests
     public void Param_Expression_Chainable()
     {
         var builder = SqlDsl.Execute("SELECT 1").DataSource(C("main"));
-        var result = builder.Param("@x", new HeaderExpression("val"));
+        var result = builder.Param(":#x", new HeaderExpression("val"));
         result.Should().BeSameAs(builder);
     }
 }

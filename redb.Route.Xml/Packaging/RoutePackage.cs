@@ -188,6 +188,37 @@ public static class RoutePackage
 
     private static readonly Regex BeanMethodOption = new(@"(?i)[?&]method=([A-Za-z0-9_]+)", RegexOptions.Compiled);
 
+    private static readonly Regex LeadingReference = new(@"^#([A-Za-z0-9_.\-]+)", RegexOptions.Compiled);
+    private static readonly Regex UriScheme = new(@"^[A-Za-z][A-Za-z0-9+.\-]*:(//)?", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Registry references by POSITION (Ф0 §2.1: a reference is a value that STARTS with '#'):
+    /// the whole attribute value, the path right after the scheme (<c>bean:#x</c>) and every URI
+    /// option value (<c>dataSource=#main-db</c>). A '#' anywhere else is text — the sql parameter
+    /// <c>:#name</c> must not read as a dangling bean.
+    /// </summary>
+    private static IEnumerable<string> RegistryReferences(string value)
+    {
+        if (LeadingReference.Match(value) is { Success: true } whole)
+        {
+            yield return whole.Groups[1].Value;
+            yield break;
+        }
+        var query = value.IndexOf('?');
+        var address = query >= 0 ? value[..query] : value;
+        if (UriScheme.Match(address) is { Success: true } scheme
+            && LeadingReference.Match(address[scheme.Length..]) is { Success: true } path)
+            yield return path.Groups[1].Value;
+        if (query < 0)
+            yield break;
+        foreach (var pair in value[(query + 1)..].Split('&'))
+        {
+            var equals = pair.IndexOf('=');
+            if (equals >= 0 && LeadingReference.Match(pair[(equals + 1)..]) is { Success: true } option)
+                yield return option.Groups[1].Value;
+        }
+    }
+
     private static IReadOnlyList<string> RunChecks(string projectDir, List<string> artifacts, List<PackageFinding> findings,
         Func<string, Type?>? typeResolver,
         IReadOnlyList<IXmlElementContribution>? extensions = null)
@@ -233,8 +264,8 @@ public static class RoutePackage
                 foreach (var attribute in element.Attributes())
                 {
                     ScanPlaceholders(attribute.Value, requiredKeys);
-                    foreach (Match match in Regex.Matches(attribute.Value, @"#([A-Za-z0-9_.\-]+)"))
-                        referencedBeans.Add((file, match.Groups[1].Value));
+                    foreach (var reference in RegistryReferences(attribute.Value))
+                        referencedBeans.Add((file, reference));
                     if (attribute.Value.StartsWith("bean:#", StringComparison.Ordinal)
                         && BeanMethodOption.Match(attribute.Value) is { Success: true } methodMatch)
                     {

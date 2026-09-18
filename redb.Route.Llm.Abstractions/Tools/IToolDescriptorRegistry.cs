@@ -25,9 +25,26 @@ public sealed class ToolDescriptorRegistry : IToolDescriptorRegistry
     private readonly ConcurrentDictionary<string, ILlmToolDescriptor> _descriptors = new(StringComparer.Ordinal);
 
     /// <inheritdoc />
+    /// <exception cref="InvalidOperationException">
+    /// The descriptor declares a caching policy on a tool that is not read-only. Every descriptor path
+    /// converges here — the <c>.AsLlmTool(...)</c> DSL, <c>LlmTool.Define(...).Build()</c>, the
+    /// <c>[ExposeAsLlmTool]</c> attribute and MCP discovery — so the rule is enforced once, for all of
+    /// them, instead of only where the route author happens to use the DSL.
+    /// </exception>
     public void Register(ILlmToolDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
+
+        // A cached entry answers a call without running the tool, so caching a mutating tool suppresses
+        // the side effect it stands for — up to the whole TTL, including legitimate repeats
+        // ("send that invoice again"). Only a read-only tool may declare a caching policy.
+        var safety = descriptor.Capability.Safety;
+        if (safety.Caching != ToolCachingPolicy.None && safety.SideEffect != ToolSideEffect.ReadOnly)
+            throw new InvalidOperationException(
+                $"Tool '{descriptor.Capability.Name}' declares Caching={safety.Caching} with "
+                + $"SideEffect={safety.SideEffect}. Only read-only tools may be cached — a cache hit would "
+                + "suppress the side effect.");
+
         _descriptors[descriptor.Capability.Name] = descriptor;
     }
 

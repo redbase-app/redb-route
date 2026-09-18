@@ -63,6 +63,25 @@ exchange). Metric names, case-insensitive: `messagesIn`, `messagesOut`, `errors`
 `health`, `healthReason`, `lastError`. A typo in a literal metric name fails the route **build**
 with the list of known names, not the first message.
 
+The same function reads the **OpenTelemetry layer** when the target starts with `otel:` — the EIP counters and
+`.Metered()` durations live only there, and this is the only way a route (or markup, which has no lambdas) can
+see them:
+
+```csharp
+// The slowest run of one metered step of this route.
+.SetHeader("worst", "stats('otel:redb.route.step.duration/enrich', 'max')")
+
+// How often the throttle delayed another route.
+.When("stats('otel:redb.route.throttle.delayed@orders', 'sum') > 100")
+```
+
+`otel:instrument[@route][/step]`: without `@route` the instrument is read for the route processing the exchange,
+`/step` matches the `redb.route.step` tag. The field is `count`, `sum`, `min`, `max` or `last`, and a literal
+unknown field fails the build like an unknown metric. This branch needs the in-process subscriber
+(`context.UseMetricsSnapshot()`); without it the call fails and says so. An instrument nobody has measured yet
+reads as zero.
+
+
 ### `IExchange.Context`
 
 Any processor can reach the route context directly — Apache Camel's `exchange.getContext()`:
@@ -93,6 +112,26 @@ r.From("timer:stats?period=60000")
 
 Mind one trap: from inside a wire-tap branch, `routeId=current` names the *branch* route, not the
 one you tapped — name the route explicitly there.
+
+## The trail of one exchange: `messageHistory()`
+
+Message History records every node an exchange passed, with the time it took, and the failure dump prints it.
+The same trail is a value in the expression language, so a route can log it or branch on its cost:
+
+```csharp
+.Log("${messageHistory()}")                                    // the table, as the failure dump prints it
+.SetHeader("trail", "${messageHistory('compact')}")             // log > choice > to(http)
+.When("messageHistory('slowestMs') > 500")                     // only the exchanges that cost something
+```
+
+Kinds: `table` (the default), `compact`, `json`, `count`, `totalMs`, `slowestMs`, `slowest`, `lastNode`. The
+numbers make it a predicate, which is what markup needs: `<when expr="messageHistory('slowestMs') &gt; 500">`.
+
+Message history is opt-in (`RouteEngineOptions.EnableMessageHistory`, or `.MessageHistory()` on one route), so
+an exchange that recorded nothing reads as an empty string and zero. That is the one measurement in this
+language that answers instead of failing: a diagnostic log must not break a route where history is simply off.
+An unknown kind is still an authoring error and fails the build.
+
 
 ## Measuring a section of a route
 
@@ -145,6 +184,8 @@ disposed when the context stops; collected points stay readable.
 |---|---|
 | Dashboards, alerting, history, percentiles | OpenTelemetry backend: `AddMeter("redb.Route")` |
 | Branch a route on an endpoint's health or counters | `stats(...)` in a condition |
+| Branch a route, or markup, on EIP counters and step durations | `stats('otel:…', field)` + `UseMetricsSnapshot()` |
+| See which steps one exchange went through, and what each cost | `messageHistory()` in a log or a condition |
 | Log a route's own numbers periodically | timer route → `controlbus:...?action=stats` → `log:` |
 | Full counter surface from a processor | `e.Context.GetEndpoint(...)` as `IEndpointStatistics` |
 | Numbers for one section of a route | `direct:` sub-route (statistics) or `.Metered()` (histograms) |

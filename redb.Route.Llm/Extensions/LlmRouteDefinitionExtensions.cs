@@ -53,7 +53,10 @@ public static class LlmRouteDefinitionExtensions
                     $"LlmConnectionFactory '{connectionFactoryName}' is not registered. " +
                     "Register via context.AddToRegistry(name, factory).");
 
-            var engine = context.GetService<IAgentEngine>() ?? new AgentEngine();
+            // Same wiring as the container: a naked engine here would lack the producer template (so every
+            // tool call would fail) and every governance seam — the route would look healthy and do less.
+            // FindRegistered covers the container too: AddRedbRouteLlm() registers the engine there.
+            var engine = AgentEngine.FindRegistered(context) ?? AgentEngine.FromContext(context);
             var registry = context.GetService<IToolDescriptorRegistry>();
 
             var userContent = builder.UserContentFactory is { } ucf
@@ -76,6 +79,8 @@ public static class LlmRouteDefinitionExtensions
                 Tools = tools,
                 ConversationId = conversationId,
                 MaxIterations = builder.MaxIterations,
+                Budget = AgentBudgetFactory.From(
+                    builder.BudgetInputTokens, builder.BudgetOutputTokens, builder.BudgetCostUsd),
                 Temperature = builder.Temperature,
                 MaxTokens = builder.MaxTokens,
                 PropagateToolHeaders = builder.PropagateToolHeaders.Count > 0
@@ -134,6 +139,16 @@ public sealed class LlmCallBuilder
     /// <summary>Maximum tool-loop iterations.</summary>
     public int MaxIterations { get; set; } = 8;
 
+    /// <summary>Per-run input-token ceiling (summed across iterations). Null = no ceiling.</summary>
+    public int? BudgetInputTokens { get; set; }
+
+    /// <summary>Per-run output-token ceiling (summed across iterations). Null = no ceiling.</summary>
+    public int? BudgetOutputTokens { get; set; }
+
+    /// <summary>Per-run cost ceiling in USD. Null = no ceiling. Needs an
+    /// <see cref="redb.Route.Llm.Engine.Governance.ICostCalculator"/> that can price the model.</summary>
+    public decimal? BudgetCostUsd { get; set; }
+
     /// <summary>Tools available for this call. Empty when no opt-in was made.</summary>
     public List<ILlmToolDescriptor> Tools { get; } = [];
 
@@ -167,6 +182,19 @@ public sealed class LlmCallBuilder
 
     /// <summary>Sets max tool-loop iterations.</summary>
     public LlmCallBuilder WithMaxIterations(int n) { MaxIterations = n; return this; }
+
+    /// <summary>
+    /// Sets the per-run budget. Only the dimensions you pass are limited; the cost ceiling requires a
+    /// registered <see cref="redb.Route.Llm.Engine.Governance.ICostCalculator"/> — without one the run
+    /// fails fast instead of silently enforcing a zero cost ceiling.
+    /// </summary>
+    public LlmCallBuilder WithBudget(int? inputTokens = null, int? outputTokens = null, decimal? costUsd = null)
+    {
+        BudgetInputTokens = inputTokens;
+        BudgetOutputTokens = outputTokens;
+        BudgetCostUsd = costUsd;
+        return this;
+    }
 
     /// <summary>Sets the conversation id explicitly.</summary>
     public LlmCallBuilder WithConversation(string id) { ConversationId = id; return this; }

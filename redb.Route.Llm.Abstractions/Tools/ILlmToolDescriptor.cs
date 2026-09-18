@@ -25,7 +25,13 @@ namespace redb.Route.Llm.Abstractions.Tools;
 /// </summary>
 public interface ILlmToolDescriptor
 {
-    /// <summary>Capability metadata used by the engine to govern the call and project the tool to the provider.</summary>
+    /// <summary>
+    /// Capability metadata the engine projects to the provider (name, description, input schema)
+    /// and consults for governance: <see cref="LlmToolSafety.RequiresApproval"/> (approval gate),
+    /// <see cref="LlmToolSafety.RequiredClaims"/> (claims), <see cref="LlmToolSafety.Caching"/> and
+    /// <see cref="LlmToolSafety.SideEffect"/> (cache and replay de-duplication). Safety never reaches
+    /// the wire — see <see cref="LlmToolSafety"/> for the per-field status.
+    /// </summary>
     LlmToolCapability Capability { get; }
 
     /// <summary>

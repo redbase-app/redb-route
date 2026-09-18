@@ -84,7 +84,7 @@ public class SqlConnectionOptionsDouble
     public string? ConnectionString { get; set; }
 }
 
-/// <summary>Constructor-injected factory, as sap-s4 in tsum (the factories example).</summary>
+/// <summary>Constructor-injected factory, as real integrations build them (the factories example).</summary>
 public class SqlConnectionFactoryDouble(SqlConnectionOptionsDouble options)
 {
     public SqlConnectionOptionsDouble Options { get; } = options;

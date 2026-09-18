@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using redb.Route.Extensions;
 using redb.Route.Sql.Connection;
 
@@ -14,6 +15,8 @@ public static class ServiceCollectionExtensions
     /// <c>sql:</c> URIs are resolved.
     /// Named data sources are registered in the context registry via
     /// <c>context.AddToRegistry(name, ISqlConnectionFactory)</c>.
+    /// The method can be called more than once (one module, one call): every call adds its data sources and named queries
+    /// to the same component and the same registry.
     /// <example>
     /// <code>
     /// services.AddRedbRoute(route =&gt;
@@ -35,11 +38,20 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Action<SqlConfigurationBuilder>? configure = null)
     {
-        var builder = new SqlConfigurationBuilder(services);
+        // One registry per container: a later call registers into it instead of replacing it, so the named queries of
+        // every call resolve. A name registered twice fails right here, in the second call.
+        var registry = services.FirstOrDefault(d => d.ServiceType == typeof(ISqlNamedQueryRegistry))?.ImplementationInstance
+            as ISqlNamedQueryRegistry;
+        if (registry is null)
+        {
+            registry = new SqlNamedQueryRegistry();
+            services.AddSingleton(registry);
+        }
+
+        var builder = new SqlConfigurationBuilder(services, registry);
         configure?.Invoke(builder);
 
-        services.AddSingleton<ISqlNamedQueryRegistry>(builder.BuildQueryRegistry());
-        services.AddSingleton<SqlComponent>();
+        services.TryAddSingleton<SqlComponent>();
 
         // Capture data sources from builder
         var dataSources = builder.BuildDataSources();
@@ -48,9 +60,11 @@ public static class ServiceCollectionExtensions
         // the correct registration hook (a lazy marker singleton never fires).
         services.AddRouteContextConfigurator((sp, context) =>
         {
-            var component = sp.GetRequiredService<SqlComponent>();
-            component.NamedQueryRegistry = sp.GetRequiredService<ISqlNamedQueryRegistry>();
-            context.AddComponent(component);
+            if (!context.HasComponent("sql"))
+                context.AddComponent(sp.GetRequiredService<SqlComponent>());
+
+            // The producer and the consumer resolve ref: queries from the context's services.
+            context.AddService(typeof(ISqlNamedQueryRegistry), sp.GetRequiredService<ISqlNamedQueryRegistry>());
 
             // Register all named data sources in the context registry
             foreach (var (name, factory) in dataSources)
@@ -66,9 +80,13 @@ public sealed class SqlConfigurationBuilder
 {
     private readonly IServiceCollection _services;
     private readonly List<KeyValuePair<string, ISqlConnectionFactory>> _dataSources = [];
-    private readonly SqlNamedQueryRegistry _queryRegistry = new();
+    private readonly ISqlNamedQueryRegistry _queryRegistry;
 
-    internal SqlConfigurationBuilder(IServiceCollection services) => _services = services;
+    internal SqlConfigurationBuilder(IServiceCollection services, ISqlNamedQueryRegistry queryRegistry)
+    {
+        _services = services;
+        _queryRegistry = queryRegistry;
+    }
 
     /// <summary>The service collection.</summary>
     public IServiceCollection Services => _services;
@@ -97,6 +115,7 @@ public sealed class SqlConfigurationBuilder
     /// <summary>
     /// Registers a named query for reuse via <c>ref:queryName</c> protocol.
     /// </summary>
+    /// <exception cref="ArgumentException">The name is already registered, by this call or an earlier one.</exception>
     public SqlConfigurationBuilder AddNamedQuery(string name, string sql)
     {
         _queryRegistry.Register(name, sql);
@@ -104,5 +123,4 @@ public sealed class SqlConfigurationBuilder
     }
 
     internal IReadOnlyList<KeyValuePair<string, ISqlConnectionFactory>> BuildDataSources() => _dataSources;
-    internal ISqlNamedQueryRegistry BuildQueryRegistry() => _queryRegistry;
 }

@@ -69,8 +69,8 @@ public sealed class TestFileConsumer : GenericFileConsumer<TestFileEndpointOptio
         : base(endpoint, processor, options, ops)
         => _endpoint = endpoint;
 
-    /// <summary>Runs exactly one poll cycle, synchronously for the test.</summary>
-    public Task PollOnceAsync(CancellationToken ct = default) => PollDirectory(ct);
+    /// <summary>Runs exactly one poll cycle, returning its tally (created / failed exchanges).</summary>
+    public Task<PollTally> PollOnceAsync(CancellationToken ct = default) => PollDirectory(ct);
 
     /// <inheritdoc />
     protected override void SetExchangeHeaders(IMessage message, GenericFileInfo file, string workPath)

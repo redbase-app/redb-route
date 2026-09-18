@@ -38,7 +38,7 @@ public sealed class LlmEndpoint : EndpointBase<LlmEndpointOptions>
         if (component.Context is not null)
         {
             ResolvedFactory = component.Context.GetFromRegistry<LlmConnectionFactory>(ConnectionFactoryName);
-            ResolvedEngine = component.Context.GetService<IAgentEngine>();
+            ResolvedEngine = AgentEngine.FindRegistered(component.Context);
         }
     }
 

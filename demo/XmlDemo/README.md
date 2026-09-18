@@ -37,6 +37,12 @@ discovery will load; without it the redb elements fail the XSD check:
 
     redb-route-xml pack . --name xmldemo --version 3.0.1 --bin <worker>/Libs/shared
 
+The same gate runs on `dotnet build -p:PackRouteOnBuild=true -p:Version=<version>`: the
+project copies its NuGet assemblies to `bin/` (`CopyLocalLockFileAssemblies`), and the
+target points `--bin` at that output. The installed `redb-route-xml` must be built against
+the same `redb.Route.Xml` version as the packages: an older tool cannot read the newer
+runtime's contributions and stops with a version error instead of guessing.
+
 Deploy: drop `pkg/xmldemo-<version>.tpkg` into the worker's `modules/` — it hot-reloads
 in a few seconds and the log shows the `REDBDEMO total=1` ticks.
 

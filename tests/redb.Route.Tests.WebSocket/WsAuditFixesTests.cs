@@ -328,8 +328,13 @@ public sealed class WsAuditFixesTests : IAsyncLifetime
         await producer.Process(new Exchange(new Message("x")));
 
         tracer.ForceFlush(1000);
-        activities.Should().NotBeEmpty();
-        activities[0].GetTagItem("messaging.destination.name").Should().Be("/feed",
+
+        // The listener is process-wide (see WsTelemetrySmokeTests): select this producer's span by kind
+        // and by its own port, not by position.
+        var span = activities.Should().ContainSingle(a =>
+            a.Kind == ActivityKind.Producer
+            && ((a.GetTagItem("redb.route.endpoint") as string) ?? string.Empty).Contains($":{port}/")).Subject;
+        span.GetTagItem("messaging.destination.name").Should().Be("/feed",
             "у SignalR destination был, у WebSocket — нет, хотя адрес известен");
     }
 

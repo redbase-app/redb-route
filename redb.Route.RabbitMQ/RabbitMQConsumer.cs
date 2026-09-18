@@ -231,11 +231,10 @@ public sealed class RabbitMQConsumer : IConsumer
             // to ack/nack, so we skip the ack action entirely (it stays null and every settle below is
             // guarded on it). Manual-ack mode (the default) registers the deferred ack action so a
             // route-level .Transacted() can commit/rollback it, and so we can ack/nack after Process.
+            // The acknowledgement belongs to this consumer, not to the route transaction: the transaction owns the
+            // database and the outgoing sends, and only a unit of work that ended well is acknowledged below.
             if (!_options.AutoAck)
-            {
                 ackAction = new RabbitMQAckAction(channel, ea.DeliveryTag, _options.Transacted, _logger);
-                RegisterTransactedAction(exchange, $"rabbitmq-ack-{ea.DeliveryTag}", ackAction);
-            }
 
             var pipelineFailed = false;
             try
@@ -243,6 +242,7 @@ public sealed class RabbitMQConsumer : IConsumer
                 try
                 {
                     await _processor.Process(exchange, _drain.ProcessingToken).ConfigureAwait(false);
+                    exchange.ThrowIfUnhandledFailure();
                 }
                 catch
                 {
@@ -590,19 +590,6 @@ public sealed class RabbitMQConsumer : IConsumer
         }
     }
 
-    // ── Transacted action registration ──
-
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (!exchange.Properties.TryGetValue("TRANSACT_ACTION", out var raw) ||
-            raw is not ConcurrentDictionary<string, ITransactedAction> dict)
-        {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties["TRANSACT_ACTION"] = dict;
-        }
-
-        dict[key] = action;
-    }
 }
 
 /// <summary>

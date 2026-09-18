@@ -48,6 +48,7 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 - [Other EIP Patterns](#other-eip-patterns) — WireTap, Multicast, Throttle, Circuit Breaker, Saga, Idempotent Consumer, Loop, Delay, Resequencer, Enrich
 - [Request-Response (InOut)](#request-response-inout)
 - [Concurrency & Parallelism](#concurrency--parallelism) — `.Threads(N)` EIP, consumer-level knobs, [full guide](CONCURRENCY.md)
+- [Transactions](TRANSACTIONS.md) — `.Transacted()`, commit order (database, sends, acknowledgement), `Retry`, idempotent consumer
 - [Reliability](#reliability) — RabbitMQ confirms, Kafka EOS, persistent IdempotentConsumer, Outbox via Sql polling
 - [Validation](#validation)
 - [Testing with Mock](#testing-with-mock)
@@ -56,6 +57,7 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 - [Fluent Transport Builders](#fluent-transport-builders)
 - [Architecture](#architecture)
 - [DSL Reference](#dsl-reference)
+- [XML Route Tools](#xml-route-tools) — `redb-route-xml` .NET tool, VS Code extension
 - [URI Scheme Reference](#uri-scheme-reference)
 - [Transport Capability Matrix](#transport-capability-matrix)
 - [Packages](#packages)
@@ -977,9 +979,9 @@ Every `BasicPublishAsync` call awaits broker confirmation; producer back-pressur
 
 ### Deferred Ack — `ITransactedAction` (RabbitMQ, AMQP, IBM MQ, Kafka)
 
-The deferred ack pattern is implemented uniformly across all four brokers. When `.Transacted()` is active, neither the consumer ack nor the producer send fire immediately. Both are registered as `ITransactedAction` instances on the exchange (`exchange.Properties["TRANSACT_ACTION"]`) and execute together when the `TransactionScope` closes.
+The deferred send pattern is implemented uniformly across the brokers. When `.Transacted()` is active, a producer send fires not at the step but after the transaction closed; the consumer settles the incoming delivery after that. Both are registered as `ITransactedAction` instances on the exchange (`exchange.Properties["TRANSACT_ACTION"]`) and execute together when the `TransactionScope` closes.
 
-| Transport | Commit | Rollback |
+| Transport | Unit of work succeeded | Unit of work failed |
 |-----------|--------|----------|
 | **RabbitMQ** consumer | `TxCommit` + `BasicAck(deliveryTag)` | `TxRollback` + `BasicNack(requeue=true)` |
 | **RabbitMQ** producer | `BasicPublishAsync` fires | message dropped |
@@ -990,7 +992,7 @@ The deferred ack pattern is implemented uniformly across all four brokers. When 
 | **Kafka** consumer | `consumer.Commit(result)` — offset committed | offset not committed (message will be re-delivered) |
 | **Kafka** producer | `ProduceAsync` fires (inside Kafka transaction if EOS enabled) | message dropped |
 
-All actions for one exchange share the same `ConcurrentDictionary<string, ITransactedAction>` — consumer ack and producer send commit or roll back atomically. IBM MQ additionally tracks `BackoutCount`; if it reaches `BackoutThreshold`, the message moves to a backout queue instead of rolling back into the main queue indefinitely (poison message handling).
+A unit of work ends in one order: the database transaction completes and closes, then the deferred sends go out, then the consumer acknowledges the incoming message. The acknowledgement belongs to the consumer, not to the transaction: a delivery is settled only after the whole unit of work succeeded, and left unsettled when it was not, so the broker redelivers it. See [TRANSACTIONS.md](TRANSACTIONS.md). IBM MQ additionally tracks `BackoutCount`; if it reaches `BackoutThreshold`, the message moves to a backout queue instead of rolling back into the main queue indefinitely (poison message handling).
 
 ```csharp
 // Same .Transacted() syntax regardless of broker
@@ -1441,6 +1443,37 @@ Quick reference for `IRouteDefinition` methods. All of them return `IRouteDefini
 **Advanced EIP**: `Saga`, `IdempotentConsumer`, `Throttle`, `CircuitBreaker`, `Resequence`, `Enrich`, `PollEnrich`
 
 **Scope**: `End()` — universal scope closer
+
+---
+
+## XML Route Tools
+
+Routes can also be written as XML: [redb.Route.Xml](redb.Route.Xml/README.md) loads `*.route.xml`
+documents into the same route definitions the C# DSL produces. [XmlDemo](demo/XmlDemo/README.md) is a
+worked example. Two developer tools ship with it; neither is needed on a server.
+
+**`redb-route-xml`**, a .NET tool (package `redb.Route.Xml.CodeGen`, runs on .NET 8, 9 and 10):
+
+```bash
+dotnet tool install -g redb.Route.Xml.CodeGen
+
+redb-route-xml xsd bin/Debug/net10.0 --out schema                  # the schema editors validate against
+redb-route-xml csharp routes/main.route.xml --namespace My.Routes  # the fluent C# the XML parses into
+redb-route-xml mermaid routes/main.route.xml                       # a flowchart of the routes
+redb-route-xml new MyRoutes                                        # scaffold a route project
+redb-route-xml check .                                             # validate a route project
+redb-route-xml pack . --version 1.0.0                              # package it for a worker
+```
+
+Keep the tool on the same version as the runtime. Whenever it reads a bin directory (`xsd`, `elements`,
+`catalog`, `check`, `pack`) it compares its own `redb.Route.Xml` with the one there and refuses to run on
+a mismatch: a tool of another version would read their types as nothing at all.
+Upgrade it together with the packages: `dotnet tool update -g redb.Route.Xml.CodeGen --version <version>`.
+
+**VS Code extension**: completion, validation and enum hints from the XSD, a route tree in the Explorer
+and a graph editor over the XML text. Source and details: [vscode-redb-route](vscode-redb-route/README.md).
+The packaged `.vsix` is attached to the [GitHub release](https://github.com/redbase-app/redb-route/releases)
+of every version; install it with `Extensions: Install from VSIX...`.
 
 ---
 

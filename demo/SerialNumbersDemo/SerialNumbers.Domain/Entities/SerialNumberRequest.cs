@@ -16,7 +16,10 @@ public sealed class SerialNumberRequest
 
     public int Quantity { get; set; }
 
-    /// <summary><see cref="Services.MessageStatuses.Accepted"/> or <see cref="Services.MessageStatuses.Rejected"/>.</summary>
+    /// <summary>
+    /// <see cref="Services.MessageStatuses.Accepted"/>, <see cref="Services.MessageStatuses.Rejected"/> or
+    /// <see cref="Services.MessageStatuses.OnHold"/>. A request on hold is decided again when its product is activated.
+    /// </summary>
     public string Status { get; set; } = "";
 
     /// <summary>One of <see cref="Services.RejectionReasons"/> when rejected.</summary>

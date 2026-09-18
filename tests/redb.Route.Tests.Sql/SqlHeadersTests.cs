@@ -21,6 +21,11 @@ public class SqlHeadersTests
     [InlineData(nameof(SqlHeaders.TransactionId), "redbSql.transactionId")]
     [InlineData(nameof(SqlHeaders.StoredProcedure), "redbSql.storedProcedure")]
     [InlineData(nameof(SqlHeaders.ExecutionTime), "redbSql.executionTime")]
+    [InlineData("BatchStrategy", "redbSql.batchStrategy")]
+    [InlineData("BatchItemCount", "redbSql.batchItemCount")]
+    [InlineData("BatchFailedIndex", "redbSql.batchFailedIndex")]
+    [InlineData("BatchErrors", "redbSql.batchErrors")]
+    [InlineData("BatchChunkCount", "redbSql.batchChunkCount")]
     public void Header_HasCorrectValue(string fieldName, string expectedValue)
     {
         var field = typeof(SqlHeaders).GetField(fieldName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);

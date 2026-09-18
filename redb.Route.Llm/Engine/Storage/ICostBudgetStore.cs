@@ -5,10 +5,14 @@ using redb.Route.Llm.Engine.Governance;
 namespace redb.Route.Llm.Engine.Storage;
 
 /// <summary>
-/// Persists running cost / token usage per conversation so that
-/// <see cref="IBudgetEnforcer"/> can enforce budgets across multiple agent
-/// runs (not just within one). Implementations are expected to be safe for
-/// concurrent updates — the engine writes after every iteration.
+/// Persists running cost / token usage per conversation so that an
+/// <see cref="IBudgetEnforcer"/> implementation can enforce budgets across multiple agent runs
+/// (not just within one).
+/// <para>
+/// <see cref="StoreBudgetEnforcer"/> is that consumer: <c>AddRedbLlmStorage()</c> registers it in
+/// place of the shipped per-run defaults, and it reads this store before each run and adds to it after
+/// each iteration. Implementations must be safe for concurrent updates.
+/// </para>
 /// <para>
 /// The optional <c>exchange</c> parameter on every method carries the route
 /// pipeline's current exchange; REDB-backed implementations resolve a

@@ -110,6 +110,7 @@ public sealed class RedisConsumer : DrainableConsumer
             exchange.In.Headers[RedisHeaders.Timestamp] = DateTimeOffset.UtcNow;
 
             await Processor.Process(exchange, ct).ConfigureAwait(false);
+            exchange.ThrowIfUnhandledFailure();
             ProcessedCount++;
         }
         catch (Exception ex)
@@ -228,17 +229,14 @@ public sealed class RedisConsumer : DrainableConsumer
                 foreach (var nv in entry.Values)
                     exchange.In.Headers[$"{RedisHeaders.StreamFieldPrefix}{nv.Name}"] = nv.Value.ToString();
 
-                // Register stream ack action
-                if (!string.IsNullOrEmpty(consumerGroup) && _options.StreamAutoAck)
-                {
-                    var ackAction = new RedisStreamAckAction(db, streamName, consumerGroup, entry.Id, Logger);
-                    RegisterTransactedAction(exchange, $"redis-stream-ack-{entry.Id}", ackAction);
-                }
+                // The entry is acknowledged by this consumer after the unit of work ended well (below), not by
+                // the route transaction: the transaction owns the database and the outgoing sends.
 
                 await Processor.Process(exchange, ct).ConfigureAwait(false);
+                exchange.ThrowIfUnhandledFailure();
 
-                // Auto-ack if not using transacted mode
-                if (!string.IsNullOrEmpty(consumerGroup) && _options.StreamAutoAck && !_options.Transacted)
+                // Acknowledge the entry now that the whole unit of work, the route transaction included, is done.
+                if (!string.IsNullOrEmpty(consumerGroup) && _options.StreamAutoAck)
                 {
                     await db.StreamAcknowledgeAsync(streamName, consumerGroup, entry.Id).ConfigureAwait(false);
                 }
@@ -311,6 +309,7 @@ public sealed class RedisConsumer : DrainableConsumer
             exchange.In.Headers[RedisHeaders.Timestamp] = DateTimeOffset.UtcNow;
 
             await Processor.Process(exchange, ct).ConfigureAwait(false);
+            exchange.ThrowIfUnhandledFailure();
             ProcessedCount++;
         }
         catch (Exception ex)
@@ -324,19 +323,6 @@ public sealed class RedisConsumer : DrainableConsumer
         }
     }
 
-    // ── Transacted action registration ──
-
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (!exchange.Properties.TryGetValue("TRANSACT_ACTION", out var raw) ||
-            raw is not ConcurrentDictionary<string, ITransactedAction> dict)
-        {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties["TRANSACT_ACTION"] = dict;
-        }
-
-        dict[key] = action;
-    }
 }
 
 /// <summary>

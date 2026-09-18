@@ -42,6 +42,7 @@ internal static partial class CoreContributions
             return cur;
         }),
         Step("streamCaching", (e, cur, ctx) => cur.StreamCaching(ctx.Convert<long>(e, "spoolThreshold"))),
+        Step("messageHistory", (e, cur, ctx) => cur.MessageHistory(ctx.Convert<bool>(e, "value") ?? true)),
         Step("validateJsonSchema", (e, cur, ctx) =>
         {
             var schema = FileOrContent(e, ctx, "JSON schema");

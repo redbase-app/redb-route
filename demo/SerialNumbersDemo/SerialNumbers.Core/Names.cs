@@ -10,9 +10,6 @@ public static class SerialHeaders
     public const string Transport = "serials.transport";
     public const string FileName = "serials.fileName";
 
-    /// <summary>Identity of the delivered file, the key of the idempotent consumer.</summary>
-    public const string MessageKey = "serials.messageKey";
-
     public const string ArchivePath = "serials.archivePath";
 
     /// <summary>Root element of the XML; absent when the file is not well-formed XML.</summary>
@@ -20,11 +17,32 @@ public static class SerialHeaders
 
     public const string RequestId = "serials.requestId";
 
-    /// <summary>Accepted or Rejected, set by the request registration.</summary>
+    /// <summary>
+    /// Set by the request registration: Accepted, Rejected or OnHold, or
+    /// <see cref="ReleaseOutcomes.AlreadyDecided"/> when a release finds the request decided already.
+    /// </summary>
     public const string Decision = "serials.decision";
+
+    /// <summary>
+    /// The object id of a request on hold whose archived file is sent through the request route again.
+    /// Absent for a file a partner delivered.
+    /// </summary>
+    public const string ReleaseOf = "serials.releaseOf";
 
     /// <summary>File name of the quota report, stamped with the time the schedule fired.</summary>
     public const string ReportFileName = "serials.reportFileName";
+
+    /// <summary>The GTIN in the path of the product API, <c>/api/products/{gtin}/status</c>.</summary>
+    public const string Gtin = "gtin";
+
+    /// <summary>The status a product has after the status change.</summary>
+    public const string ProductStatus = "serials.productStatus";
+
+    /// <summary>One of <see cref="ProductChangeOutcomes"/>.</summary>
+    public const string ProductChange = "serials.productChange";
+
+    /// <summary>How many requests on hold a product activation found.</summary>
+    public const string HeldCount = "serials.heldCount";
 }
 
 /// <summary>Exchange properties that carry redb objects between the steps of one transaction.</summary>
@@ -40,10 +58,32 @@ public static class RouteUris
     public const string Intake = "direct:intake";
     public const string SerialNumberRequest = "direct:serial-number-request";
 
+    /// <summary>Changes a product's status: called by the REST API and by the debug host's console.</summary>
+    public const string SetProductStatus = "direct:set-product-status";
+
+    public const string ReleaseHeldRequests = "direct:release-held-requests";
+
     public static string Delivery(string partnerCode) => $"direct:deliver-{partnerCode}";
 
     /// <summary><see cref="Delivery"/> as a template resolved per exchange from the outbox row.</summary>
     public const string DeliveryForOutboxRow = "direct:deliver-${header.partner_code}";
+}
+
+/// <summary>What a status change did.</summary>
+public static class ProductChangeOutcomes
+{
+    public const string Changed = "Changed";
+    public const string Unchanged = "Unchanged";
+
+    /// <summary>Unknown product or status: answered with an error, nothing written.</summary>
+    public const string Refused = "Refused";
+}
+
+/// <summary>Outcomes of the request route that are not a decision on the request.</summary>
+public static class ReleaseOutcomes
+{
+    /// <summary>A release found the request no longer on hold: a concurrent release got there first.</summary>
+    public const string AlreadyDecided = "AlreadyDecided";
 }
 
 /// <summary>
@@ -65,7 +105,4 @@ public static class RegistryNames
 {
     /// <summary>The <c>sql:</c> data source: the same SQL Server database redb lives in.</summary>
     public const string SerialsDatabase = "serials";
-
-    /// <summary>The idempotent repository that remembers every delivered file.</summary>
-    public const string InboundFiles = "inbound-files";
 }

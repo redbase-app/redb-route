@@ -35,6 +35,10 @@ public sealed class FileBuilder
     private bool _recursive;
     private string? _sortBy;
     private string? _maxMessagesPerPoll;
+    private string? _backoffMultiplier;
+    private string? _backoffIdleThreshold;
+    private string? _backoffErrorThreshold;
+    private bool _backoffOnFailedExchanges;
     private string? _minAge;
 
     // Post-processing
@@ -42,6 +46,7 @@ public sealed class FileBuilder
     private bool _delete;
     private string? _moveTo;
     private string? _moveExisting;
+    private string? _moveFailed;
     private string? _preMove;
 
     // Idempotency
@@ -89,6 +94,21 @@ public sealed class FileBuilder
     /// <summary>Initial delay from an expression.</summary>
     public FileBuilder InitialDelay(IExpression ms) { _initialDelay = ms.ToTemplateString(); return this; }
 
+    /// <summary>Skip this many polls once a backoff threshold is hit (0 = disabled; needs a threshold).</summary>
+    public FileBuilder BackoffMultiplier(int value) { _backoffMultiplier = value.ToString(); return this; }
+    /// <summary>Backoff multiplier from an expression.</summary>
+    public FileBuilder BackoffMultiplier(IExpression value) { _backoffMultiplier = value.ToTemplateString(); return this; }
+    /// <summary>Consecutive idle polls (no exchange created) that arm the backoff skip (0 = disabled).</summary>
+    public FileBuilder BackoffIdleThreshold(int value) { _backoffIdleThreshold = value.ToString(); return this; }
+    /// <summary>Backoff idle threshold from an expression.</summary>
+    public FileBuilder BackoffIdleThreshold(IExpression value) { _backoffIdleThreshold = value.ToTemplateString(); return this; }
+    /// <summary>Consecutive failed polls (the poll itself threw) that arm the backoff skip (0 = disabled).</summary>
+    public FileBuilder BackoffErrorThreshold(int value) { _backoffErrorThreshold = value.ToString(); return this; }
+    /// <summary>Backoff error threshold from an expression.</summary>
+    public FileBuilder BackoffErrorThreshold(IExpression value) { _backoffErrorThreshold = value.ToTemplateString(); return this; }
+    /// <summary>Count a poll whose every created exchange failed as an error for backoff (needs BackoffErrorThreshold).</summary>
+    public FileBuilder BackoffOnFailedExchanges() { _backoffOnFailedExchanges = true; return this; }
+
     /// <summary>File name pattern to include (e.g. "*.csv").</summary>
     public FileBuilder Include(string pattern) { _include = pattern; return this; }
 
@@ -130,6 +150,15 @@ public sealed class FileBuilder
 
     /// <summary>Strategy when file exists in move target: Override, Append, Fail, Ignore, Move, TryRename.</summary>
     public FileBuilder MoveExisting(string strategy) { _moveExisting = strategy; return this; }
+
+    /// <summary>Move a file whose processing failed to this directory (quarantine for poison files).</summary>
+    public FileBuilder MoveFailed(IExpression directory) { _moveFailed = directory.ToTemplateString(); return this; }
+    /// <summary>
+    /// Move a file whose processing failed to this directory. Without it a failed file is left in place
+    /// and re-picked on the next poll. Supports the file variables <c>${file:name}</c> and
+    /// <c>${file:name.noext}</c>.
+    /// </summary>
+    public FileBuilder MoveFailed(string directory) { _moveFailed = directory; return this; }
 
     /// <summary>Pre-move directory (temporary move before processing).</summary>
     public FileBuilder PreMove(IExpression directory) { _preMove = directory.ToTemplateString(); return this; }
@@ -257,6 +286,10 @@ public sealed class FileBuilder
         AppendBool("recursive", _recursive);
         AppendIf("sortBy", _sortBy);
         AppendIf("maxMessagesPerPoll", _maxMessagesPerPoll);
+        AppendIf("backoffMultiplier", _backoffMultiplier);
+        AppendIf("backoffIdleThreshold", _backoffIdleThreshold);
+        AppendIf("backoffErrorThreshold", _backoffErrorThreshold);
+        AppendBool("backoffOnFailedExchanges", _backoffOnFailedExchanges);
         AppendIf("minAge", _minAge);
 
         // Post-processing
@@ -264,6 +297,7 @@ public sealed class FileBuilder
         AppendBool("delete", _delete);
         AppendIf("moveTo", _moveTo);
         AppendIf("moveExisting", _moveExisting);
+        AppendIf("moveFailed", _moveFailed);
         AppendIf("preMove", _preMove);
 
         // Idempotency

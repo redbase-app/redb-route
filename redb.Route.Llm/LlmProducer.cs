@@ -80,7 +80,11 @@ public sealed class LlmProducer : ConnectableProducer
 
         var engine = ResolveEngine(exchange)
             ?? throw new InvalidOperationException(
-                "No IAgentEngine registered. Call services.AddRedbRouteLlm() or context.AddService<IAgentEngine>(new AgentEngine()).");
+                "No IAgentEngine is registered. Call services.AddRedbRouteLlm() — it registers the engine " +
+                "together with the producer template, claims source and cache the tool loop needs. A host that " +
+                "registers one itself should use context.AddService(typeof(IAgentEngine), " +
+                "AgentEngine.FromContext(context)), which wires the same seams: a bare new AgentEngine() " +
+                "answers no claims and cannot dispatch a tool.");
 
         using var activity = RouteActivitySource.Source.StartActivity(
             $"llm {factory.Provider}:{factory.ModelId}", ActivityKind.Client);
@@ -120,6 +124,8 @@ public sealed class LlmProducer : ConnectableProducer
             Tools = tools,
             ConversationId = conversationId,
             MaxIterations = _options.MaxIterations,
+            Budget = AgentBudgetFactory.From(
+                _options.BudgetInputTokens, _options.BudgetOutputTokens, _options.BudgetCostUsd),
             Temperature = _options.Temperature,
             MaxTokens = _options.MaxTokens,
             PromptTemplateName = _options.PromptTemplateName,
@@ -166,7 +172,7 @@ public sealed class LlmProducer : ConnectableProducer
     {
         if (_endpoint.ResolvedEngine is not null) return _endpoint.ResolvedEngine;
         var ctx = (_endpoint.Component as ComponentBase)?.Context;
-        return ctx?.GetService<IAgentEngine>();
+        return ctx is null ? null : AgentEngine.FindRegistered(ctx);
     }
 
     private static IReadOnlyList<LlmContentBlock> BuildUserContent(IExchange exchange)

@@ -140,7 +140,13 @@ public class LoopProcessor : IProcessor
         foreach (var h in iteration.In.Headers)
             original.In.Headers[h.Key] = h.Value;
         foreach (var p in iteration.Properties)
+        {
+            // The clone's own bookkeeping (cached DI scopes, registered resources) stays with the clone, which
+            // releases it right after this merge; copying it here would leave the original a disposed scope.
+            if (ExchangeResources.IsOwnedByExchange(p.Key))
+                continue;
             original.Properties[p.Key] = p.Value;
+        }
         if (iteration.Exception != null)
             original.Exception = iteration.Exception;
     }

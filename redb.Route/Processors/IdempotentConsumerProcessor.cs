@@ -90,8 +90,25 @@ public sealed class IdempotentConsumerProcessor : IProcessor
         }
         catch
         {
-            // On failure, remove the key so retries can succeed
-            await _repository.Remove(key, ct).ConfigureAwait(false);
+            // Under an ambient transaction the key insert is part of that transaction (redb enlists via
+            // core's AmbientConnectionRegistry): the rollback removes the key on its own, so an explicit
+            // Remove is unnecessary — and harmful, because a Remove issued inside a doomed transaction
+            // throws and would mask the original processing failure. Outside a transaction, remove the key
+            // so a redelivery can re-process; if that Remove itself fails, keep the original exception
+            // (never let a cleanup failure replace the real cause).
+            if (System.Transactions.Transaction.Current is null)
+            {
+                try
+                {
+                    await _repository.Remove(key, ct).ConfigureAwait(false);
+                }
+                catch (Exception removeEx)
+                {
+                    _logger?.LogError(removeEx,
+                        "Idempotent consumer: failed to remove key '{Key}' after a processing failure; " +
+                        "preserving the original error — the key may need manual cleanup.", key);
+                }
+            }
             throw;
         }
     }

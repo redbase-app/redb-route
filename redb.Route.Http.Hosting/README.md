@@ -66,4 +66,37 @@ not handled.
 The walk is `ForwardedHeaderResolver`, a pure function with no `HttpContext` in it, so it can be
 unit-tested on strings and reused by a host that is not Kestrel.
 
+## Caller identity
+
+Who sent a request is decided the same way as which proxies to believe: once for the process, applied
+to every listener and every consumer on it.
+
+```csharp
+services.AddRedbRouteHttpHosting(o => o.ResolvePrincipal = ctx =>
+    myTokenValidator.ValidateAsync(ctx.Request.Headers.Authorization.ToString()));
+```
+
+The resolver returns a `ClaimsPrincipal`, or `null` for an anonymous caller. Build the identity with an
+authentication type (`new ClaimsIdentity(claims, "Bearer")`): code that reads the principal, the LLM
+tool claims source among it, treats an identity that is not authenticated as anonymous. The HTTP, gRPC, SOAP, AS2,
+WebSocket and SignalR consumers put the result on the exchange, and a route reads it with
+`ExchangePrincipal.Get(exchange)`. That is Camel's `Exchange.AUTHENTICATION` shape: an exchange property,
+so a caller cannot send it as a header, and every child exchange (a split part, a sub-route, a tool
+call) inherits it.
+
+| Situation | Outcome |
+|---|---|
+| No resolver | Nothing runs, exchanges carry no identity. The default. |
+| Resolver returns a principal | Kept in `HttpContext.Items` under `SharedHttpServerManager.PrincipalItem`, then put on the exchange. |
+| Resolver returns `null` | The request is served without an identity. Turning anonymous callers away is a route's decision: one port carries routes with different requirements. |
+| Resolver throws | 500, the route does not run, the error is logged, and the exception text never reaches the caller. A resolver that cannot decide must not downgrade the caller to anonymous; return `null` yourself when that is the right answer. |
+| CORS preflight | Answered before the resolver runs. |
+| WebSocket or SignalR with its own `Authenticate` | The transport's hook decides on its paths. |
+
+The resolver runs after trusted-proxy resolution, so a check that looks at the address sees the client,
+not the proxy. Under DI resolver failures go to the host's logger factory; a manager built by hand logs
+them only when given a logger (`new SharedHttpServerManager(options, logger)`). A component added by
+hand without a `ServerManager` falls back to a private manager with default options and does not see this
+setting.
+
 Part of the redb.Route family.

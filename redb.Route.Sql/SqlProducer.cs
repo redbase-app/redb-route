@@ -4,7 +4,7 @@ using System.Transactions;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
-using redb.Route.Expressions;
+using redb.Route.Sql.Batch;
 using redb.Route.Sql.Connection;
 using redb.Route.Sql.Mapping;
 using redb.Route.Telemetry;
@@ -14,7 +14,8 @@ namespace redb.Route.Sql;
 /// <summary>
 /// Producer for SQL Execute mode. Executes INSERT/UPDATE/DELETE/SELECT statements
 /// with auto-bind parameters from Exchange headers and body.
-/// Supports batch mode and all <see cref="SqlOutputType"/> mappings.
+/// Supports all <see cref="SqlOutputType"/> mappings; a list body with <c>batchSize</c> set is written as a batch
+/// by <see cref="SqlBatchProcessor"/>.
 /// </summary>
 /// <remarks>
 /// <b>Transaction behavior:</b> always wraps execution in a local <see cref="System.Data.Common.DbTransaction"/>.
@@ -67,23 +68,43 @@ internal sealed class SqlProducer : IProducer
             return;
         }
 
-        // Batch mode: body is a list of items → execute SQL for each item
-        if (_options.BatchSize > 0 && exchange.In.Body is System.Collections.IList items && items.Count > 0)
+        // The statement that runs: the URI path, the query option or the named query either refers to. It is resolved before
+        // anything is opened, so a failing query leaves a streamed body unread and released with the exchange.
+        var sql = ResolveQuery(exchange);
+
+        // Batch mode: a list, sequence, stream or JSON array body is written item by item through one statement.
+        if (_options.BatchSize > 0 && BatchSource.TryOpen(exchange.In.Body, ct, out var items))
         {
-            await ProcessBatch(exchange, items, ct).ConfigureAwait(false);
+            await using (items.ConfigureAwait(false))
+            {
+                await new SqlBatchProcessor(_endpoint, _options, _logger)
+                    .ProcessAsync(exchange, items, sql, activity, ct)
+                    .ConfigureAwait(false);
+            }
             return;
         }
 
         var factory = ResolveConnectionFactory();
         var sw = Stopwatch.StartNew();
 
-        // Resolve Auto output type from the SQL text
+        // Auto is decided by what the statement returns when it runs — as Apache Camel's execute() asks the driver — never by
+        // its text; it resolves below, and until then it is not a stream.
         var outputType = _options.OutputType;
-        if (outputType == SqlOutputType.Auto)
-            outputType = ResolveAutoOutputType(_endpoint.QueryOrProcedure);
 
-        var connection = await factory.CreateConnectionAsync(
-            readOnly: outputType != SqlOutputType.None, ct).ConfigureAwait(false);
+        // Measured on PostgreSQL and SQL Server: a transaction does not commit while a reader is open on its connection, and
+        // a second connection in the same transaction needs a distributed one. A stream would outlive this endpoint inside
+        // the route's transaction, so it is refused before any connection is opened.
+        if (outputType == SqlOutputType.StreamList && Transaction.Current != null)
+        {
+            throw new InvalidOperationException(
+                "outputType=StreamList keeps a reader open after the endpoint, and this exchange runs inside a transaction " +
+                "(a transacted route). The transaction cannot commit while that reader is open, and a later SQL step in the " +
+                "same transaction would need a second connection and a distributed transaction. Use outputType=SelectList " +
+                "inside the transaction, or read the stream outside it.");
+        }
+
+        // The replica only when the endpoint's author declares the statement read-only: the SQL text cannot tell.
+        var connection = await factory.CreateConnectionAsync(readOnly: _options.ReadOnly, ct).ConfigureAwait(false);
 
         // From here the connection is owned resource: everything that can throw — starting the
         // transaction included, since a dropped socket or a cancellation surfaces exactly there —
@@ -107,19 +128,20 @@ internal sealed class SqlProducer : IProducer
                     : await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
             }
 
-            var sql = ResolveQuery(exchange);
             cmd = connection.CreateCommand();
             cmd.CommandText = sql;
             cmd.CommandTimeout = _options.CommandTimeout;
             if (tx != null) cmd.Transaction = tx;
 
-            BindParameters(cmd, exchange);
+            SqlParameterBinder.Bind(cmd, exchange, _options.ExplicitParameters, _options.PlaceholderStyle, _options.BackslashEscapes);
 
-            sw.Stop();
-            var executionMs = sw.ElapsedMilliseconds;
-
+            // redbSql.executionTime covers executing the statement and reading its result; for a stream, opening the reader.
             switch (outputType)
             {
+                case SqlOutputType.Auto:
+                    outputType = await ExecuteAuto(cmd, exchange, ct).ConfigureAwait(false);
+                    break;
+
                 case SqlOutputType.SelectList:
                     await ExecuteSelectList(cmd, exchange, ct).ConfigureAwait(false);
                     break;
@@ -140,7 +162,7 @@ internal sealed class SqlProducer : IProducer
                     // open, say — means ownership never left this method.
                     await ExecuteStreamList(cmd, exchange, connection, tx, ct).ConfigureAwait(false);
                     streamOwnsResources = true;
-                    SetCommonHeaders(exchange, sql, executionMs);
+                    SqlExchangeHeaders.SetCommon(exchange, _options, sql, sw.ElapsedMilliseconds, outputType);
                     return;
 
                 case SqlOutputType.None:
@@ -149,7 +171,7 @@ internal sealed class SqlProducer : IProducer
                     break;
             }
 
-            SetCommonHeaders(exchange, sql, executionMs);
+            SqlExchangeHeaders.SetCommon(exchange, _options, sql, sw.ElapsedMilliseconds, outputType);
 
             if (tx != null)
             {
@@ -163,7 +185,8 @@ internal sealed class SqlProducer : IProducer
                 _options.DataSource, _options.OutputType);
             if (tx != null)
             {
-                try { await tx.RollbackAsync(ct).ConfigureAwait(false); }
+                // The rollback is not interruptible: a cancelled token would only turn it into a "rollback failed" log.
+                try { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
                 catch (Exception rbEx) { _logger?.LogError(rbEx, "SQL transaction rollback failed"); }
             }
             throw;
@@ -171,129 +194,61 @@ internal sealed class SqlProducer : IProducer
         finally
         {
             if (!streamOwnsResources)
+                await ReleaseAsync(cmd, tx, connection).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Releases the command, the transaction and the connection, each even when the one before it failed (the first failure
+    /// propagates): a transaction whose disposal throws must not leave the connection out of the pool.
+    /// </summary>
+    private static async ValueTask ReleaseAsync(DbCommand? cmd, DbTransaction? tx, DbConnection connection)
+    {
+        try
+        {
+            if (cmd != null)
+                await cmd.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            try
             {
-                if (cmd != null)
-                    await cmd.DisposeAsync().ConfigureAwait(false);
                 if (tx != null)
                     await tx.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
                 await connection.DisposeAsync().ConfigureAwait(false);
             }
         }
     }
 
-    private async Task ProcessBatch(IExchange exchange, System.Collections.IList items, CancellationToken ct)
+    /// <summary>
+    /// <c>outputType=Auto</c>, as Apache Camel's <c>execute()</c>: the statement runs as a reader and the driver says what it
+    /// is — a result set (its rows, as <see cref="SqlOutputType.SelectList"/>) or none (the rows affected, as
+    /// <see cref="SqlOutputType.None"/>). The text is never parsed: a comment before SELECT, a WITH that writes, an
+    /// <c>INSERT … RETURNING</c> all come out as what they return.
+    /// </summary>
+    private async Task<SqlOutputType> ExecuteAuto(DbCommand cmd, IExchange exchange, CancellationToken ct)
     {
-        var factory = ResolveConnectionFactory();
-        var sw = Stopwatch.StartNew();
-        var totalAffected = 0;
-        var processedCount = 0;
-        var errors = new List<Exception>();
+        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
 
-        await using var connection = await factory.CreateConnectionAsync(
-            readOnly: false, ct).ConfigureAwait(false);
-
-        var hasAmbientTx = Transaction.Current != null;
-        DbTransaction? tx = null;
-        if (!hasAmbientTx)
+        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (reader.FieldCount > 0)
         {
-            tx = _options.IsolationLevel.HasValue
-                ? await connection.BeginTransactionAsync(_options.IsolationLevel.Value, ct).ConfigureAwait(false)
-                : await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+            await ReadRowsAsync(reader, poco, exchange, ct).ConfigureAwait(false);
+            return SqlOutputType.SelectList;
         }
 
-        try
+        // No result set: the statement is read to its end, and the rows affected are taken once the reader is closed — the
+        // point at which every driver has them, as the batch reads them.
+        while (await reader.NextResultAsync(ct).ConfigureAwait(false))
         {
-            var sql = ResolveQuery(exchange);
-
-            foreach (var item in items)
-            {
-                try
-                {
-                    await using var cmd = connection.CreateCommand();
-                    cmd.CommandText = sql;
-                    cmd.CommandTimeout = _options.CommandTimeout;
-                    if (tx != null) cmd.Transaction = tx;
-
-                    // Create a virtual exchange from the batch item for parameter binding
-                    var itemExchange = CreateBatchItemExchange(item, exchange);
-                    BindParameters(cmd, itemExchange);
-
-                    var affected = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-                    totalAffected += affected;
-                    processedCount++;
-                }
-                catch (Exception ex)
-                {
-                    errors.Add(ex);
-                    if (_options.BreakBatchOnError)
-                        break;
-                }
-            }
-
-            sw.Stop();
-            exchange.In.Headers[SqlHeaders.UpdateCount] = totalAffected;
-            exchange.In.Headers[SqlHeaders.RowCount] = processedCount;
-            SetCommonHeaders(exchange, sql, sw.ElapsedMilliseconds);
-
-            if (errors.Count > 0)
-                exchange.In.Headers[SqlHeaders.Error] = $"{errors.Count} batch error(s): {errors[0].Message}";
-
-            if (tx != null)
-            {
-                if (errors.Count > 0 && _options.BreakBatchOnError)
-                {
-                    await tx.RollbackAsync(ct).ConfigureAwait(false);
-                }
-                else
-                {
-                    exchange.In.Headers[SqlHeaders.TransactionId] = tx.GetHashCode().ToString();
-                    await tx.CommitAsync(ct).ConfigureAwait(false);
-                }
-            }
-
-            if (errors.Count > 0 && _options.BreakBatchOnError)
-                throw new AggregateException("Batch processing failed.", errors);
-        }
-        catch (AggregateException) { throw; } // re-throw batch error
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "SQL batch execution failed: dataSource={DataSource}",
-                _options.DataSource);
-            if (tx != null)
-            {
-                try { await tx.RollbackAsync(ct).ConfigureAwait(false); }
-                catch (Exception rbEx) { _logger?.LogError(rbEx, "SQL batch transaction rollback failed"); }
-            }
-            throw;
-        }
-        finally
-        {
-            if (tx != null)
-                await tx.DisposeAsync().ConfigureAwait(false);
-        }
-    }
-
-    private static IExchange CreateBatchItemExchange(object item, IExchange parent)
-    {
-        var exchange = new Exchange(new Message(item));
-
-        // Copy parent headers as defaults
-        foreach (var (key, value) in parent.In.Headers)
-            exchange.In.Headers[key] = value;
-
-        // If item is a dictionary, add its entries as headers for auto-bind
-        if (item is Dictionary<string, object?> dict)
-        {
-            foreach (var (key, value) in dict)
-                exchange.In.Headers[key] = value;
-        }
-        else if (item is IDictionary<string, object> dict2)
-        {
-            foreach (var (key, value) in dict2)
-                exchange.In.Headers[key] = value;
         }
 
-        return exchange;
+        await reader.CloseAsync().ConfigureAwait(false);
+        exchange.In.Headers[SqlHeaders.UpdateCount] = reader.RecordsAffected;
+        return SqlOutputType.None;
     }
 
     private async Task ExecuteSelectList(DbCommand cmd, IExchange exchange, CancellationToken ct)
@@ -301,7 +256,12 @@ internal sealed class SqlProducer : IProducer
         var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        await ReadRowsAsync(reader, poco, exchange, ct).ConfigureAwait(false);
+    }
 
+    /// <summary>Reads every row of <paramref name="reader"/> into the result: a <c>List&lt;T&gt;</c> with <c>outputClass</c>, dictionaries otherwise.</summary>
+    private async Task ReadRowsAsync(DbDataReader reader, SqlRowMapperFactory.PocoMapping? poco, IExchange exchange, CancellationToken ct)
+    {
         if (poco != null)
         {
             // outputClass is set → accumulate into a typed List<T>, not List<Dictionary>.
@@ -354,82 +314,32 @@ internal sealed class SqlProducer : IProducer
 
     private async Task ExecuteStreamList(DbCommand cmd, IExchange exchange, DbConnection connection, DbTransaction? tx, CancellationToken ct)
     {
-        // StreamList differs from SelectList: rows are streamed lazily as IAsyncEnumerable.
-        // The connection, command, and reader must stay alive until the stream is consumed.
-        // We transfer ownership of these resources to the async enumerable.
-        var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        // StreamList differs from SelectList: rows are streamed lazily as IAsyncEnumerable, so the reader, command,
+        // transaction and connection outlive this method. The streamed result takes them over, and — as in Apache Camel,
+        // which closes the result set on exchange completion — it is registered with the exchange: whatever the route does
+        // with the body, the connection is returned when the exchange ends.
+        // The row type is resolved before the reader is open: a bad outputClass must not leave a reader behind.
         var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
-        object enumerable = poco != null
-            // The element type is only known at runtime, so the generic streaming method
-            // has to be closed reflectively to yield IAsyncEnumerable<T> rather than <object>.
-            ? _streamRowsTypedMethod
-                .MakeGenericMethod(poco.ElementType)
-                .Invoke(null, [reader, poco.Map, cmd, connection, tx, ct])!
-            : StreamRows(reader, new DictionaryRowMapper(), cmd, connection, tx, ct);
+        object body;
+        IAsyncDisposable release;
+        try
+        {
+            (body, release) = poco != null
+                ? StreamedQueryResult.Create(poco.ElementType, reader, poco.Map, cmd, connection, tx)
+                : StreamedQueryResult.Create(typeof(Dictionary<string, object?>), reader, new DictionaryRowMapper().Map, cmd, connection, tx);
+        }
+        catch
+        {
+            // The stream never took the reader over: close it here, the caller releases the rest.
+            await reader.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
 
-        SetResult(exchange, enumerable);
+        ExchangeResources.ReleaseWithExchange(exchange, release);
+        SetResult(exchange, body);
         exchange.In.Headers[SqlHeaders.RowCount] = -1; // unknown until fully iterated
-    }
-
-    private static readonly System.Reflection.MethodInfo _streamRowsTypedMethod =
-        typeof(SqlProducer).GetMethod(nameof(StreamRowsTyped),
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-
-    private static async IAsyncEnumerable<T> StreamRowsTyped<T>(
-        DbDataReader reader,
-        Func<DbDataReader, object> map,
-        DbCommand cmd,
-        DbConnection connection,
-        DbTransaction? tx,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-    {
-        await using (reader)
-        await using (cmd)
-        await using (connection)
-        {
-            try
-            {
-                while (await reader.ReadAsync(ct).ConfigureAwait(false))
-                    yield return (T)map(reader);
-
-                if (tx != null)
-                    await tx.CommitAsync(ct).ConfigureAwait(false);
-            }
-            finally
-            {
-                if (tx != null)
-                    await tx.DisposeAsync().ConfigureAwait(false);
-            }
-        }
-    }
-
-    private static async IAsyncEnumerable<Dictionary<string, object?>> StreamRows(
-        DbDataReader reader,
-        DictionaryRowMapper mapper,
-        DbCommand cmd,
-        DbConnection connection,
-        DbTransaction? tx,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-    {
-        await using (reader)
-        await using (cmd)
-        await using (connection)
-        {
-            try
-            {
-                while (await reader.ReadAsync(ct).ConfigureAwait(false))
-                    yield return mapper.Map(reader);
-
-                if (tx != null)
-                    await tx.CommitAsync(ct).ConfigureAwait(false);
-            }
-            finally
-            {
-                if (tx != null)
-                    await tx.DisposeAsync().ConfigureAwait(false);
-            }
-        }
     }
 
     private static async Task ExecuteNonQuery(DbCommand cmd, IExchange exchange, CancellationToken ct)
@@ -447,92 +357,9 @@ internal sealed class SqlProducer : IProducer
     private void SetResult(IExchange exchange, object? value)
     {
         if (!string.IsNullOrEmpty(_options.OutputHeader))
-            exchange.In.Headers[_options.OutputHeader] = value;
+            exchange.In.Headers[SqlExchangeHeaders.ResolveOutputHeader(_options.OutputHeader, exchange)] = value;
         else
             exchange.In.Body = value;
-    }
-
-    private void SetCommonHeaders(IExchange exchange, string sql, long executionMs)
-    {
-        exchange.In.Headers[SqlHeaders.Query] = sql;
-        exchange.In.Headers[SqlHeaders.ExecutionTime] = executionMs;
-
-        if (_options.DataSource != null)
-            exchange.In.Headers[SqlHeaders.DataSource] = _options.DataSource;
-
-        exchange.In.Headers[SqlHeaders.OutputType] = _options.OutputType.ToString();
-    }
-
-    private void BindParameters(DbCommand cmd, IExchange exchange)
-    {
-        var paramNames = SqlParameterParser.ExtractParameterNames(cmd.CommandText);
-        var explicitParams = _options.ExplicitParameters;
-
-        foreach (var name in paramNames)
-        {
-            var param = cmd.CreateParameter();
-            param.ParameterName = name;
-
-            // Priority 0: explicit param from .Param()
-            if (explicitParams.TryGetValue(name, out var explicitVal))
-            {
-                param.Value = NormalizeForDb(ResolveParamValue(explicitVal, exchange));
-            }
-            // Priority 1: exchange headers
-            else if (exchange.In.Headers.TryGetValue(name, out var headerVal))
-            {
-                param.Value = NormalizeForDb(headerVal);
-            }
-            // Priority 2: body as Dictionary
-            else if (exchange.In.Body is Dictionary<string, object?> dict &&
-                     dict.TryGetValue(name, out var bodyVal))
-            {
-                param.Value = NormalizeForDb(bodyVal);
-            }
-            // Priority 3: body as IDictionary<string, object>
-            else if (exchange.In.Body is IDictionary<string, object> dict2 &&
-                     dict2.TryGetValue(name, out var bodyVal2))
-            {
-                param.Value = NormalizeForDb(bodyVal2);
-            }
-            else
-            {
-                param.Value = DBNull.Value;
-            }
-
-            cmd.Parameters.Add(param);
-        }
-    }
-
-    /// <summary>
-    /// Normalises C# values for ADO.NET parameter binding:
-    /// <list type="bullet">
-    ///   <item><c>null</c> → <see cref="DBNull.Value"/>.</item>
-    ///   <item>Empty string (<c>""</c>) → <see cref="DBNull.Value"/>. A null upstream value
-    ///   (e.g. an OAuth <c>client_id</c> absent from a logout request) is sometimes
-    ///   serialised through string-typed plumbing (header, query-string, JSON DTO) as
-    ///   <see cref="string.Empty"/>; if we bind that literally, audit columns receive
-    ///   <c>""</c> instead of <c>NULL</c> and downstream <c>WHERE ... IS NULL</c>
-    ///   predicates miss the rows. Treating empty string as NULL at the parameter layer
-    ///   keeps schema invariants honest (NULL = "not specified") without forcing every
-    ///   caller to convert.</item>
-    ///   <item>Everything else passes through unchanged.</item>
-    /// </list>
-    /// </summary>
-    private static object NormalizeForDb(object? value) => value switch
-    {
-        null => DBNull.Value,
-        string s when s.Length == 0 => DBNull.Value,
-        _ => value
-    };
-
-    internal static object ResolveParamValue(string value, IExchange? exchange)
-    {
-        if (value.Contains("${") && exchange != null)
-        {
-            return ExpressionResolver.ResolveTypedOrTemplate(value, exchange) ?? DBNull.Value;
-        }
-        return string.IsNullOrEmpty(value) ? DBNull.Value : (object)value;
     }
 
     private string ResolveQuery(IExchange exchange)
@@ -564,19 +391,4 @@ internal sealed class SqlProducer : IProducer
 
     private ISqlConnectionFactory ResolveConnectionFactory() => _endpoint.ResolveConnectionFactory();
 
-    /// <summary>
-    /// Resolves <see cref="SqlOutputType.Auto"/> by inspecting the SQL text.
-    /// SELECT / WITH → SelectList, everything else → None.
-    /// </summary>
-    internal static SqlOutputType ResolveAutoOutputType(string? sql)
-    {
-        if (string.IsNullOrWhiteSpace(sql))
-            return SqlOutputType.None;
-
-        var trimmed = sql.AsSpan().TrimStart();
-        return trimmed.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("WITH", StringComparison.OrdinalIgnoreCase)
-            ? SqlOutputType.SelectList
-            : SqlOutputType.None;
-    }
 }

@@ -4,17 +4,33 @@ using redb.Route.Abstractions;
 namespace redb.Route.Llm.Engine.Storage;
 
 /// <summary>
-/// Caches deterministic / read-only tool outputs by a content-hash key so
-/// repeated calls inside the same run (or across runs, when persisted) skip
-/// the underlying side effect entirely. Engine consults this BEFORE the
-/// idempotency store — a cache hit is reported as a skipped invocation to
-/// observers.
+/// Caches deterministic / read-only tool outputs by a content-hash key so repeated calls can skip
+/// the underlying work: inside one run for <c>ToolCachingPolicy.Memoize</c> (served in process,
+/// never through this store) and across runs for <c>ToolCachingPolicy.Persist</c>.
+/// <para>
+/// The agent loop consults this store for <c>Persist</c> tools, after approval and before the
+/// idempotency store: a hit means "this exact input already produced this output", which is cheaper
+/// than asking "was this tool_use already executed?", and it is reported to observers as a skipped
+/// invocation with <c>SkipReason = "cache_hit"</c>. Only read-only tools may declare a caching
+/// policy — a cached entry suppresses the side effect it stands for, so the route build rejects
+/// <c>Caching != None</c> on a mutating tool.
+/// </para>
+/// <para>
+/// An output the redaction filter changed is never stored: persisting the raw body would keep
+/// redaction-bypassing content in the store, and persisting the redacted body would hand the model
+/// different data on a hit than on a miss.
+/// </para>
 /// <para>
 /// The optional <c>exchange</c> parameter on every method carries the route
 /// pipeline's current exchange; REDB-backed implementations resolve a
 /// per-exchange <see cref="redb.Core.IRedbService"/> through
 /// <c>IRouteContext.GetRedbService(name, exchange)</c>. In-memory
 /// implementations ignore it.
+/// </para>
+/// <para>
+/// <b>A store does not report metrics.</b> Hit/miss counters belong to the agent loop, which is the
+/// only layer that sees both this store and the run-scoped memo; a store that counted as well would
+/// count every persisted read twice.
 /// </para>
 /// </summary>
 public interface IToolCacheStore

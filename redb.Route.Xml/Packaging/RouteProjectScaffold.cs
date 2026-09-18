@@ -55,6 +55,9 @@ public static class RouteProjectScaffold
                 <!-- The package identity `redb-route-xml pack` uses. -->
                 <RoutePackageName>{name}</RoutePackageName>
                 <RouteContextName>{contextName}</RouteContextName>
+                <!-- A route project is a library: NuGet assemblies do not reach bin/ unless asked, and the
+                     build-time pack gate reads connectors and markup contributions from TargetDir. -->
+                <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
               </PropertyGroup>
               <ItemGroup>
                 {runtimeReference}

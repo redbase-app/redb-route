@@ -77,6 +77,11 @@ public sealed class SignalRRegistrationOptions
     /// Browsers cannot set headers on a WebSocket handshake, so a token normally arrives in the
     /// <c>access_token</c> query parameter: read it from there and from the Authorization header.
     /// </para>
+    /// <para>
+    /// The principal is also put on every exchange the hub produces (<c>ExchangePrincipal</c>). Build its
+    /// identity with an authentication type (<c>new ClaimsIdentity(claims, "Bearer")</c>): code that reads
+    /// the principal treats an identity that is not authenticated as anonymous.
+    /// </para>
     /// </summary>
     public Func<Microsoft.AspNetCore.Http.HttpContext, Task<System.Security.Claims.ClaimsPrincipal?>>? Authenticate { get; set; }
 

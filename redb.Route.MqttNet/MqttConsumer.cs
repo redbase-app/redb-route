@@ -158,6 +158,7 @@ internal sealed class MqttConsumer : IConsumer
             try
             {
                 await _processor.Process(exchange, _drain.ProcessingToken).ConfigureAwait(false);
+                exchange.ThrowIfUnhandledFailure();
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
@@ -204,6 +205,7 @@ internal sealed class MqttConsumer : IConsumer
         try
         {
             await _processor.Process(exchange, ct).ConfigureAwait(false);
+            exchange.ThrowIfUnhandledFailure();
 
             // Acknowledge only after successful processing — preserves at-least-once for QoS 1/2.
             try { await args.AcknowledgeAsync(ct).ConfigureAwait(false); }

@@ -106,7 +106,7 @@ public class SqlIntegrationTests : IAsyncLifetime, IDisposable
             new() { ["repeatCount"] = "1" });
 
         var producerEp = CreateProducerEndpoint(
-            "INSERT INTO audit(source_id, message) VALUES(@id, @message)");
+            "INSERT INTO audit(source_id, message) VALUES(:#id, :#message)");
         var producer = producerEp.CreateProducer();
 
         var processor = Substitute.For<IProcessor>();
@@ -144,7 +144,7 @@ public class SqlIntegrationTests : IAsyncLifetime, IDisposable
             new()
             {
                 ["repeatCount"] = "1",
-                ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = @id"
+                ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id"
             });
 
         var processor = Substitute.For<IProcessor>();
@@ -218,7 +218,7 @@ public class SqlIntegrationTests : IAsyncLifetime, IDisposable
             {
                 ["repeatCount"] = "1",
                 ["transacted"] = "true",
-                ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = @id"
+                ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id"
             });
 
         var processor = Substitute.For<IProcessor>();
@@ -272,7 +272,7 @@ public class SqlIntegrationTests : IAsyncLifetime, IDisposable
             new()
             {
                 ["delete"] = "false",
-                ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = @id"
+                ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id"
             });
 
         var count = 0;
@@ -311,7 +311,7 @@ public class SqlIntegrationTests : IAsyncLifetime, IDisposable
             {
                 ["repeatCount"] = "1",
                 ["maxMessagesPerPoll"] = "2",
-                ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = @id"
+                ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id"
             });
 
         var processor = Substitute.For<IProcessor>();
@@ -348,7 +348,7 @@ public class SqlIntegrationTests : IAsyncLifetime, IDisposable
             new() { ["repeatCount"] = "1" });
 
         var producerEp = CreateProducerEndpoint(
-            "INSERT INTO audit(source_id, message, status) VALUES(@source_id, @message, @status)");
+            "INSERT INTO audit(source_id, message, status) VALUES(:#source_id, :#message, :#status)");
         var producer = producerEp.CreateProducer();
 
         // Processor transforms the exchange before sending to producer

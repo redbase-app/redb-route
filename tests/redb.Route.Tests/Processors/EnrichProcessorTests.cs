@@ -46,6 +46,47 @@ public class EnrichProcessorTests
         exchange.In.Headers["enriched"].Should().Be("yes");
     }
 
+    private sealed class TrackingResource : IAsyncDisposable
+    {
+        public int DisposeCount;
+
+        public ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref DisposeCount);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task Process_HandsTheResourceExchangesResourcesOverToTheOriginal()
+    {
+        var (context, producer) = SetupContext("direct://stream");
+        var resource = new TrackingResource();
+        producer.When(p => p.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>()))
+            .Do(ci =>
+            {
+                // A streamed SQL result: the body holds a connection that is released when its exchange ends.
+                var ex = ci.Arg<IExchange>();
+                ExchangeResources.ReleaseWithExchange(ex, resource);
+                ex.In.Body = "stream";
+            });
+        var enricher = new EnrichProcessor(context, "direct://stream",
+            mergeStrategy: (original, enriched) =>
+            {
+                original.In.Body = enriched.In.Body;
+                return original;
+            });
+
+        var exchange = new Exchange(new Message("original"));
+        await enricher.Process(exchange);
+
+        exchange.In.Body.Should().Be("stream");
+        resource.DisposeCount.Should().Be(0,
+            "as Apache Camel's Enrich hands the resource exchange's completions over, the stream lives until the original ends");
+        await exchange.DisposeAsync();
+        resource.DisposeCount.Should().Be(1);
+    }
+
     [Fact]
     public async Task Process_SendsCloneToResource()
     {

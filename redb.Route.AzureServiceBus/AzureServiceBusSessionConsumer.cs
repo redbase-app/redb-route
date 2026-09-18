@@ -101,11 +101,8 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
         {
             exchange = CreateExchange(args.Message, args);
 
-            if (_options.Transacted)
-            {
-                RegisterTransactedAction(exchange, $"asb-session-ack-{args.Message.SequenceNumber}",
-                    new AzureServiceBusSessionAckAction(args));
-            }
+            // The lock is settled by this consumer below, after the whole unit of work ended well; the route
+            // transaction owns the database and the outgoing sends.
 
             // No RecordMessageIn: the core's StatisticsProcessor around From() owns it (ownership audit).
             try
@@ -118,7 +115,7 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
                 throw;
             }
 
-            if (_options.ParsedReceiveMode == ServiceBusReceiveMode.PeekLock && !_options.Transacted)
+            if (_options.ParsedReceiveMode == ServiceBusReceiveMode.PeekLock)
             {
                 await AcknowledgeAsync(args, exchange).ConfigureAwait(false);
             }
@@ -243,15 +240,4 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
             message.Headers[key] = value;
     }
 
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (!exchange.Properties.TryGetValue("TRANSACT_ACTION", out var raw)
-            || raw is not ConcurrentDictionary<string, ITransactedAction> dict)
-        {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties["TRANSACT_ACTION"] = dict;
-        }
-
-        dict[key] = action;
-    }
 }

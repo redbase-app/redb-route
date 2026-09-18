@@ -128,9 +128,9 @@ public interface IExchange : IAsyncDisposable
     IExchange CloneLinked() => Clone();
 
     /// <summary>
-    /// Releases DI scopes (main scope + named __redb_scope:* entries) without
-    /// disposing the exchange body or headers. Call after processing to free DB
-    /// connections early while keeping message data alive for aggregation.
+    /// Releases DI scopes (main scope + named __redb_scope:* entries) and the resources registered with
+    /// <see cref="ExchangeResources.ReleaseWithExchange"/>, without disposing the exchange body or headers.
+    /// Call after processing to free DB connections early while keeping message data alive for aggregation.
     /// Idempotent — safe to call multiple times.
     /// </summary>
     ValueTask ReleaseScopes() => default;

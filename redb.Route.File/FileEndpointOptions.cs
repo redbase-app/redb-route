@@ -26,6 +26,16 @@ public class FileEndpointOptions : GenericFileEndpointOptions
     /// <summary>Extension used for marker file lock (default: ".redbLock").</summary>
     public string ReadLockMarkerFileExtension { get; set; } = ".redbLock";
 
+    // ── Failure handling ────────────────────────────────────────────
+
+    /// <summary>
+    /// Directory to move a file to when its processing fails (empty = disabled, the default).
+    /// Relative to the endpoint directory unless absolute; supports the same file tokens as
+    /// <see cref="GenericFileEndpointOptions.MoveTo"/>. Without it a failed file is left in place and
+    /// re-picked on the next poll; setting it quarantines poison files out of the poll directory.
+    /// </summary>
+    public string MoveFailed { get; set; } = "";
+
     // ── Producer safety ─────────────────────────────────────────────
 
     /// <summary>

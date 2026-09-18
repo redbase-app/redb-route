@@ -125,7 +125,7 @@ public class Exchange : IExchange
         foreach (var kvp in _properties)
         {
             // Named redb scopes are per-exchange; child will create its own on first access.
-            if (kvp.Key.StartsWith("__redb_scope:", StringComparison.Ordinal))
+            if (ExchangeResources.IsOwnedByExchange(kvp.Key))
                 continue;
             clone._properties[kvp.Key] = kvp.Value;
         }
@@ -160,7 +160,7 @@ public class Exchange : IExchange
         foreach (var kvp in _properties)
         {
             // Named redb scopes are per-exchange; the snapshot creates its own on first access.
-            if (kvp.Key.StartsWith("__redb_scope:", StringComparison.Ordinal))
+            if (ExchangeResources.IsOwnedByExchange(kvp.Key))
                 continue;
             // Property values are shared (route metadata, not payload) — see Snapshot doc.
             snapshot._properties[kvp.Key] = kvp.Value;
@@ -191,7 +191,7 @@ public class Exchange : IExchange
         foreach (var kvp in _properties)
         {
             // Named redb scopes are per-exchange; child will create its own on first access.
-            if (kvp.Key.StartsWith("__redb_scope:", StringComparison.Ordinal))
+            if (ExchangeResources.IsOwnedByExchange(kvp.Key))
                 continue;
             child._properties[kvp.Key] = kvp.Value;
         }
@@ -221,7 +221,7 @@ public class Exchange : IExchange
 
         foreach (var kvp in _properties)
         {
-            if (kvp.Key.StartsWith("__redb_scope:", StringComparison.Ordinal))
+            if (ExchangeResources.IsOwnedByExchange(kvp.Key))
                 continue;
             child._properties[kvp.Key] = kvp.Value;
         }
@@ -251,7 +251,7 @@ public class Exchange : IExchange
 
         foreach (var kvp in _properties)
         {
-            if (kvp.Key.StartsWith("__redb_scope:", StringComparison.Ordinal))
+            if (ExchangeResources.IsOwnedByExchange(kvp.Key))
                 continue;
             clone._properties[kvp.Key] = kvp.Value;
         }
@@ -291,11 +291,42 @@ public class Exchange : IExchange
         // the remaining scopes: each disposal is isolated in its own try so one throw can't strand
         // sibling scopes (which would re-introduce the very connection leak this guards against).
         ILogger? logger = null;
-        try { logger = _scope?.ServiceProvider?.GetService<ILoggerFactory>()?.CreateLogger("redb.Route.Exchange"); }
+        // An exchange without a DI scope (a ProducerTemplate, a test) still has its context to log through.
+        try
+        {
+            logger = (_scope?.ServiceProvider?.GetService<ILoggerFactory>() ?? Context?.GetService<ILoggerFactory>())
+                ?.CreateLogger("redb.Route.Exchange");
+        }
         catch { /* logger is best-effort; disposal proceeds regardless */ }
 
+        // Release resources registered through ExchangeResources (a streamed query result holding its connection) first:
+        // most recent first, while the DI scopes that may own their factories are still alive. Each release is isolated,
+        // like the scopes below, so one failure cannot strand the others.
+        var resourceKeys = _properties.Keys
+            .Where(k => k.StartsWith(ExchangeResources.PropertyPrefix, StringComparison.Ordinal))
+            .OrderByDescending(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        foreach (var key in resourceKeys)
+        {
+            try
+            {
+                if (_properties.TryGetValue(key, out var val) && val is IAsyncDisposable resource)
+                    await resource.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex, "Releasing resource '{ResourceKey}' failed on exchange {ExchangeId} (route '{RouteId}'); remaining resources and scopes are still released.", key, ExchangeId, RouteId);
+            }
+            finally
+            {
+                _properties.Remove(key);
+            }
+        }
+
         // Dispose named IRedbService scopes cached by RedbRouteExtensions
-        // and remove them from Properties so ApplyAggregation won't copy disposed scopes to parent.
+        // and remove them from Properties, so a repeated release has nothing to dispose twice. (The aggregation merge-back
+        // of Multicast / Splitter / Scatter-Gather / Loop skips owned keys — ExchangeResources.IsOwnedByExchange.)
         var namedKeys = _properties.Keys
             .Where(k => k.StartsWith("__redb_scope:", StringComparison.Ordinal))
             .ToList();

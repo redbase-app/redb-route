@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.GenericFile;
@@ -119,6 +120,45 @@ public class FileConsumer : GenericFileConsumer<FileEndpointOptions>
         var info = new FileInfo(file.FullPath);
         _readLock.ReleaseLock(info, Options);
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Moves a failed file to <see cref="FileEndpointOptions.MoveFailed"/> when configured, so a poison
+    /// file is quarantined out of the poll directory instead of being re-picked on every poll. No-op when
+    /// unset (the file is left in place). Best-effort: a move failure is logged, not thrown.
+    /// </remarks>
+    protected override async Task OnProcessingFailedAsync(string filePath, string fileName, string basePath, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(Options.MoveFailed))
+            return;
+
+        try
+        {
+            var failedDir = ResolveDirectory(
+                GenericFileUtils.SubstituteFileTokens(fileName, Options.MoveFailed, Operations), basePath);
+            await Operations.CreateDirectoryAsync(failedDir, ct).ConfigureAwait(false);
+
+            var targetPath = Operations.CombinePath(failedDir, fileName);
+
+            if (await Operations.ExistsAsync(targetPath, ct).ConfigureAwait(false))
+            {
+                try
+                {
+                    await Operations.DeleteAsync(targetPath, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Logger?.LogWarning(ex, "{Consumer}: failed to delete target before move-failed {Path}", ConsumerName, targetPath);
+                }
+            }
+
+            await Operations.MoveAsync(filePath, targetPath, false, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Logger?.LogWarning(ex, "{Consumer}: failed to move file to failed directory {File}", ConsumerName, fileName);
+        }
     }
 
     /// <summary>

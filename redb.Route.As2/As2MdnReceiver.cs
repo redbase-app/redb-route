@@ -103,6 +103,7 @@ internal sealed class As2MdnReceiver : IConsumer
 
             var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
             exchange.Pattern = ExchangePattern.InOnly;
+            ExchangePrincipal.Set(exchange, SharedHttpServerManager.GetResolvedPrincipal(http));
             try { await _processor.Process(exchange, http.RequestAborted).ConfigureAwait(false); }
             finally { await exchange.DisposeAsync().ConfigureAwait(false); }
         }

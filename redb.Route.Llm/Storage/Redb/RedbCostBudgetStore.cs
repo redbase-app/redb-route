@@ -24,12 +24,14 @@ namespace redb.Route.Llm.Storage.Redb;
 /// instead of trampling each other. No raw SQL.
 /// </para>
 /// <para>
-/// The store does not own an <see cref="IRedbService"/> instance — each call
-/// resolves one through <c>IRouteContext.GetRedbService(name, exchange)</c>,
-/// which honours the per-exchange scope cache. The redb name is read from
-/// <c>exchange.Properties[LlmKeys.RedbName]</c> (set by the LLM endpoint URI),
-/// falling back to the constructor-supplied default name and then to the host's
-/// default unnamed instance.
+/// The store does not own an <see cref="IRedbService"/> instance. A call with an
+/// exchange resolves the exchange's service through
+/// <c>IRouteContext.GetRedbService(name, exchange)</c>; a call without one (the
+/// budget enforcer's, made from every concurrent run) opens a scope of its own with
+/// <c>IRouteContext.CreateRedbScope(name)</c> and releases it when the call ends. The
+/// redb name is read from <c>exchange.Properties[LlmKeys.RedbName]</c> (set by the LLM
+/// endpoint URI), falling back to the constructor-supplied default name and then to the
+/// host's default unnamed instance.
 /// </para>
 /// </summary>
 public sealed class RedbCostBudgetStore : ICostBudgetStore
@@ -44,20 +46,36 @@ public sealed class RedbCostBudgetStore : ICostBudgetStore
         _defaultRedbName = defaultRedbName;
     }
 
-    private IRedbService Resolve(IExchange? exchange)
+    /// <summary>
+    /// The service a call works on. With an exchange it is the exchange's service. Without one - the budget enforcer
+    /// calls without an exchange, from every concurrent run - the call opens a scope of its own and hands it back in
+    /// <paramref name="owned"/> for the caller to dispose: a shared instance would put every run on one connection,
+    /// and the second of two simultaneous commands on it is refused. A refusal to open that scope is a configuration
+    /// error and is not caught here.
+    /// </summary>
+    private IRedbService Resolve(IExchange? exchange, out RedbScope? owned)
     {
         var name = _defaultRedbName;
         if (exchange is not null
             && exchange.Properties.TryGetValue(LlmKeys.RedbName, out var raw)
             && raw is string s && s.Length > 0)
             name = s;
-        return _context.GetRedbService(name ?? string.Empty, exchange);
+
+        if (exchange is not null)
+        {
+            owned = null;
+            return _context.GetRedbService(name ?? string.Empty, exchange);
+        }
+
+        owned = _context.CreateRedbScope(name);
+        return owned.Service;
     }
 
     /// <inheritdoc />
     public async ValueTask<AgentUsage> GetUsageAsync(string conversationId, IExchange? exchange = null, CancellationToken ct = default)
     {
-        var redb = Resolve(exchange);
+        var redb = Resolve(exchange, out var owned);
+        await using var scope = owned;
         var row = await LoadAsync(redb, conversationId).ConfigureAwait(false);
         return row is null
             ? AgentUsage.Zero
@@ -67,7 +85,8 @@ public sealed class RedbCostBudgetStore : ICostBudgetStore
     /// <inheritdoc />
     public async ValueTask<AgentUsage> AddAsync(string conversationId, AgentUsage delta, IExchange? exchange = null, CancellationToken ct = default)
     {
-        var redb = Resolve(exchange);
+        var redb = Resolve(exchange, out var owned);
+        await using var scope = owned;
 
         // Two passes at most: a row soft-deleted mid-flight (a concurrent ResetAsync —
         // the documented daily/monthly counter roll) sends the loop back to the
@@ -173,7 +192,8 @@ public sealed class RedbCostBudgetStore : ICostBudgetStore
     /// <inheritdoc />
     public async ValueTask ResetAsync(string conversationId, IExchange? exchange = null, CancellationToken ct = default)
     {
-        var redb = Resolve(exchange);
+        var redb = Resolve(exchange, out var owned);
+        await using var scope = owned;
         var row = await LoadAsync(redb, conversationId).ConfigureAwait(false);
         if (row is not null) await redb.SoftDeleteAsync([row]).ConfigureAwait(false);
     }

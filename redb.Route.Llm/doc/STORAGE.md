@@ -471,9 +471,15 @@ Two rules pervade everything:
 | `EvalRunProps`        | `LLM Eval Run`                | RunId, Scenario, AgentFingerprint, Score?, InputTokens, OutputTokens, CostUsd, CreatedAtUtc, Iterations[]          | Phase 3; `Iterations` is a typed metric array |
 
 `MessageProps.Content` is a typed array of `MessageContentBlock`
-(`Kind` ∈ `text` / `tool_use` / `tool_result`) — no JSON serialisation for
+(`Kind` ∈ `text` / `tool_use` / `tool_result` / `thinking`) — no JSON serialisation for
 **our own** fields. Foreign JSON (tool input, tool output) is stored as
 `string` on `InputJson` / `OutputJson` only when the structure isn't ours.
+
+A `thinking` block keeps the model's reasoning in `ThinkingText`, with
+`Signature` (Anthropic) and `RedactedData` (`redacted_thinking`) beside it;
+`Text` belongs to the `text` kind only. The provider and model that produced
+the turn are the message's own `ProviderId` / `ModelId`. A block type or a
+stored kind the store has no form for is an error, on write and on read.
 
 ---
 

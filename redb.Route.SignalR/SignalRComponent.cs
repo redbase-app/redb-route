@@ -60,7 +60,9 @@ public class SignalRComponent : ComponentBase
     /// Authenticates hub connections. Without it the hub accepts anonymous connections and
     /// <c>UserIdentifier</c> stays empty, which makes <c>Clients.User(...)</c> useless. Supplied by
     /// the host (see <c>AddRedbRouteSignalR(o =&gt; o.Authenticate = ...)</c>) rather than built in,
-    /// because token validation belongs to whoever issues the tokens.
+    /// because token validation belongs to whoever issues the tokens. The principal is put on every
+    /// exchange the hub produces (<c>ExchangePrincipal</c>); build its identity with an authentication
+    /// type, because code that reads it treats an identity that is not authenticated as anonymous.
     /// </summary>
     public Func<HttpContext, Task<ClaimsPrincipal?>>? Authenticate { get; set; }
 
@@ -297,8 +299,11 @@ public class SignalREndpoint : EndpointBase<SignalREndpointOptions>
                 // Authentication gate in front of the hub path: the host's own validator decides,
                 // and a rejected handshake gets 401 before the connection is upgraded. Placed here
                 // (not as ASP.NET authentication) because the process hosting the route context is
-                // a generic host, not an ASP.NET application.
-                if (component.Authenticate is { } authenticate)
+                // a generic host, not an ASP.NET application. Without the component's own delegate,
+                // the caller is whoever the shared host's resolver identified (it runs earlier in the
+                // pipeline), and that principal is handed to SignalR the same way.
+                var authenticate = component.Authenticate;
+                if (authenticate is not null || component.EffectiveServerManager.Options.ResolvePrincipal is not null)
                 {
                     app.Use(async (ctx, next) =>
                     {
@@ -308,15 +313,23 @@ public class SignalREndpoint : EndpointBase<SignalREndpointOptions>
                             return;
                         }
 
-                        var principal = await authenticate(ctx).ConfigureAwait(false);
-                        if (principal is null)
+                        if (authenticate is not null)
                         {
-                            ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                            return;
+                            var principal = await authenticate(ctx).ConfigureAwait(false);
+                            if (principal is null)
+                            {
+                                ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                                return;
+                            }
+
+                            // SignalR reads UserIdentifier from HttpContext.User.
+                            ctx.User = principal;
+                        }
+                        else if (SharedHttpServerManager.GetResolvedPrincipal(ctx) is { } resolved)
+                        {
+                            ctx.User = resolved;
                         }
 
-                        // SignalR reads UserIdentifier from HttpContext.User.
-                        ctx.User = principal;
                         await next().ConfigureAwait(false);
                     });
                 }

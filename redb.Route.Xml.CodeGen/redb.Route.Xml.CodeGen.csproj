@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>redb-route-xml</ToolCommandName>
+    <PackageId>redb.Route.Xml.CodeGen</PackageId>
+    <Description>Developer tool for redb.Route XML routes: generate fluent C#, Mermaid diagrams and the XSD from .route.xml files. Not part of the runtime.</Description>
+    <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route.Xml\redb.Route.Xml.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- catalog reflects over built connector assemblies; the HTTP-family connectors carry
+         this same FrameworkReference (Kestrel lives in the shared framework), so a console
+         host without it cannot even enumerate their types. Dev tool only - the reference
+         changes nothing in the shipped worker (owner-approved 2026-09-03). -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>

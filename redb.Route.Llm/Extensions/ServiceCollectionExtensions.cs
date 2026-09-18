@@ -48,7 +48,12 @@ public static class LlmServiceCollectionExtensions
         LlmExpressionResolverSetup.EnsureRegistered();
 
         services.AddSingleton<LlmComponent>();
-        services.AddSingleton<IAgentEngine, AgentEngine>();
+
+        // The engine is built from the context on purpose: the container's constructor-selection would pick
+        // whatever it can satisfy, and a shorter overload silently yields an engine without a producer
+        // template, claims source or cache — governance that exists only in tests. One factory, one wiring.
+        services.AddSingleton<IAgentEngine>(sp =>
+            AgentEngine.FromContext(sp.GetRequiredService<IRouteContext>()));
 
         // Producer template — used by the engine to dispatch tool-bridge endpoints.
         // Started lazily on first resolution so it is ready before any tool call.
@@ -76,6 +81,11 @@ public static class LlmServiceCollectionExtensions
         services.TryAddSingleton<IApprovalGate, AutoApproveGate>();
         services.TryAddSingleton<IRedactionFilter, NoopRedactionFilter>();
         services.TryAddSingleton<IShadowRunner, NoopShadowRunner>();
+        services.TryAddSingleton<ICostCalculator, NullCostCalculator>();
+
+        // Claims are checked against the caller the exchange came from (a property, never a header).
+        // TryAdd on purpose: a host with its own identity vocabulary registers its own source instead.
+        services.TryAddSingleton<IToolClaimsSource, ExchangePrincipalClaimsSource>();
 
         // Storage InMemory fallbacks — TryAdd so AddRedbLlmStorage() (or any
         // custom registration) overrides cleanly. IToolIdempotencyStore is
@@ -255,10 +265,37 @@ public static class LlmServiceCollectionExtensions
         services.AddSingleton<IBatchStore>(sp =>
             new RedbBatchStore(sp.GetRequiredService<IRouteContext>()));
 
-        services.Replace(ServiceDescriptor.Singleton<IAgentObserver>(sp =>
-            new RedbAuditObserver(sp.GetRequiredService<IRouteContext>())));
+        // Only the defaults this package ships are replaced — a host's own observer or budget enforcer
+        // is left exactly as registered. Taking a user registration away is what `Replace` used to do
+        // here silently, and the audit observer is not worth breaking someone's governance for.
+        ReplaceShippedDefault<IAgentObserver>(services,
+            sp => new RedbAuditObserver(sp.GetRequiredService<IRouteContext>()),
+            typeof(NoopAgentObserver));
+
+        // Cross-run budgets arrive with the store: the per-run ceiling is now also checked against the
+        // conversation's accumulated usage, which can stop a run that used to pass.
+        ReplaceShippedDefault<IBudgetEnforcer>(services,
+            sp => new StoreBudgetEnforcer(sp.GetRequiredService<ICostBudgetStore>()),
+            typeof(NoopBudgetEnforcer), typeof(InMemoryBudgetEnforcer));
 
         return services;
+    }
+
+    /// <summary>
+    /// Replaces a registration only while it still points at one of the defaults this package ships;
+    /// anything a host registered — an instance, a factory or its own type — survives untouched.
+    /// </summary>
+    private static void ReplaceShippedDefault<TService>(
+        IServiceCollection services, Func<IServiceProvider, TService> factory, params Type[] shippedDefaults)
+        where TService : class
+    {
+        var current = services.LastOrDefault(d => d.ServiceType == typeof(TService));
+        var isShippedDefault = current?.ImplementationType is { } type && shippedDefaults.Contains(type);
+        if (current is not null && !isShippedDefault)
+            return;
+
+        services.RemoveAll<TService>();
+        services.AddSingleton(factory);
     }
 
     /// <summary>

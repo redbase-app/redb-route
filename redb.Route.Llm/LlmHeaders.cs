@@ -11,7 +11,7 @@ public static class LlmHeaders
 
     /// <summary>
     /// Marks the outbound message as a streaming response so transports
-    /// (<see cref="redb.Route.Http.HttpConsumer"/>, WebSocket) switch to
+    /// (<c>HttpConsumer</c> in <c>redb.Route.Http</c>, WebSocket) switch to
     /// chunked / SSE / per-frame wire encoding instead of buffering the body.
     /// Set by <see cref="LlmProducer"/> when <c>?stream=true</c>.
     /// </summary>

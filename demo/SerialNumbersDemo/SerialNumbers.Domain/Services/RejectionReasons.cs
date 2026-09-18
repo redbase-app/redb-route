@@ -4,6 +4,7 @@ namespace SerialNumbers.Domain.Services;
 public static class RejectionReasons
 {
     public const string UnknownProduct = "UnknownProduct";
+    public const string ProductObsolete = "ProductObsolete";
     public const string QuantityOutOfRange = "QuantityOutOfRange";
     public const string AnnualQuotaExhausted = "AnnualQuotaExhausted";
     public const string DuplicateRequest = "DuplicateRequest";

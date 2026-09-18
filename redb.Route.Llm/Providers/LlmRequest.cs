@@ -42,7 +42,7 @@ public sealed class LlmMessage
     };
 }
 
-/// <summary>Base type for content blocks (text, tool-use, tool-result).</summary>
+/// <summary>Base type for content blocks (text, tool-use, tool-result, thinking).</summary>
 public abstract record LlmContentBlock;
 
 /// <summary>Plain text block.</summary>

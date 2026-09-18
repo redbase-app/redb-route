@@ -9,13 +9,15 @@ using redb.Postgres.Pro.Extensions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Llm.Storage.Redb.Schemas;
+using redb.SQLite.Pro.Extensions;
 
 namespace redb.Route.Tests.Llm.Storage;
 
 /// <summary>
 /// Provider-substituted Pro fixture for the redb.Route.Llm storage integration tests: one
 /// fixture, one set of test classes, the provider slid underneath by REDB_PROVIDER
-/// (postgres — default — or mssql), following the redb.Tests.Integration matrix convention.
+/// (<c>sqlite</c> — default, since it needs no stand and is where the dialect's own planner guards
+/// matter — or <c>postgres</c> / <c>mssql</c>), following the redb.Tests.Integration matrix convention.
 /// Uses the Pro free tier (1024 queries, no JWT license required).
 /// <para>
 /// Cleanup is <b>scoped to the LLM schemes</b> only — never <c>DELETE FROM _objects</c>,
@@ -41,11 +43,11 @@ public sealed class StorageProFixture : IAsyncLifetime
     /// </summary>
     public IRouteContext RouteContext { get; private set; } = null!;
 
-    /// <summary>Which backend this run rides on: <c>postgres</c> (default) or <c>mssql</c>.</summary>
+    /// <summary>Which backend this run rides on: <c>sqlite</c> (default), <c>postgres</c> or <c>mssql</c>.</summary>
     public string Provider { get; } =
         Environment.GetEnvironmentVariable("REDB_PROVIDER")?.ToLowerInvariant() is { Length: > 0 } p
             ? p
-            : "postgres";
+            : "sqlite";
 
     private static string RequireConnectionString(IConfiguration config, string name)
         => config.GetConnectionString(name)
@@ -67,14 +69,22 @@ public sealed class StorageProFixture : IAsyncLifetime
             {
                 "mssql" => options.UseMsSql(RequireConnectionString(config, "MsSql")),
                 "postgres" => options.UsePostgres(RequireConnectionString(config, "Postgres")),
+                // SQLite needs no stand: the file lives next to the test assembly. Full provider parity
+                // with the other two, so the same claims are checked on it rather than assumed.
+                "sqlite" => options.UseSqlite(RequireConnectionString(config, "Sqlite")),
                 _ => throw new InvalidOperationException(
-                    $"REDB_PROVIDER '{Provider}' is not one of: postgres, mssql.")
+                    $"REDB_PROVIDER '{Provider}' is not one of: postgres, mssql, sqlite.")
             };
             builder.Configure(c =>
             {
                 c.PropsSaveStrategy = PropsSaveStrategy.ChangeTracking;
                 c.SkipHashValidationOnCacheCheck = false;
                 c.EnablePropsCache = false;
+                // PVT prefilter: a cutting step that narrows the value-side scan before the aggregation.
+                // Measured on 97k objects at 3x with fewer buffers (docs/PVT_PREFILTER_PLAN.md §13,
+                // variant D). The plan says it landed in all three Pro providers, so it is on here for all
+                // three — SQLite included, whose dialect guards the planner itself (SqlitePrefilterGuards).
+                c.EnablePvtPrefilter = true;
             });
             // Free tier: 1024 queries — no .WithLicense() needed.
         });

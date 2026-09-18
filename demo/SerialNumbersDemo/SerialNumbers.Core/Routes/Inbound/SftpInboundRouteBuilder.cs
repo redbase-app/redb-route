@@ -1,4 +1,3 @@
-using System.Globalization;
 using redb.Route.Core;
 using redb.Route.Sftp;
 using SerialNumbers.Domain.Entities;
@@ -22,16 +21,22 @@ public sealed class SftpInboundRouteBuilder : RouteBuilder
                     .ConnectionFactory(code)        // host and credentials live in the registry, not here
                     .Include("*.xml")
                     .Delay(2000)
-                    .MoveTo(".done"))               // after success only; a failed file stays for the next poll
+                    .MoveTo(".done")                // after success only; a failed file stays for the next poll
+                    // Poll less often while failures repeat: after three failed polls in a row the next ten
+                    // are skipped. A poll fails when the server cannot be reached and, with
+                    // BackoffOnFailedExchanges, also when every file it picked up failed, as it does
+                    // while the database is down.
+                    .BackoffErrorThreshold(3)
+                    .BackoffMultiplier(10)
+                    .BackoffOnFailedExchanges())
                 .RouteId($"sftp-inbound-{code}")
                 .SetHeader(SerialHeaders.Partner, code)
                 .SetHeader(SerialHeaders.Transport, Transports.Sftp)
                 .SetHeader(SerialHeaders.FileName, Header(SftpHeaders.FileName))
-                // name + size + modification time: the same file is processed once, a corrected
-                // file re-sent under the same name is a new delivery. Invariant formatting: the key is
-                // shared by every node, whatever culture each one runs with.
-                .SetHeader(SerialHeaders.MessageKey, e => string.Create(CultureInfo.InvariantCulture,
-                    $"{code}/{e.In.Headers[SftpHeaders.FileName]}/{e.In.Headers[SftpHeaders.FileLength]}/{e.In.GetHeader<DateTimeOffset>(SftpHeaders.FileLastModified):O}"))
+                .Log()
+                    .Message("${header.serials.partner}: received ${header.serials.fileName} over SFTP")
+                    .Header(SftpHeaders.FileLength)
+                .EndLog()
                 .To(RouteUris.Intake);
         }
     }

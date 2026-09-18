@@ -11,6 +11,9 @@ using redb.Route.Transactions;
 
 namespace redb.Route.Tests.Core;
 
+// BeginRedbTransaction is [Obsolete] (use .Transacted()); these tests exercise it deliberately.
+#pragma warning disable CS0618
+
 /// <summary>
 /// Tests for <see cref="RedbTransactedAction"/> and the
 /// <c>BeginRedbTransaction</c> DSL extensions (S3.1 R-17).
@@ -165,6 +168,29 @@ public sealed class RedbTransactedActionTests
 
         await context.GetRedbService().Context.Received(1).BeginTransactionAsync();
         GetActionsBag(exchange).Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task BeginRedbTransaction_UnderAmbientScope_DoesNotOpenRedbTx()
+    {
+        // Under core 5dc3741e, inside an ambient TransactionScope (.Transacted()) redb already writes
+        // into that transaction via AmbientConnectionRegistry, and BeginTransactionAsync is rejected.
+        // BeginRedbTransaction must be a no-op here — not open a second redb tx, not enroll an action.
+        var (route, context, _) = SetupRouteWithRedb(name: null);
+        var exchange = new Exchange();
+
+        route.BeginRedbTransaction();
+
+        using (var scope = new System.Transactions.TransactionScope(
+                   System.Transactions.TransactionScopeAsyncFlowOption.Enabled))
+        {
+            await InvokeFirstOutputAsync(route, context, exchange);
+            scope.Complete();
+        }
+
+        await context.GetRedbService().Context.DidNotReceive().BeginTransactionAsync();
+        exchange.Properties.ContainsKey(TransactedProcessor.TransactActionPropertyKey)
+            .Should().BeFalse("under an ambient scope nothing is enrolled — the scope owns the redb transaction");
     }
 
     [Fact]

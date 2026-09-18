@@ -253,6 +253,7 @@ public class HttpConsumer : IConsumer
 
         var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         exchange.Properties["redbHttp.RequestHeaderNames"] = requestHeaderNames;
+        ExchangePrincipal.Set(exchange, SharedHttpServerManager.GetResolvedPrincipal(httpContext));
         return exchange;
     }
 

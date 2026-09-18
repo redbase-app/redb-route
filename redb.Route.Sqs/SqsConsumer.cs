@@ -126,9 +126,8 @@ internal sealed class SqsConsumer : DrainableConsumer
         {
             exchange = CreateExchange(msg);
 
-            if (_options.Transacted)
-                RegisterTransactedAction(exchange, $"sqs-ack-{msg.MessageId}",
-                    new SqsAckAction(_client!, _queueUrl, msg.ReceiptHandle, _options.DeleteAfterRead));
+            // The message is deleted (or made visible again) by this consumer below, after the whole unit of
+            // work ended well; the route transaction owns the database and the outgoing sends.
 
             heartbeat = StartVisibilityHeartbeat(msg.ReceiptHandle, processingCt);
 
@@ -142,14 +141,12 @@ internal sealed class SqsConsumer : DrainableConsumer
 
             var failed = exchange.Exception is not null && !exchange.ExceptionHandled;
 
-            // Transacted mode settles via TransactedProcessor (SqsAckAction). Otherwise ack here.
-            if (!_options.Transacted)
-            {
-                if (!failed && _options.DeleteAfterRead)
-                    await _client!.DeleteMessageAsync(_queueUrl, msg.ReceiptHandle, processingCt).ConfigureAwait(false);
-                else if (failed && _options.ResetVisibilityOnFailure)
-                    await SafeResetVisibilityAsync(msg.ReceiptHandle).ConfigureAwait(false);
-            }
+            // Settle here whether or not the route is transacted: the acknowledgement is the consumer's, and by now
+            // the route transaction has committed the database and sent what it deferred.
+            if (!failed && _options.DeleteAfterRead)
+                await _client!.DeleteMessageAsync(_queueUrl, msg.ReceiptHandle, processingCt).ConfigureAwait(false);
+            else if (failed && _options.ResetVisibilityOnFailure)
+                await SafeResetVisibilityAsync(msg.ReceiptHandle).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (processingCt.IsCancellationRequested)
         {
@@ -162,7 +159,7 @@ internal sealed class SqsConsumer : DrainableConsumer
             // logs and restores visibility (ownership audit).
             Logger?.LogError(ex, "SQS message processing failed on queue {Queue}, messageId={MessageId}",
                 _endpoint.QueueName, msg.MessageId);
-            if (!_options.Transacted && _options.ResetVisibilityOnFailure)
+            if (_options.ResetVisibilityOnFailure)
                 await SafeResetVisibilityAsync(msg.ReceiptHandle).ConfigureAwait(false);
         }
         finally
@@ -282,22 +279,6 @@ internal sealed class SqsConsumer : DrainableConsumer
     }
 
     // ── Helpers ───────────────────────────────────────────────────────
-
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (exchange.Properties.TryGetValue(TransactedProcessor.TransactActionPropertyKey, out var raw)
-            && raw is ConcurrentDictionary<string, ITransactedAction> existing)
-        {
-            existing[key] = action;
-            return;
-        }
-
-        var bag = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase)
-        {
-            [key] = action,
-        };
-        exchange.Properties[TransactedProcessor.TransactActionPropertyKey] = bag;
-    }
 
     private static List<string> SplitCsv(string csv) =>
         string.IsNullOrWhiteSpace(csv)

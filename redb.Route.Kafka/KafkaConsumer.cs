@@ -211,12 +211,14 @@ public sealed class KafkaConsumer : DrainableConsumer
         IncrementInflight();
         try
         {
+            // The offset is advanced by this consumer after the unit of work ended well, not by the route
+            // transaction: the transaction owns the database and the outgoing sends.
             var commitAction = new KafkaCommitAction(_consumer, result, Logger);
-            RegisterTransactedAction(exchange, $"kafka-commit-{result.Offset.Value}", commitAction);
 
             try
             {
                 await Processor.Process(exchange, processingCt).ConfigureAwait(false);
+                exchange.ThrowIfUnhandledFailure();
             }
             catch (OperationCanceledException) when (processingCt.IsCancellationRequested)
             {
@@ -332,12 +334,13 @@ public sealed class KafkaConsumer : DrainableConsumer
         {
             // Settle the last offset of EVERY partition the batch touched (волна A6.4)
             var last = batch[^1];
+            // As in the single-record path: the consumer advances the offset, the transaction does not.
             var commitAction = new KafkaCommitAction(_consumer!, batch, Logger);
-            RegisterTransactedAction(exchange, $"kafka-batch-commit-{last.Offset.Value}", commitAction);
 
             try
             {
                 await Processor.Process(exchange, processingCt).ConfigureAwait(false);
+                exchange.ThrowIfUnhandledFailure();
             }
             catch (OperationCanceledException) when (processingCt.IsCancellationRequested)
             {
@@ -513,19 +516,6 @@ public sealed class KafkaConsumer : DrainableConsumer
         return exchange;
     }
 
-    // ── Transacted action registration ──
-
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (!exchange.Properties.TryGetValue("TRANSACT_ACTION", out var raw) ||
-            raw is not ConcurrentDictionary<string, ITransactedAction> dict)
-        {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties["TRANSACT_ACTION"] = dict;
-        }
-
-        dict[key] = action;
-    }
 
     // ── Seek ──
 

@@ -6,8 +6,8 @@ namespace redb.Route.Tests.Core;
 
 /// <summary>
 /// <see cref="Exchange.ReleaseScopes"/> used to be a one-shot latch: the first call spent it for
-/// the life of the exchange. Downstream code calls it manually in error handlers (tsum carries
-/// three such call sites), and any redb access on the same exchange afterwards caches a fresh
+/// the life of the exchange. Downstream code calls it manually in error handlers (a production
+/// integration carries three such call sites), and any redb access on the same exchange afterwards caches a fresh
 /// scope under <c>__redb_scope:*</c> — which the spent latch then prevented
 /// <see cref="Exchange.DisposeAsync"/> from ever releasing. A landmine rather than a proven live
 /// leak, because today's handlers end the route; these tests defuse it either way.

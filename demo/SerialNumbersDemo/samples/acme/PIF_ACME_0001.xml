@@ -4,6 +4,12 @@
   <BatchNumber>B-2026-0917</BatchNumber>
   <Gtin>04607001234567</Gtin>
   <ManufacturedOn>2026-09-17</ManufacturedOn>
-  <UsedFirstSerial>000000000001</UsedFirstSerial>
-  <UsedLastSerial>000000029950</UsedLastSerial>
+  <UsedSerialNumbers>
+    <SerialNumber>000000007315</SerialNumber>
+    <SerialNumber>000000012094</SerialNumber>
+    <SerialNumber>000000028861</SerialNumber>
+  </UsedSerialNumbers>
+  <LostSerialNumbers>
+    <SerialNumber>000000031402</SerialNumber>
+  </LostSerialNumbers>
 </ProductionInformation>

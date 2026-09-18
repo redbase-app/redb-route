@@ -63,12 +63,33 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
         }
 
         var delay = TimeSpan.FromMilliseconds(Options.Delay);
+        var backoff = new PollBackoff(
+            Options.BackoffMultiplier, Options.BackoffIdleThreshold, Options.BackoffErrorThreshold);
+        var wasSkipping = false;
 
         while (!pollCt.IsCancellationRequested)
         {
+            // Backoff skip: wait one Delay WITHOUT polling — no BeforePollAsync, so a down server is not
+            // reconnected on a skipped cycle. Stopping during a skip still resolves within Delay.
+            if (backoff.ShouldSkip())
+            {
+                wasSkipping = true;
+                try { await Task.Delay(delay, pollCt).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+                continue;
+            }
+
+            if (wasSkipping)
+            {
+                Logger?.LogInformation("{Consumer}: resuming polling after backoff.", ConsumerName);
+                wasSkipping = false;
+            }
+
+            PollOutcome outcome;
             try
             {
-                await PollDirectory(processingCt).ConfigureAwait(false);
+                var tally = await PollDirectory(processingCt).ConfigureAwait(false);
+                outcome = PollBackoff.Classify(tally, Options.BackoffOnFailedExchanges);
             }
             catch (OperationCanceledException) when (pollCt.IsCancellationRequested || processingCt.IsCancellationRequested)
             {
@@ -78,6 +99,14 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
             {
                 Logger?.LogError(ex, "{Consumer} poll failed", ConsumerName);
                 OnPollError(ex);
+                outcome = PollOutcome.Error;
+            }
+
+            if (backoff.Record(outcome) is { } trigger)
+            {
+                Logger?.LogWarning(
+                    "{Consumer}: backing off after the {Reason} threshold — skipping the next {Skips} poll(s).",
+                    ConsumerName, trigger.ByError ? "error" : "idle", trigger.Skips);
             }
 
             try
@@ -92,14 +121,14 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
     /// Polls the base directory for files, applies filters, and processes each file.
     /// This is the core template method — do not override.
     /// </summary>
-    internal async Task PollDirectory(CancellationToken ct)
+    internal async Task<PollTally> PollDirectory(CancellationToken ct)
     {
         await BeforePollAsync(ct).ConfigureAwait(false);
 
         if (!await Operations.DirectoryExistsAsync(BasePath, ct).ConfigureAwait(false))
         {
             await AfterPollAsync([], ct).ConfigureAwait(false);
-            return;
+            return default;
         }
 
         var files = await Operations.ListFilesAsync(
@@ -114,47 +143,62 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
         {
             await OnNoFilesFoundAsync(ct).ConfigureAwait(false);
             await AfterPollAsync(fileList, ct).ConfigureAwait(false);
-            return;
+            return default;
         }
 
+        // Tally created exchanges (files filtered by age / done-file / read-lock / idempotency contribute
+        // nothing, so a poll that picks up only already-seen files still reads as idle) and how many of
+        // those failed unhandled — the latter only matters when BackoffOnFailedExchanges is on.
+        var created = 0;
+        var failed = 0;
         foreach (var file in fileList)
         {
             ct.ThrowIfCancellationRequested();
-            await ProcessFileAsync(file, ct).ConfigureAwait(false);
+            var result = await ProcessFileAsync(file, ct).ConfigureAwait(false);
+            if (result != FileProcessResult.Skipped) created++;
+            if (result == FileProcessResult.Failed) failed++;
         }
 
         await AfterPollAsync(fileList, ct).ConfigureAwait(false);
+        return new PollTally(created, failed);
     }
 
     // ── Per-file processing ─────────────────────────────────────────
 
-    private async Task ProcessFileAsync(GenericFileInfo file, CancellationToken ct)
+    /// <summary>
+    /// Processes one polled file. Returns <see cref="FileProcessResult.Processed"/> once the file has been
+    /// read and dispatched and the route left no unhandled failure, <see cref="FileProcessResult.Failed"/>
+    /// when it was dispatched but the route failed unhandled, and <see cref="FileProcessResult.Skipped"/>
+    /// when no exchange was created (min/max age, missing done-file, lost read-lock, idempotent duplicate,
+    /// or an unreadable file). The poll aggregates these into a <see cref="PollTally"/> for backoff.
+    /// </summary>
+    private async Task<FileProcessResult> ProcessFileAsync(GenericFileInfo file, CancellationToken ct)
     {
         // Check minimum age
         if (Options.MinAge > 0)
         {
             var ageMs = (DateTimeOffset.UtcNow - file.LastModified).TotalMilliseconds;
             if (ageMs < Options.MinAge)
-                return;
+                return FileProcessResult.Skipped;
         }
 
         // Check maximum age (virtual — remote connectors override)
         if (!CheckMaxAge(file))
-            return;
+            return FileProcessResult.Skipped;
 
         // Check done file
         if (!string.IsNullOrEmpty(Options.DoneFileName))
         {
             var doneFilePath = GenericFileUtils.ResolveDoneFileName(file, Options.DoneFileName, Operations);
             if (!await Operations.ExistsAsync(doneFilePath, ct).ConfigureAwait(false))
-                return;
+                return FileProcessResult.Skipped;
         }
 
         // Acquire read lock (virtual — local file only).
         // This runs BEFORE the idempotency claim: a consumer that loses the lock race must not
         // burn the idempotent key, otherwise the file is never picked up again by anyone.
         if (!await AcquireReadLockAsync(file, ct).ConfigureAwait(false))
-            return;
+            return FileProcessResult.Skipped;
 
         var idempotentKey = "";
 
@@ -168,7 +212,7 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
                     : GenericFileUtils.SubstituteFileTokens(file.Name, Options.IdempotentKey, Operations);
 
                 if (!await _idempotentRepo.Add(idempotentKey, ct).ConfigureAwait(false))
-                    return; // Already processed
+                    return FileProcessResult.Skipped; // Already processed
             }
 
             // PreMove
@@ -194,7 +238,7 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
                     await _idempotentRepo.Remove(idempotentKey, ct).ConfigureAwait(false);
 
                 await OnProcessingFailedAsync(workPath, file.Name, file.BasePath, ct).ConfigureAwait(false);
-                return;
+                return FileProcessResult.Skipped; // no exchange created — a read failure counts as idle, not a poll error
             }
 
             exchange.Pattern = ExchangePattern.InOnly;
@@ -203,6 +247,18 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
             try
             {
                 await Processor.Process(exchange, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw; // shutdown — abort the poll, do not treat as a per-file failure
+            }
+            catch (Exception ex)
+            {
+                // An exception escaped the route (no matching OnException, or a handler that rethrew).
+                // Record it on the exchange so the failure path below runs (idempotent-key release +
+                // MoveFailed) and the poll loop continues to the next file — a single poison file must
+                // not abort the whole batch and leave the files after it in the listing unprocessed.
+                exchange.Exception ??= ex;
             }
             finally
             {
@@ -218,7 +274,7 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
 
                 // Move to failed directory (virtual hook — remote connectors)
                 await OnProcessingFailedAsync(workPath, file.Name, file.BasePath, ct).ConfigureAwait(false);
-                return;
+                return FileProcessResult.Failed; // exchange created but the route left an unhandled failure
             }
 
             // Post-processing
@@ -243,6 +299,7 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
             }
 
             Interlocked.Increment(ref _processedCount);
+            return FileProcessResult.Processed;
         }
         catch when (_idempotentRepo != null && !string.IsNullOrEmpty(idempotentKey))
         {

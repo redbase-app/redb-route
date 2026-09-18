@@ -9,6 +9,11 @@ using redb.Route.Telemetry;
 namespace redb.Route.Tests.Sql;
 
 /// <summary>Smoke test for the P1 transport span opened by <see cref="SqlProducer"/>.</summary>
+/// <remarks>
+/// The in-memory exporter listens to the process-wide route activity source, so spans of SQL producers in tests running
+/// in parallel land in the same list. Each test therefore gives its endpoint a unique marker and picks its span by the
+/// <c>redb.route.endpoint</c> tag — never by position — and stops the tracer before reading the list.
+/// </remarks>
 public sealed class SqlTelemetrySmokeTests : IDisposable
 {
     private readonly SqliteTestHelper _db = new();
@@ -29,13 +34,15 @@ public sealed class SqlTelemetrySmokeTests : IDisposable
         context.AddComponent(component);
         context.AddToRegistry("main", _db.CreateFactory());
 
+        var marker = $"telemetry-{Guid.NewGuid():N}";
+        var sql = $"SELECT * FROM t /* {marker} */";
         var pars = new Dictionary<string, string>
         {
             ["mode"] = "Execute",
             ["dataSource"] = "main",
             ["outputType"] = "SelectList"
         };
-        var uri = new EndpointUri("sql", "SELECT * FROM t", "sql:SELECT * FROM t", pars);
+        var uri = new EndpointUri("sql", sql, $"sql:{sql}", pars);
         var endpoint = (SqlEndpoint)component.CreateEndpoint(uri);
         var producer = endpoint.CreateProducer();
 
@@ -49,12 +56,11 @@ public sealed class SqlTelemetrySmokeTests : IDisposable
         await producer.Process(exchange, CancellationToken.None);
 
         tracer.ForceFlush(1000);
-        activities.Should().NotBeEmpty();
-        var activity = activities.First();
+        tracer.Dispose();
+        var activity = activities.Should().ContainSingle(a => HasMarker(a, marker)).Which;
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
         activity.Kind.Should().Be(ActivityKind.Client);
         activity.GetTagItem("db.system").Should().NotBeNull();
-        activity.GetTagItem("redb.route.endpoint").Should().NotBeNull();
         activity.DisplayName.Should().Be("sql.execute");
     }
 
@@ -66,15 +72,15 @@ public sealed class SqlTelemetrySmokeTests : IDisposable
         context.AddComponent(component);
         context.AddToRegistry("main", _db.CreateFactory());
 
-        const string ProcName = "sp_smoke";
+        var procName = $"sp_smoke_{Guid.NewGuid():N}";
         var pars = new Dictionary<string, string>
         {
             ["mode"] = "Procedure",
             ["dataSource"] = "main",
-            ["procedureName"] = ProcName,
+            ["procedureName"] = procName,
             ["noop"] = "true"
         };
-        var uri = new EndpointUri("sql", ProcName, $"sql:{ProcName}", pars);
+        var uri = new EndpointUri("sql", procName, $"sql:{procName}", pars);
         var endpoint = (SqlEndpoint)component.CreateEndpoint(uri);
         var producer = endpoint.CreateProducer();
 
@@ -87,13 +93,15 @@ public sealed class SqlTelemetrySmokeTests : IDisposable
         await producer.Process(new Exchange(new Message(null)), CancellationToken.None);
 
         tracer.ForceFlush(1000);
-        activities.Should().NotBeEmpty();
-        var activity = activities.First();
+        tracer.Dispose();
+        var activity = activities.Should().ContainSingle(a => HasMarker(a, procName)).Which;
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
         activity.Kind.Should().Be(ActivityKind.Client);
         activity.DisplayName.Should().Be("sql.procedure");
         activity.GetTagItem("db.system").Should().NotBeNull();
-        activity.GetTagItem("messaging.destination.name").Should().Be(ProcName);
-        activity.GetTagItem("redb.route.endpoint").Should().NotBeNull();
+        activity.GetTagItem("messaging.destination.name").Should().Be(procName);
     }
+
+    private static bool HasMarker(Activity activity, string marker) =>
+        activity.GetTagItem("redb.route.endpoint") is string endpoint && endpoint.Contains(marker, StringComparison.Ordinal);
 }

@@ -5,8 +5,8 @@ namespace SerialNumbers.Domain.Entities;
 
 /// <summary>
 /// The answer to a request, as it is sent back. The individual serial numbers are rows of the
-/// <c>serial_numbers</c> table (a request can carry tens of thousands of them); the response
-/// holds the range.
+/// <c>serial_numbers</c> table (a request can carry tens of thousands of them); an accepted response
+/// points at their allocation.
 /// </summary>
 [RedbScheme(Name = "SerialNumbers.Response")]
 public sealed class SerialNumberResponse
@@ -24,9 +24,8 @@ public sealed class SerialNumberResponse
 
     public int Quantity { get; set; }
 
-    public long? FirstSerial { get; set; }
-
-    public long? LastSerial { get; set; }
+    /// <summary>The <c>serial_allocations</c> row the numbers of an accepted response belong to.</summary>
+    public long? AllocationId { get; set; }
 
     public RedbObject<SerialNumberRequest>? Request { get; set; }
 }

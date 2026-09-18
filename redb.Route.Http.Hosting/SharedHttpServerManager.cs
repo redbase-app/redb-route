@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -25,12 +26,19 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
     private readonly ConcurrentDictionary<string, ServerEntry> _servers = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
     private readonly HttpHostingOptions _options;
+    private readonly ILogger? _logger;
 
     /// <summary>Key under which the pre-resolution socket address is kept in <c>HttpContext.Items</c>.</summary>
     public const string OriginalRemoteAddressItem = "redb.OriginalRemoteAddress";
 
     /// <summary>Key under which the pre-resolution scheme is kept in <c>HttpContext.Items</c>.</summary>
     public const string OriginalSchemeItem = "redb.OriginalScheme";
+
+    /// <summary>
+    /// Key under which the caller's principal, as produced by <see cref="HttpHostingOptions.ResolvePrincipal"/>,
+    /// is kept in <c>HttpContext.Items</c>. Absent when no resolver is configured or it returned null.
+    /// </summary>
+    public const string PrincipalItem = "redb.Principal";
 
     /// <summary>Creates a manager with default options: no trusted proxies, forwarded headers ignored.</summary>
     public SharedHttpServerManager() : this(null)
@@ -42,9 +50,29 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
     /// <c>AddRedbRouteHttpHosting(configure)</c>; a host that constructs the manager by hand
     /// passes them here.
     /// </summary>
-    public SharedHttpServerManager(HttpHostingOptions? options)
+    public SharedHttpServerManager(HttpHostingOptions? options) : this(options, null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a manager with host options and a logger for the failures that happen before any
+    /// transport sees a request — a principal resolver that throws. The listener's own logging is
+    /// switched off, so without this logger such a failure is visible only as the 500 it produces.
+    /// </summary>
+    public SharedHttpServerManager(HttpHostingOptions? options, ILogger? logger)
     {
         _options = options ?? new HttpHostingOptions();
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// Returns the principal the host resolved for this request (<see cref="PrincipalItem"/>), or null.
+    /// This is what a consumer copies onto the exchange it builds from the request.
+    /// </summary>
+    public static ClaimsPrincipal? GetResolvedPrincipal(HttpContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return context.Items.TryGetValue(PrincipalItem, out var raw) ? raw as ClaimsPrincipal : null;
     }
 
     /// <summary>The process-wide host options this manager applies to every listener it opens.</summary>
@@ -538,6 +566,14 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
             app.Use(CorsDispatchMiddleware(entry));
         }
 
+        // Caller identity (HttpHostingOptions.ResolvePrincipal), opt-in per process. After the proxy
+        // resolution so the resolver sees the real client, after CORS so a preflight never reaches
+        // it, and before the transport configurators so a hub's own gate sees the host's principal.
+        if (_options.ResolvePrincipal is { } resolvePrincipal)
+        {
+            app.Use(PrincipalMiddleware(resolvePrincipal, _logger));
+        }
+
         // WebSocket upgrades, opt-in per listener (see EnableWebSockets). Installed after the
         // proxy/CORS middleware so an upgrade request is seen with its real client address, and
         // before the catch-all so a handler can accept the socket.
@@ -629,6 +665,39 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
             }
 
             return next();
+        };
+    }
+
+    /// <summary>
+    /// Builds the caller-identity delegate: runs the host's resolver once per request and keeps a
+    /// non-null result in <c>HttpContext.Items</c> under <see cref="PrincipalItem"/>. An anonymous
+    /// request passes through untouched; a request whose resolver failed does not, because letting it
+    /// through would hand the route an anonymous caller that may not be one.
+    /// </summary>
+    private static Func<HttpContext, Func<Task>, Task> PrincipalMiddleware(
+        Func<HttpContext, Task<ClaimsPrincipal?>> resolve, ILogger? logger)
+    {
+        return async (ctx, next) =>
+        {
+            ClaimsPrincipal? principal;
+            try
+            {
+                principal = await resolve(ctx).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The text stays in the log: it describes the resolver (a key endpoint, a token store),
+                // nothing the caller should read.
+                logger?.LogError(ex, "Principal resolver failed for {Method} {Path}",
+                    ctx.Request.Method, ctx.Request.Path);
+                ctx.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                return;
+            }
+
+            if (principal is not null)
+                ctx.Items[PrincipalItem] = principal;
+
+            await next().ConfigureAwait(false);
         };
     }
 

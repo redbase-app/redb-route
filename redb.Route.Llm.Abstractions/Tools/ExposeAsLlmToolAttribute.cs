@@ -31,7 +31,11 @@ public sealed class ExposeAsLlmToolAttribute : Attribute
     /// <summary>When true the tool always requires explicit user approval before execution.</summary>
     public bool RequiresApproval { get; init; }
 
-    /// <summary>Comma-separated list of claims required on the calling principal. Empty = no requirements.</summary>
+    /// <summary>
+    /// Comma-separated list of claims required on the calling principal. Empty = no requirements.
+    /// <b>Enforced</b> — the engine verifies the requirement against the registered
+    /// <c>IToolClaimsSource</c> and refuses the call when it cannot.
+    /// </summary>
     public string RequiredClaims { get; init; } = "";
 
     /// <summary>Creates a tool exposure attribute.</summary>

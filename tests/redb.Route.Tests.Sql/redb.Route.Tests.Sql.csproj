@@ -3,13 +3,27 @@
   <ItemGroup>
     <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
     <ProjectReference Include="..\..\redb.Route.Sql\redb.Route.Sql.csproj" />
+    <!-- E2E: CSV rows as batch items. -->
+    <ProjectReference Include="..\..\redb.Route.DataFormats.Csv\redb.Route.DataFormats.Csv.csproj" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <!-- Provider versions for the E2E suites follow the redb core packages (redb.Postgres, redb.MSSql).
+         The SqlClient version is a property so the characterization suite can be re-run against another
+         driver line: dotnet test -p:RouteSqlClientVersion=6.0.1 -->
+    <RouteSqlClientVersion Condition="'$(RouteSqlClientVersion)' == ''">7.0.3</RouteSqlClientVersion>
+  </PropertyGroup>
+
   <ItemGroup>
+    <PackageReference Include="FirebirdSql.Data.FirebirdClient" Version="10.3.4" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.3" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <PackageReference Include="MySqlConnector" Version="2.6.2" />
+    <PackageReference Include="Oracle.ManagedDataAccess.Core" Version="23.26.301" />
     <!-- Pin the native lib: see redb.SQLite.csproj — NU1903 / GHSA-2m69-gcr7-jv3q. -->
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
+    <PackageReference Include="Npgsql" Version="9.0.3" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="$(RouteSqlClientVersion)" />
   </ItemGroup>
 
 </Project>

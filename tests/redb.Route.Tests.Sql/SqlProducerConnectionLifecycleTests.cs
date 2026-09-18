@@ -35,6 +35,7 @@ public sealed class SqlProducerConnectionLifecycleTests
         public bool Disposed;
         public bool FailOnBeginTransaction;
         public bool FailOnExecuteReader;
+        public bool FailOnTransactionDispose;
         public FakeTransaction? Transaction;
 
         public override string ConnectionString { get; set; } = "";
@@ -85,6 +86,8 @@ public sealed class SqlProducerConnectionLifecycleTests
         public override ValueTask DisposeAsync()
         {
             Disposed = true;
+            if (connection.FailOnTransactionDispose)
+                throw new InvalidOperationException("the server dropped the session; the transaction cannot be disposed cleanly");
             return base.DisposeAsync();
         }
     }
@@ -129,6 +132,21 @@ public sealed class SqlProducerConnectionLifecycleTests
     }
 
     // ── The holes ──
+
+    [Fact]
+    public async Task A_transaction_whose_disposal_throws_does_not_strand_the_connection()
+    {
+        var connection = new FakeConnection { FailOnExecuteReader = true, FailOnTransactionDispose = true };
+        await using var context = new RouteContext();
+        var producer = await Producer(context, connection,
+            "sql:SELECT x FROM audit?dataSource=lifecycle&outputType=SelectList", "direct:sql-txdispose");
+
+        var act = () => producer.Process(new Exchange(new Message("m")), CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        connection.Transaction!.Disposed.Should().BeTrue();
+        connection.Disposed.Should().BeTrue("each resource is released even when the one before it fails, as the streamed result does");
+    }
 
     [Fact]
     public async Task A_connection_whose_transaction_never_started_is_still_returned()

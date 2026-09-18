@@ -4,11 +4,17 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- The package identity `redb-route-xml pack` uses. -->
-    <RoutePackageName>XmlDemo</RoutePackageName>
+    <RoutePackageName>xmldemo</RoutePackageName>
     <RouteContextName>xmldemo</RouteContextName>
+    <!-- A route project is a library: NuGet assemblies are not copied to bin unless asked, and the
+         build-time pack gate reads the connectors and markup contributions from TargetDir. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="redb.Route.Xml" Version="3.7.3" />
+    <PackageReference Include="redb.Route.Xml" Version="4.0.1" />
+    <!-- The redb bridge: its <redbSave>/<redbQuery>/<redb> markup contributions must sit in the
+         build output so the build-time pack gate (its bin option pointed at TargetDir) knows them. -->
+    <PackageReference Include="redb.Route.Core" Version="4.0.1" />
   </ItemGroup>
   <ItemGroup>
     <None Include="routes/**/*.route.xml" />
@@ -17,7 +23,7 @@
     <None Include="config/**/*.json" />
   </ItemGroup>
   <!-- Opt-in build-time packaging: dotnet build -p:PackRouteOnBuild=true -p:Version=1.0.0
-       runs the Ф5.4 checks against the fresh build output and produces pkg/XmlDemo-VERSION.tpkg. -->
+       runs the Ф5.4 checks against the fresh build output and produces pkg/xmldemo-VERSION.tpkg. -->
   <Target Name="RoutePackage" AfterTargets="Build" Condition="'$(PackRouteOnBuild)' == 'true'">
     <Exec Command="redb-route-xml pack &quot;$(MSBuildProjectDirectory)&quot; --version $(Version) --bin &quot;$(TargetDir).&quot;" />
   </Target>

@@ -165,6 +165,11 @@ public class MessageProps
     /// Provider-emitted JSON (<see cref="MessageContentBlock.InputJson"/> /
     /// <see cref="MessageContentBlock.OutputJson"/>) stays a raw string —
     /// those payloads are intentionally schema-less.
+    /// <para>
+    /// A <c>"thinking"</c> block is the model's reasoning, kept with the turn that
+    /// produced it: text in <see cref="MessageContentBlock.ThinkingText"/>, the
+    /// signature and the redacted payload beside it.
+    /// </para>
     /// </summary>
     public MessageContentBlock[] Content { get; set; } = [];
 
@@ -186,7 +191,7 @@ public class MessageProps
 /// </summary>
 public class MessageContentBlock
 {
-    /// <summary>Block kind: "text" / "tool_use" / "tool_result".</summary>
+    /// <summary>Block kind: "text" / "tool_use" / "tool_result" / "thinking".</summary>
     public string Kind { get; set; } = string.Empty;
 
     /// <summary>Set when <see cref="Kind"/> == "text".</summary>
@@ -206,4 +211,22 @@ public class MessageContentBlock
 
     /// <summary>Error flag for tool results; set when <see cref="Kind"/> == "tool_result".</summary>
     public bool IsError { get; set; }
-}
+
+    /// <summary>
+    /// Reasoning text; set when <see cref="Kind"/> == "thinking". Empty when the provider signs the
+    /// block without returning its text, and for a redacted block.
+    /// </summary>
+    public string? ThinkingText { get; set; }
+
+    /// <summary>
+    /// Provider signature that authenticates <see cref="ThinkingText"/>; "thinking" blocks only, null
+    /// when the provider does not sign. The provider verifies it when the block comes back, so text and
+    /// signature are stored and replayed exactly as received.
+    /// </summary>
+    public string? Signature { get; set; }
+
+    /// <summary>
+    /// Encrypted payload of a redacted thinking block; "thinking" blocks only, with
+    /// <see cref="ThinkingText"/> empty. Nothing in it can be read — only handed back.
+    /// </summary>
+    public string? RedactedData { get; set; }}

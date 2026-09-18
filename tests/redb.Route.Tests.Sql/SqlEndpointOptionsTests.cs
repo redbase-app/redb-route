@@ -20,6 +20,9 @@ public class SqlEndpointOptionsTests
         o.CommandTimeout.Should().Be(30);
         o.Transacted.Should().BeFalse();
         o.IsolationLevel.Should().BeNull();
+        o.ReadOnly.Should().BeFalse("the primary database unless the endpoint declares readOnly=true");
+        o.PlaceholderStyle.Should().Be(SqlPlaceholderStyle.At, ":#name is sent as @name unless the provider needs another style");
+        o.BackslashEscapes.Should().BeFalse("standard SQL literals unless the endpoint declares backslashEscapes=true");
         o.Query.Should().BeNull();
         o.OutputType.Should().Be(SqlOutputType.Auto);
         o.OutputClass.Should().BeNull();
@@ -35,8 +38,9 @@ public class SqlEndpointOptionsTests
         o.OnSuccess.Should().BeNull();
         o.OnFailure.Should().BeNull();
         o.OnBatchComplete.Should().BeNull();
+        o.PollDelivery.Should().Be(SqlPollDelivery.PerRow, "an exchange per row unless a list is asked for, as Camel's useIterator=true");
         o.BatchSize.Should().Be(0);
-        o.BreakBatchOnError.Should().BeFalse();
+        o.BreakBatchOnError.Should().BeTrue("a failing batch item rolls the whole batch back unless told otherwise, as in Camel");
         o.ProcedureName.Should().BeNull();
         o.AsFunction.Should().BeFalse();
         o.ProcedureParams.Should().BeNull();
@@ -130,6 +134,83 @@ public class SqlEndpointOptionsTests
         act.Should().Throw<ArgumentException>().WithMessage("*Delay*");
     }
 
+    [Fact]
+    public void Validate_ReadOnlyWithBatchSize_Throws()
+    {
+        var o = new SqlEndpointOptions();
+        o.BindFromUri(new Dictionary<string, string> { ["dataSource"] = "main", ["readOnly"] = "true", ["batchSize"] = "10" });
+
+        var act = () => o.Validate();
+
+        act.Should().Throw<ArgumentException>("a batch writes, and readOnly sends it to the replica").WithMessage("*readOnly*batchSize*");
+    }
+
+    [Theory]
+    [InlineData("onSuccess", "UPDATE t SET done = 1")]
+    [InlineData("onFailure", "UPDATE t SET failed = 1")]
+    [InlineData("onBatchComplete", "DELETE FROM t WHERE done = 1")]
+    [InlineData("transacted", "true")]
+    public void Validate_ReadOnlyPollThatMarksRows_Throws(string option, string value)
+    {
+        var o = new SqlEndpointOptions();
+        o.BindFromUri(new Dictionary<string, string>
+        {
+            ["mode"] = "Poll", ["dataSource"] = "main", ["readOnly"] = "true", [option] = value,
+        });
+
+        var act = () => o.Validate();
+
+        act.Should().Throw<ArgumentException>("rows read on a lagging replica and marked on the primary come back")
+            .WithMessage("*readOnly*");
+    }
+
+    [Fact]
+    public void Validate_FunctionWithOutParameters_Throws()
+    {
+        var o = new SqlEndpointOptions
+        {
+            DataSource = "main",
+            Mode = SqlMode.Procedure,
+            ProcedureName = "fn",
+            AsFunction = true,
+            ProcedureParams = "IN:x:Int32,OUT:r:Int32",
+        };
+
+        var act = () => o.Validate();
+
+        act.Should().Throw<ArgumentException>("SELECT fn(...) returns its result as the scalar; an OUT parameter has no place in " +
+            "the text and shifts the positions of the others under a positional placeholder style")
+            .WithMessage("*OUT*");
+    }
+
+    [Theory]
+    [InlineData(SqlOutputType.Scalar)]
+    [InlineData(SqlOutputType.SelectOne)]
+    public void Validate_ListDeliveryWithSingleValueOutput_Throws(SqlOutputType outputType)
+    {
+        var o = new SqlEndpointOptions
+        {
+            DataSource = "main",
+            Mode = SqlMode.Poll,
+            PollDelivery = SqlPollDelivery.List,
+            OutputType = outputType,
+        };
+
+        var act = () => o.Validate();
+
+        act.Should().Throw<ArgumentException>("a single value is not a list; the option would be ignored silently")
+            .WithMessage("*pollDelivery*");
+    }
+
+    [Fact]
+    public void Validate_ReadOnlyPollWithoutLifecycleSql_Valid()
+    {
+        var o = new SqlEndpointOptions();
+        o.BindFromUri(new Dictionary<string, string> { ["mode"] = "Poll", ["dataSource"] = "main", ["readOnly"] = "true" });
+
+        o.Validate(); // no throw
+    }
+
     // ── BindFromUri ─────────────────────────────────────────────────
 
     [Fact]
@@ -211,8 +292,8 @@ public class SqlEndpointOptionsTests
             ["provider"] = "Microsoft.Data.SqlClient",
             ["outputClass"] = "MyPoco",
             ["outputHeader"] = "resultHeader",
-            ["onSuccess"] = "UPDATE t SET done=1 WHERE id=@id",
-            ["onFailure"] = "INSERT INTO errors(msg) VALUES(@redbError)",
+            ["onSuccess"] = "UPDATE t SET done=1 WHERE id=:#id",
+            ["onFailure"] = "INSERT INTO errors(msg) VALUES(:#redbError)",
             ["onBatchComplete"] = "EXEC sp_Notify",
             ["procedureName"] = "sp_Process",
             ["procedureParams"] = "IN:id:Int32,OUT:result:String"
@@ -223,8 +304,8 @@ public class SqlEndpointOptionsTests
         o.Provider.Should().Be("Microsoft.Data.SqlClient");
         o.OutputClass.Should().Be("MyPoco");
         o.OutputHeader.Should().Be("resultHeader");
-        o.OnSuccess.Should().Be("UPDATE t SET done=1 WHERE id=@id");
-        o.OnFailure.Should().Be("INSERT INTO errors(msg) VALUES(@redbError)");
+        o.OnSuccess.Should().Be("UPDATE t SET done=1 WHERE id=:#id");
+        o.OnFailure.Should().Be("INSERT INTO errors(msg) VALUES(:#redbError)");
         o.OnBatchComplete.Should().Be("EXEC sp_Notify");
         o.ProcedureName.Should().Be("sp_Process");
         o.ProcedureParams.Should().Be("IN:id:Int32,OUT:result:String");

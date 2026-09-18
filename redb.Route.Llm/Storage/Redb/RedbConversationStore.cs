@@ -448,7 +448,16 @@ public sealed class RedbConversationStore : IConversationStore
                     OutputJson = r.OutputJson,
                     IsError = r.IsError
                 },
-                _ => new MessageContentBlock { Kind = "text", Text = blocks[i].ToString() ?? string.Empty }
+                // The thought goes in its own field, with the signature it is authenticated by.
+                LlmThinkingBlock t => new MessageContentBlock
+                {
+                    Kind = "thinking",
+                    ThinkingText = t.Text,
+                    Signature = t.Signature,
+                    RedactedData = t.RedactedData
+                },
+                _ => throw new NotSupportedException(
+                    $"Content block type '{blocks[i].GetType().Name}' has no stored form.")
             };
         }
         return arr;
@@ -465,7 +474,12 @@ public sealed class RedbConversationStore : IConversationStore
                 "text" => new LlmTextBlock(b.Text ?? string.Empty),
                 "tool_use" => new LlmToolUseBlock(b.ToolUseId ?? string.Empty, b.ToolName ?? string.Empty, b.InputJson ?? "{}"),
                 "tool_result" => new LlmToolResultBlock(b.ToolUseId ?? string.Empty, b.OutputJson ?? string.Empty, b.IsError),
-                _ => new LlmTextBlock(b.Text ?? string.Empty)
+                "thinking" => new LlmThinkingBlock(
+                    b.ThinkingText ?? string.Empty,
+                    b.Signature,
+                    b.RedactedData),
+                _ => throw new InvalidOperationException(
+                    $"Stored content block kind '{b.Kind}' is unknown.")
             });
         }
         return list;

@@ -44,11 +44,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 using redb.Core;                          // IRedbService
-using redb.Core.Extensions;               // AddRedb(...)
+using redb.Core.Pro.Extensions;           // AddRedbPro(...)
 using redb.Core.Models.Configuration;     // PropsSaveStrategy
 using redb.Core.Models.Contracts;         // IRedbObject
 using redb.Core.Models.Entities;          // RedbObject<T>
-using redb.Postgres.Extensions;           // UsePostgres(...)
+using redb.SQLite.Pro.Extensions;         // UseSqlite(...) — tier-agnostic, paired with AddRedbPro
 
 using redb.Route.Abstractions;            // IRouteContext, IExchange
 using redb.Route.Core;                    // RouteContext
@@ -64,11 +64,10 @@ const string LdapBaseDn = "DC=example,DC=com";
 const string LdapServiceDn = "svc-ldap@example.com"; // service account trusted in AD
 const string LdapServicePassword = "<your-ldap-password>";
 
-// Postgres — in a real application, take the connection string from an
-// environment variable or configuration, not a hard-coded constant.
-const string PostgresConnection =
-"Host=localhost;Port=5432;Username=<your user>;Password=<your password>;Database=<your database>;Pooling=true;Maximum Pool Size=100;Minimum Pool Size=1;" +
-"Connection Idle Lifetime=60;Connection Pruning Interval=60;Timeout=60;Command Timeout=180;Include Error Detail=true;Keepalive=30;Tcp Keepalive=true;Options=-c jit=off";
+// SQLite — the demo carries its own database file next to the exe, so it runs with no
+// stand at all. In a real application, take the connection string from an environment
+// variable or configuration, not a hard-coded constant.
+const string SqliteConnection = "Data Source=buyers-ldap-demo.db";
 
 const int HttpPort = 5099;
 
@@ -82,11 +81,13 @@ services.AddLogging(b => b
     .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; })
     .SetMinimumLevel(LogLevel.Information));
 
-// Register redb with PostgreSQL. After this, IRedbService can be resolved from the container.
+// Register redb on the Pro tier over SQLite: IRedbService can be resolved from the container and
+// the demo needs no database stand. (UseSqlite is tier-agnostic — the tier is decided by
+// AddRedbPro vs AddRedb, not by the provider package.)
 // PropsSaveStrategy.DeleteInsert — the simplest save strategy to understand:
 // always overwrites all object props in full, without change tracking.
-services.AddRedb(options => options
-    .UsePostgres(PostgresConnection)
+services.AddRedbPro(options => options
+    .UseSqlite(SqliteConnection)
     .Configure(c => c.PropsSaveStrategy = PropsSaveStrategy.DeleteInsert));
 
 var sp = services.BuildServiceProvider();

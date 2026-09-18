@@ -10,25 +10,27 @@ namespace redb.Route.Demo.Routes;
 internal static class DemoEndpoints
 {
     // ── RabbitMQ ────────────────────────────────────────────────────────────
+    // Credentials/host live in the "rabbit-demo" connection factory (see InitRoute), not the URI.
     public const string RabbitConsumer =
-        "rabbitmq://demo-rpc-queue?host=localhost&port=5672&username=admin&password=admin&declare=true";
+        "rabbitmq://demo-rpc-queue?connectionFactory=rabbit-demo&declare=true";
     // RPC timeout=15s for demo; tune per environment for production.
     public const string RabbitProducer =
-        "rabbitmq://demo-rpc-queue?host=localhost&port=5672&username=admin&password=admin&replyTo=true&timeout=15";
+        "rabbitmq://demo-rpc-queue?connectionFactory=rabbit-demo&replyTo=true&timeout=15";
 
     // ── AMQP 1.0 / Artemis ──────────────────────────────────────────────────
     public const string AmqpConsumer =
-        "amqp://demo-amqp-queue?host=localhost&port=5673&user=admin&password=admin";
+        "amqp://demo-amqp-queue?connectionFactory=amqp-demo";
     public const string AmqpProducer =
-        "amqp://demo-amqp-queue?host=localhost&port=5673&user=admin&password=admin&replyTo=true&timeout=15";
+        "amqp://demo-amqp-queue?connectionFactory=amqp-demo&replyTo=true&timeout=15";
 
     // ── IBM MQ (RPC queue + topic pub/sub) ──────────────────────────────────
-    // waitInterval=200 — короткий цикл MQGET, чтобы worker не дремал лишние ~1.5 с
+    // Host/channel/queueManager/credentials live in the "wmq-demo" connection factory (see InitRoute).
+    // waitInterval=100 — короткий цикл MQGET, чтобы worker не дремал лишние ~1.5 с
     // после простоя очереди (по умолчанию WaitInterval=5000 мс).
     public const string WmqRpcConsumer =
-        "wmq:DEV.QUEUE.3?host=localhost&port=1414&channel=DEV.APP.SVRCONN&queueManager=QM1&user=app&password=admin&waitInterval=100";
+        "wmq:DEV.QUEUE.3?connectionFactory=wmq-demo&waitInterval=100";
     public const string WmqRpcProducer =
-        "wmq:DEV.QUEUE.3?host=localhost&port=1414&channel=DEV.APP.SVRCONN&queueManager=QM1&user=app&password=admin&replyTo=true&timeout=15";
+        "wmq:DEV.QUEUE.3?connectionFactory=wmq-demo&replyTo=true&timeout=15";
 
     // ── gRPC ────────────────────────────────────────────────────────────────
     public const string GrpcConsumer = "grpc:0.0.0.0:50051";
@@ -43,7 +45,7 @@ internal static class DemoEndpoints
 
     // ── SQL ─────────────────────────────────────────────────────────────────
     public const string SqlInsert =
-        "sql:INSERT INTO demo_log(exchange_id, message, status) VALUES(@exchange_id, @message, @status)"
+        "sql:INSERT INTO demo_log(exchange_id, message, status) VALUES(:#exchange_id, :#message, :#status)"
         + "?dataSource=#pg-demo"
         + "&param.exchange_id=${header.traceId}"
         + "&param.message=${body}"

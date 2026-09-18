@@ -63,8 +63,7 @@ variable a render error instead of an empty string. `LoopLimit` (default 10 000)
 
 ## XML form
 
-The node's shape in the Route-XML catalog (`docs/Route-XML/`); the XML loader itself is not shipped yet,
-so today the node is declared through the DSL above.
+The same node in an XML route ([redb.Route.Xml](../redb.Route.Xml/README.md)):
 
 ```xml
 <payload template="templates/order-confirm.json.sbn" mediaType="json">

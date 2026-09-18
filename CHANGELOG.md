@@ -51,6 +51,769 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [4.0.1] — 2026-09-18
+> **Phase 15 — LLM tool governance: declared contracts get executors** (`docs/V4/llm/`).
+> Version bump is pending: the set fits a minor release, but the items marked *behavioural* below are
+> the owner's call between a minor with explicit notes and a major
+> (`docs/V4/llm/PLAN-WAVES.md` §8).
+
+### Added
+
+- `LlmThinkingBlock` (`redb.Route.Llm.Providers`) — the thinking a provider returns is carried as a
+  content block of its own (Anthropic `thinking` / `redacted_thinking` with their signature, DeepSeek
+  `reasoning_content`) and handed back unchanged, in the original order, on the next request of the
+  run. Each request path sends what its wire can express: Anthropic a signed or redacted block, the
+  OpenAI-compatible path the block's text as `reasoning_content` where `tools` are declared. Thinking
+  is never shown — it stays out of `AgentResponse.Text` and `Out.Body`. Streaming responses do not
+  carry thinking blocks yet.
+- Thinking blocks in the conversation record (`redb.Route.Llm.Storage.Redb`) — `MessageContentBlock`
+  gains kind `"thinking"` with the thought in a field of its own, the signature beside it and the
+  redacted payload, so a saved conversation replays a signed block byte-for-byte instead of losing it;
+  a conversation continued on another provider goes to it as it was written. A turn of nothing but
+  reasoning is written like any other turn, with its usage and stop reason.
+- `IToolClaimsSource` (`redb.Route.Llm.Abstractions`) — resolves the claims of a run's principal, plus
+  the default implementation `ExchangePrincipalClaimsSource`. The agent loop verifies
+  `LlmToolSafety.RequiredClaims` before approval and denies a call it cannot verify (fail closed). The
+  default source reads the caller's principal from the exchange (`ExchangePrincipal` — a property, so a
+  client cannot send it as a header) and takes its `scope` / `scp` values, split on whitespace only
+  (RFC 6749 §3.3 — a comma is a legal character inside a scope token, not a separator); a deployment
+  with another vocabulary registers its own source and wins. A principal whose identity is not
+  authenticated counts as no principal, so a resolver must return an identity with an authentication
+  type. If a host removes the default source, a claim-declaring tool stops building at route build, with
+  the required registration in the message — a requirement that can never be satisfied does not ship
+  silently.
+- `ICostCalculator` (`redb.Route.Llm`) — prices provider responses so cost budgets mean something.
+- Budget URI options `budgetInputTokens`, `budgetOutputTokens`, `budgetCostUsd`, plus `.Budget(...)`
+  on the fluent LLM builder and `WithBudget(...)` on the inline `.Llm(...)` builder.
+- `StoreBudgetEnforcer` — cross-run budget enforcement over `ICostBudgetStore`, registered by
+  `AddRedbLlmStorage()`.
+- `ToolSkipReasons` / `ToolResultErrors` — the observer-channel skip reasons and the model-facing
+  `tool_result` error codes as constants instead of scattered literals.
+- `AgentEngine.FromContext(IRouteContext)` — builds an engine from whatever the route context and its DI
+  container provide, falling back to the shipped no-op collaborators. `AddRedbRouteLlm()` registers the
+  engine through it, so one extension call yields every seam (producer template, claims source, cache,
+  cost calculator) instead of depending on the container's constructor selection.
+
+### Fixed — concurrent LLM runs no longer share one redb instance and connection
+
+- **Scheduled `llm:` prompts.** `From("llm://...?schedule=...")` resolved `initialBodyRef` and
+  `systemPromptRef` without an exchange, so a redb-backed `IPromptTemplateRegistry` answered every
+  concurrent tick from one shared instance and connection, and a second tick's lookup could be refused.
+  The tick now creates its exchange first, sets the named redb on it, resolves both prompts with it and
+  only then writes the initial body. The lookup runs inside the block that owns the exchange, so a
+  failing template releases the exchange and its DI scope instead of leaking them.
+- **Budget and audit.** `StoreBudgetEnforcer` (through `RedbCostBudgetStore`) and `RedbAuditObserver` run
+  without an exchange and used `GetRedbService(name, exchange: null)`, so every concurrent agent run shared
+  one instance and one connection: a second simultaneous command was refused, and the audit row was lost.
+  Each call now opens a scope of its own with `IRouteContext.CreateRedbScope(name)` and releases it. A
+  refusal to open that scope is a configuration error, and the budget call fails with it. The budget still
+  runs outside the route's transaction; the audit row stays in it and rolls back with the tool writes it
+  describes.
+- **Audit failures.** `RedbAuditObserver` swallowed a failed write without a trace. It still never breaks
+  the run, but the failure is now logged as a warning with the tool name, the `tool_use` id and the
+  exchange id; the logger comes from the route context like the engine's.
+
+### Fixed — the XML pack gate no longer reads SQL parameters as bean references
+
+- `redb-route-xml check|pack` (`redb.Route.Xml` packaging) looked for registry references with a
+  `#name` search over the whole attribute, so every Camel-style SQL parameter of the `sql:` connector
+  (`VALUES (:#login, :#at)`) was reported as an undeclared, possibly dangling bean. A reference is now
+  recognised by position, as the format convention states: a value that starts with `#` (the whole
+  attribute, the path right after the scheme as in `bean:#x`, or a URI option value as in
+  `dataSource=#main-db`). A `#` inside the SQL text is text. The Route-XML format spec
+  (`docs/Route-XML/02-PHASE0-FORMAT.md`) now writes its SQL examples as `:#name` and states the rule.
+
+### Added — a public transactions guide at the root
+
+- `TRANSACTIONS.md` joins `METRICS.md` and `CONCURRENCY.md` as a public guide: the transaction model, one route end
+  to end with `Retry`, a dead-letter channel and an idempotent consumer, the order a unit of work commits in, who
+  acknowledges the incoming message, why `.WireTap(...)` stays outside, writing an `ITransactedAction`, one database
+  per transacted route, parallelism, and the migration off `BeginRedbTransaction()`. `docs/TRANSACTIONS_GUIDE.md`
+  now points at it, and the README section on deferred acknowledgement is corrected to the current order.
+
+### Changed — behavioural — the unit of work commits database first, brokers after
+
+- `.Transacted()` used to flush the deferred transport actions **before** completing its `TransactionScope`, so a
+  message could be sent, or an incoming one acknowledged, while the database work was still uncommitted, and a
+  failing database commit then left a message pointing at rows nobody could read. The order is now: the database
+  transaction completes and closes, then the deferred sends go out. The failure window is "written but not
+  announced" — the broker redelivers and the idempotent consumer absorbs the duplicate — never "announced but not
+  written". A send that fails after the database committed is logged as such and propagates, so the message is not
+  acknowledged and the work is picked up again.
+- **`Retry` inside `.Transacted()` now wraps the transaction instead of living inside it.** One attempt is one unit
+  of work: a failed attempt rolls back its own database work and its own deferred sends, and the next attempt starts
+  with an empty set, so the attempt that succeeds no longer publishes the messages of the attempts that failed. No
+  transaction is held open across the retry delays either, which is what made a transacted broker route hold locks
+  for the whole retry sequence.
+- **The inbound acknowledgement belongs to the consumer, not to the transaction.** RabbitMQ, AMQP 1.0, Kafka
+  (single and batch), IBM MQ (poll and XMS), Redis Streams, Azure Service Bus (queue and session) and SQS no longer
+  register the ack as an `ITransactedAction`; each settles after the whole unit of work, the route transaction
+  included, has succeeded, and leaves the message unsettled when it has not. Rolling an ack back is a nack — an
+  action on the broker, not an undo of work — and with `Retry` outside the transaction it would have made the broker
+  redeliver a message while the local retry was still running on it. Outgoing sends stay deferred and transactional.
+- **What this changes for an implementer of `ITransactedAction`:** the interface is the same, but `Commit` is now
+  called after the database transaction has closed, so `Transaction.Current` is null there; an action that counted on
+  running inside the ambient transaction must be revisited.
+
+### Added — the exchange trail and the OpenTelemetry layer as expression values
+
+- `messageHistory(kind)` in the expression language: the steps an exchange went through, as a value. `table` (the
+  default) is the dump the failure handler prints, `compact` one line, `json` an array; `count`, `totalMs` and
+  `slowestMs` are numbers, `slowest` and `lastNode` name a step. The numbers make it a predicate, so a route logs the
+  trail only when it cost something: `.When("messageHistory(\x27slowestMs\x27) > 500")`. Message history is opt-in, so an
+  exchange that recorded none reads as an empty string and zero rather than failing a diagnostic log; an unknown kind
+  fails the route build.
+- `stats()` reads the OpenTelemetry layer when its target starts with `otel:`:
+  `stats(\x27otel:redb.route.step.duration/enrich\x27, \x27max\x27)`, target `otel:instrument[@route][/step]`, field `count`,
+  `sum`, `min`, `max` or `last`. The EIP counters (`throttle.delayed`, `circuitbreaker.tripped`, …) and `.Metered()`
+  durations live only in that layer, and until now only C# could read them through the snapshot. Needs the in-process
+  subscriber (`UseMetricsSnapshot()`) and says so when it is missing; an instrument nobody measured reads as zero; a
+  literal unknown field fails the route build. Closes the open question 2 of `docs/METRICS_IN_ROUTE_PLAN.md`.
+- Both functions work in markup as well as in C#: XML routes have no lambdas, so `<log message="${messageHistory()}"/>`
+  and `<when expr="messageHistory(\x27slowestMs\x27) &gt; 500">` were impossible to express before.
+
+### Changed — the AWS connectors resolve one AWSSDK.Core
+
+- `redb.Route.S3` was on `AWSSDK.S3` 4.0.20.3 while `redb.Route.Sqs` was on `AWSSDK.SQS` and
+  `AWSSDK.SimpleNotificationService` 4.0.100.2, so the two connectors resolved different `AWSSDK.Core` versions.
+  Side by side in one deployment layer (the Tsak worker publishes every connector into a shared folder) that is a
+  file in two versions, and the layer build stops on it. All three packages are now on the same SDK train:
+  `AWSSDK.S3` 4.0.103.3, `AWSSDK.SQS` and `AWSSDK.SimpleNotificationService` 4.0.100.14, and both projects resolve
+  `AWSSDK.Core` 4.0.102.6 (checked in `obj/project.assets.json`). No code change; the test projects follow the
+  same versions.
+
+### Changed — behavioural — a host outside Tsak gets a redb scope per exchange
+
+- A host that runs routes itself (a console, ASP.NET, a worker) and registers a named database with
+  `context.RegisterRedbService(name, instance)` publishes no scope factory. With an exchange,
+  `GetRedbService(name, exchange)` handed every exchange that one instance: one connection for all parallel
+  exchanges, and parallel explicit calls on it refused by redb's command gate. An instance built through a DI
+  container now opens a scope of the same database per exchange through `IRedbScopeSource` (redb.Core), cached on
+  the exchange and released with it, as the published factory does under Tsak. The same holds for a default
+  service registered on the context when the context's service provider has no redb of its own.
+- What changes for such a host: a connection per parallel exchange instead of one shared connection (size the
+  pool for it); the steps of a route no longer see work done on the registered instance outside the route, for
+  example a transaction opened on it by host code. `.Transacted()` is unaffected: one connection per transaction
+  and database.
+- Unchanged: Tsak, whose published factory is used first; code without an exchange, which keeps the registered
+  instance; an instance built without a container, which stays shared.
+
+### Added — a scope of its own for redb work without an exchange
+
+- `context.CreateRedbScope(name)` (`redb.Route.Core`) opens a new scope with its own `IRedbService` on every call,
+  for code that runs without an exchange and may run in parallel: an observer, a background job, a store call made
+  outside a route step. Without an exchange `GetRedbService(name)` hands every caller the same registered instance,
+  one connection, and parallel explicit calls on it are refused by redb's command gate. The caller owns the returned
+  `RedbScope` and disposes it (`await using`).
+  - **Named:** the scope factory the host published for the name (Tsak does, one per named instance), otherwise a
+    scope opened from the instance registered with `RegisterRedbService` through `IRedbScopeSource` (redb.Core).
+  - **Default:** a scope opened from the service registered on the context, otherwise a scope of the context's
+    service provider.
+  - A service built without a DI container has no scope to open: the call throws `InvalidOperationException` rather
+    than hand out the shared instance. Single-threaded start-up code (scheme sync, seeding) keeps using
+    `GetRedbService` without an exchange.
+  - A scope opened inside an ambient transaction takes part in it; work that must survive the route's rollback opens
+    its scope under a suppressing `TransactionScope`.
+
+- Guide: docs/REDB_SERVICE_GUIDE.md — which `IRedbService` route code gets where (steps,
+  controllers, code with and without an exchange, start-up code), transactions, Tsak and self-hosted registration.
+  The `redb.Route.Core` README samples are corrected: they called a `RedbIdempotentRepository(redb)` constructor and
+  an `exchange.GetService<IRedbService>()` method that do not exist and imported the wrong namespace; the repository
+  is registered by name with `AddRedbIdempotentRepository`, route steps use `ProcessWithRedb`.
+
+### Fixed — an unhandled failure is a failure everywhere: transaction and ack
+
+- A route that fails through an `OnException` without `Handled(true)` returns **normally** with the
+  exception left on the exchange. `TransactedProcessor` took that return for success: the deferred
+  broker actions were committed and the `TransactionScope` completed with the work half done — for
+  example a `.Transacted()` body that calls a sub-route (`direct://`) whose own `OnException` has no
+  `Handled(true)`. The processor now reads the exchange's terminal state after the body: an unhandled
+  exception rolls the deferred actions back and leaves the scope incomplete (rollback), exactly like a
+  throw; a handled one is a completed exchange and commits.
+- The same failure was **acknowledged** by the broker consumers that settle by "did Process throw":
+  RabbitMQ, AMQP 1.0, Kafka (single and batch commit), IBM MQ (poll and XMS engines), Redis Streams
+  and MQTT. Each consumer now rethrows an unhandled failure left on the exchange
+  (`IExchange.ThrowIfUnhandledFailure()` in `redb.Route.Core`) so its existing failure path takes
+  over: nack-requeue, release, no offset commit, backout, no XACK, no MQTT ack. Azure Service Bus and
+  SQS already read the terminal state and are unchanged.
+- AMQP 1.0: `AmqpAckAction` now tracks whether the delivery is settled. Inside `.Transacted()` the
+  transaction accepted the message and the consumer's inline `AutoAccept` accepted it a second time
+  (an error on an already settled delivery); the inline path now settles through the same action and
+  skips it once settled, on the accept and the release side alike.
+
+### Fixed — a branch's DI scope no longer reaches the original exchange through the merge-back
+
+- Multicast, Splitter, Scatter-Gather and Loop (`copy`) merged the aggregated clone's **properties** into the
+  original exchange wholesale, including the clone's own bookkeeping: a named redb scope cached under
+  `__redb_scope:*` by a step of the branch, or a resource registered with `ExchangeResources`. The clone
+  released those right after the merge, so the original kept a disposed scope under the same key and the
+  next redb call on that name failed with `ObjectDisposedException` (a registered resource was released
+  twice). The merge-back now skips what the clone owns, as `Clone` / `CreateChild` already do on the way
+  in: the exchange that created a scope or registered a resource is the one that releases it.
+
+### Fixed — the editor validated against the schema without the package elements
+
+- The extension's OASIS catalog bound the namespace `urn:redb:route:1.0` to the registry-only
+  `redb-route-1.0.xsd`, while the catalog-aware schema that knows the package contributions
+  (`<redb>`, `<redbSave>`, `<cache>`, ...) and the typed endpoint options shipped beside it, unbound.
+  A project with its own `.vscode` binding (the scaffold writes one) was fine; any other document got
+  «Element name 'redb' is invalid» from the editor while the loader and the pack gate accepted it.
+  The catalog now binds the catalog-aware schema, and a unit test asserts that the bound file
+  declares the package elements.
+
+### Added — `<messageHistory>` in the markup
+
+- The route-level `MessageHistory()` flag of the C# DSL now has a markup form: the leaf step
+  `<messageHistory [value="false"]/>`, the way `<streamCaching/>` spells its own flag. Found missing
+  while writing the SerialNumbers demo as XML — a route that wants the per-step timing in its failure
+  log had no way to say so in markup. Schema, element list, editor palette and the generator's C#
+  output carry it.
+
+### Removed — the `<beginRedbTransaction>` markup element
+
+- The route markup no longer has `<beginRedbTransaction [storage=]/>`. The verb it printed,
+  `BeginRedbTransaction()`, is obsolete (`docs/TRANSACTIONS_GUIDE.md`: one primitive, `.Transacted()`)
+  and a no-op under an ambient scope — and markup has no warning channel, so an author writing it
+  inside `<transaction>` got a silent nothing. The loader now rejects it as an unknown element with
+  the position; wrap the steps in `<transaction policy="…">`, the markup form of `.Transacted()`. The
+  schema, the element list and the editor palette are regenerated without it. Shipped in 4.0.0 for
+  four days; no package in the wild uses it.
+
+### Fixed — build-time route packaging actually sees the runtime
+
+- `redb-route-xml new` scaffolds a library project, and a library does not copy its NuGet
+  assemblies to `bin/` — so the opt-in `PackRouteOnBuild` target handed the gate an output with
+  no connectors and no markup contributions, and a `<redbSave>` failed the XSD check for no visible
+  reason. The template now sets `CopyLocalLockFileAssemblies`; the XmlDemo project gets the same,
+  plus the `redb.Route.Core` reference its `<redb*>` elements need and the package name `xmldemo`
+  the worker already knows it by.
+- `redb-route-xml` refuses a `--bin` whose `redb.Route.Xml` / `redb.Route` assembly version differs
+  from the one the tool was built with. Contributions and components of another runtime version
+  cannot be cast to the tool's own interfaces; before, that read as «0 contributions» and a
+  misleading unknown-element error (a 3.7.3 tool over 4.0.0 bins). Update the tool to the
+  runtime's version.
+
+### Fixed — error handling now matches Camel (behavioural)
+
+- **`OnException` without `Handled(true)` no longer swallows the failure** (`redb.Route`). When an
+  exception matched a handler that did not set `Handled`/`Continued`, the processor marked the exchange
+  `ExceptionHandled = true` and returned — so every consumer (`GenericFile`, `Quartz`, `As2`, `Http`,
+  `Soap`, `Sqs`, `AzureServiceBus`, `Grpc`, `SignalR`), which treats `Exception != null && !ExceptionHandled`
+  as a failure, saw success and acknowledged/committed while the transaction had rolled back. The failure
+  is now left on the exchange (Camel `handled(false)`): the `OnException` route still runs (logging, DLQ,
+  redelivery), but the consumer sees the failure and does not ack. `Handled(true)`/`Continued(true)` clear
+  the exception as before. Reproduced red-before at the consumer-contract level.
+- **The most-specific `OnException` handler wins, regardless of declaration order** (`redb.Route`).
+  Handler selection took the first registered match, so an `OnException<Exception>()` declared first
+  captured everything; it now picks the most-derived matching type (Camel's nearest-supertype rule),
+  ties keeping declaration order.
+
+### Added — string/quarantine conveniences
+
+- **`Sql.DataSource(string)`** (`redb.Route.Sql`) — the fluent builder accepted only `DataSource(IExpression)`,
+  so the documented `.DataSource("main")` did not compile. A string overload now matches the sibling
+  connectors' `ConnectionFactory(string)`.
+- **`.MoveFailed(...)` on the local File connector** (`redb.Route.File`) — a file whose processing fails
+  can be quarantined to a directory (as the remote FTP/SFTP consumers already do) instead of being left in
+  place and re-picked on every poll. New `FileEndpointOptions.MoveFailed` + DSL `MoveFailed(...)`; unset
+  keeps the previous leave-in-place behaviour.
+
+### Fixed — SQL table bootstrap is dialect-aware
+
+- **`SqlIdempotentRepository` and `SqlClaimCheckRepository`** (`redb.Route.Sql`) auto-created their tables
+  with `CREATE TABLE IF NOT EXISTS`, which SQL Server rejects — so `CreateTable = true` (the default) threw
+  on SQL Server. The DDL is now chosen from the live connection: SQL Server gets a guarded
+  `IF OBJECT_ID(...) IS NULL CREATE TABLE` with `NVARCHAR`/`VARBINARY(MAX)`; SQLite/PostgreSQL/MySQL keep
+  `CREATE TABLE IF NOT EXISTS`, with the claim-check binary column typed per dialect (`BYTEA`/`LONGBLOB`/`BLOB`)
+  — the latter also fixes claim-check bootstrap on PostgreSQL, which has no `BLOB` type.
+
+### Fixed — documentation corrected
+
+- **`redb.Route` README Error-Handling** showed `.Retry(...)` / `.DeadLetterChannel(...)` as top-level route
+  steps with a `maxRetries:`/`initialDelay:` signature; they exist only on the `.Transacted()` scope as
+  `Retry(int attempts, TimeSpan delay)` / `DeadLetterChannel(string)`. The example and the EIP table now
+  show the correct scoped form.
+- **`Unmarshal<T>()`** (`redb.Route`) documented itself as decoding via `IDataFormatRegistry` by ContentType,
+  but is an alias of `ConvertBody<T>()` (type-converter based). The doc now says so and points to
+  `Unmarshal(IMessageSerializer, Type)` for format decoding.
+
+### Fixed — a poison file no longer blocks the rest of the poll batch
+
+- **File consumers (`redb.Route.GenericFile` → local `File`, `Ftp`, `Sftp`)** ran each polled file with no
+  guard around the route: an exception that escaped the route (no matching `OnException`, or a handler that
+  rethrew) propagated out of the per-file loop and aborted the whole batch. Every file after the poison one
+  in the listing was left unprocessed, and `MoveFailed` never ran for the poison file itself — so on SFTP a
+  later file could be reprocessed on a loop while earlier ones sat untouched. The per-file processing now
+  catches the escape, records it on the exchange, runs the failure path (idempotent-key release +
+  `MoveFailed`) and continues to the next file; `OperationCanceledException` still aborts the poll (shutdown).
+
+### Fixed — a logger factory registered after construction reaches components
+
+- **`RouteContext`** wired component loggers only from a factory passed to its constructor;
+  `AddService(typeof(ILoggerFactory), …)` afterwards left components — and the route compiler's
+  `OnException`/statistics loggers — without one, so consumer failures were logged nowhere. Registering a
+  factory now adopts it as the context factory and back-fills a logger onto components already registered
+  (and forward-fills onto those added later).
+
+### Fixed — context/builder-level OnException keeps its full configuration
+
+- **Builder- and context-level `OnException`** (`redb.Route`) forwarded only redeliveries and
+  `handled`/`continued` to the compiled handler; `OnWhen`, `RetryWhile`, `OnRedelivery`, `OnPrepareFailure`,
+  `RetryAttemptedLogLevel`/`RetriesExhaustedLogLevel`, `LogStackTrace`, `LogExhausted`, `OnExceptionOccurred`
+  and `UseOriginalBody` were silently dropped — so even `Handled(true)` still logged
+  `Retries exhausted … after 0 attempts`. The compiler now forwards the full configuration, matching the
+  in-route `OnException` path.
+
+### Added — poll backoff for file consumers (File / FTP / SFTP)
+
+- **`GenericFileConsumer` gains Apache Camel `ScheduledPollConsumer`-style poll backoff.** New options
+  `BackoffMultiplier` / `BackoffIdleThreshold` / `BackoffErrorThreshold` (with matching DSL methods on
+  File/FTP/SFTP): after that many consecutive idle or error polls, the next `BackoffMultiplier` polls are
+  skipped — no listing and, for remote transports, no reconnect — then the counters reset. A down SFTP
+  server or an empty directory no longer forces a poll (and a reconnect attempt) every `Delay`. Entering
+  backoff logs one warning, resuming logs one info line; `BackoffMultiplier` requires at least one
+  threshold and vice-versa, or the endpoint refuses the configuration. `BackoffOnFailedExchanges` (off by
+  default — a superset of Camel) additionally counts a poll whose every created exchange failed unhandled
+  as an error, so a route backs off when the downstream is down and every file fails, instead of
+  re-reading the same files every `Delay`; a poll with any success still counts as success.
+
+### Fixed — idempotent consumer and redb transactions under `.Transacted()`
+
+- **`IdempotentConsumer` no longer risks a silent-loss window inside a transaction, and no longer masks the
+  original failure.** Under an ambient transaction it does not `Remove` the dedup key on failure — the
+  rollback removes it, and a `Remove` issued inside a doomed transaction would throw and hide the real
+  error. Outside a transaction, a `Remove` that itself fails now keeps the original exception instead of
+  being replaced by the cleanup error.
+- **`BeginRedbTransaction()` is `[Obsolete]` and a no-op under `.Transacted()`.** With core enlisting redb
+  in the ambient `TransactionScope`, opening a separate redb transaction there is rejected; the method now
+  attaches without opening one when an ambient scope is active, and only opens its own when none is. Use
+  `.Transacted()`.
+
+### Changed — behavioural
+
+- **An external tool does not run inside a transaction.** A tool declared `ToolSideEffect.External` that
+  the model calls while an ambient transaction is open (a route's `.Transacted()`) is not dispatched: the
+  model receives `external_in_transaction` (`ToolResultErrors.ExternalInTransaction`) and observers see
+  the same skip reason (`ToolSkipReasons.ExternalInTransaction`). Its action could not be rolled back with
+  the transaction, and a retry after a rollback would have repeated it. Mutating and read-only tools run
+  inside the transaction as before, so their writes and deferred sends roll back with the route. The
+  budget of an agent run is now recorded outside the route's transaction, so a rollback no longer
+  un-counts spent tokens; on SQLite that second writer waits for the transaction's write lock and fails,
+  so `llm:` with the redb budget store does not belong inside `.Transacted()` there. A shadow run no longer
+  inherits the transaction.
+- **Thinking is kept and handed back.** Both connectors used to discard a model's thinking: Anthropic
+  `thinking` / `redacted_thinking` blocks and DeepSeek `reasoning_content` were dropped on parse and
+  never sent back. They now travel with the turn that produced them, within a run and, with a
+  conversation store, across runs, so a stored turn holds more data than before. A message that says
+  nothing (no text and no tool call, such as a turn the model spent entirely on thinking) is kept in the
+  record but not sent to the provider, on the Anthropic and the OpenAI-compatible path alike; the
+  OpenAI-compatible path used to send it as `content: null`, and a refused message in the history
+  breaks every later call of a conversation (2026-09-07). `RedbConversationStore` throws on a content
+  block type or a stored kind it has no form for, where it used to write the block's `ToString()` as
+  text and read an unknown kind back as text. Plan and reports: `docs/V4/llm-THINKING/`.
+- **Claims are enforced.** `.RequireClaim(...)` now denies the call when the claims cannot be
+  verified; previously the declaration was never consulted. Claims are checked against the caller's
+  principal taken from the exchange (a transport-set property — a client-supplied identity header is
+  not evidence), so a run with no inbound request, or one carrying an unauthenticated principal, is
+  denied. Hosts with their own identity vocabulary register their own `IToolClaimsSource`.
+- **Idempotency is gated on the declared side effect.** A tool that is not `ToolSideEffect.ReadOnly`
+  is reserved before it runs and a replayed `tool_use` id returns the stored result; read-only tools
+  are no longer reserved at all. Consequence: replay protection is no longer the default for tools
+  that declare nothing, because `SideEffect` defaults to `ReadOnly` — declare `Mutating` on anything
+  that changes state.
+- **Tool-result cache is wired.** `ToolCachingPolicy.Memoize` is answered by a run-scoped in-process
+  memo, `Persist` by `IToolCacheStore` (24 h TTL); a hit is a skipped invocation reported to observers
+  as `cache_hit`. The key includes the *resolved* endpoint address (hashed, never stored raw), so two
+  tenants with the same input never share an entry, and the tool's policy fingerprint, so entries
+  written while a tool was laxer are not served after it got stricter. Only read-only tools may declare
+  a caching policy — the route build rejects `Caching != None` with a mutating side effect — and an
+  output the redaction filter changed is never cached.
+- **Budgets are reachable and cost is real.** The three budget options reach the engine, and cost
+  comes from `ICostCalculator` instead of a placeholder zero. A cost ceiling nobody can price fails
+  the run before the first provider call instead of being silently ignored.
+- `AddRedbLlmStorage()` now replaces **only the defaults this package ships** (`IBudgetEnforcer`,
+  `IAgentObserver`); a host-registered implementation survives untouched. It also swaps the shipped
+  per-run budget enforcer for `StoreBudgetEnforcer`, so a conversation's accumulated usage can stop a
+  run that used to pass.
+- **The cache key carries the caller.** A persisted entry is now keyed by tool name, resolved endpoint,
+  policy fingerprint, the caller's identity and the values of the headers the route opted into
+  propagating — not by the input alone. A tool route sees the real principal and the real headers, so
+  "same input" was not "same answer": before this, an entry fetched for one caller could be served to
+  another (same rights, different person).
+- **The read-only caching rule is enforced at descriptor registration**, where every path converges —
+  `.AsLlmTool(...)`, `LlmTool.Define(...).Build()`, `[ExposeAsLlmTool]` and MCP discovery — and MCP
+  server options validate it when they are built. A non-read-only tool that declares a caching policy
+  now fails registration (loudly, before any run) instead of being silently cached by paths that only
+  the route DSL guarded.
+- **Cache access is best effort.** A store that cannot be read or written logs a warning and the tool
+  still runs; previously a store outage failed the whole run, and a failed write turned a successful
+  tool call into an error the model could retry.
+- **Cache entries and audit rows name their tool.** A persisted cache key starts with the tool name
+  (`persist:<tool>:<hash>`) instead of being a bare hash, and an audit row's name leads with it
+  (`audit:<tool>:<exchange>:<tool_use>`). Both are labels: they let an operator read the scheme and slice it
+  by tool on an object column (`_objects.name` / `value_string`). Filtering by the `ToolName` property is
+  server-side too (the props-typed `Where`) but resolves through the values table, so the label is the cheap
+  path, not the only one. The hash still covers every security-relevant input; entries written in the
+  previous format are missed once.
+- `stream=true` with `tools=` now throws `ArgumentException` like the other option checks in
+  `LlmEndpointOptions.Validate()`, instead of `InvalidOperationException`.
+- **`stream=true` together with `tools=` is rejected** when the endpoint is created instead of
+  silently ignoring the tools (streaming bypasses the agent engine, so its tools would never run).
+  Streaming without tools is unchanged.
+
+### Fixed
+
+- **`llm://` endpoints could not see the engine the package registers.** The endpoint resolved the agent
+  engine through the route context's own locator only (`IRouteContext.GetService<T>()` deliberately has no
+  fallback), while `AddRedbRouteLlm()` registers the engine in the container — so a host that did everything
+  right got `InvalidOperationException: No IAgentEngine registered` on every call. Producers, consumers and
+  the inline step now share `AgentEngine.FindRegistered(context)` (locator, then container), which is also
+  what made the "engine in the container only" tests turn green.
+- The `No IAgentEngine registered` message advised `context.AddService<IAgentEngine>(new AgentEngine())`:
+  no such overload exists (`AddService` takes `(Type, object)`), and a bare engine has no producer template
+  (a tool call fails) and no claims source (a requirement is never verified). Both messages now name
+  `AddRedbRouteLlm()` and `AgentEngine.FromContext(context)`, and say what a bare constructor costs.
+- **The engine resolved from DI was not the engine the package wires.** `AddRedbRouteLlm()` registered
+  `AgentEngine` by type, so the container picked a constructor it could satisfy — one whose parameters all
+  have defaults — and the resolved engine had no producer template (every tool dispatch failed) and none of
+  the governance seams this release advertises: claims, cache and cost were wired only in tests, which build
+  the engine by hand. The registration is now an explicit factory over `AgentEngine.FromContext(...)`. The
+  inline `.Llm(...)` fallback had the same hole (`?? new AgentEngine()`), and the shipped demos plus the demo
+  host assembled the engine by hand, silently losing every seam added since — they now register their
+  deliberate choices and let the factory build the engine (`Llm.HttpShell` stays on the released surface
+  until the package carries `FromContext`; a note in the file gives the exact replacement).
+- `ToolAuditProps` documented that `WhereRedb` predicates on `ConversationId`, `ToolName`, `Outcome` and
+  `InvokedAtUtc` avoid the value table. Properties are not object columns, so predicates on them resolve
+  through `_values`: server-side, but costlier than an object-column filter. The doc now says exactly that,
+  and points at the row name as the cheap path for tool-scoped queries.
+- Budget option docs promised that a zero ceiling "stops the run at once"; the enforcer has always
+  enforced only positive limits, so `0` means "no ceiling" — the docs now say that, and a test pins it.
+- MCP discovered tools declare `RequiresApproval = true` by default (external side effects). With the
+  shipped `AutoApproveGate` this buys an audit row, not a blocked call.
+- `SkipReason` values: `idempotent_cache_hit` → `idempotency_hit`; the approval refusal is now
+  `denied: <reason>` built from `ToolSkipReasons.ApprovalDeniedPrefix`, and the model-facing error
+  code is `approval_denied`.
+- **`ToolSetHash` semantics changed**: the hash of the tool surface now includes safety (side effect,
+  caching policy, cost class, approval flag, and claims — length-prefixed so `["a,b"]` and `["a","b"]`
+  cannot collide). Hashes computed before this release are not comparable with hashes computed after
+  it; re-baseline audit queries that compare them.
+- MCP safety-override patterns are compiled when the override is built, so an invalid regex fails at
+  configuration time instead of surfacing as "the server is silently absent from the tool set"; an
+  override that matches no discovered tool is reported as a warning, with an example of the
+  model-facing name it most likely copied.
+
+### Removed
+
+- Metric `redb.route.llm.tool_cache.expired` — an expired entry is indistinguishable from a miss
+  through `IToolCacheStore.GetAsync`, and the shipped `Memoize` layer does not touch the store at all.
+  The counter was never incremented. Cache stores no longer report hit/miss metrics either: the agent
+  loop does, because it is the only layer that sees both the store and the run-scoped memo.
+
+### Added — the caller's identity on the exchange
+
+Nothing could bring an identity to a route over HTTP, gRPC, SOAP or AS2. The consumers ignored who a
+request came from, and a trusted middleware had no channel to say it: a `redbHttp.*` header it added is
+dropped by the anti-spoofing guard, and any other header cannot be told apart from one the caller sent.
+WebSocket and SignalR had their own `Authenticate` hooks, but those reduced the principal to a user-id
+string.
+
+- **`ExchangePrincipal`** (core, `redb.Route.Abstractions`) — the caller's `ClaimsPrincipal` as an
+  exchange property under `CamelAuthentication` (Camel's `Exchange.AUTHENTICATION`). A property rather
+  than a header, so a caller cannot send it and producers do not bridge it on. Every exchange copy
+  (child, linked child, clone, snapshot) inherits it, so a split part, a sub-route or an LLM tool call
+  sees the identity of the request that started it. A route that validates credentials itself records
+  the outcome with `ExchangePrincipal.Set`.
+- **`HttpHostingOptions.ResolvePrincipal`** — one resolver for every listener in the process, installed
+  like the trusted proxies: after proxy resolution, so it sees the client rather than the proxy, and
+  after CORS, so a preflight never reaches it. It identifies and does not authorize: `null` serves the
+  request without an identity, because one port carries routes with different requirements. A resolver
+  that throws fails the request with 500 and an error log instead of downgrading the caller to
+  anonymous. The result is kept in `HttpContext.Items` under `SharedHttpServerManager.PrincipalItem`
+  (`SharedHttpServerManager.GetResolvedPrincipal`).
+- The HTTP, gRPC, SOAP, AS2 (receive and async MDN), WebSocket and SignalR consumers put the principal on
+  every exchange they build. On WebSocket and SignalR the component's own `Authenticate` still decides on
+  its paths and takes precedence; without it, the host's principal fills `redbWs.UserId` and SignalR's
+  `UserIdentifier` the same way.
+- `SharedHttpServerManager(options, logger)` — a new constructor overload. The listener's own logging is
+  switched off, so this logger is where resolver failures go; `AddRedbRouteHttpHosting()` passes the
+  host's logger factory.
+
+Additive: with no resolver configured, the host pipeline and every exchange are unchanged.
+
+### Fixed — AS2 no longer reports an unsigned message as signature-verified
+
+`redbAs2.signatureValid` on a received message is documented as "the inbound signature verified against
+the partner cert", but the consumer started from `true` and overwrote it only when the message was
+signed. An unsigned message in a partnership that does not require a signature therefore reached the
+route reporting a verified signature, and a route that gates on the header accepted it as authenticated.
+The header is now `true` only when a signature was present and verified — the rule the MDN side already
+followed, starting from `false`. Rejection is unaffected: the consumer's own enforcement never read the
+header, and the MDN it returns does not depend on it. *Behavioural* for a route that reads the header on
+an unsigned flow: it now sees `false`.
+
+### Changed — behavioural — SQL batch writes (phase 17, `docs/V4/sql/`)
+
+The batch mode of `redb.Route.Sql` (`batchSize` above zero with a list body) no longer reports writes that did not
+happen. Measured on PostgreSQL, SQL Server and SQLite: continuing past a failed item committed nothing on PostgreSQL
+while the exchange succeeded, and on SQL Server wrote the following items outside the transaction after an error that
+had ended it.
+
+- **`breakBatchOnError` defaults to `true`**, as in Apache Camel: the first failing item rolls the whole batch back.
+  *Migration:* set `breakBatchOnError=false` (or `.BreakBatchOnError(false)`) to keep going past failed items.
+- **The provider's exception is thrown as is** instead of `AggregateException`, so `OnException<DbException>` and
+  `catch (SqlException)` match it; the failed item's index is in `exception.Data["redbSql.batchFailedIndex"]` and in the
+  `redbSql.batchFailedIndex` header. *Migration:* catch the provider's exception instead of `AggregateException`.
+- **`breakBatchOnError=false` runs each item under a savepoint:** a failed item is undone and listed in
+  `redbSql.batchErrors`, and the other items commit. It is refused before any write inside a transacted route or on a
+  provider without savepoints, and it stops the batch with the item's own error when the server has ended the
+  transaction.
+- **An empty list writes nothing** (`redbSql.updateCount` is `0`); it used to run the statement once with NULL
+  parameters.
+- **A `${...}` value for a numeric or enum SQL option fails endpoint creation** (for example `Batch(Header("n"))`);
+  it used to be dropped silently, which turned batching off.
+- **A `@name` placeholder with no value is an error**, as in Apache Camel ("Cannot find key ... to use when setting
+  named parameter"): `InvalidOperationException` naming the parameter and the statement, in a batch with the item's
+  index. It used to bind `NULL` silently. Applies to `mode=Execute` (single statement and batch) and to the poll
+  consumer's `onSuccess` / `onFailure` / `onBatchComplete`. A value that is present still binds `NULL` when it is null: a
+  header or key set to `null` / `DBNull.Value`, an empty string, a `param.*` expression that evaluates to null.
+  `@redbError` always has a value (`NULL` where nothing failed). *Migration:* give the placeholder a source —
+  `param.name=...`, a header, or a key — or set it to `null` explicitly.
+- **JSON values bind as scalars:** a `JsonElement` / `JsonNode` in a header, a dictionary body or a batch item becomes
+  a string, `long` / `decimal` / `double`, `bool` or `NULL`, and a JSON object or array becomes its JSON text. It used to
+  reach the provider as is and fail (`No mapping exists from object type JsonElement`).
+- **The body of a single statement binds by key when it is a map**, as in Apache Camel: any dictionary (a CSV row
+  `Dictionary<string, string>`, read-only and non-generic dictionaries) or a JSON object (`JsonElement`, `JsonDocument`,
+  `JsonObject`), with the key's case as a fallback. Only `IDictionary<string, object>` used to be read. A POCO, XML or
+  JSON-text body is still not read by name.
+- **`batchSize` is the number of statements in one round trip**, not an on/off flag: on PostgreSQL and SQL Server a
+  batch of 10 000 items with `batchSize=500` goes as 20 `DbBatch` round trips instead of 10 000 commands. The whole batch
+  still commits or rolls back as one transaction; `redbSql.batchStrategy` reads `DbBatch` there instead of `Commands`.
+  *Migration:* none; a very large `batchSize` makes one very large request.
+- **Sequences, streams and JSON arrays are batch sources**, not only lists: with `batchSize` above zero an `IEnumerable`
+  (`HashSet`, LINQ, `yield`), an `IAsyncEnumerable` of a reference type (a `StreamList` result) and a JSON array
+  (`JsonElement`, `JsonDocument` with an array root, `JsonArray`) are written item by item, read as they are written —
+  a stream of millions of rows never sits in memory. They used to run one statement with the whole body. A string, a
+  dictionary or JSON object and an XML document stay one value. *Migration:* none, unless a route relied on such a body
+  reaching a single statement: set `batchSize=0` there.
+
+### Added — SQL batch results
+
+- `SqlHeaders.BatchStrategy`, `BatchItemCount`, `BatchFailedIndex`, `BatchErrors`; the `SqlBatchItemError` record
+  (index, message, SQLSTATE); `SqlBuilder.BreakBatchOnError(bool)`.
+- **`DbBatch` for SQL batches:** with `breakBatchOnError=true` on a connection that can create a `DbBatch` (PostgreSQL,
+  SQL Server), items go in chunks of `batchSize` statements, one round trip each; `redbSql.batchStrategy` is `DbBatch`
+  and `SqlHeaders.BatchChunkCount` counts the round trips. The failed item's index comes from the provider's
+  `DbException.BatchCommand`; a provider that does not fill it gets the chunk's first item and
+  `exception.Data["redbSql.batchFailedChunk"]` with the chunk's range. Elsewhere one command is created per batch and its
+  parameters are reused for every item. No option picks the strategy, as in Apache Camel.
+- **`pollDelivery=List`** (`SqlEndpointOptions.PollDelivery`, `SqlBuilder.PollDelivery`; Apache Camel `useIterator=false`):
+  a poll consumer delivers one exchange with every polled row — a list, or with `outputType=StreamList` the open stream —
+  and runs `onSuccess` / `onFailure` and `onBatchComplete` once for it, after the reader is closed. The default `PerRow`
+  keeps an exchange per row.
+
+### Fixed — SQL batch
+
+- Cancelling a batch no longer records the cancellation as an item error and goes on executing the remaining items.
+- A `byte[]` body with `batchSize` set is one value, not a list of bytes inserted one by one.
+- Batch items bind their own values whatever their shape: `Dictionary<string, string>` (CSV rows), read-only and
+  non-generic dictionaries, JSON objects (`JsonElement`, `JsonObject`, `JsonDocument`), POCOs of the application (by
+  property, `[Column]` or `snake_case`), and exchanges grouped by `AggregationStrategies.GroupedExchange()` (their own
+  headers). These used to bind `NULL` or the carrying exchange's headers. Keys differing only by case are no longer
+  resolved by whichever came last. XML nodes and other .NET types (`XElement`, `Uri`, `Stream`) carry no named values, as
+  in Apache Camel: bind them with expressions such as `param.id=${xpath('@id')}`.
+- A `param.*` expression of a batch item sees the exchange properties and route context (`${property.x}`); it used to be
+  evaluated on a bare exchange.
+
+### Fixed — a streamed SQL result releases its connection when the exchange ends
+
+- `outputType=StreamList` handed the route an `IAsyncEnumerable` that closed its reader, command, transaction and
+  connection only when read to the end. A stream the route did not read — the route failed, filtered the message, or
+  replaced the body — kept its connection until the garbage collector found it; on PostgreSQL its open transaction also
+  held a lock on the table (a `DROP TABLE` waited until timeout). The result is now registered with the exchange, as Apache
+  Camel closes the result set on exchange completion, and released when the exchange ends. It can be read once; a second
+  read fails with an explicit message.
+
+### Changed — behavioural — `StreamList` inside a route transaction
+
+- **`outputType=StreamList` is refused inside a transaction** (a transacted route, an ambient `TransactionScope`), before
+  any connection is opened. Measured on PostgreSQL and SQL Server: the transaction does not commit while the stream's reader
+  is open (`TransactionInDoubtException`), and a later SQL step in the same transaction would need a second connection and
+  a distributed transaction. *Migration:* use `outputType=SelectList` inside the transaction, or read the stream outside it.
+
+### Added — exchange resources
+
+- `ExchangeResources.ReleaseWithExchange(exchange, resource)` (Apache Camel: `addOnCompletion`): a component registers an
+  `IAsyncDisposable` that the exchange releases in `ReleaseScopes` / `DisposeAsync`, most recent first and before its DI
+  scopes. Copies of the exchange do not inherit registered resources, and `RemoveProperties` by mask keeps them.
+
+### Fixed — streaming SQL poll marks its rows
+
+- A poll consumer with `outputType=StreamList` ran `onSuccess` / `onFailure` on the connection whose reader was still
+  open, with or without a transaction. PostgreSQL and SQL Server refuse a second command there; the failure was swallowed
+  without a log, the rows stayed unmarked and were processed again on every poll (SQLite allowed it, so the tests passed).
+  Outside a transaction the statements now run on a connection of their own to the primary database, as Apache Camel runs
+  `onConsume` through its `JdbcTemplate`; inside one they stay on the reader's connection and transaction, as in Camel.
+  A failed row of a transacted streaming poll rolls the transaction back after the reader is closed; PostgreSQL and SQL
+  Server refuse even the rollback while it is open, and the poll used to throw from there.
+- A failing `onSuccess` is logged in every poll mode; it used to pass unnoticed when no `onFailure` was set.
+
+### Changed — behavioural — streaming poll on SQLite outside a transaction
+
+- **SQLite, `mode=Poll` with `outputType=StreamList` and `onSuccess` / `onFailure`, no transaction**: the statements now
+  run on another connection, and in SQLite's default journal mode the open reader blocks that write ("database is
+  locked"). It used to work on the reader's connection. *Migration:* set `transacted=true` (the statements stay on the
+  reader's connection), switch the database to WAL, or drop `outputType=StreamList`.
+- The SQL connector README no longer calls `outputClass` / `outputHeader` unimplemented or `Sql.Procedure(...)` broken.
+
+### Fixed — SQL `outputType=Auto` and named queries
+
+- **`outputType=Auto` follows the statement that runs**, not the URI path. A `SELECT` given in the `query` option (a
+  constant or `${...}`) or through a named query `ref:name` ran as a non-query: the body stayed as it was,
+  `redbSql.updateCount` was `-1`, and nothing failed. A `SELECT` path with an `INSERT` in `query` ran as a reader.
+  *Behavioural:* such a route now gets the rows in the body (or `redbSql.updateCount` for the `INSERT`).
+- **`sql:ref:name` works with named queries registered through `AddRedbRouteSql(sql => sql.AddNamedQuery(...))`.** The
+  registry was never put where the connector looks for it: the producer threw "no ISqlNamedQueryRegistry is registered"
+  and a poll consumer failed that way on every cycle. The registry is now registered on the route context.
+
+### Changed — behavioural — SQL `outputClass` maps strictly
+
+- **A column that cannot become its property fails the exchange** with an `InvalidOperationException` naming the column,
+  the property and both types, as Apache Camel's `BeanPropertyRowMapper` refuses a type mismatch. It used to be skipped
+  silently, leaving the property's default. Measured on SQLite, PostgreSQL and SQL Server: `timestamptz` / `datetime2`
+  into `DateTimeOffset`, `date` into `DateOnly`, an integer into an `enum`, `5000000000` or `'abc'` into `int` all came
+  out as defaults, with no error. The accepted conversions are listed in the connector README; `ScalarMapper<T>`
+  follows them too.
+- **`NULL` into a value-type property is an error**; into a nullable or reference property it sets `null` (it used to
+  leave whatever the property's initializer set).
+- **A timestamp without a time zone does not become a `DateTimeOffset`**, and a `DateTimeOffset` does not become a
+  `DateTime`: the offset would be guessed or lost.
+- **Text is parsed with the invariant culture**: `'12.5'` into `decimal` failed under a culture with a decimal comma.
+- **An error while mapping `outputClass` reaches the route as itself**; the mapper was invoked by reflection per row and
+  every exception arrived wrapped in `TargetInvocationException`.
+- *Migration:* make a property nullable where its column is, map timestamps without a time zone to `DateTime`, and give a
+  property a type that holds its column's values.
+
+### Changed — behavioural — SQL read replica only with `readOnly=true`
+
+- **`readOnly=true`** (`SqlEndpointOptions.ReadOnly`, `SqlBuilder.ReadOnly()`) sends a statement to the data source's read
+  replica (`SqlConnectionOptions.ReadConnectionString`), for `mode=Execute`, `mode=Procedure` and a poll consumer. Without
+  it every statement goes to the primary database. The replica used to be picked automatically: an `Execute` endpoint
+  whose `outputType` reads rows — `INSERT … RETURNING` with `outputType=Scalar` included — and every poll consumer, its
+  `onSuccess` / `onFailure` included, ran on it. Only the endpoint's author knows that a statement does not write (a
+  `SELECT` can call a function that writes, advance a sequence or take a lock), so nothing is guessed from the SQL.
+- `readOnly=true` is refused with `batchSize` above zero, and for a poll with `onSuccess` / `onFailure` /
+  `onBatchComplete` or `transacted=true`: rows read on a lagging replica and marked on the primary come back.
+- *Migration:* add `readOnly=true` (or `.ReadOnly()`) to the endpoints that should read from the replica.
+
+### Fixed — SQL execution time
+
+- `redbSql.executionTime` measured only resolving and binding the statement: the stopwatch stopped before the command ran.
+  It now includes executing the statement and reading its result — for `outputType=StreamList`, until the reader is open —
+  in the producer and in the poll consumer.
+
+### Added — SQL batch keys and telemetry
+
+- **`redbSql.generatedKeys` for a batch**, as Apache Camel's `CamelSqlGeneratedKeyRows`: with an `outputType` that reads
+  rows (`SelectList`, `SelectOne`, `Scalar`, `StreamList`), the rows the batch's statements return — `INSERT … RETURNING`
+  on PostgreSQL and SQLite, `OUTPUT inserted.*` on SQL Server — are collected in item order, across `DbBatch` round trips,
+  as `List<Dictionary<string, object?>>` (`List<T>` with `outputClass`); `SqlHeaders.GeneratedKeysRowCount` holds their
+  number, and the body stays the list that was written. A failed item of a batch that goes on past errors returns none.
+  `outputType=Auto` makes an `INSERT` a statement without rows, so nothing is collected. MySQL's `LAST_INSERT_ID()` and
+  Oracle's `RETURNING … INTO` are not collected in a batch.
+- **Batch tags on the `sql.execute` span**: `db.operation.batch.size` (from two items, as the OpenTelemetry database
+  conventions count a batch), `redb.sql.batch.strategy`, `redb.sql.batch.chunks` (`DbBatch` round trips) and
+  `redb.sql.batch.failed_index`. Parameter values are never tagged.
+
+### Changed — breaking — SQL parameters are written `:#name`, as in Apache Camel
+
+- **A parameter in a `sql:` statement is `:#name`**: in the URI path and `query`, in `onSuccess` / `onFailure` /
+  `onBatchComplete` (`:#redbError` there), in named queries, in batches and in the poll query. `@` is no longer a
+  placeholder and reaches the database as written, so T-SQL variables (`DECLARE @n int = :#value`), `EXEC` argument
+  names (`EXEC proc @arg = :#value`) and MySQL user variables work. They clashed with `@name` placeholders: with strict
+  binding `EXEC proc @arg = @value` failed with "has no value", and a declared variable never worked.
+- **Placeholders are found only in the SQL itself**, not inside string literals, quoted identifiers, comments or
+  PostgreSQL dollar quotes: `'user@example.com'` and `-- :#todo` stay text.
+- **`placeholderStyle`** (`SqlEndpointOptions.PlaceholderStyle`, `SqlBuilder.PlaceholderStyle(...)`) sets what the
+  provider receives: `At` — `@name`, the default (Npgsql, SqlClient, Microsoft.Data.Sqlite, MySqlConnector); `Colon` —
+  `:name` (Oracle); `Question` — `?` with one parameter per occurrence (ODBC, OleDb).
+- **`backslashEscapes`** (`SqlEndpointOptions.BackslashEscapes`, `SqlBuilder.BackslashEscapes()`): MySQL and MariaDB escape
+  a quote with a backslash by default, and `'it\'s'` used to hide the placeholders after it — the provider got `:#id` and
+  refused the statement. With `backslashEscapes=true` a backslash inside `'…'` and `"…"` escapes the next character. Off by
+  default: in standard SQL `'C:\'` is a complete literal, and nothing is guessed from the provider. Doubling the quote
+  (`''`) works without the option. Checked on MySQL 8.4, MariaDB 11 and Firebird 5 (tier 2).
+- **A placeholder of the poll query without a `param.*` value is an error** naming it, as everywhere else: the poll query
+  has no exchange to take values from.
+- **`SqlBuilder.Param("@x", ...)` is refused**: name the parameter `x` or `:#x`.
+- Apache Camel's inline expressions `:#${...}` and `:#in:name` lists are refused with a message; use `param.name=${...}`.
+- *Migration:* replace every `@name` placeholder with `:#name` in `sql:` URIs, lifecycle SQL, named queries and Route-XML;
+  keep `@` only where the database itself means it.
+
+### Fixed — SQL connector review after 4.0.0 (`docs/V4/sql/REVIEW-POST-400-2026-09-16.md`)
+
+A code review of everything the SQL connector gained after 4.0.0, with Apache Camel as the reference. Every finding is
+fixed; the ones that change behaviour are marked.
+
+- **A streamed result survives copies of its exchange.** The body of `outputType=StreamList` was disposable, and a copy of
+  the exchange (WireTap, RecipientList, Loop, Threads, a `seda:` hand-off) shares the body: disposing the copy closed the
+  reader and the connection under the original — deterministically after `.Enrich("sql:…?outputType=StreamList")`. The
+  body is no longer disposable; the release is a resource of the exchange that ran the endpoint, and `Enrich` hands the
+  resource exchange's resources over to the enriched one (`ExchangeResources.HandOver`, as Camel's
+  `handoverCompletions`), so the enriched route reads the stream. A copy that outlives the original still finds the
+  stream released: read it in the segment that produced it, or use `SelectList` across a `seda:`/`Threads` boundary.
+- **`SqlIdempotentRepository` and `SqlClaimCheckRepository` bootstrap on MySQL and MariaDB.** Their `TEXT` key columns
+  were refused in a primary key (error 1170), so `CreateTable=true` failed on the first call. The keys are sized now —
+  `VARCHAR(128)` for the processor name, `VARCHAR(255)` for the message and claim keys, `NVARCHAR` of the same sizes on
+  SQL Server, where the idempotent key also drops under the 900-byte clustered index limit (it was 1020). Tables created
+  by an earlier release keep their schema. `SqlIdempotentOptions.TableName` is validated like the claim-check one.
+- *Behavioural:* **`outputType=Auto` is decided by what the statement returns**, as Camel's `execute()` asks the driver —
+  not by the first word of the text. A comment before `SELECT` or a leading `(` used to run the statement as a non-query
+  (body untouched, `updateCount=-1`, no error); `WITH … UPDATE` ran as a reader. `INSERT … RETURNING` under `Auto` now
+  returns its rows; a batch under `Auto` collects no rows, as Camel's `executeBatch`. `redbSql.outputType` reports the
+  resolved type.
+- *Behavioural:* **lifecycle SQL of a poll (`onSuccess` / `onFailure` / `onBatchComplete`) binds values under the
+  producer's rule:** `""` binds `NULL` and a `JsonElement` binds its scalar. They used to reach the provider as they
+  were — a JSON header failed `onSuccess`, the row stayed unmarked and was polled again forever.
+- *Behavioural:* **a stop is not a failure of the row.** A cancellation of the poll while a row was in the route ran
+  `onFailure` with the cancelled token, marked the row with "The operation was canceled" where the driver let it, and
+  logged an error. The cancellation now goes up, `onFailure` does not run, nothing is logged as an error, and the row is
+  polled again after the restart. Rollbacks no longer take the cancellation token.
+- *Behavioural:* **`param.x=${…}` and `query=${…}` on a poll are errors** naming the option: a poll has no exchange to
+  evaluate them in. The parameter used to bind the template text as its value (an empty result, silently), and the query
+  fell back to the URI path.
+- *Behavioural:* **a batch reports only its own run.** `redbSql.batchFailedIndex`, `batchErrors` and `redbSql.error` left
+  by an earlier attempt on the same exchange (a redelivery through `OnException`, an earlier `sql:` step) are removed
+  before the batch writes its result. `redbSql.batchStrategy` is set on failure too.
+- *Behavioural:* **a returned row that `outputClass` cannot hold ends the batch** with `SqlRowMappingException` (an
+  `InvalidOperationException`) in either error mode; in continue mode it used to be recorded as an error of every item,
+  in break mode as a chunk failure with the chunk's first index.
+- **`:#Id` and `:#id` in one statement are one parameter in the text the provider gets** (SQLite refused the second name).
+- **`bool` and `enum` properties accept a `decimal` or `double` that holds an integer** — Oracle `NUMBER(1)`, PostgreSQL
+  `numeric` — as the integer properties already did.
+- **Invalid ISO text (`2024-13-45`) into a date property** fails as a mapping error naming the column, not with a
+  `FormatException` carrying the value.
+- **`SqlBuilder.Param(name, object)` and the numeric builder options are written invariantly**: `12.5`, not `12,5` under a
+  culture with a decimal comma; dates as ISO 8601 round-trip text.
+- **`SqlBuilder.DataSource(IExpression)` and `ConnectionString(IExpression)` take a constant only**; a `${…}` expression is
+  refused, since the endpoint is fixed when it is created (a dynamic target is `ToD`). They used to write the template
+  text into the URI. `SqlBuilder.ConnectionString(string)` added. `outputHeader=${…}` names the header per exchange; it
+  used to be a header literally named `${header.x}`.
+- **`asFunction=true` with an `OUT`/`INOUT` parameter is refused** at endpoint creation: `SELECT fn(...)` returns the
+  scalar, and under a positional placeholder style the parameters shifted. **`pollDelivery=List` with `Scalar`/`SelectOne`**
+  is refused instead of ignored.
+- **`AddRedbRouteSql` called twice keeps the named queries of both calls** and registers one `sql` component; the second
+  call used to replace the first call's registry.
+- The message for a placeholder without a value names it `:#name`; a sequence of bytes or characters other than
+  `byte[]`/`string` (`ArraySegment<byte>`, `List<byte>`, `char[]`) is one value, not a batch; a source that answers a
+  cancellation with its own exception is not reported as a source failure; a transaction whose disposal throws no longer
+  strands the producer's connection; a failing release of an exchange resource is logged through the context when the
+  exchange has no DI scope.
+
+### Changed — the SQL connector is tested on Microsoft.Data.SqlClient 7.0.3
+
+- The SQL Server e2e suite of `redb.Route.Sql` runs on `Microsoft.Data.SqlClient` 7.0.3 (was 5.2.2), the version
+  `redb.MSSql` now ships; the connector itself references no driver. Characterization and the full suite give the same
+  results as on 5.2.2 on net8.0, net9.0 and net10.0.
+
 ## [4.0.0] — 2026-09-12
 
 > **4.0.0 breaking bundle (docs/V4/09-BREAKING.md).** The entries under *Removed* and the first two

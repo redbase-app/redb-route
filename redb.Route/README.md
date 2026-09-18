@@ -215,8 +215,8 @@ AST-based compiled expression language with caching (used in `Log`, `Filter(stri
 | `LoopProcessor` | `.Loop(...)` | Loop |
 | `ThrottleProcessor` | `.Throttle(...)` | Throttler |
 | `CircuitBreakerProcessor` | `.CircuitBreaker(...)` | Circuit Breaker |
-| `RetryProcessor` | `.Retry(...)` | Retry |
-| `DeadLetterProcessor` | `.DeadLetterChannel(...)` | Dead Letter Channel |
+| `RetryProcessor` | `.Transacted().Retry(...)` | Retry (transaction scope) |
+| `DeadLetterProcessor` | `.Transacted().DeadLetterChannel(...)` | Dead Letter Channel (transaction scope) |
 | `OnExceptionProcessor` | `.OnException<T>()` | Exception Handler |
 | `TryCatchProcessor` | `.DoTry()` | Try-Catch |
 | `IdempotentConsumerProcessor` | `.IdempotentConsumer(...)` | Idempotent Consumer |
@@ -244,11 +244,12 @@ AST-based compiled expression language with caching (used in `Log`, `Filter(stri
 ## Error Handling
 
 ```csharp
-// Retry with delay
-.Retry(maxRetries: 3, initialDelay: TimeSpan.FromSeconds(1))
-
-// Dead Letter Channel
-.DeadLetterChannel("seda://failed")
+// Retry + Dead Letter Channel live on the transaction scope (.Transacted() / .Transaction())
+.Transacted()
+    .Retry(attempts: 3, delay: TimeSpan.FromSeconds(1))
+    .DeadLetterChannel("seda://failed")
+    .To("http://api/submit")
+.End()
 
 // Try-Catch-Finally scope
 .DoTry()
@@ -260,6 +261,27 @@ AST-based compiled expression language with caching (used in `Log`, `Filter(stri
     .Log("Attempt done")
 .End()
 ```
+
+## Transactions
+
+One primitive: `.Transacted()` (alias `.Transaction()`). Inside it all `redb` work shares one connection
+per (transaction, database) and commits or rolls back with the block; put `.IdempotentConsumer(...)`
+**inside** `.Transacted()` so the dedup key is written in the same transaction as the work.
+
+```csharp
+.Transacted()
+    .Process(async ex => await redb.SaveAsync(order))   // enlists in the ambient transaction
+    .To("kafka://orders.created")
+.End()
+```
+
+Keep a transacted route to one database (a second durable connection escalates to MSDTC, unsupported on
+.NET/Linux), don't run parallel branches inside a transaction (open a transaction inside each sub-route
+instead), and note `BeginRedbTransaction()` is `[Obsolete]` — `.Transacted()` enlists `redb` on its own.
+
+**See the full guide: [TRANSACTIONS.md](../TRANSACTIONS.md)** — placement,
+per-mode idempotency semantics, the at-most-once loss window without a transaction, parallelism, and
+migration off `BeginRedbTransaction()`.
 
 ## Content-Based Routing
 

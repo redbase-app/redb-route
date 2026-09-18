@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes xmlns="urn:redb:route:1.0">
+
+  <!-- The heart of the module: one partner request, from a validated file to a queued response.
+       A technical failure (database, network) is deliberately NOT handled here: the transaction
+       rolls back, the consumer sees the failure, and the file stays for the next poll. -->
+  <route id="serial-number-request" description="A serial number request: validate, decide, respond">
+    <from uri="direct://serial-number-request"/>
+
+    <!-- Every step is timed; when a message fails, the log shows the path it took. -->
+    <messageHistory/>
+
+    <tryCatch>
+      <try>
+        <validateXsd file="SerialNumberRequest.xsd"/>
+        <unmarshal format="application/xml"
+                   target="SerialNumbers.Core.Integration.Xml.SerialNumberRequestXml, SerialNumbers.Core"/>
+      </try>
+      <catch exceptions="redb.Route.Validation.ValidationException, redb.Route">
+        <to uri="bean:#intake?method=RecordInvalid"/>
+        <log level="Warning">${header.serials.partner}: ${header.serials.fileName} violates the schema, recorded as Invalid</log>
+        <stop/>
+      </catch>
+    </tryCatch>
+
+    <!-- The decision, the serial numbers and the outbox row commit together. Duplicates need no
+         registry of processed files: the request carries the unique key {partner}/{request id},
+         so a twin of a request already written fails on that key and the transaction rolls back
+         without a trace. -->
+    <transaction>
+      <to uri="bean:#serial-requests?method=Register"/>
+      <choice>
+        <when expr="${header.serials.decision} == 'Accepted'">
+          <to uri="bean:#serial-requests?method=Allocate"/>
+          <to uri="bean:#serial-requests?method=QueueResponse"/>
+        </when>
+        <when expr="${header.serials.decision} == 'Rejected'">
+          <to uri="bean:#serial-requests?method=Reject"/>
+          <to uri="bean:#serial-requests?method=QueueResponse"/>
+        </when>
+      </choice>
+    </transaction>
+
+    <!-- Logged after the commit: the line says what has happened, not what was about to. -->
+    <choice>
+      <when expr="${header.serials.decision} == 'OnHold'">
+        <log>${header.serials.partner}: request ${header.serials.requestId} is on hold until its product is activated</log>
+      </when>
+      <when expr="${header.serials.decision} == 'AlreadyDecided'">
+        <log>${header.serials.partner}: request ${header.serials.requestId} was decided by another release, nothing to do</log>
+      </when>
+      <otherwise>
+        <log>${header.serials.partner}: request ${header.serials.requestId} ${header.serials.decision}, response queued</log>
+      </otherwise>
+    </choice>
+
+    <!-- The path the request took, with timings. Raise the module to Debug and every request
+         shows its trail; at the usual level this line is silent. -->
+    <log level="Debug">${messageHistory()}</log>
+  </route>
+
+</routes>

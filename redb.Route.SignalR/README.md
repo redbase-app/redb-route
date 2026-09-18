@@ -337,7 +337,14 @@ services.AddRedbRouteSignalR(o =>
 
 Returning null rejects the handshake with 401 **before** the connection is upgraded. The
 principal's `NameIdentifier` claim becomes SignalR's `UserIdentifier`, which is what makes
-`Clients.User(...)` (`targetType=User`) and the `redbSignalR.UserId` header work.
+`Clients.User(...)` (`targetType=User`) and the `redbSignalR.UserId` header work. The principal itself
+is on every exchange the hub produces (`ExchangePrincipal.Get(exchange)`); an anonymous connection
+carries none. Build the identity with an authentication type (`new ClaimsIdentity(claims, "Bearer")`):
+code that reads the principal treats an identity that is not authenticated as anonymous.
+
+Without this delegate, a caller identified by the shared host
+(`AddRedbRouteHttpHosting(o => o.ResolvePrincipal = ...)`) is handed to SignalR the same way, but an
+anonymous handshake is not rejected. When the delegate is set, it takes precedence.
 
 ---
 

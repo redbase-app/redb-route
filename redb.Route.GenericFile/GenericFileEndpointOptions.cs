@@ -42,6 +42,35 @@ public abstract class GenericFileEndpointOptions : EndpointOptions
     /// <summary>Minimum file age in milliseconds before the file is eligible for pickup. (default: 0)</summary>
     public long MinAge { get; set; }
 
+    // ── Poll backoff (Apache Camel ScheduledPollConsumer parity) ──
+
+    /// <summary>
+    /// How many subsequent polls to skip once a backoff threshold is reached. 0 = backoff disabled (default).
+    /// Requires at least one of <see cref="BackoffIdleThreshold"/> / <see cref="BackoffErrorThreshold"/> to be set.
+    /// </summary>
+    public int BackoffMultiplier { get; set; }
+
+    /// <summary>
+    /// Number of consecutive idle polls (a poll that created no exchange) that arms the backoff skip.
+    /// 0 = idle backoff disabled (default).
+    /// </summary>
+    public int BackoffIdleThreshold { get; set; }
+
+    /// <summary>
+    /// Number of consecutive failed polls (the poll itself threw — e.g. the server is down) that arms the
+    /// backoff skip. 0 = error backoff disabled (default).
+    /// </summary>
+    public int BackoffErrorThreshold { get; set; }
+
+    /// <summary>
+    /// Extension beyond Camel parity (default false): count a poll that created at least one exchange whose
+    /// route all failed (unhandled) as an <c>Error</c> for <see cref="BackoffErrorThreshold"/>. Lets a route
+    /// back off polling when the downstream (e.g. the database) is down and every file fails, instead of
+    /// re-reading the same files every <see cref="Delay"/>. A poll with any successful exchange counts as
+    /// success. Needs <see cref="BackoffErrorThreshold"/> and <see cref="BackoffMultiplier"/> to have effect.
+    /// </summary>
+    public bool BackoffOnFailedExchanges { get; set; }
+
     // ═══════════════════════════════════════════════════════════════════
     //  CONSUMER: Post-processing
     // ═══════════════════════════════════════════════════════════════════
@@ -158,5 +187,25 @@ public abstract class GenericFileEndpointOptions : EndpointOptions
 
         if (Delete && !string.IsNullOrEmpty(MoveTo))
             throw new InvalidOperationException("Cannot set both Delete=true and MoveTo. Choose one post-processing strategy.");
+
+        if (BackoffMultiplier < 0)
+            throw new ArgumentOutOfRangeException(nameof(BackoffMultiplier), BackoffMultiplier,
+                "BackoffMultiplier cannot be negative.");
+        if (BackoffIdleThreshold < 0)
+            throw new ArgumentOutOfRangeException(nameof(BackoffIdleThreshold), BackoffIdleThreshold,
+                "BackoffIdleThreshold cannot be negative.");
+        if (BackoffErrorThreshold < 0)
+            throw new ArgumentOutOfRangeException(nameof(BackoffErrorThreshold), BackoffErrorThreshold,
+                "BackoffErrorThreshold cannot be negative.");
+
+        // Camel refuses backoffMultiplier without a threshold; we also refuse a threshold without a
+        // multiplier, since that configuration is ambiguous (a threshold that can never skip anything).
+        var hasThreshold = BackoffIdleThreshold > 0 || BackoffErrorThreshold > 0;
+        if (BackoffMultiplier > 0 && !hasThreshold)
+            throw new InvalidOperationException(
+                "BackoffMultiplier requires at least one of BackoffIdleThreshold / BackoffErrorThreshold to be set.");
+        if (BackoffMultiplier == 0 && hasThreshold)
+            throw new InvalidOperationException(
+                "BackoffIdleThreshold / BackoffErrorThreshold require BackoffMultiplier to be set (> 0).");
     }
 }

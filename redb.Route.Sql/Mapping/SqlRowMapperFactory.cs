@@ -45,11 +45,20 @@ internal static class SqlRowMapperFactory
             throw new InvalidOperationException(
                 $"outputClass '{type.FullName}' must have a public parameterless constructor.");
 
-        var mapperType = typeof(PocoRowMapper<>).MakeGenericType(type);
-        var mapper = Activator.CreateInstance(mapperType)!;
-        var mapMethod = mapperType.GetMethod(nameof(PocoRowMapper<object>.Map))!;
+        // A typed delegate, built once: a mapping error reaches the route as itself, not wrapped in the
+        // TargetInvocationException a reflective Invoke per row would add.
+        var map = (Func<DbDataReader, object>)typeof(SqlRowMapperFactory)
+            .GetMethod(nameof(CreateMap), BindingFlags.NonPublic | BindingFlags.Static)!
+            .MakeGenericMethod(type)
+            .Invoke(null, null)!;
 
-        return new PocoMapping(type, reader => mapMethod.Invoke(mapper, [reader])!);
+        return new PocoMapping(type, map);
+    }
+
+    private static Func<DbDataReader, object> CreateMap<T>() where T : new()
+    {
+        var mapper = new PocoRowMapper<T>();
+        return reader => mapper.Map(reader)!;
     }
 
     private static Type? ResolveType(string name)

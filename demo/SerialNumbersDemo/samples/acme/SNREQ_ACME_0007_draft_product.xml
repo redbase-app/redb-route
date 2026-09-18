@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The product is still a draft: the request waits on hold. Activate the product and it is answered. -->
+<SerialNumberRequest>
+  <RequestId>ACME-2026-0007</RequestId>
+  <Gtin>04607005550001</Gtin>
+  <Quantity>5000</Quantity>
+</SerialNumberRequest>

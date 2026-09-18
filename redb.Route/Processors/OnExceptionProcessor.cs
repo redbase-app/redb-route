@@ -255,20 +255,22 @@ public class OnExceptionProcessor : IProcessor
 
                 await handler.Processor.Process(exchange, ct).ConfigureAwait(false);
 
-                // Apply handled/continued flags
-                if (handler.Handled)
+                // Apply handled/continued flags.
+                // Handled or Continued suppress the failure — the exception is cleared and the consumer
+                // commits (Continued additionally means routing is meant to resume). Otherwise — the
+                // Camel handled(false) default — the failure is NOT suppressed: the onException route ran
+                // (logging / DLQ / etc.), but the exception stays on the exchange with ExceptionHandled=false
+                // so the consumer, which treats `Exception != null && !ExceptionHandled` as a failure, rolls
+                // back and does not ack. Previously this branch set ExceptionHandled=true, silently swallowing
+                // the failure: the transaction rolled back while the message was acknowledged.
+                if (handler.Handled || handler.Continued)
                 {
                     exchange.ExceptionHandled = true;
                     exchange.Exception = null;
                 }
                 else
                 {
-                    exchange.ExceptionHandled = true;
-                }
-
-                if (handler.Continued)
-                {
-                    exchange.ExceptionHandled = true;
+                    exchange.ExceptionHandled = false;
                 }
 
                 return;
@@ -294,10 +296,24 @@ public class OnExceptionProcessor : IProcessor
 
     private ExceptionHandler? FindHandler(Exception ex, IExchange exchange)
     {
-        return _handlers.FirstOrDefault(h =>
-            h.ExceptionType.IsInstanceOfType(ex) &&
-            (h.OnWhenPredicate == null || h.OnWhenPredicate(exchange)));
+        // Camel semantics: pick the most-specific (most-derived) matching handler, not the first
+        // declared. Among candidates whose type matches and whose OnWhen guard passes, prefer the one
+        // whose ExceptionType is deepest in the hierarchy; ties keep declaration order (first wins).
+        ExceptionHandler? best = null;
+        foreach (var h in _handlers)
+        {
+            if (!h.ExceptionType.IsInstanceOfType(ex)) continue;
+            if (h.OnWhenPredicate != null && !h.OnWhenPredicate(exchange)) continue;
+            if (best == null || IsMoreSpecific(h.ExceptionType, best.ExceptionType))
+                best = h;
+        }
+        return best;
     }
+
+    /// <summary><paramref name="candidate"/> is more specific than <paramref name="current"/> when it is
+    /// a strict subtype — <paramref name="current"/> is assignable from it but not the reverse.</summary>
+    private static bool IsMoreSpecific(Type candidate, Type current)
+        => candidate != current && current.IsAssignableFrom(candidate);
 
     /// <summary>Gets the registered handlers.</summary>
     public IReadOnlyList<ExceptionHandler> Handlers => _handlers;

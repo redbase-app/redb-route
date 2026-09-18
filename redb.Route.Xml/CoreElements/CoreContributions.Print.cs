@@ -130,6 +130,8 @@ internal static partial class CoreContributions
                 A(e, "messageFrequency") is { } f ? $"{f}L" : XmlCodeWriter.Ts(ParseTs(A(e, "period") ?? "0:0:1"))),
             ["streamCaching"] = (e, w) => w.Verb(e, "StreamCaching",
                 A(e, "spoolThreshold") is { } s ? [$"{s}L"] : []),
+            ["messageHistory"] = (e, w) => w.Verb(e, "MessageHistory",
+                A(e, "value") is { } mh ? [XmlCodeWriter.Bool(bool.Parse(mh))] : []),
             ["validateJsonSchema"] = (e, w) => w.Verb(e, "ValidateJsonSchema", Trim(
                 XmlCodeWriter.Str(A(e, "file") is { } f ? w.ReadResource(f) : ElementText6(e)),
                 A(e, "throwOnFailure") is { } t ? XmlCodeWriter.Bool(bool.Parse(t)) : null)),

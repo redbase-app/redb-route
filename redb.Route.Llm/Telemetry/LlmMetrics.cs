@@ -78,10 +78,4 @@ public static class LlmMetrics
     /// <summary>Tool-cache reads that found no row (cold key).</summary>
     public static readonly Counter<long> ToolCacheMisses =
         Meter.CreateCounter<long>("redb.route.llm.tool_cache.misses", "reads",
-            "Tool-cache reads that found no row.");
-
-    /// <summary>Tool-cache reads that found an expired row (and triggered lazy eviction).</summary>
-    public static readonly Counter<long> ToolCacheExpired =
-        Meter.CreateCounter<long>("redb.route.llm.tool_cache.expired", "reads",
-            "Tool-cache reads that found an expired row.");
-}
+            "Tool-cache reads that found no row.");}

@@ -68,7 +68,7 @@ internal sealed class SqlProcedureProducer : IProducer
         var factory = ResolveConnectionFactory();
         var sw = Stopwatch.StartNew();
 
-        await using var connection = await factory.CreateConnectionAsync(readOnly: false, ct).ConfigureAwait(false);
+        await using var connection = await factory.CreateConnectionAsync(readOnly: _options.ReadOnly, ct).ConfigureAwait(false);
 
         var hasAmbientTx = Transaction.Current != null;
         DbTransaction? tx = null;
@@ -109,7 +109,7 @@ internal sealed class SqlProcedureProducer : IProducer
                 // outputHeader keeps the incoming body intact and parks the function result
                 // in a header instead — the same contract as in SqlProducer.
                 if (!string.IsNullOrEmpty(_options.OutputHeader))
-                    exchange.In.Headers[_options.OutputHeader] = result;
+                    exchange.In.Headers[SqlExchangeHeaders.ResolveOutputHeader(_options.OutputHeader, exchange)] = result;
                 else
                     exchange.In.Body = result;
             }
@@ -147,7 +147,8 @@ internal sealed class SqlProcedureProducer : IProducer
                 _options.ProcedureName, _options.DataSource);
             if (tx != null)
             {
-                try { await tx.RollbackAsync(ct).ConfigureAwait(false); }
+                // The rollback is not interruptible: a cancelled token would only turn it into a "rollback failed" log.
+                try { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
                 catch (Exception rbEx) { _logger?.LogError(rbEx, "SQL procedure transaction rollback failed"); }
             }
             throw;
@@ -183,11 +184,11 @@ internal sealed class SqlProcedureProducer : IProducer
                 // Resolve value: expression > explicit param > header > body
                 if (def.Expression != null)
                 {
-                    param.Value = SqlProducer.ResolveParamValue(def.Expression, exchange);
+                    param.Value = SqlParameterBinder.ResolveParamValue(def.Expression, exchange);
                 }
                 else if (explicitParams.TryGetValue(def.Name, out var explicitVal))
                 {
-                    param.Value = SqlProducer.ResolveParamValue(explicitVal, exchange);
+                    param.Value = SqlParameterBinder.ResolveParamValue(explicitVal, exchange);
                 }
                 else if (exchange.In.Headers.TryGetValue(def.Name, out var headerVal))
                 {
@@ -237,14 +238,16 @@ internal sealed class SqlProcedureProducer : IProducer
         return result;
     }
 
+    /// <summary><c>SELECT name(:#p1, :#p2, …)</c> from the IN / INOUT parameters, in the provider's placeholder style.</summary>
     private string BuildFunctionCall(string functionName)
     {
         var paramDefs = ParseProcedureParams();
         var paramList = string.Join(", ", paramDefs
             .Where(p => p.Direction is SqlParamDirection.In or SqlParamDirection.InOut)
-            .Select(p => $"@{p.Name}"));
+            .Select(p => $":#{p.Name}"));
 
-        return $"SELECT {functionName}({paramList})";
+        var call = $"SELECT {functionName}({paramList})";
+        return SqlParameterParser.Rewrite(call, SqlParameterParser.FindPlaceholders(call, _options.BackslashEscapes), _options.PlaceholderStyle);
     }
 
     private ISqlConnectionFactory ResolveConnectionFactory() => _endpoint.ResolveConnectionFactory();

@@ -4,7 +4,6 @@ using redb.Core.Models.Entities;
 using redb.Route.Abstractions;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Storage.Redb.Schemas;
-using redb.Route.Llm.Telemetry;
 using redb.Route.RedbCore;
 using redb.Route.RedbCore.Extensions;
 
@@ -19,10 +18,10 @@ namespace redb.Route.Llm.Storage.Redb;
 /// on a single row. TTL is honoured lazily — entries past expiry are dropped on
 /// read.
 /// <para>
-/// Distinct from <see cref="RedbToolIdempotencyStore"/>: idempotency answers
-/// "have I already run this tool call (by tool_use_id)?", while this store
-/// answers "do I already have an output for this exact input?". Engine
-/// consults the cache before reservation.
+/// Distinct from <see cref="RedbToolIdempotencyStore"/>: idempotency answers "have I already run
+/// this tool call (by tool_use_id)?", while this store answers "do I already have an output for
+/// this exact input?". The engine consults this store for <c>ToolCachingPolicy.Persist</c> tools,
+/// after approval and before the idempotency reservation.
 /// </para>
 /// <para>
 /// The store does not own an <see cref="IRedbService"/> instance — each call
@@ -68,27 +67,15 @@ public sealed class RedbToolResultCache : IToolCacheStore
             .ConfigureAwait(false);
 
         if (row is null)
-        {
-            LlmMetrics.ToolCacheMisses.Add(1);
             return null;
-        }
 
         if (row.Props.ExpiresAtUtc is { } exp && exp <= DateTimeOffset.UtcNow)
         {
-            // Lazy eviction — soft-delete and report a miss. Counted separately
-            // so dashboards can distinguish cold keys from TTL drops.
-            LlmMetrics.ToolCacheExpired.Add(1);
+            // Lazy eviction — soft-delete and report a miss. Whoever asked sees a miss, and the
+            // two cases (cold key, expired entry) are indistinguishable through this interface.
             await redb.SoftDeleteAsync([row]).ConfigureAwait(false);
             return null;
         }
-
-        // Hit-count goes through OpenTelemetry (RouteMetrics meter), NOT a
-        // per-read SaveAsync. Tag with the tool name when we have one so
-        // dashboards can break down hit rate per tool.
-        if (row.Props.ToolName is { Length: > 0 } toolName)
-            LlmMetrics.ToolCacheHits.Add(1, new KeyValuePair<string, object?>("llm.tool.name", toolName));
-        else
-            LlmMetrics.ToolCacheHits.Add(1);
 
         return row.Props.OutputJson;
     }

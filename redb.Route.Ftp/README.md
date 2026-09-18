@@ -188,6 +188,7 @@ Uses `FtpEncryptionMode.Explicit`. Certificate validation is enabled by default.
 | **TLS** | `.UseFtps()`, `.ValidateCertificate()` |
 | **Reconnect** | `.MaximumReconnectAttempts()`, `.ReconnectDelay()`, `.Disconnect()` |
 | **Consumer** | `.Delay()`, `.InitialDelay()`, `.Include()`, `.Exclude()`, `.Recursive()`, `.MaxDepth()`, `.MinDepth()`, `.SortBy()`, `.MaxMessagesPerPoll()`, `.MinAge()`, `.MaxAge()` |
+| **Poll backoff** | `.BackoffMultiplier()`, `.BackoffIdleThreshold()`, `.BackoffErrorThreshold()`, `.BackoffOnFailedExchanges()` |
 | **Post-process** | `.Noop()`, `.Delete()`, `.MoveTo()`, `.MoveExisting()`, `.PreMove()`, `.MoveFailed()` |
 | **Idempotency** | `.Idempotent()`, `.DoneFileName()` |
 | **Transfer** | `.TransferType()` (Binary/Ascii), `.StreamBody()`, `.Charset()`, `.IgnoreFileNotFoundOrPermissionError()`, `.StartingDirectoryMustExist()`, `.SendEmptyMessageWhenIdle()` |

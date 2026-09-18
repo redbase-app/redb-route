@@ -322,17 +322,14 @@ public sealed class IbmMqConsumer : IConsumer
             "IBM MQ consumer: exchange CREATED, pattern={Pattern}, about to invoke route processor",
             exchange.Pattern);
 
-        // Register transacted ack action bound to THIS worker's queue-manager connection —
-        // the syncpoint (commit/backout) is connection-scoped, so it must be the worker's own qm.
-        if (_options.Transacted)
-        {
-            var ackAction = new IbmMqAckAction(worker.Qm, _logger);
-            RegisterTransactedAction(exchange, $"ibmmq-ack-{Guid.NewGuid():N}", ackAction);
-        }
+        // The syncpoint (commit/backout) is connection-scoped, so it belongs to this worker's queue manager and to
+        // this consumer. The route transaction owns the database and the outgoing sends; the message is committed
+        // below, once the whole unit of work ended well.
 
         try
         {
             await _processor.Process(exchange, ct).ConfigureAwait(false);
+            exchange.ThrowIfUnhandledFailure();
 
             _logger?.LogDebug(
                 "IBM MQ consumer: route processor RETURNED, hasOut={HasOut}, replyTo={ReplyTo}",
@@ -350,8 +347,13 @@ public sealed class IbmMqConsumer : IConsumer
                 await MoveToBackoutQueueAsync(worker, mqMsg, ct).ConfigureAwait(false);
             }
 
-            // Commit in non-transacted mode is implicitly done by MQGET without syncpoint.
-            // For transacted mode, commit/rollback is handled by IbmMqAckAction via route processor.
+            // Commit in non-transacted mode is implicitly done by MQGET without syncpoint. In transacted mode the
+            // consumer commits the syncpoint here, once the route and its transaction have succeeded.
+            if (_options.Transacted)
+            {
+                var ackAction = new IbmMqAckAction(worker.Qm, _logger);
+                await ackAction.Commit(ct).ConfigureAwait(false);
+            }
 
             Interlocked.Increment(ref _processedCount);
         }
@@ -564,17 +566,4 @@ public sealed class IbmMqConsumer : IConsumer
         }
     }
 
-    // ── Transacted action registration ──
-
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (!exchange.Properties.TryGetValue("TRANSACT_ACTION", out var raw) ||
-            raw is not ConcurrentDictionary<string, ITransactedAction> dict)
-        {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties["TRANSACT_ACTION"] = dict;
-        }
-
-        dict[key] = action;
-    }
 }

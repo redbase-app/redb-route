@@ -1,3 +1,4 @@
+using System.Globalization;
 using redb.Core;
 using redb.Core.Models.Entities;
 using redb.Route.Abstractions;
@@ -8,25 +9,28 @@ using SerialNumbers.Domain.Services;
 namespace SerialNumbers.Core.Services;
 
 /// <summary>
-/// The steps of a serial number request. Each one is a <c>ProcessWithRedb</c> step of the request
-/// route; all of them run inside one redb transaction the route opens, so they either all commit
-/// or leave no trace.
+/// The steps of a serial number request. Each one is a <c>ProcessWithRedb</c> step inside the request
+/// route's <c>.Transacted()</c> block, so they either all commit or leave no trace.
 /// </summary>
 public static class SerialRequestService
 {
     /// <summary>
-    /// Records the message and the request and takes the decision. Sets the
-    /// <see cref="SerialHeaders.Decision"/> header the route branches on.
+    /// Records the message and the request and takes the decision, or, for the release of a request on
+    /// hold, decides that request again. Sets the <see cref="SerialHeaders.Decision"/> header the route
+    /// branches on.
     /// </summary>
     public static async Task RegisterAsync(IRedbService redb, IExchange exchange, CancellationToken ct)
     {
+        if (exchange.In.Headers.TryGetValue(SerialHeaders.ReleaseOf, out var releaseOf) && releaseOf is not null)
+        {
+            await ResumeAsync(redb, exchange, Convert.ToInt64(releaseOf, CultureInfo.InvariantCulture), ct);
+            return;
+        }
+
         var xml = (SerialNumberRequestXml)exchange.In.Body!;
         var partner = exchange.In.GetHeader<string>(SerialHeaders.Partner)!;
 
-        // The GTIN is the product's unique key: a system-field lookup, no Props scan.
-        var product = await redb.Query<Product>()
-            .WhereRedb(o => o.ValueUnique == xml.Gtin)
-            .FirstOrDefaultAsync();
+        var product = await ProductAsync(redb, xml.Gtin);
 
         var earlier = await redb.Query<SerialNumberRequest>()
             .Where(r => r.PartnerCode == partner && r.RequestId == xml.RequestId)
@@ -34,14 +38,10 @@ public static class SerialRequestService
             .ToListAsync();
         var isDuplicate = earlier.Count > 0;
 
-        var allocatedThisYear = product is null
-            ? 0
-            : await SerialNumberAllocator.AllocatedThisYearAsync(redb, xml.Gtin, DateTime.UtcNow.Year, ct);
+        var allocatedThisYear = await AllocatedThisYearAsync(redb, product, ct);
+        var decision = SerialRequestPolicy.Decide(product?.Props, xml.Quantity, allocatedThisYear, isDuplicate);
 
-        var rejection = SerialRequestPolicy.Evaluate(product?.Props, xml.Quantity, allocatedThisYear, isDuplicate);
-        var status = rejection is null ? MessageStatuses.Accepted : MessageStatuses.Rejected;
-
-        var messageId = await redb.SaveAsync(IntakeRecorder.Create(exchange, status, error: rejection), ct);
+        var messageId = await redb.SaveAsync(IntakeRecorder.Create(exchange, decision.Status, error: decision.RejectionReason), ct);
 
         var request = new RedbObject<SerialNumberRequest>
         {
@@ -55,8 +55,8 @@ public static class SerialRequestService
                 PartnerCode = partner,
                 Gtin = xml.Gtin,
                 Quantity = xml.Quantity,
-                Status = status,
-                RejectionReason = rejection,
+                Status = decision.Status,
+                RejectionReason = decision.RejectionReason,
                 Message = new RedbObject<InboundMessage> { id = messageId },
             },
         };
@@ -64,19 +64,18 @@ public static class SerialRequestService
 
         exchange.Properties[SerialProperties.Request] = request;
         exchange.In.Headers[SerialHeaders.RequestId] = xml.RequestId;
-        exchange.In.Headers[SerialHeaders.Decision] = status;
+        exchange.In.Headers[SerialHeaders.Decision] = decision.Status;
     }
 
     /// <summary>Accepted: reserves the serial numbers and writes the response.</summary>
     public static async Task AllocateAsync(IRedbService redb, IExchange exchange, CancellationToken ct)
     {
         var request = RequestOf(exchange);
-        var first = await SerialNumberAllocator.AllocateAsync(redb, request.Props, request.Id, DateTime.UtcNow.Year, ct);
+        var allocationId = await SerialNumberAllocator.AllocateAsync(redb, request.Props, request.Id, DateTime.UtcNow.Year, ct);
 
         var response = ResponseTo(request);
         response.Props.Accepted = true;
-        response.Props.FirstSerial = first;
-        response.Props.LastSerial = first + request.Props.Quantity - 1;
+        response.Props.AllocationId = allocationId;
         await redb.SaveAsync(response, ct);
 
         exchange.Properties[SerialProperties.Response] = response;
@@ -101,6 +100,61 @@ public static class SerialRequestService
         var response = (RedbObject<SerialNumberResponse>)exchange.Properties[SerialProperties.Response]!;
         await OutboxWriter.EnqueueAsync(redb, response.Props.PartnerCode, response.Id, ct);
     }
+
+    /// <summary>
+    /// The release of a request on hold: the same request object is decided again, against the
+    /// product and the quota as they are now. No new request, no new message record.
+    /// </summary>
+    private static async Task ResumeAsync(IRedbService redb, IExchange exchange, long requestObjectId, CancellationToken ct)
+    {
+        var request = await redb.LoadAsync<SerialNumberRequest>(requestObjectId, cancellationToken: ct)
+            ?? throw new InvalidOperationException($"Request object {requestObjectId} was not found.");
+        exchange.In.Headers[SerialHeaders.RequestId] = request.Props.RequestId;
+
+        if (request.Props.Status != MessageStatuses.OnHold)
+        {
+            exchange.In.Headers[SerialHeaders.Decision] = ReleaseOutcomes.AlreadyDecided;
+            return;
+        }
+
+        var product = await ProductAsync(redb, request.Props.Gtin);
+        var allocatedThisYear = await AllocatedThisYearAsync(redb, product, ct);
+        var decision = SerialRequestPolicy.Decide(product?.Props, request.Props.Quantity, allocatedThisYear, isDuplicate: false);
+
+        if (decision.Status != MessageStatuses.OnHold)
+        {
+            request.Props.Status = decision.Status;
+            request.Props.RejectionReason = decision.RejectionReason;
+            await redb.SaveAsync(request, ct);
+
+            // Saved after the request, so the message record ends with the new status.
+            var messageId = request.Props.Message?.Id
+                ?? throw new InvalidOperationException($"Request object {requestObjectId} has no inbound message.");
+            var message = await redb.LoadAsync<InboundMessage>(messageId, cancellationToken: ct)
+                ?? throw new InvalidOperationException($"Inbound message object {messageId} was not found.");
+            message.Props.Status = decision.Status;
+            message.Props.Error = decision.RejectionReason;
+            await redb.SaveAsync(message, ct);
+        }
+
+        exchange.Properties[SerialProperties.Request] = request;
+        exchange.In.Headers[SerialHeaders.Decision] = decision.Status;
+    }
+
+    /// <summary>The GTIN is the product's unique key: a system-field lookup, no Props scan.</summary>
+    private static Task<RedbObject<Product>?> ProductAsync(IRedbService redb, string gtin) =>
+        redb.Query<Product>()
+            .WhereRedb(o => o.ValueUnique == gtin)
+            .FirstOrDefaultAsync();
+
+    /// <summary>
+    /// What was allocated this year, for an active product only. The read takes the range lock that keeps
+    /// two requests from passing the quota together; a request that waits or is rejected does not need it.
+    /// </summary>
+    private static async Task<long> AllocatedThisYearAsync(IRedbService redb, RedbObject<Product>? product, CancellationToken ct) =>
+        product?.Props.Status == ProductStatuses.Active
+            ? await SerialNumberAllocator.AllocatedThisYearAsync(redb, product.Props.Gtin, DateTime.UtcNow.Year, ct)
+            : 0;
 
     private static RedbObject<SerialNumberRequest> RequestOf(IExchange exchange) =>
         (RedbObject<SerialNumberRequest>)exchange.Properties[SerialProperties.Request]!;

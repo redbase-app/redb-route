@@ -335,4 +335,246 @@ public sealed class AnthropicProviderRequestTests
         handler.LastBody!["output_config"]!["effort"]!.GetValue<string>().Should().Be("medium");
         handler.LastBody!.ContainsKey("effort").Should().BeFalse("effort is not a top-level field");
     }
+
+    /// <summary>
+    /// Captures the body of every request and answers with the scripted body per call — the second
+    /// request is the one under test, so one canned reply is not enough.
+    /// </summary>
+    private sealed class ScriptedHandler : HttpMessageHandler
+    {
+        private readonly string[] _bodies;
+        private int _calls;
+
+        public ScriptedHandler(params string[] bodies) => _bodies = bodies;
+
+        public List<JsonObject> Bodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Bodies.Add(JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!.AsObject());
+            var body = _bodies[Math.Min(_calls++, _bodies.Length - 1)];
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+        }
+    }
+
+    private static LlmToolCapability LookupTool() => new()
+    {
+        Name = "order_lookup",
+        Description = "Look up an order by id.",
+        InputSchema = """{"type":"object","properties":{"orderId":{"type":"string"}},"required":["orderId"]}"""
+    };
+
+    [Fact]
+    public async Task Anthropic_SecondRequest_CarriesSignedThinkingBlock()
+    {
+        // The model thinks, then asks for a tool. The thinking it produced comes back signed, and
+        // the API verifies that signature: the block has to travel on untouched, in the order the
+        // API issued it, or the second call of a tool loop is rejected with 400.
+        var handler = new ScriptedHandler(
+            """
+            {"id":"msg_1","content":[
+                {"type":"thinking","thinking":"the user wants an order status","signature":"sig-abc"},
+                {"type":"text","text":"let me look"},
+                {"type":"tool_use","id":"tu_1","name":"order_lookup","input":{"orderId":"42"}}],
+             "stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}}
+            """);
+        var provider = new AnthropicProvider(
+            new LlmConnectionFactory { Provider = "anthropic", ModelId = "claude-sonnet-4-6", ApiKey = "test-key" },
+            new HttpClient(handler));
+
+        var first = await provider.CompleteAsync(new LlmRequest
+        {
+            Messages = [LlmMessage.User("what is the status of order 42?")],
+            Tools = [LookupTool()]
+        });
+
+        var thinking = first.Content.OfType<LlmThinkingBlock>().Should().ContainSingle(
+            "the thinking block is parsed as a block of its own").Which;
+        thinking.Text.Should().Be("the user wants an order status");
+        thinking.Signature.Should().Be("sig-abc");
+
+        // Thinking is not the answer: the visible text is what the model said afterwards.
+        first.Content.OfType<LlmTextBlock>().Should().ContainSingle().Which.Text.Should().Be("let me look");
+
+        // Second call of the same run: history + the tool result.
+        await provider.CompleteAsync(new LlmRequest
+        {
+            Messages =
+            [
+                LlmMessage.User("what is the status of order 42?"),
+                new LlmMessage { Role = "assistant", Content = first.Content },
+                new LlmMessage { Role = "user", Content = [new LlmToolResultBlock("tu_1", """{"status":"shipped"}""")] }
+            ],
+            Tools = [LookupTool()]
+        });
+
+        var sent = handler.Bodies[1]["messages"]!.AsArray()[1]!["content"]!.AsArray();
+        sent.Should().HaveCount(3);
+        sent[0]!["type"]!.GetValue<string>().Should().Be("thinking");
+        sent[0]!["thinking"]!.GetValue<string>().Should().Be("the user wants an order status");
+        sent[0]!["signature"]!.GetValue<string>().Should().Be("sig-abc");
+        sent[1]!["type"]!.GetValue<string>().Should().Be("text");
+        sent[2]!["type"]!.GetValue<string>().Should().Be("tool_use");
+    }
+
+    [Fact]
+    public async Task Anthropic_RedactedAndOmittedThinking_GoBackVerbatim()
+    {
+        // Two shapes the signed-block test does not cover. With display "omitted" (the default on
+        // models that think on their own) the thinking text is empty and the signature is what
+        // travels; a redacted_thinking block carries an encrypted payload in "data" and no text. Both
+        // must come back field for field, or the API cannot verify them.
+        var handler = new ScriptedHandler(
+            """
+            {"id":"msg_1","content":[
+                {"type":"thinking","thinking":"","signature":"sig-omitted"},
+                {"type":"redacted_thinking","data":"EncryptedPayload=="},
+                {"type":"tool_use","id":"tu_1","name":"order_lookup","input":{"orderId":"42"}}],
+             "stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}}
+            """);
+        var provider = new AnthropicProvider(
+            new LlmConnectionFactory { Provider = "anthropic", ModelId = "claude-sonnet-5", ApiKey = "test-key" },
+            new HttpClient(handler));
+
+        var first = await provider.CompleteAsync(new LlmRequest
+        {
+            Messages = [LlmMessage.User("what is the status of order 42?")],
+            Tools = [LookupTool()]
+        });
+
+        var parsed = first.Content.OfType<LlmThinkingBlock>().ToList();
+        parsed.Should().HaveCount(2);
+        parsed[0].Text.Should().BeEmpty();
+        parsed[0].Signature.Should().Be("sig-omitted");
+        parsed[1].IsRedacted.Should().BeTrue();
+        parsed[1].RedactedData.Should().Be("EncryptedPayload==");
+
+        await provider.CompleteAsync(new LlmRequest
+        {
+            Messages =
+            [
+                LlmMessage.User("what is the status of order 42?"),
+                new LlmMessage { Role = "assistant", Content = first.Content },
+                new LlmMessage { Role = "user", Content = [new LlmToolResultBlock("tu_1", """{"status":"shipped"}""")] }
+            ],
+            Tools = [LookupTool()]
+        });
+
+        var sent = handler.Bodies[1]["messages"]!.AsArray()[1]!["content"]!.AsArray();
+        sent.Should().HaveCount(3);
+
+        var omitted = sent[0]!.AsObject();
+        omitted.Count.Should().Be(3, "type, thinking and signature, nothing added");
+        omitted["type"]!.GetValue<string>().Should().Be("thinking");
+        omitted["thinking"]!.GetValue<string>().Should().BeEmpty();
+        omitted["signature"]!.GetValue<string>().Should().Be("sig-omitted");
+
+        var redacted = sent[1]!.AsObject();
+        redacted.Count.Should().Be(2, "type and data: a redacted block has no text to send");
+        redacted["type"]!.GetValue<string>().Should().Be("redacted_thinking");
+        redacted["data"]!.GetValue<string>().Should().Be("EncryptedPayload==");
+
+        sent[2]!["type"]!.GetValue<string>().Should().Be("tool_use");
+    }
+
+    [Fact]
+    public async Task UnsignedThinkingBlock_HasNoAnthropicForm_IsNotSent()
+    {
+        // A conversation continued here after a provider switch can carry unsigned blocks (DeepSeek
+        // reasoning_content). The Anthropic wire has no form for them: a thinking block without a
+        // signature is a 400. So the block is not written into the request, and the rest of the turn
+        // goes on unchanged.
+        var handler = new CapturingHandler();
+        var provider = new AnthropicProvider(
+            new LlmConnectionFactory { Provider = "anthropic", ModelId = "claude-sonnet-5", ApiKey = "test-key" },
+            new HttpClient(handler));
+
+        await provider.CompleteAsync(new LlmRequest
+        {
+            Messages =
+            [
+                LlmMessage.User("status of order 42?"),
+                new LlmMessage
+                {
+                    Role = "assistant",
+                    Content = [new LlmThinkingBlock("deepseek reasoning"), new LlmTextBlock("shipped")]
+                },
+                LlmMessage.User("and order 43?")
+            ]
+        });
+
+        var messages = handler.LastBody!["messages"]!.AsArray();
+        messages.Count.Should().Be(3, "the turn itself is sent");
+
+        var turn = messages[1]!["content"]!.AsArray();
+        turn.Count.Should().Be(1, "only the text: an unsigned thinking block has no Anthropic form");
+        turn[0]!["type"]!.GetValue<string>().Should().Be("text");
+        turn[0]!["text"]!.GetValue<string>().Should().Be("shipped");
+    }
+
+    [Fact]
+    public async Task ThinkingOnlyTurn_IsNotSent()
+    {
+        // The model spent the whole turn thinking and said nothing. The turn is kept in the record, but
+        // a message with no text and no tool call has nothing to continue from, and sending it would
+        // put a message the API may refuse into every later request of the conversation (the class of
+        // 2026-09-07). Signed and redacted alike: the turn is left out of the request.
+        var handler = new CapturingHandler();
+        var provider = new AnthropicProvider(
+            new LlmConnectionFactory { Provider = "anthropic", ModelId = "claude-sonnet-5", ApiKey = "test-key" },
+            new HttpClient(handler));
+
+        await provider.CompleteAsync(new LlmRequest
+        {
+            Messages =
+            [
+                LlmMessage.User("status of order 42?"),
+                new LlmMessage { Role = "assistant", Content = [new LlmThinkingBlock("ran out of tokens", "sig-1")] },
+                LlmMessage.User("and now?"),
+                new LlmMessage { Role = "assistant", Content = [new LlmThinkingBlock(string.Empty, RedactedData: "opaque")] },
+                LlmMessage.User("still there?")
+            ]
+        });
+
+        var messages = handler.LastBody!["messages"]!.AsArray();
+        messages.Count.Should().Be(3, "the two turns of nothing but thinking are not sent");
+        messages.Should().OnlyContain(m => m!["role"]!.GetValue<string>() == "user");
+    }
+
+    [Fact]
+    public async Task OldHistory_WithoutThinkingBlocks_RequestShapeIsRecorded()
+    {
+        // A conversation written before phase 16 carries text only. Nothing new may appear on the
+        // wire for it: no thinking block, no empty text block, no top-level thinking knob. Whether
+        // an old history is ACCEPTED is what the 16.0a live probe answers — a unit test can only
+        // pin the shape we send.
+        var handler = new ScriptedHandler(
+            """
+            {"id":"msg_1","content":[{"type":"text","text":"ok"}],
+             "stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}
+            """);
+        var provider = new AnthropicProvider(
+            new LlmConnectionFactory { Provider = "anthropic", ModelId = "claude-sonnet-4-6", ApiKey = "test-key" },
+            new HttpClient(handler));
+
+        await provider.CompleteAsync(new LlmRequest
+        {
+            Messages =
+            [
+                LlmMessage.User("hi"),
+                LlmMessage.Assistant("hello"),
+                LlmMessage.User("and now?")
+            ]
+        });
+
+        var body = handler.Bodies[0];
+        body.ContainsKey("thinking").Should().BeFalse("we do not ask the model to think; that is decision 15");
+
+        var messages = body["messages"]!.AsArray();
+        messages.Should().HaveCount(3, "three non-empty turns, nothing added and nothing dropped");
+        messages[1]!["content"]!.AsArray().Should().HaveCount(1, "no thinking block, no empty text block");
+        messages[1]!["content"]!.AsArray()[0]!["type"]!.GetValue<string>().Should().Be("text");
+        messages[1]!["content"]!.AsArray()[0]!["text"]!.GetValue<string>().Should().Be("hello");
+    }
 }

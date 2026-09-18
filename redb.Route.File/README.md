@@ -49,6 +49,7 @@ From("direct://logs")
 | Category | Methods |
 |----------|---------|
 | **Consumer** | `FileDsl.Read(dir)`, `.Delay()`, `.InitialDelay()`, `.Include()`, `.Exclude()`, `.Recursive()`, `.SortBy()`, `.MaxMessagesPerPoll()`, `.MinAge()` |
+| **Poll backoff** | `.BackoffMultiplier()`, `.BackoffIdleThreshold()`, `.BackoffErrorThreshold()`, `.BackoffOnFailedExchanges()` |
 | **Post-process** | `.Noop()`, `.Delete()`, `.MoveTo()`, `.MoveExisting()`, `.PreMove()` |
 | **Idempotency** | `.Idempotent()`, `.DoneFileName()` |
 | **Read Lock** | `.ReadLock(strategy)`, `.ReadLockTimeout()`, `.ReadLockCheckInterval()`, `.ReadLockMinAge()`, `.ReadLockMarkerFileExtension()` |

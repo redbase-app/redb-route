@@ -242,7 +242,7 @@ public class SqlProducerTests : IDisposable
     public async Task BindParameters_FromHeaders()
     {
         var endpoint = CreateEndpoint(
-            "SELECT * FROM products WHERE name = @name",
+            "SELECT * FROM products WHERE name = :#name",
             new() { ["outputType"] = "SelectOne" });
         var producer = endpoint.CreateProducer();
 
@@ -262,7 +262,7 @@ public class SqlProducerTests : IDisposable
     public async Task BindParameters_FromBodyDictionary()
     {
         var endpoint = CreateEndpoint(
-            "SELECT * FROM products WHERE name = @name",
+            "SELECT * FROM products WHERE name = :#name",
             new() { ["outputType"] = "SelectOne" });
         var producer = endpoint.CreateProducer();
 
@@ -280,7 +280,7 @@ public class SqlProducerTests : IDisposable
     public async Task BindParameters_HeaderTakesPriority()
     {
         var endpoint = CreateEndpoint(
-            "SELECT * FROM products WHERE name = @name",
+            "SELECT * FROM products WHERE name = :#name",
             new() { ["outputType"] = "SelectOne" });
         var producer = endpoint.CreateProducer();
 
@@ -298,19 +298,170 @@ public class SqlProducerTests : IDisposable
     }
 
     [Fact]
-    public async Task BindParameters_MissingParam_BindsDBNull()
+    public async Task BindParameters_MissingParam_FailsWithParameterName()
     {
         var endpoint = CreateEndpoint(
-            "SELECT * FROM products WHERE name = @nonExistent OR 1=1 ORDER BY id LIMIT 1",
+            "SELECT * FROM products WHERE name = :#nonExistent OR 1=1 ORDER BY id LIMIT 1",
             new() { ["outputType"] = "SelectOne" });
         var producer = endpoint.CreateProducer();
         var exchange = CreateExchange();
 
-        await producer.Process(exchange, CancellationToken.None);
+        var thrown = await Record.ExceptionAsync(() => producer.Process(exchange, CancellationToken.None));
 
-        // Query should still work (param bound as NULL)
-        var row = exchange.In.Body as Dictionary<string, object?>;
-        row.Should().NotBeNull();
+        // As in Apache Camel: a placeholder with no value anywhere is an error, not a silent NULL.
+        thrown.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Contain(":#nonExistent");
+    }
+
+    [Fact]
+    public async Task BindParameters_HeaderWithNullOrDbNull_BindsNull()
+    {
+        var endpoint = CreateEndpoint("SELECT COUNT(*) FROM products WHERE :#a IS NULL AND :#b IS NULL",
+            new() { ["outputType"] = "Scalar" });
+        var exchange = CreateExchange(headers: new() { ["a"] = null, ["b"] = DBNull.Value });
+
+        await endpoint.CreateProducer().Process(exchange, CancellationToken.None);
+
+        Convert.ToInt64(exchange.In.Body).Should().Be(3, "a header that is present binds its value, null included");
+    }
+
+    [Fact]
+    public async Task BindParameters_BodyKeyWithNullValue_BindsNull()
+    {
+        var endpoint = CreateEndpoint("SELECT COUNT(*) FROM products WHERE :#a IS NULL",
+            new() { ["outputType"] = "Scalar" });
+        var exchange = CreateExchange(new Dictionary<string, object?> { ["a"] = null });
+
+        await endpoint.CreateProducer().Process(exchange, CancellationToken.None);
+
+        Convert.ToInt64(exchange.In.Body).Should().Be(3);
+    }
+
+    [Fact]
+    public async Task BindParameters_ExplicitExpressionEvaluatingToNull_BindsNull()
+    {
+        var endpoint = CreateEndpoint("SELECT COUNT(*) FROM products WHERE :#a IS NULL",
+            new() { ["outputType"] = "Scalar", ["param.a"] = "${header.missing}" });
+        var exchange = CreateExchange();
+
+        await endpoint.CreateProducer().Process(exchange, CancellationToken.None);
+
+        Convert.ToInt64(exchange.In.Body).Should().Be(3, "an explicit param.* always has a value, even when it evaluates to null");
+    }
+
+    [Fact]
+    public async Task BindParameters_JsonElementHeaders_BindScalars()
+    {
+        var endpoint = CreateEndpoint("INSERT INTO products(name, price) VALUES(:#name, :#price)",
+            new() { ["outputType"] = "None" });
+        var exchange = CreateExchange(headers: new()
+        {
+            ["name"] = System.Text.Json.JsonDocument.Parse("\"Json\"").RootElement.Clone(),
+            ["price"] = System.Text.Json.JsonDocument.Parse("12.5").RootElement.Clone(),
+        });
+
+        await endpoint.CreateProducer().Process(exchange, CancellationToken.None);
+
+        _db.ExecuteScalar("SELECT price FROM products WHERE name = 'Json'").Should().Be(12.5);
+    }
+
+    // ── Map-like bodies: as in Apache Camel, a body that converts to a Map (Jackson JsonNode included) binds by key ──
+
+    [Fact]
+    public async Task BindParameters_JsonElementObjectBody_BindsByKey()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse("""{"name":"JsonElement","price":12.5}""");
+
+        await InsertProductAsync(document.RootElement.Clone());
+
+        _db.ExecuteScalar("SELECT price FROM products WHERE name = 'JsonElement'").Should().Be(12.5);
+    }
+
+    [Fact]
+    public async Task BindParameters_JsonDocumentBody_BindsByKey()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse("""{"name":"JsonDocument","price":7}""");
+
+        await InsertProductAsync(document);
+
+        _db.ExecuteScalar("SELECT price FROM products WHERE name = 'JsonDocument'").Should().Be(7.0);
+    }
+
+    [Fact]
+    public async Task BindParameters_JsonObjectBody_BindsByKey()
+    {
+        var body = System.Text.Json.Nodes.JsonNode.Parse("""{"name":"JsonObject","price":3.5}""")!.AsObject();
+
+        await InsertProductAsync(body);
+
+        _db.ExecuteScalar("SELECT price FROM products WHERE name = 'JsonObject'").Should().Be(3.5);
+    }
+
+    [Fact]
+    public async Task BindParameters_StringDictionaryBody_BindsByKey()
+    {
+        await InsertProductAsync(new Dictionary<string, string> { ["name"] = "Csv", ["price"] = "2.5" });
+
+        _db.ExecuteScalar("SELECT price FROM products WHERE name = 'Csv'").Should().Be(2.5);
+    }
+
+    [Fact]
+    public async Task BindParameters_DictionaryBody_CaseInsensitiveKeyFallback()
+    {
+        await InsertProductAsync(new Dictionary<string, object?> { ["NAME"] = "Upper", ["Price"] = 1.5 });
+
+        _db.ExecuteScalar("SELECT price FROM products WHERE name = 'Upper'").Should().Be(1.5);
+    }
+
+    [Fact]
+    public async Task BindParameters_JsonObjectBody_NestedValueIsJsonText()
+    {
+        var endpoint = CreateEndpoint("SELECT :#extra", new() { ["outputType"] = "Scalar" });
+        using var document = System.Text.Json.JsonDocument.Parse("""{"extra":{"a":[1,2]}}""");
+        var exchange = CreateExchange(document.RootElement.Clone());
+
+        await endpoint.CreateProducer().Process(exchange, CancellationToken.None);
+
+        exchange.In.Body.Should().Be("""{"a":[1,2]}""");
+    }
+
+    [Fact]
+    public async Task BindParameters_HeaderWinsOverJsonBodyKey()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse("""{"name":"FromBody","price":4}""");
+
+        await InsertProductAsync(document.RootElement.Clone(), new() { ["name"] = "FromHeader" });
+
+        _db.ExecuteScalar("SELECT price FROM products WHERE name = 'FromHeader'").Should().Be(4.0);
+    }
+
+    [Fact]
+    public async Task BindParameters_PocoBody_IsNotReadByProperty()
+    {
+        var thrown = await Record.ExceptionAsync(() => InsertProductAsync(new ProductBody { Name = "Poco", Price = 1 }));
+
+        // As in Apache Camel: a POJO body does not convert to a Map, so it gives no named values.
+        thrown.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Contain(":#name");
+    }
+
+    [Fact]
+    public async Task BindParameters_JsonTextBody_IsNotReadByKey()
+    {
+        var thrown = await Record.ExceptionAsync(() => InsertProductAsync("""{"name":"Text","price":1}"""));
+
+        // JSON text is a string, not a map: unmarshal it first.
+        thrown.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Contain(":#name");
+    }
+
+    public sealed class ProductBody
+    {
+        public string Name { get; set; } = "";
+        public double Price { get; set; }
+    }
+
+    private async Task InsertProductAsync(object body, Dictionary<string, object?>? headers = null)
+    {
+        var endpoint = CreateEndpoint("INSERT INTO products(name, price) VALUES(:#name, :#price)", new() { ["outputType"] = "None" });
+        await endpoint.CreateProducer().Process(CreateExchange(body, headers), CancellationToken.None);
     }
 
     // ── Common headers ──────────────────────────────────────────────
@@ -423,9 +574,9 @@ public class SqlProducerTests : IDisposable
     [Fact]
     public async Task ExplicitParam_ConstantValue_OverridesHeader()
     {
-        // @name is bound to explicit "Widget" even though header has "Gadget"
+        // :#name is bound to explicit "Widget" even though header has "Gadget"
         var endpoint = CreateEndpoint(
-            "SELECT * FROM products WHERE name = @name",
+            "SELECT * FROM products WHERE name = :#name",
             new()
             {
                 ["outputType"] = "SelectOne",
@@ -445,7 +596,7 @@ public class SqlProducerTests : IDisposable
     public async Task ExplicitParam_ConstantValue_OverridesBody()
     {
         var endpoint = CreateEndpoint(
-            "SELECT * FROM products WHERE name = @name",
+            "SELECT * FROM products WHERE name = :#name",
             new()
             {
                 ["outputType"] = "SelectOne",
@@ -465,14 +616,14 @@ public class SqlProducerTests : IDisposable
     [Fact]
     public async Task ExplicitParam_MixedWithAutoBindHeaders()
     {
-        // @name explicit, @price from header
+        // :#name explicit, :#price from header
         _db.Execute("CREATE TABLE filtered (id INTEGER PRIMARY KEY, name TEXT, price REAL)");
         _db.Execute("INSERT INTO filtered(name, price) VALUES('A', 10)");
         _db.Execute("INSERT INTO filtered(name, price) VALUES('A', 20)");
         _db.Execute("INSERT INTO filtered(name, price) VALUES('B', 10)");
 
         var endpoint = CreateEndpoint(
-            "SELECT * FROM filtered WHERE name = @name AND price = @price",
+            "SELECT * FROM filtered WHERE name = :#name AND price = :#price",
             new()
             {
                 ["outputType"] = "SelectOne",
@@ -493,7 +644,7 @@ public class SqlProducerTests : IDisposable
     public async Task ExplicitParam_InsertWithConstants()
     {
         var endpoint = CreateEndpoint(
-            "INSERT INTO products(name, price) VALUES(@name, @price)",
+            "INSERT INTO products(name, price) VALUES(:#name, :#price)",
             new()
             {
                 ["outputType"] = "None",
@@ -515,7 +666,7 @@ public class SqlProducerTests : IDisposable
         _db.Execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)");
 
         var endpoint = CreateEndpoint(
-            "INSERT INTO notes(text) VALUES(@text)",
+            "INSERT INTO notes(text) VALUES(:#text)",
             new()
             {
                 ["outputType"] = "None",
@@ -537,7 +688,7 @@ public class SqlProducerTests : IDisposable
         _db.Execute("CREATE TABLE typed_test (tag TEXT, num INTEGER)");
 
         var endpoint = CreateEndpoint(
-            "INSERT INTO typed_test(tag, num) VALUES(@tag, @num)",
+            "INSERT INTO typed_test(tag, num) VALUES(:#tag, :#num)",
             new()
             {
                 ["outputType"] = "None",
@@ -567,7 +718,7 @@ public class SqlProducerTests : IDisposable
         _db.Execute("CREATE TABLE composite_test (label TEXT)");
 
         var endpoint = CreateEndpoint(
-            "INSERT INTO composite_test(label) VALUES(@label)",
+            "INSERT INTO composite_test(label) VALUES(:#label)",
             new()
             {
                 ["outputType"] = "None",
@@ -595,7 +746,7 @@ public class SqlProducerTests : IDisposable
         };
 
         var endpoint = CreateEndpoint(
-            "INSERT INTO products(name, price) VALUES(@name, @price)",
+            "INSERT INTO products(name, price) VALUES(:#name, :#price)",
             new() { ["outputType"] = "None", ["batchSize"] = "10" });
         var producer = endpoint.CreateProducer();
 
@@ -619,7 +770,7 @@ public class SqlProducerTests : IDisposable
         };
 
         var endpoint = CreateEndpoint(
-            "INSERT INTO products(name, price) VALUES(@name, @price)",
+            "INSERT INTO products(name, price) VALUES(:#name, :#price)",
             new() { ["outputType"] = "None", ["batchSize"] = "10", ["transacted"] = "true" });
         var producer = endpoint.CreateProducer();
 
@@ -643,7 +794,7 @@ public class SqlProducerTests : IDisposable
         };
 
         var endpoint = CreateEndpoint(
-            "INSERT INTO products(name, price) VALUES(@name, @price)",
+            "INSERT INTO products(name, price) VALUES(:#name, :#price)",
             new()
             {
                 ["outputType"] = "None",
@@ -655,8 +806,9 @@ public class SqlProducerTests : IDisposable
 
         var exchange = CreateExchange(body: items);
 
-        var act = () => producer.Process(exchange, CancellationToken.None);
-        await act.Should().ThrowAsync<AggregateException>();
+        // The provider's exception as is, as in Camel (Record.ExceptionAsync does not look inside an AggregateException).
+        var thrown = await Record.ExceptionAsync(() => producer.Process(exchange, CancellationToken.None));
+        thrown.Should().BeOfType<Microsoft.Data.Sqlite.SqliteException>();
 
         // Transaction rolled back — Good1 should NOT be persisted
         var count = Convert.ToInt64(_db.ExecuteScalar("SELECT COUNT(*) FROM products WHERE name = 'Good1'"));
@@ -676,7 +828,7 @@ public class SqlProducerTests : IDisposable
         };
 
         var endpoint = CreateEndpoint(
-            "INSERT INTO batch_test(id, val) VALUES(@id, @val)",
+            "INSERT INTO batch_test(id, val) VALUES(:#id, :#val)",
             new()
             {
                 ["outputType"] = "None",
@@ -697,19 +849,21 @@ public class SqlProducerTests : IDisposable
     }
 
     [Fact]
-    public async Task Batch_EmptyList_NoBatchProcessing()
+    public async Task Batch_EmptyListWithSelect_ExecutesNothing()
     {
         var endpoint = CreateEndpoint(
             "SELECT COUNT(*) FROM products",
             new() { ["outputType"] = "Scalar", ["batchSize"] = "10" });
         var producer = endpoint.CreateProducer();
 
-        // Body is empty list — should NOT enter batch mode, falls through to normal execution
-        var exchange = CreateExchange(body: new List<Dictionary<string, object?>>());
+        var empty = new List<Dictionary<string, object?>>();
+        var exchange = CreateExchange(body: empty);
         await producer.Process(exchange, CancellationToken.None);
 
-        // Normal scalar execution returns the count
-        exchange.In.Body.Should().Be(3L); // 3 seeded products
+        // An empty batch source runs no statement, as Camel's empty executeBatch() reports zero updates.
+        exchange.In.Body.Should().BeSameAs(empty);
+        exchange.In.Headers[SqlHeaders.UpdateCount].Should().Be(0);
+        exchange.In.Headers["redbSql.batchStrategy"].Should().Be("None");
     }
 
     // ── StreamList OutputType ───────────────────────────────────────

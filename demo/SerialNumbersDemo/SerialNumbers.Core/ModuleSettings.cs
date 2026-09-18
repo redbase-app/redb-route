@@ -15,8 +15,9 @@ namespace SerialNumbers.Core;
 ///   <item>Passwords arrive the same way, through the Override layer: environment variables on the
 ///   worker such as <c>Tsak__Contexts__serial-numbers__Override__Sftp__Password</c>. They are never
 ///   written into the config file that ships with the module.</item>
-///   <item>The connection string is the worker's own <c>ConnectionStrings:MSSql</c>: the flat tables
-///   live in the database redb lives in, so it is configured in one place.</item>
+///   <item>The connection string is the worker's own <c>ConnectionStrings:MSSql</c>, the one its default
+///   redb uses when <c>Tsak:Redb:Provider</c> is <c>mssql</c>: the flat tables live in the database redb
+///   lives in, so it is configured in one place.</item>
 /// </list>
 /// </summary>
 public sealed record ModuleSettings(
@@ -33,7 +34,8 @@ public sealed record ModuleSettings(
     string As2CertificatePassword,
     string ReportDirectory,
     string ReportSchedule,
-    string ReportTimeZone)
+    string ReportTimeZone,
+    int ApiPort)
 {
     /// <summary>The connection string of the worker's redb database.</summary>
     public const string ConnectionStringName = "MSSql";
@@ -45,6 +47,7 @@ public sealed record ModuleSettings(
         var sftp = config.Section("Sftp");
         var as2 = config.Section("As2");
         var report = config.Section("Report");
+        var api = config.Section("Api");
 
         var configuration = context.GetService<IConfiguration>()
             ?? context.GetServiceProvider()?.GetService<IConfiguration>()
@@ -67,7 +70,9 @@ public sealed record ModuleSettings(
             // Quartz cron format: seconds first.
             ReportSchedule: config.Value(report, "Report", "Cron"),
             // The zone the schedule is read in: an IANA id such as Europe/Berlin.
-            ReportTimeZone: config.Value(report, "Report", "TimeZone"));
+            ReportTimeZone: config.Value(report, "Report", "TimeZone"),
+            // The port of the product API (REST).
+            ApiPort: int.Parse(config.Value(api, "Api", "Port"), CultureInfo.InvariantCulture));
     }
 
     /// <summary>

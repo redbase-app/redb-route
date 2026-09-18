@@ -56,9 +56,24 @@ This project is designed to be **deployed into redb.Tsak** (the redb.Route runti
 ```
 redb.Route.Demo/
 ├── InitRoute.cs                    ← Tsak module entry point (discovered by convention)
-├── DemoRouteBuilder.cs             ← All 39 routes in 9 sections
+├── Routes/                         ← Routes split by concern, one RouteBuilder per file
+│   ├── DemoEndpoints.cs            ← Central registry of every endpoint URI + shared resources
+│   ├── DemoHelpers.cs              ← Shared helpers for the route builders
+│   ├── MainPipelineRoutes.cs       ← HTTP entry → throttle → dedup → broker RPC → SQL → WireTap
+│   ├── ErrorHandlingRoutes.cs      ← DoTry/DoCatch, CircuitBreaker, Transacted Retry/DeadLetter
+│   ├── EipRoutes.cs                ← Aggregator, Multicast, RecipientList, Loop, Resequencer, …
+│   ├── TransportRoutes.cs          ← Timer, Cron, SEDA, Redis, TCP, WebSocket, MQTT, IBM MQ
+│   ├── DataObservabilityRoutes.cs  ← JSON Schema validation, Marshal, Traced+Metered
+│   ├── TransactionRoutes.cs        ← Transacted() scope
+│   ├── LifecycleRoutes.cs          ← Route policies, cluster-ready checks
+│   ├── NamedRedbRoutes.cs          ← CRUD via named IRedbService from inside a route
+│   ├── ScopeDiagRoutes.cs          ← Exchange introspection / property dump
+│   ├── DeepDslShowcaseRoutes.cs    ← Deep fluent-DSL showcase
+│   ├── LlmDemoRoutes.cs / LlmHttpRoutes.cs ← LLM connector (stub + live Claude)
+│   └── EchoRoutes.cs               ← Minimal echo routes
 ├── DemoLifecycle.cs                ← IRouteLifecycleListener implementation
 ├── DemoItemProps.cs                ← redb.Core props model ([RedbScheme])
+├── EnvLoader.cs                    ← Loads .env.local for local runs
 ├── manifest.json                   ← Tsak module manifest
 ├── redb.Route.Demo.config.json     ← Module config (loaded by Tsak 5-layer pipeline)
 └── output/                         ← File WireTap writes JSON snapshots here
@@ -66,9 +81,9 @@ redb.Route.Demo/
 
 ### Key files explained
 
-**`InitRoute.cs`** — the Tsak module entry point. Discovered automatically because the class is named `InitRoute` and contains a static method `main(IRouteContext)`. Registers all 18 transport components, the PostgreSQL data source, the lifecycle listener, and the route builder.
+**`InitRoute.cs`** — the Tsak module entry point. Discovered automatically because the class is named `InitRoute` and contains a static method `main(IRouteContext)`. Registers the transport components, the PostgreSQL data source, the broker connection factories, the lifecycle listener, and every route builder in `Routes/`.
 
-**`DemoRouteBuilder.cs`** — inherits `RouteBuilder` and overrides `Configure()`. Each private `ConfigureXxx()` method defines one or more routes using the fluent DSL. Read top to bottom — the message literally flows like that.
+**`Routes/*.cs`** — the routes, split by concern, one `RouteBuilder` subclass per file (registered in `InitRoute`). Each overrides `Configure()` and defines its routes with the fluent DSL. **`DemoEndpoints.cs`** is the central registry of every endpoint URI and shared resource — retune the demo for another environment by editing that one file; broker credentials live in the connection factories registered in `InitRoute`, not in the URIs.
 
 **`redb.Route.Demo.config.json`** — loaded via the Tsak 5-layer config pipeline. Contains connection strings for Postgres, RabbitMQ, Redis; feature flags; named redb provider configs for both PostgreSQL and MSSQL.
 

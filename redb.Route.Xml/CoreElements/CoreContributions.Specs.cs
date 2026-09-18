@@ -77,6 +77,7 @@ internal static partial class CoreContributions
             ["sort"] = ElementSpec.Leaf("sort", E("expr", required: true), E("by"), B("descending")),
             ["sample"] = ElementSpec.Leaf("sample", L("messageFrequency"), D("period")),
             ["streamCaching"] = ElementSpec.Leaf("streamCaching", L("spoolThreshold")),
+            ["messageHistory"] = ElementSpec.Leaf("messageHistory", B("value")),
             ["validateJsonSchema"] = new("validateJsonSchema", XmlElementKind.Step,
                 [S("file"), B("throwOnFailure")], [], AllowsTextContent: true),
             ["validateXsd"] = new("validateXsd", XmlElementKind.Step,

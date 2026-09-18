@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -12,6 +13,7 @@ using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Expressions;
 using redb.Route.Llm.Providers;
 using redb.Route.Llm.Telemetry;
+using redb.Route.Llm.Tools;
 
 namespace redb.Route.Llm.Engine;
 
@@ -40,6 +42,9 @@ public sealed class AgentEngine : IAgentEngine
     private readonly IConversationStore? _conversation;
     private readonly IToolIdempotencyStore? _idempotency;
     private readonly IApprovalStore? _approvalStore;
+    private readonly IToolClaimsSource? _claimsSource;
+    private readonly IToolCacheStore? _toolCache;
+    private readonly ICostCalculator _costCalculator;
 
     /// <summary>
     /// Backwards-compatible constructor — wires every dependency to its no-op
@@ -51,6 +56,29 @@ public sealed class AgentEngine : IAgentEngine
     }
 
     /// <summary>Creates an engine with explicit governance / storage dependencies.</summary>
+    /// <param name="logger">Optional logger for governance decisions and tool failures.</param>
+    /// <param name="producerTemplate">Producer used to dispatch tool calls onto their endpoints.</param>
+    /// <param name="observer">Observability sink; defaults to <see cref="NoopAgentObserver"/>.</param>
+    /// <param name="budget">Budget enforcer; defaults to <see cref="NoopBudgetEnforcer"/> (no ceiling).</param>
+    /// <param name="approval">Approval gate; defaults to <see cref="AutoApproveGate"/>.</param>
+    /// <param name="redaction">Redaction filter; defaults to <see cref="NoopRedactionFilter"/>.</param>
+    /// <param name="shadow">Shadow runner; defaults to <see cref="NoopShadowRunner"/>.</param>
+    /// <param name="conversation">Conversation store; absent means the run is not persisted.</param>
+    /// <param name="idempotency">Idempotency store, consulted for tools with a declared side effect.</param>
+    /// <param name="approvalStore">Audit sink for approval decisions; absent means none are recorded.</param>
+    /// <param name="claimsSource">
+    /// Optional claims source. When absent, a tool that declares
+    /// <see cref="LlmToolSafety.RequiredClaims"/> is denied — fail closed by design.
+    /// </param>
+    /// <param name="toolCache">
+    /// Optional cross-run tool cache. Consulted only for <c>ToolCachingPolicy.Persist</c>;
+    /// <c>Memoize</c> is served by a run-scoped in-process cache. When absent, persisted caching
+    /// degrades to "not cached" rather than failing.
+    /// </param>
+    /// <param name="costCalculator">
+    /// Prices provider responses for cost budgets; defaults to <see cref="NullCostCalculator"/>, which
+    /// makes a run that requests a cost ceiling fail fast instead of enforcing a zero ceiling.
+    /// </param>
     public AgentEngine(
         ILogger<AgentEngine>? logger,
         IProducerTemplate? producerTemplate,
@@ -61,7 +89,10 @@ public sealed class AgentEngine : IAgentEngine
         IShadowRunner? shadow,
         IConversationStore? conversation,
         IToolIdempotencyStore? idempotency,
-        IApprovalStore? approvalStore)
+        IApprovalStore? approvalStore,
+        IToolClaimsSource? claimsSource = null,
+        IToolCacheStore? toolCache = null,
+        ICostCalculator? costCalculator = null)
     {
         _logger = logger;
         _producerTemplate = producerTemplate;
@@ -73,12 +104,83 @@ public sealed class AgentEngine : IAgentEngine
         _conversation = conversation;
         _idempotency = idempotency;
         _approvalStore = approvalStore;
+        _claimsSource = claimsSource;
+        _toolCache = toolCache;
+        _costCalculator = costCalculator ?? new NullCostCalculator();
     }
+
+    /// <summary>
+    /// Builds an engine from whatever the route context and its DI container can provide — the
+    /// production composition path. Every seam is optional here (an absent store means "not configured",
+    /// not "broken"), so a host only has to call <c>AddRedbRouteLlm()</c>, and the engine it resolves
+    /// carries the governance the package registered.
+    /// <para>
+    /// Constructing an engine by hand is still possible, but then every seam is the caller's to wire —
+    /// including the ones added since: use this factory (or DI) unless you intend to replace them all.
+    /// </para>
+    /// </summary>
+    /// <param name="context">Route context whose locator and DI provider are searched for the dependencies.</param>
+    public static AgentEngine FromContext(IRouteContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        return new AgentEngine(
+            logger: Resolve<ILogger<AgentEngine>>(context)
+                ?? Resolve<ILoggerFactory>(context)?.CreateLogger<AgentEngine>(),
+            producerTemplate: Resolve<IProducerTemplate>(context),
+            // Absent collaborators fall back to the same no-ops <c>AddRedbRouteLlm()</c> registers, so a
+            // bare context (a demo, a hand-rolled host) gets a working engine instead of null references.
+            observer: Resolve<IAgentObserver>(context) ?? new NoopAgentObserver(),
+            budget: Resolve<IBudgetEnforcer>(context) ?? new NoopBudgetEnforcer(),
+            approval: Resolve<IApprovalGate>(context) ?? new AutoApproveGate(),
+            redaction: Resolve<IRedactionFilter>(context) ?? new NoopRedactionFilter(),
+            shadow: Resolve<IShadowRunner>(context) ?? new NoopShadowRunner(),
+            conversation: Resolve<IConversationStore>(context),
+            idempotency: Resolve<IToolIdempotencyStore>(context),
+            approvalStore: Resolve<IApprovalStore>(context),
+            claimsSource: Resolve<IToolClaimsSource>(context),
+            toolCache: Resolve<IToolCacheStore>(context),
+            costCalculator: Resolve<ICostCalculator>(context));
+    }
+
+    /// <summary>
+    /// Finds the engine a host registered — first in the route context's own locator, then in the DI
+    /// container — or <c>null</c> when the host registered none. Producers, consumers and the inline step
+    /// must all use this: <see cref="IRouteContext.GetService{T}"/> deliberately looks only at the locator,
+    /// so asking it alone misses the engine <c>AddRedbRouteLlm()</c> registered in the container.
+    /// </summary>
+    public static IAgentEngine? FindRegistered(IRouteContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        return context.GetService<IAgentEngine>()
+               ?? context.GetServiceProvider()?.GetService(typeof(IAgentEngine)) as IAgentEngine;
+    }
+
+    /// <summary>
+    /// The context's own locator wins (a host may explicitly override a seam there), then the DI
+    /// provider. <see cref="IRouteContext.GetService{T}"/> deliberately looks only at the locator, so
+    /// asking one place would miss everything a container registered.
+    /// </summary>
+    private static T? Resolve<T>(IRouteContext context) where T : class
+        => context.GetService<T>()
+           ?? context.GetServiceProvider()?.GetService(typeof(T)) as T;
 
     /// <inheritdoc />
     public async Task<AgentResponse> RunAsync(AgentRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // A cost ceiling that cannot be priced must fail loudly and before the first provider call:
+        // the alternative is a run that reports "budget enforced" while pricing every call as zero.
+        if (request.Budget.MaxCostUsd > 0m
+            && _costCalculator.Estimate(LlmUsage.Empty, request.Factory) is null)
+        {
+            throw new InvalidOperationException(
+                $"This run requests a cost budget of {request.Budget.MaxCostUsd:F4} USD, but the registered "
+                + $"ICostCalculator cannot price model '{request.Factory.ModelId}'. Register a calculator that "
+                + "knows the model's rates, or drop the cost ceiling.");
+        }
 
         var provider = request.Factory.Build();
         var capabilities = ProjectCapabilities(request.Tools);
@@ -98,6 +200,10 @@ public sealed class AgentEngine : IAgentEngine
         await _observer.OnRunStartedAsync(runCtx, ct).ConfigureAwait(false);
 
         var retryCount = ReadRetryCount(request.Exchange);
+
+        // One memo per run, dropped when this method returns: "memoised for the lifetime of the agent
+        // run" is exactly what ToolCachingPolicy.Memoize promises, and nothing may outlive it.
+        var runCache = new AgentRunToolCache();
 
         // The preamble opens the transcript and stays out of the store: it is part of how the
         // assistant is assembled, not something said in this dialog (see AgentRequest.Preamble).
@@ -196,7 +302,8 @@ public sealed class AgentEngine : IAgentEngine
                     break;
                 }
 
-                var pre = await _budget.PreCheckAsync(request.ConversationId, request.Budget, totalUsage, ct).ConfigureAwait(false);
+                var pre = await OutsideTransactionAsync(
+                    () => _budget.PreCheckAsync(request.ConversationId, request.Budget, totalUsage, ct)).ConfigureAwait(false);
                 if (!pre.Continue)
                 {
                     _logger?.LogInformation("Budget pre-check stopped run: {Reason}", pre.Reason);
@@ -244,7 +351,12 @@ public sealed class AgentEngine : IAgentEngine
                 if (last.Usage.OutputTokens > 0)
                     LlmMetrics.TokensOut.Add(last.Usage.OutputTokens, providerTag, modelTag, factoryTag);
 
-                var iterUsage = new AgentUsage(last.Usage.InputTokens, last.Usage.OutputTokens, 0m);
+                // Cost is what the deployment can price, not a placeholder zero: a cost ceiling must
+                // not silently collapse into a tokens-only budget.
+                var iterUsage = new AgentUsage(
+                    last.Usage.InputTokens,
+                    last.Usage.OutputTokens,
+                    _costCalculator.Estimate(last.Usage, request.Factory) ?? 0m);
                 totalUsage = totalUsage.Add(iterUsage);
 
                 cacheWrite += last.Usage.CacheCreationInputTokens;
@@ -279,8 +391,8 @@ public sealed class AgentEngine : IAgentEngine
 
                 PublishConversationContext(request, transcript, iter, totalUsage);
 
-                var post = await _budget.RecordAndCheckAsync(
-                    request.ConversationId, request.Budget, iterUsage, totalUsage, ct).ConfigureAwait(false);
+                var post = await OutsideTransactionAsync(() => _budget.RecordAndCheckAsync(
+                    request.ConversationId, request.Budget, iterUsage, totalUsage, ct)).ConfigureAwait(false);
                 if (!post.Continue)
                 {
                     _logger?.LogInformation("Budget post-check stopped run: {Reason}", post.Reason);
@@ -294,7 +406,7 @@ public sealed class AgentEngine : IAgentEngine
                 {
                     if (block is not LlmToolUseBlock use) continue;
 
-                    var resultBlock = await DispatchToolAsync(request, runCtx, use, parentMessageId, ct).ConfigureAwait(false);
+                    var resultBlock = await DispatchToolAsync(request, runCtx, runCache, use, parentMessageId, ct).ConfigureAwait(false);
                     toolResults.Add(resultBlock);
                 }
 
@@ -355,7 +467,8 @@ public sealed class AgentEngine : IAgentEngine
     }
 
     private async Task<LlmToolResultBlock> DispatchToolAsync(
-        AgentRequest request, AgentRunContext runCtx, LlmToolUseBlock use, string? messageId, CancellationToken ct)
+        AgentRequest request, AgentRunContext runCtx, AgentRunToolCache runCache,
+        LlmToolUseBlock use, string? messageId, CancellationToken ct)
     {
         request.Exchange.setProperty(LlmExpressionKeys.Tool, new LlmToolContext
         {
@@ -369,7 +482,7 @@ public sealed class AgentEngine : IAgentEngine
         var sw = Stopwatch.StartNew();
         try
         {
-            var result = await DispatchToolCoreAsync(request, runCtx, use, messageId, ct).ConfigureAwait(false);
+            var result = await DispatchToolCoreAsync(request, runCtx, runCache, use, messageId, ct).ConfigureAwait(false);
             sw.Stop();
             request.Exchange.setProperty(LlmExpressionKeys.Tool, new LlmToolContext
             {
@@ -390,7 +503,8 @@ public sealed class AgentEngine : IAgentEngine
     }
 
     private async Task<LlmToolResultBlock> DispatchToolCoreAsync(
-        AgentRequest request, AgentRunContext runCtx, LlmToolUseBlock use, string? messageId, CancellationToken ct)
+        AgentRequest request, AgentRunContext runCtx, AgentRunToolCache runCache,
+        LlmToolUseBlock use, string? messageId, CancellationToken ct)
     {
         var tool = FindTool(request.Tools, use.Name);
         if (tool is null)
@@ -400,6 +514,86 @@ public sealed class AgentEngine : IAgentEngine
         }
 
         var redactedInput = _redaction.Redact(use.InputJson, RedactionContext.ToolInput);
+
+        // Claims are verified before approval: a caller that cannot prove its identity must not even
+        // reach the approver's queue. Fail closed — a tool that declares claims this run cannot
+        // verify is never invoked. The model is told the error code only; the missing-claim list
+        // stays in the observer/audit channel, so the tool's policy never leaks to the model.
+        var requiredClaims = tool.Capability.Safety.RequiredClaims;
+        if (requiredClaims.Count > 0)
+        {
+            var held = _claimsSource?.GetClaims(request.Exchange);
+            var missing = held is null
+                ? [.. requiredClaims]
+                : requiredClaims.Where(c => !held.Contains(c, StringComparer.Ordinal)).ToArray();
+
+            if (missing.Length > 0)
+            {
+                await _observer.OnToolInvokedAsync(new AgentToolInvocationContext
+                {
+                    Run = runCtx,
+                    Tool = tool.Capability,
+                    InputJson = redactedInput,
+                    OutputJson = null,
+                    ToolUseId = use.ToolUseId,
+                    Duration = TimeSpan.Zero,
+                    Skipped = true,
+                    SkipReason = $"{ToolSkipReasons.ClaimsMissing}:{string.Join(",", missing)}"
+                }, ct).ConfigureAwait(false);
+
+                if (held is null)
+                {
+                    // No principal at all is usually a transport/wiring problem, so it earns a warning.
+                    _logger?.LogWarning(
+                        "Tool '{Tool}' denied: no verifiable principal. Missing: [{Claims}]. Claims source: {Source}.",
+                        use.Name, string.Join(", ", missing),
+                        _claimsSource is null ? "none registered" : _claimsSource.GetType().Name);
+                }
+                else
+                {
+                    // A caller that simply does not hold the claim is a normal decision, not an incident.
+                    _logger?.LogInformation(
+                        "Tool '{Tool}' denied: the principal lacks the required claims. Missing: [{Claims}].",
+                        use.Name, string.Join(", ", missing));
+                }
+
+                return new LlmToolResultBlock(
+                    use.ToolUseId,
+                    JsonSerializer.Serialize(new { error = ToolResultErrors.ClaimsMissing }, JsonOptions),
+                    IsError: true);
+            }
+        }
+
+        // An external tool (mail, payment, deployment) does something no transaction can take back. Inside an
+        // ambient transaction - a route's .Transacted() - the run's database work and deferred sends roll back
+        // together, but the external action would stay done, and a retry after the rollback would do it again.
+        // So it is not run there: the model gets an error it can answer around, the audit channel records why.
+        // Checked before approval, so nobody is asked to approve a call that cannot run.
+        if (tool.Capability.Safety.SideEffect == ToolSideEffect.External
+            && System.Transactions.Transaction.Current is not null)
+        {
+            await _observer.OnToolInvokedAsync(new AgentToolInvocationContext
+            {
+                Run = runCtx,
+                Tool = tool.Capability,
+                InputJson = redactedInput,
+                OutputJson = null,
+                ToolUseId = use.ToolUseId,
+                Duration = TimeSpan.Zero,
+                Skipped = true,
+                SkipReason = ToolSkipReasons.ExternalInTransaction
+            }, ct).ConfigureAwait(false);
+
+            _logger?.LogWarning(
+                "Tool '{Tool}' declares SideEffect=External and was called inside an ambient transaction; it was not run, " +
+                "because its action cannot be rolled back with the transaction. Call it from a route without .Transacted().",
+                use.Name);
+
+            return new LlmToolResultBlock(
+                use.ToolUseId,
+                JsonSerializer.Serialize(new { error = ToolResultErrors.ExternalInTransaction }, JsonOptions),
+                IsError: true);
+        }
 
         if (tool.Capability.Safety.RequiresApproval)
         {
@@ -425,16 +619,108 @@ public sealed class AgentEngine : IAgentEngine
                     ToolUseId = use.ToolUseId,
                     Duration = TimeSpan.Zero,
                     Skipped = true,
-                    SkipReason = $"denied: {decision.Reason ?? "no reason"}"
+                    SkipReason = $"{ToolSkipReasons.ApprovalDeniedPrefix} {decision.Reason ?? "no reason"}"
                 }, ct).ConfigureAwait(false);
                 return new LlmToolResultBlock(use.ToolUseId,
-                    JsonSerializer.Serialize(new { error = "approval_denied", reason = decision.Reason }, JsonOptions),
+                    JsonSerializer.Serialize(new { error = ToolResultErrors.ApprovalDenied, reason = decision.Reason }, JsonOptions),
                     IsError: true);
             }
         }
 
+        // Cache lookup runs before the idempotency reservation: a hit means "this exact input already
+        // produced this output", which is cheaper than asking "was this tool_use already executed?".
+        // Approval ran first, so a cached result can never bypass a gate.
+        //
+        // The gate is the tool's own declaration, checked here as well as at registration: only a
+        // read-only tool may be cached, because a cached entry suppresses the side effect it stands for.
+        // A descriptor that reached the engine without that check (a hand-built AgentRequest) is therefore
+        // not cached — and says so, instead of silently mutating nothing.
+        //
+        // The address is resolved BEFORE the key is built and then REUSED for the dispatch: a descriptor
+        // may address a per-tenant endpoint, and a BuildEndpointUri that is not pure must not produce one
+        // address for the key and another for the call.
+        string? memoKey = null;
+        string? storeKey = null;
+        string? resolvedToolUri = null;
+        var lookedUp = false;
+        var caching = tool.Capability.Safety.Caching;
+        var cacheable = caching != ToolCachingPolicy.None
+            && tool.Capability.Safety.SideEffect == ToolSideEffect.ReadOnly;
+
+        if (caching != ToolCachingPolicy.None && !cacheable)
+        {
+            _logger?.LogWarning(
+                "Tool '{Tool}' declares Caching={Caching} with SideEffect={SideEffect}; its result is not cached. "
+                + "Only read-only tools may be cached — registration rejects this combination, so this descriptor "
+                + "reached the engine without it.",
+                use.Name, caching, tool.Capability.Safety.SideEffect);
+        }
+
+        if (cacheable)
+        {
+            resolvedToolUri = tool.BuildEndpointUri(use.InputJson, request.Exchange);
+            var policyFingerprint = ToolCacheKey.PolicyFingerprint(tool.Capability.Safety);
+            var callerFingerprint = CallerFingerprint(request);
+            memoKey = caching == ToolCachingPolicy.Memoize
+                ? ToolCacheKey.MemoKey(
+                    tool.Capability.Name, resolvedToolUri, policyFingerprint, callerFingerprint, use.InputJson)
+                : null;
+            storeKey = ToolCacheKey.StoreKey(
+                tool.Capability.Name, resolvedToolUri, use.InputJson, caching, policyFingerprint, callerFingerprint);
+
+            string? cachedOutput = null;
+            if (memoKey is not null)
+            {
+                cachedOutput = runCache.Get(memoKey);
+                lookedUp = true;
+            }
+            if (cachedOutput is null && storeKey is not null && _toolCache is not null)
+            {
+                // Best effort: a cache that cannot answer must not fail the run. A store outage is an
+                // operational incident, not a reason to refuse work the tool itself can still do.
+                try
+                {
+                    cachedOutput = await _toolCache.GetAsync(storeKey, request.Exchange, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger?.LogWarning(ex,
+                        "Tool-cache read failed for '{Tool}'; continuing without the cache.", use.Name);
+                    cachedOutput = null;
+                }
+
+                lookedUp = true;
+            }
+
+            if (cachedOutput is not null)
+            {
+                LlmMetrics.ToolCacheHits.Add(1, new KeyValuePair<string, object?>("llm.tool.name", use.Name));
+                await _observer.OnToolInvokedAsync(new AgentToolInvocationContext
+                {
+                    Run = runCtx,
+                    Tool = tool.Capability,
+                    InputJson = redactedInput,
+                    OutputJson = cachedOutput,
+                    ToolUseId = use.ToolUseId,
+                    Duration = TimeSpan.Zero,
+                    Skipped = true,
+                    SkipReason = ToolSkipReasons.CacheHit
+                }, ct).ConfigureAwait(false);
+                return new LlmToolResultBlock(use.ToolUseId, cachedOutput);
+            }
+
+            if (lookedUp)
+                LlmMetrics.ToolCacheMisses.Add(1, new KeyValuePair<string, object?>("llm.tool.name", use.Name));
+        }
+
+        // Idempotency is opt-in per side-effect class, as the tool's Safety declares: a read-only tool
+        // has no side effect to de-duplicate, and reserving it costs store round-trips on every call.
+        // Note what this implies for tools that declare nothing — SideEffect defaults to ReadOnly, so
+        // "no declaration" means "no replay protection".
+        var needsIdempotency = tool.Capability.Safety.SideEffect != ToolSideEffect.ReadOnly;
+
         ToolIdempotencyReservation? reservation = null;
-        if (_idempotency is not null && request.ConversationId is { } convId)
+        if (_idempotency is not null && request.ConversationId is { } convId && needsIdempotency)
         {
             reservation = await _idempotency.TryReserveAsync(convId, use.ToolUseId, request.Exchange, ct).ConfigureAwait(false);
             if (!reservation.IsNew)
@@ -448,7 +734,7 @@ public sealed class AgentEngine : IAgentEngine
                     ToolUseId = use.ToolUseId,
                     Duration = TimeSpan.Zero,
                     Skipped = true,
-                    SkipReason = "idempotent_cache_hit"
+                    SkipReason = ToolSkipReasons.IdempotencyHit
                 }, ct).ConfigureAwait(false);
                 return new LlmToolResultBlock(use.ToolUseId, reservation.CachedOutputJson ?? "{}");
             }
@@ -457,7 +743,7 @@ public sealed class AgentEngine : IAgentEngine
         var sw = Stopwatch.StartNew();
         try
         {
-            var output = await DispatchToolEndpointAsync(request, tool, use, ct).ConfigureAwait(false);
+            var output = await DispatchToolEndpointAsync(request, tool, use, resolvedToolUri, ct).ConfigureAwait(false);
             sw.Stop();
             LlmMetrics.ToolInvocations.Add(1, new KeyValuePair<string, object?>("llm.tool.name", use.Name));
 
@@ -465,6 +751,37 @@ public sealed class AgentEngine : IAgentEngine
                 await _idempotency!.CompleteAsync(completeConvId, use.ToolUseId, output, request.Exchange, ct).ConfigureAwait(false);
 
             var redactedOutput = _redaction.Redact(output, RedactionContext.ToolOutput);
+
+            // Store only an output the redaction filter left untouched. Storing the redacted body
+            // would hand the model different data on a hit than on a miss (the returned block below
+            // carries the raw body); storing the raw body would persist redaction-bypassing content in
+            // the cache for the whole TTL. The price is honest and documented: a tool whose output is
+            // redacted is not cached at all.
+            if (!string.Equals(output, redactedOutput, StringComparison.Ordinal))
+            {
+                _logger?.LogDebug(
+                    "Tool '{Name}' output was redacted — result is not cached.", use.Name);
+            }
+            else
+            {
+                if (memoKey is not null) runCache.Set(memoKey, output);
+                if (storeKey is not null && _toolCache is not null)
+                {
+                    // Best effort, same reasoning as the read: a failed write loses a future hit, it does
+                    // not invalidate a tool call that already succeeded. Letting it throw here would turn
+                    // a successful call into an error the model sees — and may retry.
+                    try
+                    {
+                        await _toolCache.SetAsync(storeKey, output, ToolCacheKey.StoreTtl, request.Exchange, ct)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger?.LogWarning(ex,
+                            "Tool-cache write failed for '{Tool}'; the result is not cached.", use.Name);
+                    }
+                }
+            }
 
             await _observer.OnToolInvokedAsync(new AgentToolInvocationContext
             {
@@ -604,8 +921,29 @@ public sealed class AgentEngine : IAgentEngine
 
     private async Task SafeRunShadowAsync(ILlmProvider provider, LlmRequest request, LlmResponse response, CancellationToken ct)
     {
+        // The shadow runs beside the primary run, not inside its work: it must not write into the route's
+        // transaction, and a command of its own on that transaction's connection at the same time as the
+        // primary run's would be refused.
+        using var outside = new System.Transactions.TransactionScope(
+            System.Transactions.TransactionScopeOption.Suppress,
+            System.Transactions.TransactionScopeAsyncFlowOption.Enabled);
         try { await _shadow.RunAsync(provider, request, response, ct).ConfigureAwait(false); }
         catch { /* shadow failures must never affect the primary run */ }
+    }
+
+    /// <summary>
+    /// Runs a budget call outside the ambient transaction. Tokens are paid when the provider answers, so a
+    /// rollback of the route must not un-count them: a retry after the rollback would otherwise run against
+    /// a budget that forgot the spend.
+    /// </summary>
+    private static async ValueTask<BudgetDecision> OutsideTransactionAsync(Func<ValueTask<BudgetDecision>> call)
+    {
+        using var outside = new System.Transactions.TransactionScope(
+            System.Transactions.TransactionScopeOption.Suppress,
+            System.Transactions.TransactionScopeAsyncFlowOption.Enabled);
+        var decision = await call().ConfigureAwait(false);
+        outside.Complete();
+        return decision;
     }
 
     private static void PublishConversationContext(
@@ -643,6 +981,46 @@ public sealed class AgentEngine : IAgentEngine
     }
 
     /// <summary>
+    /// Everything a tool receives that is NOT the input JSON and still changes its answer: the caller's
+    /// identity and the header values the route opted into propagating. Both belong in the cache key —
+    /// a tool route sees a real principal and real headers (see <see cref="ToolHeaderPolicy"/>), so
+    /// "same input" does not mean "same answer", and without this a persisted entry fetched for one
+    /// caller could be served to another.
+    /// <para>
+    /// The ambient conversation / correlation ids and the audit tags are deliberately left out: they are
+    /// per-run bookkeeping, and folding them in would make a cross-run cache useless. A tool whose output
+    /// depends on them must not declare <c>Persist</c>.
+    /// </para>
+    /// </summary>
+    private static string CallerFingerprint(AgentRequest request)
+    {
+        var sb = new StringBuilder();
+
+        var principal = ExchangePrincipal.Get(request.Exchange);
+        string? subject = null;
+        if (principal?.Identity is { IsAuthenticated: true } identity)
+            subject = identity.Name ?? principal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        sb.Append("caller:").Append(subject ?? request.UserId ?? string.Empty).Append('\n');
+
+        if (request.PropagateToolHeaders is { Count: > 0 } names)
+        {
+            var headers = request.Exchange.In?.Headers;
+            foreach (var name in names
+                         .Where(n => !string.IsNullOrWhiteSpace(n))
+                         .OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            {
+                sb.Append("header:").Append(name).Append('=');
+                if (headers is not null && headers.TryGetValue(name, out var value) && value is not null)
+                    sb.Append(value);
+                sb.Append('\n');
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Dispatches one tool call onto its redb.Route endpoint.
     /// <para>
     /// The tool runs on a <b>child of the agent exchange</b>, not on a freshly minted
@@ -670,6 +1048,7 @@ public sealed class AgentEngine : IAgentEngine
         AgentRequest request,
         ILlmToolDescriptor descriptor,
         LlmToolUseBlock use,
+        string? resolvedUri,
         CancellationToken ct)
     {
         if (_producerTemplate is null)
@@ -678,7 +1057,10 @@ public sealed class AgentEngine : IAgentEngine
 
         var parentExchange = request.Exchange;
 
-        var endpointUri = descriptor.BuildEndpointUri(use.InputJson, parentExchange);
+        // The cache block resolves the address when it needs a key; passing it in keeps one resolution
+        // per dispatch, so a descriptor that is not pure cannot index the cache by one address and call
+        // another.
+        var endpointUri = resolvedUri ?? descriptor.BuildEndpointUri(use.InputJson, parentExchange);
         if (string.IsNullOrWhiteSpace(endpointUri))
             throw new InvalidOperationException(
                 $"Tool '{descriptor.Capability.Name}' returned an empty endpoint URI.");
@@ -741,6 +1123,20 @@ public sealed class AgentEngine : IAgentEngine
             sb.Append(cap.Name).Append('\n');
             sb.Append(cap.Description ?? string.Empty).Append('\n');
             sb.Append(cap.InputSchema ?? string.Empty).Append('\n');
+
+            // Safety is part of the tool surface the model was given: a policy change between two runs
+            // is exactly the drift an auditor is looking for ("the same prompt, a weaker gate").
+            sb.Append("safety:")
+                .Append(cap.Safety.SideEffect).Append('/')
+                .Append(cap.Safety.Caching).Append('/')
+                .Append(cap.Safety.Cost).Append('/')
+                .Append(cap.Safety.RequiresApproval ? '1' : '0').Append('\n');
+
+            // Claims are length-prefixed: joining on a comma would hash ["a,b"] and ["a","b"]
+            // identically, which is the one collision an audit hash must not have.
+            foreach (var claim in cap.Safety.RequiredClaims.OrderBy(c => c, StringComparer.Ordinal))
+                sb.Append("claim:").Append(claim.Length).Append(':').Append(claim).Append('\n');
+
             sb.Append("---\n");
         }
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));

@@ -116,8 +116,12 @@ public static class XmlCodeGenerator
                 : XmlCodeWriter.Str(a.Attribute("value")?.Value ?? ""));
         args.Append(", [").Append(string.Join(", ", ctorArgs)).Append(']');
         var properties = bean.Elements().Where(e => e.Name.LocalName == "property")
-            .Select(p => $"({XmlCodeWriter.Str(p.Attribute("key")?.Value ?? "")}, {XmlCodeWriter.Str(p.Attribute("value")?.Value ?? "")})");
+            .Select(p => p.Elements().FirstOrDefault(c => c.Name.LocalName == "bean") is { } nestedValue
+                ? $"({XmlCodeWriter.Str(p.Attribute("key")?.Value ?? "")}, {BeanExpression(nestedValue)})"
+                : $"({XmlCodeWriter.Str(p.Attribute("key")?.Value ?? "")}, {XmlCodeWriter.Str(p.Attribute("value")?.Value ?? "")})");
         args.Append(", [").Append(string.Join(", ", properties)).Append(']');
+        if (bean.Attribute("factoryMethod")?.Value is { Length: > 0 } factoryMethod)
+            args.Append(", ").Append(XmlCodeWriter.Str(factoryMethod));
         return args.Append(')').ToString();
     }
 
@@ -222,26 +226,59 @@ public static class XmlCodeGenerator
 /// </summary>
 public static class XmlBeans
 {
-    /// <summary>Creates a bean instance for a generated registration.</summary>
+    /// <summary>
+    /// Creates a bean instance for a generated registration. A property value is either a string,
+    /// converted to the property type the way a URI option is, or an object built by a nested
+    /// anonymous bean and assigned as it is. <paramref name="factoryMethod"/> names a public static
+    /// creator to call instead of a constructor, with the constructor arguments as its parameters.
+    /// </summary>
     public static object Create(
         IRouteContext context,
         string typeName,
         object?[] constructorArgs,
-        (string Key, string Value)[] properties)
+        (string Key, object? Value)[] properties,
+        string? factoryMethod = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         var resolver = context.GetService<IBeanTypeResolver>() ?? DefaultBeanTypeResolver.Instance;
         var type = resolver.Resolve(typeName)
             ?? throw new InvalidOperationException($"bean type '{typeName}' was not found in the loaded assemblies.");
         var provider = context.GetServiceProvider();
-        var instance = constructorArgs.Length > 0
-            ? ActivatorUtilities.CreateInstance(provider ?? EmptyProvider.Instance, type, constructorArgs!)
-            : ActivatorUtilities.CreateInstance(provider ?? EmptyProvider.Instance, type);
+        object instance;
+        if (!string.IsNullOrEmpty(factoryMethod))
+        {
+            var method = type.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+                .FirstOrDefault(m => m.Name == factoryMethod && m.GetParameters().Length == constructorArgs.Length)
+                ?? throw new InvalidOperationException(
+                    $"type '{type.FullName}' has no public static method '{factoryMethod}' taking {constructorArgs.Length} argument(s).");
+            var parameters = method.GetParameters();
+            var bound = new object?[parameters.Length];
+            for (var i = 0; i < parameters.Length; i++)
+                bound[i] = constructorArgs[i] is string text && parameters[i].ParameterType != typeof(string)
+                    ? OptionValueConverter.Convert(text, parameters[i].ParameterType)
+                    : constructorArgs[i];
+            instance = method.Invoke(null, bound)
+                ?? throw new InvalidOperationException($"'{type.FullName}.{factoryMethod}' returned null.");
+        }
+        else
+        {
+            instance = constructorArgs.Length > 0
+                ? ActivatorUtilities.CreateInstance(provider ?? EmptyProvider.Instance, type, constructorArgs!)
+                : ActivatorUtilities.CreateInstance(provider ?? EmptyProvider.Instance, type);
+        }
         foreach (var (key, value) in properties)
         {
             var property = type.GetProperty(key)
                 ?? throw new InvalidOperationException($"type '{type.FullName}' has no property '{key}'.");
-            var resolved = context is RouteContext live ? live.ResolvePlaceholders(value) : value;
+            if (value is not string text)
+            {
+                if (value is not null && !property.PropertyType.IsInstanceOfType(value))
+                    throw new InvalidOperationException(
+                        $"'{value.GetType().FullName}' is not assignable to {property.PropertyType.Name} for '{key}'.");
+                property.SetValue(instance, value);
+                continue;
+            }
+            var resolved = context is RouteContext live ? live.ResolvePlaceholders(text) : text;
             var converted = OptionValueConverter.Convert(resolved, property.PropertyType)
                 ?? throw new InvalidOperationException($"'{resolved}' is not convertible to {property.PropertyType.Name} for '{key}'.");
             property.SetValue(instance, converted);

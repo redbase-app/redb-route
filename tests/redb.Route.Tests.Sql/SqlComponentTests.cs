@@ -153,7 +153,7 @@ public class SqlComponentTests
             ["mode"] = "Execute",
             ["dataSource"] = "main"
         };
-        var uri = new EndpointUri("sql", "INSERT INTO t(x) VALUES(@x)", "sql:INSERT...", parameters);
+        var uri = new EndpointUri("sql", "INSERT INTO t(x) VALUES(:#x)", "sql:INSERT...", parameters);
         var endpoint = (SqlEndpoint)component.CreateEndpoint(uri);
 
         var producer = endpoint.CreateProducer();
@@ -195,14 +195,5 @@ public class SqlComponentTests
         var producer = endpoint.CreateProducer();
 
         producer.Should().BeOfType<SqlProducer>();
-    }
-
-    // ── NamedQueryRegistry ─────────────────────────────────────────
-
-    [Fact]
-    public void Component_NamedQueryRegistry_InitiallyNull()
-    {
-        var component = new SqlComponent();
-        component.NamedQueryRegistry.Should().BeNull();
     }
 }

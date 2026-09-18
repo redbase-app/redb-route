@@ -79,6 +79,28 @@ The `GenericFileProducer` writes files with atomic temp-then-rename:
 | `SortBy` | `GenericFileSortBy` | `None` | Sort: `Name`, `NameDesc`, `Modified`, `ModifiedDesc`, `Size`, `SizeDesc` |
 | `MaxMessagesPerPoll` | `int` | `0` | Max files per poll (0 = unlimited) |
 | `MinAge` | `long` | `0` | Min file age (ms) |
+| `BackoffMultiplier` | `int` | `0` | Skip this many polls once a threshold is hit (0 = backoff off) |
+| `BackoffIdleThreshold` | `int` | `0` | Consecutive idle polls (no exchange created) that arm the skip |
+| `BackoffErrorThreshold` | `int` | `0` | Consecutive failed polls (the poll itself threw) that arm the skip |
+| `BackoffOnFailedExchanges` | `bool` | `false` | Beyond Camel: count a poll whose every exchange failed as an error for `BackoffErrorThreshold` |
+
+**Poll backoff** follows Apache Camel `ScheduledPollConsumer`: after `BackoffIdleThreshold` idle
+polls or `BackoffErrorThreshold` error polls, the next `BackoffMultiplier` polls are skipped (no
+listing, no connect), then the counters reset. A skipped poll still waits `Delay`, so stopping the
+consumer during a skip resolves within `Delay`. Entering backoff logs one warning; resuming logs one
+info line. `BackoffMultiplier` requires at least one threshold, and a threshold requires a multiplier —
+otherwise the endpoint refuses the configuration.
+
+**A file that fails in the route.** By default (Camel parity) a poll that created exchanges counts as
+success even if the route failed them, so a deterministically-bad file, or every file while the
+downstream is down, is retried every `Delay`. Two remedies:
+
+- **Poison file** → `OnException<T>().MaximumRedeliveries(n).RedeliveryDelay(...)` and/or `MoveFailed`
+  to quarantine it out of the poll directory.
+- **Downstream down** (every file fails) → set `BackoffOnFailedExchanges = true` (with an error
+  threshold + multiplier): a poll whose every created exchange failed unhandled then counts as an
+  error and the consumer backs off instead of hammering the downstream. A poll with any success still
+  counts as success.
 
 #### Consumer / Post-Processing
 

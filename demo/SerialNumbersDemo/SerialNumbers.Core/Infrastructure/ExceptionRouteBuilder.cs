@@ -26,6 +26,10 @@ public sealed class ExceptionRouteBuilder : RouteBuilder
             .Handled(true)
             .ProcessWithRedb(IntakeRecorder.RecordParkedAsync)
             .Log("${header.serials.partner}: ${header.serials.fileName} parked, " +
-                 "no route for message type ${header.serials.messageType}", LogLevel.Warning);
+                 "no route for message type ${header.serials.messageType}", LogLevel.Warning)
+            // The steps the message went through before it was parked, with their timings. Collected by
+            // .MessageHistory() on the intake and request routes; without a step that prints it the trace
+            // stays inside the exchange.
+            .Log(MessageHistory.Format, LogLevel.Warning);
     }
 }

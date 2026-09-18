@@ -339,6 +339,11 @@ public class FunctionCallNode : AstNode
                 }
                 return false;
 
+            case "messagehistory":
+                // Same evaluator as the compiled branch — a function that lives in one branch is a lie.
+                return ExpressionResolver.Ast_MessageHistory(
+                    evaluatedArgs.Length >= 1 ? evaluatedArgs[0] : null, exchange);
+
             case "stats":
                 // Same evaluator as the compiled branch — the format() lesson: a function that
                 // lives in one engine branch only is a documented lie.

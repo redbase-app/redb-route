@@ -28,8 +28,15 @@ public static class SqlHeaders
 
     // ── INSERT keys ───────────────────────────────────────────────────
 
-    /// <summary>Auto-generated keys after INSERT (e.g. identity column values).</summary>
+    /// <summary>
+    /// Rows the statements of a batch returned (<c>INSERT … RETURNING</c>, <c>OUTPUT inserted.*</c>), in item order, when
+    /// <c>outputType</c> reads rows: a <c>List&lt;Dictionary&lt;string, object?&gt;&gt;</c>, or <c>List&lt;T&gt;</c> with
+    /// <c>outputClass</c> (Apache Camel <c>CamelSqlGeneratedKeyRows</c>). The body is left alone.
+    /// </summary>
     public const string GeneratedKeys = "redbSql.generatedKeys";
+
+    /// <summary>Number of rows in <see cref="GeneratedKeys"/> (Apache Camel <c>CamelSqlGeneratedKeysRowCount</c>).</summary>
+    public const string GeneratedKeysRowCount = "redbSql.generatedKeysRowCount";
 
     // ── Error ─────────────────────────────────────────────────────────
 
@@ -50,4 +57,31 @@ public static class SqlHeaders
 
     /// <summary>Query execution time in milliseconds.</summary>
     public const string ExecutionTime = "redbSql.executionTime";
+
+    // ── Batch ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Batch strategy that ran: <c>None</c> (empty batch source, nothing executed), <c>DbBatch</c> (break on the first error,
+    /// chunks of <c>batchSize</c> statements per round trip), <c>Commands</c> (break on the first error, the connection has no
+    /// <c>DbBatch</c>) or <c>Savepoints</c> (continue past errors). The driver's capability decides, not an option.
+    /// </summary>
+    public const string BatchStrategy = "redbSql.batchStrategy";
+
+    /// <summary>Round trips of a <c>DbBatch</c> batch (<see cref="BatchStrategy"/> <c>DbBatch</c>); absent for other strategies.</summary>
+    public const string BatchChunkCount = "redbSql.batchChunkCount";
+
+    /// <summary>Batch items written successfully; in batch mode <see cref="RowCount"/> carries the same value.</summary>
+    public const string BatchItemCount = "redbSql.batchItemCount";
+
+    /// <summary>
+    /// Zero-based index of the item that ended a batch. The thrown provider exception carries the same value in its
+    /// <see cref="Exception.Data"/> under this key.
+    /// </summary>
+    public const string BatchFailedIndex = "redbSql.batchFailedIndex";
+
+    /// <summary>
+    /// Items that failed and were undone to their savepoint in a batch that continues past errors
+    /// (<c>breakBatchOnError=false</c>): an <c>IReadOnlyList&lt;SqlBatchItemError&gt;</c>.
+    /// </summary>
+    public const string BatchErrors = "redbSql.batchErrors";
 }

@@ -166,10 +166,42 @@ public sealed class McpDiscoveryService : IHostedService, IAsyncDisposable
             registeredNames.Add(modelName);
         }
 
+        // Patterns are matched against the RAW server-side tool name, while the model sees the
+        // sanitized "{server}__{tool}" form. An operator who copied the model-facing name gets a silent
+        // no-match, so say it out loud instead — with a real example from this server.
+        var unmatched = FindUnmatchedOverrides(server, tools);
+        if (unmatched.Count > 0)
+        {
+            var example = tools.Count > 0
+                ? McpToolDescriptor.BuildModelFacingName(server.Name, tools[0].Name)
+                : "(no tools discovered)";
+            foreach (var ovr in unmatched)
+            {
+                _logger.LogWarning(
+                    "MCP {Server}: safety override '{Pattern}' matched no discovered tool. Patterns match the raw "
+                    + "server-side name, not the model-facing form; names seen by the model here look like '{Example}'.",
+                    server.Name, ovr.ToolNamePattern, example);
+            }
+        }
+
         lock (_gate)
         {
             _registeredToolNames[server.Name] = registeredNames;
         }
+    }
+
+    /// <summary>
+    /// Overrides of <paramref name="server"/> that match none of <paramref name="tools"/>. A pure
+    /// function so the diagnostic below is testable without an MCP server.
+    /// </summary>
+    internal static IReadOnlyList<McpSafetyOverride> FindUnmatchedOverrides(
+        McpServerOptions server, IReadOnlyList<ToolDefinition> tools)
+    {
+        if (server.SafetyOverrides.Count == 0) return [];
+
+        return server.SafetyOverrides
+            .Where(ovr => !tools.Any(tool => !string.IsNullOrWhiteSpace(tool.Name) && ovr.Matches(tool.Name)))
+            .ToArray();
     }
 
     private static LlmToolSafety ResolveSafety(McpServerOptions server, string rawToolName)

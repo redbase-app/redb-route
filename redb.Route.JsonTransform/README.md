@@ -24,5 +24,5 @@ template for the whole document.
 
 Options: `services.AddJsonTransform(o => ...)` or `context.UseJsonTransform(o => ...)` — `BaseDirectory`, `Indent`.
 
-XML form (the node's shape in the Route-XML catalog; the XML loader itself is not shipped yet):
+XML form ([redb.Route.Xml](../redb.Route.Xml/README.md)):
 `<transformJson spec="transforms/order-to-shipment.jsonata"/>` or the specification as the element's text (CDATA); `output="string|node"`.

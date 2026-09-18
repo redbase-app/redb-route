@@ -1,0 +1,110 @@
+{
+  "name": "redb-route-xml",
+  "displayName": "redb Route XML",
+  "description": "XML routes for redb.Route: schema-driven completion and validation, a route tree, snippets and Mermaid preview. Text mode only - the format stays useful without any editor.",
+  "version": "0.1.0",
+  "publisher": "redb",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/redbase-app/redb-route.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "redb",
+    "route",
+    "esb",
+    "eip",
+    "xml"
+  ],
+  "extensionDependencies": [
+    "redhat.vscode-xml"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/*.route.xml",
+    "workspaceContains:**/*.redb-route.xml",
+    "onLanguage:xml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "redbRoute.graph",
+        "displayName": "redb Route Graph",
+        "selector": [
+          { "filenamePattern": "*.route.xml" },
+          { "filenamePattern": "*.redb-route.xml" }
+        ],
+        "priority": "option"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "redbRoutes",
+          "name": "redb Routes",
+          "icon": "$(type-hierarchy-sub)",
+          "when": "redbRoute.hasRoutes"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "redbRoute.refreshTree",
+        "title": "redb Route: Refresh Route Tree",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "redbRoute.showMermaid",
+        "title": "redb Route: Show Mermaid Diagram"
+      },
+      {
+        "command": "redbRoute.openGraph",
+        "title": "redb Route: Open Route Graph",
+        "icon": "$(type-hierarchy-sub)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "redbRoute.refreshTree",
+          "when": "view == redbRoutes",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "redbRoute.openGraph",
+          "when": "resourceFilename =~ /\\.(redb-)?route\\.xml$/",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "redbRoute.showMermaid",
+          "when": "resourceExtname == .xml"
+        },
+        {
+          "command": "redbRoute.openGraph",
+          "when": "resourceExtname == .xml"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "node --test \"out/test/*.test.js\"",
+    "refresh-schema": "dotnet run --project ../redb.Route.Xml.CodeGen -f net10.0 -- xsd --out media"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

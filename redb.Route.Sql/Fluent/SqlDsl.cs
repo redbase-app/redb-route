@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Text;
 using redb.Route.Abstractions;
 
@@ -16,7 +17,7 @@ namespace redb.Route.Sql;
 /// // Fluent:
 /// .From(Sql.Poll("SELECT * FROM outbox WHERE processed = 0")
 ///     .DataSource("main").Delay(5000).Transacted()
-///     .OnSuccess("UPDATE outbox SET processed = 1 WHERE id = @id"))
+///     .OnSuccess("UPDATE outbox SET processed = 1 WHERE id = :#id"))
 ///
 /// // URI (equivalent):
 /// .From("sql:SELECT * FROM outbox WHERE processed = 0?mode=Poll&amp;dataSource=main&amp;delay=5000&amp;transacted=true&amp;onSuccess=...")
@@ -68,7 +69,10 @@ public sealed class SqlBuilder
     private string? _onFailure;
     private string? _onBatchComplete;
     private string? _batchSize;
-    private bool _breakBatchOnError;
+    private bool? _breakBatchOnError;
+    private bool _readOnly;
+    private SqlPlaceholderStyle? _placeholderStyle;
+    private bool _backslashEscapes;
     private bool _asFunction;
     private readonly List<ProcedureParamDef> _procedureParams = [];
     private readonly List<(string Name, string Value)> _explicitParams = [];
@@ -83,17 +87,42 @@ public sealed class SqlBuilder
 
     // ── Connection ────────────────────────────────────────────────────
 
-    /// <summary>Sets the named data source.</summary>
-    public SqlBuilder DataSource(IExpression name) { _dataSource = name.ToTemplateString(); return this; }
+    /// <summary>Sets the named data source (constant name, e.g. <c>"main"</c>).</summary>
+    public SqlBuilder DataSource(string name) { _dataSource = name; return this; }
+
+    /// <summary>
+    /// Sets the named data source from a constant expression. The data source is fixed when the endpoint is created: a
+    /// <c>${...}</c> expression is refused — as in Apache Camel, a dynamic target is a dynamic endpoint (<c>ToD</c>).
+    /// </summary>
+    /// <exception cref="ArgumentException">The expression is not a constant.</exception>
+    public SqlBuilder DataSource(IExpression name) { _dataSource = ConstantOnly(name, "dataSource"); return this; }
 
     /// <summary>Sets a direct connection string.</summary>
-    public SqlBuilder ConnectionString(IExpression cs) { _connectionString = cs.ToTemplateString(); return this; }
+    public SqlBuilder ConnectionString(string cs) { _connectionString = cs; return this; }
+
+    /// <summary>Sets a direct connection string from a constant expression; a <c>${...}</c> expression is refused, as for <see cref="DataSource(IExpression)"/>.</summary>
+    /// <exception cref="ArgumentException">The expression is not a constant.</exception>
+    public SqlBuilder ConnectionString(IExpression cs) { _connectionString = ConstantOnly(cs, "connectionString"); return this; }
+
+    private static string ConstantOnly(IExpression expression, string option)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        var text = expression.ToTemplateString();
+        if (text.Contains("${", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"{option} is fixed when the endpoint is created and cannot come from the expression '{text}'. " +
+                "As in Apache Camel, route to a dynamic endpoint (ToD, RecipientList) instead.", nameof(expression));
+        }
+
+        return text;
+    }
 
     /// <summary>Sets the ADO.NET provider name.</summary>
     public SqlBuilder Provider(string name) { _provider = name; return this; }
 
     /// <summary>Sets the command timeout in seconds.</summary>
-    public SqlBuilder CommandTimeout(int seconds) { _commandTimeout = seconds.ToString(); return this; }
+    public SqlBuilder CommandTimeout(int seconds) { _commandTimeout = seconds.ToString(CultureInfo.InvariantCulture); return this; }
     /// <summary>Sets the command timeout from an expression.</summary>
     public SqlBuilder CommandTimeout(IExpression seconds) { _commandTimeout = seconds.ToTemplateString(); return this; }
 
@@ -101,6 +130,24 @@ public sealed class SqlBuilder
 
     /// <summary>Enables transaction wrapping.</summary>
     public SqlBuilder Transacted() { _transacted = true; return this; }
+
+    /// <summary>
+    /// Runs the statement on the data source's read replica. Declare it only for a statement that does not write; a batch, and a
+    /// poll with lifecycle SQL or a transaction, refuse it (see <see cref="SqlEndpointOptions.ReadOnly"/>).
+    /// </summary>
+    public SqlBuilder ReadOnly() { _readOnly = true; return this; }
+
+    /// <summary>
+    /// How <c>:#name</c> placeholders are written for the provider: <c>@name</c> (the default), <c>:name</c> (Oracle) or
+    /// <c>?</c> (ODBC) — see <see cref="SqlEndpointOptions.PlaceholderStyle"/>.
+    /// </summary>
+    public SqlBuilder PlaceholderStyle(SqlPlaceholderStyle style) { _placeholderStyle = style; return this; }
+
+    /// <summary>
+    /// Reads a backslash inside <c>'…'</c> and <c>"…"</c> as an escape, as MySQL and MariaDB do by default — see
+    /// <see cref="SqlEndpointOptions.BackslashEscapes"/>.
+    /// </summary>
+    public SqlBuilder BackslashEscapes() { _backslashEscapes = true; return this; }
 
     /// <summary>Sets the transaction isolation level.</summary>
     public SqlBuilder WithIsolationLevel(IsolationLevel level) { _isolationLevel = level; return this; }
@@ -122,12 +169,12 @@ public sealed class SqlBuilder
     // ── Polling ───────────────────────────────────────────────────────
 
     /// <summary>Sets the delay between polls in milliseconds.</summary>
-    public SqlBuilder Delay(int ms) { _delay = ms.ToString(); return this; }
+    public SqlBuilder Delay(int ms) { _delay = ms.ToString(CultureInfo.InvariantCulture); return this; }
     /// <summary>Sets the delay from an expression.</summary>
     public SqlBuilder Delay(IExpression ms) { _delay = ms.ToTemplateString(); return this; }
 
     /// <summary>Sets the initial delay before the first poll.</summary>
-    public SqlBuilder InitialDelay(int ms) { _initialDelay = ms.ToString(); return this; }
+    public SqlBuilder InitialDelay(int ms) { _initialDelay = ms.ToString(CultureInfo.InvariantCulture); return this; }
     /// <summary>Sets the initial delay from an expression.</summary>
     public SqlBuilder InitialDelay(IExpression ms) { _initialDelay = ms.ToTemplateString(); return this; }
 
@@ -135,12 +182,12 @@ public sealed class SqlBuilder
     public SqlBuilder FixedRate() { _fixedRate = true; return this; }
 
     /// <summary>Sets the maximum number of poll cycles.</summary>
-    public SqlBuilder RepeatCount(long count) { _repeatCount = count.ToString(); return this; }
+    public SqlBuilder RepeatCount(long count) { _repeatCount = count.ToString(CultureInfo.InvariantCulture); return this; }
     /// <summary>Sets the repeat count from an expression.</summary>
     public SqlBuilder RepeatCount(IExpression count) { _repeatCount = count.ToTemplateString(); return this; }
 
     /// <summary>Sets the maximum rows per poll.</summary>
-    public SqlBuilder MaxMessagesPerPoll(int max) { _maxMessagesPerPoll = max.ToString(); return this; }
+    public SqlBuilder MaxMessagesPerPoll(int max) { _maxMessagesPerPoll = max.ToString(CultureInfo.InvariantCulture); return this; }
     /// <summary>Sets max messages per poll from an expression.</summary>
     public SqlBuilder MaxMessagesPerPoll(IExpression max) { _maxMessagesPerPoll = max.ToTemplateString(); return this; }
 
@@ -161,15 +208,32 @@ public sealed class SqlBuilder
     /// <summary>SQL to execute after the entire batch.</summary>
     public SqlBuilder OnBatchComplete(string sql) { _onBatchComplete = sql; return this; }
 
+    private SqlPollDelivery? _pollDelivery;
+
+    /// <summary>
+    /// How polled rows reach the route: an exchange per row (the default) or one exchange with every row
+    /// (<see cref="SqlPollDelivery.List"/>, Apache Camel <c>useIterator=false</c>).
+    /// </summary>
+    public SqlBuilder PollDelivery(SqlPollDelivery delivery) { _pollDelivery = delivery; return this; }
+
     // ── Batch ─────────────────────────────────────────────────────────
 
-    /// <summary>Sets the batch size for producer mode.</summary>
-    public SqlBuilder Batch(int size) { _batchSize = size.ToString(); return this; }
-    /// <summary>Sets the batch size from an expression.</summary>
+    /// <summary>Enables batch mode for producer mode: a list body is written item by item in one transaction.</summary>
+    public SqlBuilder Batch(int size) { _batchSize = size.ToString(CultureInfo.InvariantCulture); return this; }
+    /// <summary>
+    /// Sets the batch size from an expression. Only constant expressions and <c>{{property}}</c> placeholders are accepted:
+    /// the value is read when the endpoint is created, and a <c>${...}</c> expression fails endpoint creation.
+    /// </summary>
     public SqlBuilder Batch(IExpression size) { _batchSize = size.ToTemplateString(); return this; }
 
-    /// <summary>Stops the batch on first error.</summary>
+    /// <summary>Stops the batch on the first error and rolls it back (the default).</summary>
     public SqlBuilder BreakBatchOnError() { _breakBatchOnError = true; return this; }
+
+    /// <summary>
+    /// Chooses what a failing batch item does: <c>true</c> stops and rolls the batch back (the default); <c>false</c> undoes
+    /// the failed item to its savepoint, reports it in <see cref="SqlHeaders.BatchErrors"/> and commits the others.
+    /// </summary>
+    public SqlBuilder BreakBatchOnError(bool enabled) { _breakBatchOnError = enabled; return this; }
 
     // ── Explicit Parameters ─────────────────────────────────────────
 
@@ -177,27 +241,57 @@ public sealed class SqlBuilder
     /// Binds a SQL parameter to an explicit value, overriding auto-bind from headers/body.
     /// Values containing <c>${...}</c> are resolved as expressions at runtime.
     /// </summary>
-    /// <param name="name">Parameter name (with or without <c>@</c> prefix).</param>
+    /// <param name="name">Parameter name, bare (<c>id</c>) or as written in the statement (<c>:#id</c>).</param>
     /// <param name="value">Constant value or expression string.</param>
+    /// <exception cref="ArgumentException">The name starts with <c>@</c>, which is not a placeholder.</exception>
     public SqlBuilder Param(string name, object? value)
     {
-        var paramName = name.TrimStart('@');
         // null → "" → ResolveParamValue → DBNull.Value (SQL NULL)
-        _explicitParams.Add((paramName, value?.ToString() ?? ""));
+        _explicitParams.Add((ParamName(name), FormatConstant(value)));
         return this;
     }
 
     /// <summary>
+    /// A constant as the database reads it, whatever the culture of the process: numbers with a decimal point, dates and times
+    /// as ISO 8601 round-trip text.
+    /// </summary>
+    private static string FormatConstant(object? value) => value switch
+    {
+        null => "",
+        string text => text,
+        DateTime dateTime => dateTime.ToString("O", CultureInfo.InvariantCulture),
+        DateTimeOffset dateTimeOffset => dateTimeOffset.ToString("O", CultureInfo.InvariantCulture),
+        DateOnly date => date.ToString("O", CultureInfo.InvariantCulture),
+        TimeOnly time => time.ToString("O", CultureInfo.InvariantCulture),
+        IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
+        _ => value.ToString() ?? "",
+    };
+
+    /// <summary>
     /// Binds a SQL parameter to an expression, resolved at runtime.
     /// </summary>
-    /// <param name="name">Parameter name (with or without <c>@</c> prefix).</param>
+    /// <param name="name">Parameter name, bare (<c>id</c>) or as written in the statement (<c>:#id</c>).</param>
     /// <param name="expression">Expression that produces the parameter value.</param>
+    /// <exception cref="ArgumentException">The name starts with <c>@</c>, which is not a placeholder.</exception>
     public SqlBuilder Param(string name, IExpression expression)
     {
         ArgumentNullException.ThrowIfNull(expression);
-        var paramName = name.TrimStart('@');
-        _explicitParams.Add((paramName, expression.ToTemplateString()));
+        _explicitParams.Add((ParamName(name), expression.ToTemplateString()));
         return this;
+    }
+
+    private static string ParamName(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        if (name.StartsWith('@'))
+        {
+            var bare = name.TrimStart('@');
+            throw new ArgumentException(
+                $"SQL parameters are written :#name, and '{name}' starts with '@', which the database keeps for its own variables. " +
+                $"Use Param(\"{bare}\", ...) or Param(\":#{bare}\", ...).", nameof(name));
+        }
+
+        return name.StartsWith(":#", StringComparison.Ordinal) ? name[2..] : name;
     }
 
     // ── Procedure ─────────────────────────────────────────────────────
@@ -272,6 +366,9 @@ public sealed class SqlBuilder
         AppendIf("provider", _provider);
         AppendIf("commandTimeout", _commandTimeout);
         AppendBool("transacted", _transacted);
+        AppendBool("readOnly", _readOnly);
+        if (_placeholderStyle.HasValue) Append("placeholderStyle", _placeholderStyle.Value.ToString());
+        AppendBool("backslashEscapes", _backslashEscapes);
         if (_isolationLevel.HasValue) Append("isolationLevel", _isolationLevel.Value.ToString());
 
         // Output
@@ -288,6 +385,7 @@ public sealed class SqlBuilder
         AppendIf("maxMessagesPerPoll", _maxMessagesPerPoll);
         AppendBool("routeEmptyResultSet", _routeEmptyResultSet);
         AppendBool("sendEmptyMessageWhenIdle", _sendEmptyMessageWhenIdle);
+        if (_pollDelivery.HasValue) Append("pollDelivery", _pollDelivery.Value.ToString());
 
         // Lifecycle SQL
         AppendIf("onSuccess", _onSuccess);
@@ -296,7 +394,7 @@ public sealed class SqlBuilder
 
         // Batch
         AppendIf("batchSize", _batchSize);
-        AppendBool("breakBatchOnError", _breakBatchOnError);
+        if (_breakBatchOnError.HasValue) Append("breakBatchOnError", _breakBatchOnError.Value ? "true" : "false");
 
         // Explicit parameters
         foreach (var (name, value) in _explicitParams)

@@ -22,9 +22,8 @@ public sealed class SerialNumberResponseXml
     [XmlElement("Quantity")]
     public int Quantity { get; set; }
 
-    [XmlElement("FirstSerial")]
-    public string? FirstSerial { get; set; }
-
-    [XmlElement("LastSerial")]
-    public string? LastSerial { get; set; }
+    /// <summary>Every issued serial number, twelve digits each. Empty for a rejection.</summary>
+    [XmlArray("SerialNumbers")]
+    [XmlArrayItem("SerialNumber")]
+    public List<string> SerialNumbers { get; set; } = [];
 }

@@ -89,5 +89,8 @@
     <Project Path="tests/redb.Route.Tests.JsonTransform/redb.Route.Tests.JsonTransform.csproj" />
     <Project Path="tests/redb.Route.Tests.Cache/redb.Route.Tests.Cache.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="redb.Route.Xml.CodeGen/redb.Route.Xml.CodeGen.csproj" />
+  </Folder>
 </Solution>
 

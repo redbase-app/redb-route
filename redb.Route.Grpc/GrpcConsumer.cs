@@ -474,7 +474,9 @@ public class GrpcConsumer : IConsumer
             message.Headers[GrpcHeaders.ClientCertNotAfter] = clientCert.NotAfter.ToUniversalTime().ToString("O");
         }
 
-        return Exchange.Create(message, _endpoint.ScopeFactory);
+        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
+        ExchangePrincipal.Set(exchange, SharedHttpServerManager.GetResolvedPrincipal(http));
+        return exchange;
 
         bool Accept(string key) => _options.AllowClientReservedHeaders || !GrpcWire.IsReservedKey(key);
     }

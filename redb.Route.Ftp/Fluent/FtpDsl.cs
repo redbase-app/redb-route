@@ -64,6 +64,10 @@ public sealed class FtpBuilder
     private string? _minDepth;
     private string? _sortBy;
     private string? _maxMessagesPerPoll;
+    private string? _backoffMultiplier;
+    private string? _backoffIdleThreshold;
+    private string? _backoffErrorThreshold;
+    private bool _backoffOnFailedExchanges;
     private string? _minAge;
     private string? _maxAge;
 
@@ -181,6 +185,21 @@ public sealed class FtpBuilder
 
     /// <summary>Initial delay from an expression.</summary>
     public FtpBuilder InitialDelay(IExpression ms) { _initialDelay = ms.ToTemplateString(); return this; }
+
+    /// <summary>Skip this many polls once a backoff threshold is hit (0 = disabled; needs a threshold).</summary>
+    public FtpBuilder BackoffMultiplier(int value) { _backoffMultiplier = value.ToString(); return this; }
+    /// <summary>Backoff multiplier from an expression.</summary>
+    public FtpBuilder BackoffMultiplier(IExpression value) { _backoffMultiplier = value.ToTemplateString(); return this; }
+    /// <summary>Consecutive idle polls (no exchange created) that arm the backoff skip (0 = disabled).</summary>
+    public FtpBuilder BackoffIdleThreshold(int value) { _backoffIdleThreshold = value.ToString(); return this; }
+    /// <summary>Backoff idle threshold from an expression.</summary>
+    public FtpBuilder BackoffIdleThreshold(IExpression value) { _backoffIdleThreshold = value.ToTemplateString(); return this; }
+    /// <summary>Consecutive failed polls (the poll itself threw) that arm the backoff skip (0 = disabled).</summary>
+    public FtpBuilder BackoffErrorThreshold(int value) { _backoffErrorThreshold = value.ToString(); return this; }
+    /// <summary>Backoff error threshold from an expression.</summary>
+    public FtpBuilder BackoffErrorThreshold(IExpression value) { _backoffErrorThreshold = value.ToTemplateString(); return this; }
+    /// <summary>Count a poll whose every created exchange failed as an error for backoff (needs BackoffErrorThreshold).</summary>
+    public FtpBuilder BackoffOnFailedExchanges() { _backoffOnFailedExchanges = true; return this; }
 
     /// <summary>File name pattern to include (e.g. "*.csv").</summary>
     public FtpBuilder Include(string pattern) { _include = pattern; return this; }
@@ -377,6 +396,10 @@ public sealed class FtpBuilder
         AppendIf("minDepth", _minDepth);
         AppendIf("sortBy", _sortBy);
         AppendIf("maxMessagesPerPoll", _maxMessagesPerPoll);
+        AppendIf("backoffMultiplier", _backoffMultiplier);
+        AppendIf("backoffIdleThreshold", _backoffIdleThreshold);
+        AppendIf("backoffErrorThreshold", _backoffErrorThreshold);
+        AppendBool("backoffOnFailedExchanges", _backoffOnFailedExchanges);
         AppendIf("minAge", _minAge);
         AppendIf("maxAge", _maxAge);
 

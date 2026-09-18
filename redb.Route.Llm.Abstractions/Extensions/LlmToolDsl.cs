@@ -120,7 +120,12 @@ public sealed class LlmToolBuilderDefinition
         return this;
     }
 
-    /// <summary>Adds a claim that the calling principal must carry for the tool to fire.</summary>
+    /// <summary>
+    /// Declares a claim the calling principal must carry for the tool to fire.
+    /// <b>Enforced</b> — the engine verifies the requirement against the registered
+    /// <c>IToolClaimsSource</c> (the caller's principal by default) and refuses the call when it cannot;
+    /// see <see cref="LlmToolSafety.RequiredClaims"/>.
+    /// </summary>
     public LlmToolBuilderDefinition RequireClaim(string claim)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(claim);
@@ -146,6 +151,24 @@ public sealed class LlmToolBuilderDefinition
         if (_registered) return _route;
         _registered = true;
 
+        // Fail fast rather than ship a tool that always refuses: a declared claim with no claims source
+        // can never be verified, because the engine denies what it cannot check. AddRedbRouteLlm()
+        // registers the default source (the caller's principal), so this fires only when a host
+        // replaced or removed it — and then breaking the route build beats a silently dead tool.
+        if (_requiredClaims is { Count: > 0 } && !HasClaimsSource())
+            throw new InvalidOperationException(
+                $"Tool '{_name}' requires claims [{string.Join(", ", _requiredClaims)}] but no IToolClaimsSource is registered. "
+                + "Remove the registration that disabled the default source, register one of your own "
+                + "(services.AddSingleton<IToolClaimsSource, ...>), or drop .RequireClaim(...).");
+
+        // Only read-only tools may be cached. A cache hit suppresses the side effect the entry stands
+        // for, so caching a mutation would silently drop a legitimate repeat ("send that invoice
+        // again") for the whole TTL. Same call HTTP made: caches are for safe methods by default.
+        if (_caching != ToolCachingPolicy.None && _sideEffect != ToolSideEffect.ReadOnly)
+            throw new InvalidOperationException(
+                $"Tool '{_name}' declares Caching={_caching} with SideEffect={_sideEffect}. "
+                + "Only read-only tools may be cached — a cache hit would suppress the side effect.");
+
         var capability = new LlmToolCapability
         {
             Name = _name,
@@ -167,6 +190,22 @@ public sealed class LlmToolBuilderDefinition
         registry.Register(descriptor);
 
         return _route;
+    }
+
+    /// <summary>
+    /// Whether a claims source is reachable from the route's context. Absence is the fail-closed
+    /// default, so a claim-declaring tool must not build against it.
+    /// </summary>
+    private bool HasClaimsSource()
+    {
+        if (_route is RouteDefinitionBase<RouteDefinition> rdef && rdef.Context is { } ctx)
+        {
+            var sp = ctx.GetServiceProvider();
+            if (sp?.GetService<IToolClaimsSource>() is not null) return true;
+            if (ctx.GetService<IToolClaimsSource>() is not null) return true;
+        }
+
+        return false;
     }
 
     private IToolDescriptorRegistry ResolveRegistry()

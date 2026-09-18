@@ -178,7 +178,9 @@ internal sealed class As2Consumer : IConsumer
             // Content-Type is deliberately NOT copied into the headers.
             var message = new Message(payload) { ContentType = payloadContentType };
             CopyInboundHeaders(request, message);
-            message.Headers[As2Headers.SignatureValid] = signatureValid;
+            // signatureValid starts true so the checks above treat an unsigned message uniformly; the header
+            // reports a verification, and an unsigned message had none.
+            message.Headers[As2Headers.SignatureValid] = wasSigned && signatureValid;
             if (mic is not null)
             {
                 message.Headers[As2Headers.Mic] = mic.Value.Digest;
@@ -191,6 +193,7 @@ internal sealed class As2Consumer : IConsumer
 
             exchange = Exchange.Create(message, _endpoint.ScopeFactory);
             exchange.Pattern = ExchangePattern.InOut;
+            ExchangePrincipal.Set(exchange, SharedHttpServerManager.GetResolvedPrincipal(http));
 
             await _processor.Process(exchange, http.RequestAborted).ConfigureAwait(false);
 

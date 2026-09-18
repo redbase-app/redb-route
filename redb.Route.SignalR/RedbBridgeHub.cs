@@ -58,6 +58,7 @@ internal sealed class RedbBridgeHub : Hub
             message.Headers[SignalRHeaders.UserId] = Context.UserIdentifier;
 
         var exchange = Exchange.Create(message, consumer.ScopeFactory);
+        ExchangePrincipal.Set(exchange, CallerPrincipal());
         exchange.Pattern = options.InOut ? ExchangePattern.InOut : ExchangePattern.InOnly;
 
         try
@@ -115,6 +116,7 @@ internal sealed class RedbBridgeHub : Hub
             message.Headers[SignalRHeaders.UserId] = Context.UserIdentifier;
 
         var exchange = Exchange.Create(message, consumer.ScopeFactory);
+        ExchangePrincipal.Set(exchange, CallerPrincipal());
 
         try
         {
@@ -158,6 +160,7 @@ internal sealed class RedbBridgeHub : Hub
             message.Headers[SignalRHeaders.UserId] = Context.UserIdentifier;
 
         var exchange = Exchange.Create(message, consumer.ScopeFactory);
+        ExchangePrincipal.Set(exchange, CallerPrincipal());
 
         try
         {
@@ -169,6 +172,17 @@ internal sealed class RedbBridgeHub : Hub
         }
 
         await base.OnDisconnectedAsync(exception);
+    }
+
+    /// <summary>
+    /// The caller's principal as the hub's identity gate handed it to SignalR, or null for an anonymous
+    /// connection. SignalR always has a <c>User</c>; for an anonymous connection it is an empty principal
+    /// (no claims, no authenticated identity), which identifies nobody and is not put on the exchange.
+    /// </summary>
+    private System.Security.Claims.ClaimsPrincipal? CallerPrincipal()
+    {
+        var user = Context.User;
+        return user is not null && user.Identities.Any(i => i.IsAuthenticated || i.Claims.Any()) ? user : null;
     }
 
     /// <summary>

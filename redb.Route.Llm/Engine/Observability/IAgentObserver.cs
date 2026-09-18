@@ -84,10 +84,16 @@ public sealed class AgentToolInvocationContext
     /// <summary>Exception thrown by the tool, if any.</summary>
     public Exception? Exception { get; init; }
 
-    /// <summary>True when the call was skipped due to idempotency / approval denial / cache hit.</summary>
+    /// <summary>
+    /// True when the call was skipped instead of executed: an idempotency hit, an approval denial, an
+    /// unverifiable claim requirement, or a tool-cache hit. <see cref="SkipReason"/> carries which.
+    /// </summary>
     public bool Skipped { get; init; }
 
-    /// <summary>Reason for skipping (when <see cref="Skipped"/> is true).</summary>
+    /// <summary>
+    /// Reason for skipping (when <see cref="Skipped"/> is true). Engine-emitted values are the
+    /// constants of <see cref="ToolSkipReasons"/>; the approval path adds the gate's own reason text.
+    /// </summary>
     public string? SkipReason { get; init; }
 }
 

@@ -554,6 +554,55 @@ public class CatalogContributionsTests : IAsyncDisposable
         act.Should().Throw<XmlRouteException>().WithMessage("*either message text or child elements*");
     }
 
+    [Fact]
+    public void MessageHistory_ReachesTheRouteDefinition()
+    {
+        // The route-level flag of the C# DSL has a markup form: a leaf step, like <streamCaching/>.
+        // Found missing while spelling the SerialNumbers demo in XML (2026-09-17).
+        Load("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="cat-history">
+                <from uri="direct://cat-history-in"/>
+                <messageHistory/>
+                <log level="Debug">step</log>
+              </route>
+            </routes>
+            """);
+
+        var builder = _context.RouteBuilders.Single();
+        if (!builder.IsBuilt)
+            builder.InternalBuild(_context);
+        builder.Definitions.OfType<IRouteDefinition>().Single()
+            .GetMessageHistory().Should().BeTrue("<messageHistory/> is the markup form of .MessageHistory()");
+    }
+
+    [Fact]
+    public async Task MessageHistory_TrailIsReadableFromAnExpression()
+    {
+        // The trail the engine records is a value like any other: the markup reads it through the
+        // messageHistory() function of the expression language, so a route can log it or branch on
+        // it without a processor. The seam is what this test pins - the function lives in the engine.
+        Load("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="cat-history-fn">
+                <from uri="direct://cat-hist-fn-in"/>
+                <messageHistory/>
+                <log level="Debug">step</log>
+                <setHeader name="trail" expr="messageHistory('compact')"/>
+                <setHeader name="steps" expr="messageHistory('count')"/>
+              </route>
+            </routes>
+            """);
+        var producer = await StartAndProducer("direct://cat-hist-fn-in");
+
+        var exchange = new Exchange(new Message("x"));
+        await producer.Process(exchange);
+
+        exchange.In.Headers["trail"].Should().BeOfType<string>()
+            .Which.Should().NotBeEmpty("the recorded trail renders as text");
+        Convert.ToInt32(exchange.In.Headers["steps"]).Should().BeGreaterThan(0);
+    }
+
     // ── anti-drift: the whole catalog in one document ────────────────────────
 
     [Fact]
@@ -572,6 +621,7 @@ public class CatalogContributionsTests : IAsyncDisposable
                 <sort expr="property.items" by="body" descending="true"/>
                 <sample messageFrequency="1"/>
                 <streamCaching/>
+                <messageHistory/>
                 <validate expr="body != null"/>
                 <validateJsonSchema throwOnFailure="false"><![CDATA[{"type":"object"}]]></validateJsonSchema>
                 <marshal format="application/json"/>

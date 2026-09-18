@@ -23,10 +23,11 @@ using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Extensions;
 
 // ─── REDB-BACKED MEMORY (optional) ───────────────────────────────────────────
-// To swap the in-memory conversation store for a Postgres-backed one:
+// To swap the in-memory conversation store for a SQLite-backed one (no database
+// stand needed — SQLite is the project default):
 //   STEP 1: uncomment the two PackageReference lines in Llm.HttpShell.csproj.
 //   STEP 2: uncomment the three `using` lines just below and the
-//           `services.AddRedb(...)` line further down.
+//           `services.AddRedbPro(...)` line further down.
 //   STEP 3: in the AgentEngine constructor, swap `new InMemoryConversationStore()`
 //           for `new RedbConversationStore(ctx)` (see the comment there).
 //
@@ -34,8 +35,8 @@ using redb.Route.Llm.Extensions;
 // `context.GetRedbService(name, exchange)`, which auto-creates a per-exchange
 // IServiceScope (cached in exchange.Properties, disposed when the exchange ends)
 // — so we don't need to plumb an IServiceScopeFactory ourselves.
-// using redb.Core.Extensions;
-// using redb.Postgres.Extensions;
+// using redb.Core.Pro.Extensions;
+// using redb.SQLite.Pro.Extensions;
 // using redb.Route.Llm.Storage.Redb;
 
 using LlmDsl = redb.Route.Llm.Fluent.Llm;
@@ -55,7 +56,8 @@ services.AddSingleton<ILogger>(sp => sp.GetRequiredService<ILoggerFactory>().Cre
 
 // STEP 2 of 3 — register the default (unnamed) IRedbService. RedbConversationStore
 // will pick it up via context.GetRedbService("", exchange) → per-exchange scope.
-// services.AddRedb(o => o.UsePostgres("Host=localhost;Port=5432;Username=postgres;Password=1;Database=redb"));
+// SQLite keeps the demo stand-free; SQLite is the project default provider.
+// services.AddRedbPro(o => o.UseSqlite("Data Source=llm-http-shell.db"));
 
 var sp = services.BuildServiceProvider();
 ctx = new RouteContext(sp, contextId: "llm-http-shell");
@@ -96,11 +98,18 @@ var engine = new AgentEngine(
     redaction:        new NoopRedactionFilter(),
     shadow:           new NoopShadowRunner(),
     conversation:     new InMemoryConversationStore(),  // X-Chat-Id history (lost on restart)
-    // STEP 3 of 3 — swap the line above for the line below to persist chat history in Postgres:
+    // STEP 3 of 3 — swap the line above for the line below to persist chat history in SQLite:
     // conversation:     new RedbConversationStore(ctx),
     idempotency:      null,
     approvalStore:    null);
 ctx.AddService(typeof(IAgentEngine), engine);
+
+// NOTE: this is the NuGet-consumer demo (PackageReference 4.0.0), so it shows the RELEASED surface.
+// The other shells build against the sources and register their choices instead:
+//     ctx.AddService(typeof(IConversationStore), new InMemoryConversationStore());
+//     ctx.AddService(typeof(IAgentEngine), AgentEngine.FromContext(ctx));
+// Switch this block to that shape once the package carrying AgentEngine.FromContext ships — a
+// constructor call here silently loses every seam added after the version it was written against.
 
 // ─── 6. Routes ───────────────────────────────────────────────────────────────
 var isWindows  = OperatingSystem.IsWindows();

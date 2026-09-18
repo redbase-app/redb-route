@@ -1,3 +1,6 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Http;
+
 namespace redb.Route.Http;
 
 /// <summary>
@@ -20,6 +23,38 @@ public sealed class HttpHostingOptions
 
     /// <summary>Kestrel connection ceilings applied to every listener the manager opens.</summary>
     public HostConnectionLimits Limits { get; } = new();
+
+    /// <summary>
+    /// Identifies the caller of each request on every listener the manager opens. Null (the default)
+    /// leaves requests unidentified and the host byte-for-byte what it was.
+    /// <para>
+    /// It runs once per request: after trusted-proxy resolution, so it sees the client's real address
+    /// and scheme; after CORS, so a preflight never reaches it; and before any transport sees the
+    /// request. A non-null result is kept in <c>HttpContext.Items</c> under
+    /// <see cref="SharedHttpServerManager.PrincipalItem"/>, and the HTTP, gRPC, SOAP, AS2, WebSocket and
+    /// SignalR consumers put it on the exchange (<c>ExchangePrincipal</c>).
+    /// </para>
+    /// <para>
+    /// It identifies; it does not authorize. Return <c>null</c> for an anonymous caller: such a request
+    /// is still served, because one listener carries routes with different requirements, and whether
+    /// an anonymous caller is acceptable is each route's decision. A resolver that <b>throws</b> fails the
+    /// request with 500 and an error log instead — one that could not decide must not quietly hand the
+    /// route an anonymous caller that may not be one. Build the identity with an authentication type
+    /// (<c>new ClaimsIdentity(claims, "Bearer")</c>): code that reads the principal treats an identity that
+    /// is not authenticated as anonymous.
+    /// </para>
+    /// <para>
+    /// A transport's own authenticate hook (<c>WsComponent.Authenticate</c>,
+    /// <c>SignalRComponent.Authenticate</c>) takes precedence on that transport's paths.
+    /// </para>
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// services.AddRedbRouteHttpHosting(o => o.ResolvePrincipal = ctx =>
+    ///     myTokenValidator.ValidateAsync(ctx.Request.Headers.Authorization.ToString()));
+    /// </code>
+    /// </example>
+    public Func<HttpContext, Task<ClaimsPrincipal?>>? ResolvePrincipal { get; set; }
 }
 
 /// <summary>

@@ -142,27 +142,33 @@ public sealed class LlmConsumer : IConsumer
 
         var services = ctx?.GetServiceProvider();
         var engine = _endpoint.ResolvedEngine
-            ?? services?.GetService<IAgentEngine>()
-            ?? ctx?.GetService<IAgentEngine>()
-            ?? throw new InvalidOperationException("No IAgentEngine registered.");
+            ?? (ctx is null ? null : AgentEngine.FindRegistered(ctx))
+            ?? throw new InvalidOperationException(
+                "No IAgentEngine is registered. Call services.AddRedbRouteLlm() — it registers the engine with " +
+                "the producer template, claims source and cache — or register one via " +
+                "AgentEngine.FromContext(context).");
 
         var templateRegistry = services?.GetService<IPromptTemplateRegistry>()
             ?? ctx?.GetService<IPromptTemplateRegistry>();
-        var initialBody = await PromptRef.ResolveAsync(_options.InitialBodyRef, templateRegistry, ctx, exchange: null, ct).ConfigureAwait(false)
-            ?? string.Empty;
-        var systemPrompt = await PromptRef.ResolveAsync(_options.SystemPromptRef, templateRegistry, ctx, exchange: null, ct).ConfigureAwait(false);
-
+        // The exchange comes first, with an empty body: the prompt references resolve with it, so a redb-backed
+        // template registry works on this tick's scope instead of the one instance every concurrent tick shares.
         var scopeFactory = services?.GetService<IServiceScopeFactory>();
-        var exchange = Exchange.Create(new Message(initialBody), scopeFactory);
+        var exchange = Exchange.Create(new Message(string.Empty), scopeFactory);
 
         // The scheduler owns this exchange for the whole tick: dispose it in finally so its
         // per-exchange DI scope (and any redb connection resolved downstream) is released every
         // tick — otherwise each scheduled fire would leak a scope and drain the connection pool.
+        // The prompt lookups run inside, so a failing template releases the exchange as well.
         try
         {
-            // Make the configured named-redb visible to every downstream store.
+            // Make the configured named-redb visible to every downstream store, the template registry included.
             if (!string.IsNullOrEmpty(_options.Redb))
                 exchange.Properties[LlmKeys.RedbName] = _options.Redb;
+
+            var initialBody = await PromptRef.ResolveAsync(_options.InitialBodyRef, templateRegistry, ctx, exchange, ct).ConfigureAwait(false)
+                ?? string.Empty;
+            var systemPrompt = await PromptRef.ResolveAsync(_options.SystemPromptRef, templateRegistry, ctx, exchange, ct).ConfigureAwait(false);
+            exchange.In.Body = initialBody;
 
             var registry = services?.GetService<IToolDescriptorRegistry>()
                 ?? ctx?.GetService<IToolDescriptorRegistry>();
@@ -184,6 +190,8 @@ public sealed class LlmConsumer : IConsumer
                 Tools = tools,
                 ConversationId = conversationId,
                 MaxIterations = _options.MaxIterations,
+                Budget = AgentBudgetFactory.From(
+                    _options.BudgetInputTokens, _options.BudgetOutputTokens, _options.BudgetCostUsd),
                 Temperature = _options.Temperature,
                 MaxTokens = _options.MaxTokens,
                 PropagateToolHeaders = ToolHeaderPolicy.ParseCsv(_options.PropagateToolHeaders)

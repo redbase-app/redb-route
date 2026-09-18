@@ -38,6 +38,9 @@ public static class RedbTransactedActionExtensions
     /// surrounding <see cref="TransactedProcessor"/> (or imperative <c>Commit/RollbackTransaction</c>)
     /// will close it.
     /// </summary>
+    [Obsolete("Use .Transacted() instead: under an ambient transaction scope redb enlists automatically " +
+              "via core's AmbientConnectionRegistry, so BeginRedbTransaction is a no-op there and only opens " +
+              "its own transaction when no ambient scope is active.")]
     public static IRouteDefinition BeginRedbTransaction(this IRouteDefinition route)
         => BeginRedbTransactionCore(route, name: null);
 
@@ -49,6 +52,9 @@ public static class RedbTransactedActionExtensions
     /// </summary>
     /// <param name="route">Route definition.</param>
     /// <param name="name">Named redb instance (e.g. <c>"orders-db"</c>).</param>
+    [Obsolete("Use .Transacted() instead: under an ambient transaction scope redb enlists automatically " +
+              "via core's AmbientConnectionRegistry, so BeginRedbTransaction is a no-op there and only opens " +
+              "its own transaction when no ambient scope is active.")]
     public static IRouteDefinition BeginRedbTransaction(this IRouteDefinition route, string name)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
@@ -64,6 +70,14 @@ public static class RedbTransactedActionExtensions
             var context = route.GetContext()
                 ?? throw new InvalidOperationException(
                     "RouteContext is not available. Ensure the route builder has been configured.");
+
+            // Under an ambient TransactionScope (.Transacted()), redb already writes into that
+            // transaction via core's AmbientConnectionRegistry, and redb.Context.BeginTransactionAsync()
+            // is rejected there (core 5dc3741e). Attach without opening: nothing to enroll — the scope
+            // owns commit/rollback. Only the legacy path (no ambient scope, e.g. .Transacted(Suppress)
+            // or no transaction at all) opens its own redb transaction.
+            if (System.Transactions.Transaction.Current is not null)
+                return;
 
             // Always resolve a PER-EXCHANGE scoped redb (its own connection) — never a captive
             // singleton. The unnamed path routes through the scoped resolver (see GetRedbService).

@@ -90,9 +90,13 @@ internal sealed class SqlConsumer : DrainableConsumer
     internal async Task Poll(CancellationToken ct)
     {
         var factory = ResolveConnectionFactory();
+
+        // Measured until the statement has run and its result is read (for a stream, until the reader is open): each poll
+        // strategy reads the stopwatch at that point.
         var sw = Stopwatch.StartNew();
 
-        await using var connection = await factory.CreateConnectionAsync(readOnly: true, ct).ConfigureAwait(false);
+        // The replica only with readOnly=true, which Validate refuses for a poll that marks or locks its rows.
+        await using var connection = await factory.CreateConnectionAsync(readOnly: _options.ReadOnly, ct).ConfigureAwait(false);
 
         var hasAmbientTx = Transaction.Current != null;
         DbTransaction? tx = null;
@@ -113,34 +117,45 @@ internal sealed class SqlConsumer : DrainableConsumer
 
             BindPollParameters(cmd);
 
-            sw.Stop();
-
             switch (_options.OutputType)
             {
                 case SqlOutputType.Scalar:
-                    await PollScalar(cmd, connection, tx, sql, sw.ElapsedMilliseconds, ct).ConfigureAwait(false);
+                    await PollScalar(cmd, connection, tx, sql, sw, ct).ConfigureAwait(false);
                     break;
 
                 case SqlOutputType.SelectOne:
-                    await PollSelectOne(cmd, connection, tx, sql, sw.ElapsedMilliseconds, ct).ConfigureAwait(false);
+                    await PollSelectOne(cmd, connection, tx, sql, sw, ct).ConfigureAwait(false);
+                    break;
+
+                case SqlOutputType.StreamList when _options.PollDelivery == SqlPollDelivery.List:
+                    await PollStreamAsList(cmd, connection, tx, sql, sw, ct).ConfigureAwait(false);
                     break;
 
                 case SqlOutputType.StreamList:
-                    await PollStreamPerRow(cmd, connection, tx, sql, sw.ElapsedMilliseconds, ct).ConfigureAwait(false);
+                    await PollStreamPerRow(cmd, connection, tx, sql, sw, ct).ConfigureAwait(false);
                     break;
 
                 default:
-                    await PollPerRow(cmd, connection, tx, sql, sw.ElapsedMilliseconds, ct).ConfigureAwait(false);
+                    if (_options.PollDelivery == SqlPollDelivery.List)
+                        await PollAsList(cmd, connection, tx, sql, sw, ct).ConfigureAwait(false);
+                    else
+                        await PollPerRow(cmd, connection, tx, sql, sw, ct).ConfigureAwait(false);
                     break;
             }
         }
         catch (Exception ex)
         {
-            Logger?.LogError(ex, "SQL consumer execution failed: dataSource={DataSource}",
-                _options.DataSource);
+            // A stop (cancellation of this poll's token) is not a failure; anything else is logged here, whatever the caller does.
+            if (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                Logger?.LogError(ex, "SQL consumer execution failed: dataSource={DataSource}",
+                    _options.DataSource);
+            }
+
             if (tx != null)
             {
-                try { await tx.RollbackAsync(ct).ConfigureAwait(false); }
+                // The rollback is not interruptible: a cancelled token would only turn it into a "rollback failed" log.
+                try { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
                 catch (Exception rbEx) { Logger?.LogError(rbEx, "SQL transaction rollback failed"); }
             }
             throw;
@@ -157,7 +172,7 @@ internal sealed class SqlConsumer : DrainableConsumer
     /// <summary>Default mode: read all rows, emit one exchange per row with lifecycle SQL.</summary>
     private async Task PollPerRow(
         DbCommand cmd, DbConnection connection, DbTransaction? tx,
-        string sql, long executionMs, CancellationToken ct)
+        string sql, Stopwatch stopwatch, CancellationToken ct)
     {
         var rows = new List<Dictionary<string, object?>>();
         var bodies = new List<object?>();
@@ -179,6 +194,8 @@ internal sealed class SqlConsumer : DrainableConsumer
             }
         }
 
+        var executionMs = stopwatch.ElapsedMilliseconds;
+
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
@@ -187,13 +204,14 @@ internal sealed class SqlConsumer : DrainableConsumer
             try
             {
                 await Processor.Process(exchange, ct).ConfigureAwait(false);
-                await ExecuteLifecycleSql(connection, tx, _options.OnSuccess, row, exchange, ct).ConfigureAwait(false);
+                await ExecuteOnSuccessAsync(connection, tx, row, exchange, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            // A stop is not a failure of the row: a cancellation of this poll's token goes up, onFailure does not run.
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 exchange.Exception = ex;
                 await ExecuteLifecycleSql(connection, tx, _options.OnFailure, row, exchange, ct).ConfigureAwait(false);
-                if (tx != null) { await tx.RollbackAsync(ct).ConfigureAwait(false); return; }
+                if (tx != null) { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); return; }
             }
             finally
             {
@@ -213,48 +231,93 @@ internal sealed class SqlConsumer : DrainableConsumer
 
     /// <summary>
     /// Streaming mode: reads rows lazily from <see cref="System.Data.Common.DbDataReader"/>
-    /// without buffering all rows in memory. Each row is processed immediately with
-    /// lifecycle SQL (OnSuccess/OnFailure) executed on the same connection/transaction.
-    /// The reader, connection, and transaction stay alive for the entire poll cycle.
+    /// without buffering all rows in memory. Each row is processed while the reader stays open.
+    /// <para>
+    /// Where <c>onSuccess</c> / <c>onFailure</c> run follows Apache Camel, which runs <c>onConsume</c> through its
+    /// <c>JdbcTemplate</c>: inside a transaction (<c>transacted=true</c> or an ambient one) on the reader's connection and
+    /// transaction; outside one on a connection of their own to the primary database, opened on first use and closed with the
+    /// cycle. The consequences are the drivers': PostgreSQL and SQL Server refuse a second command on the reader's connection
+    /// (a failing <c>onSuccess</c> is logged and the transaction rolls back), and SQLite in its default journal mode blocks a
+    /// write on another connection while the reader is open. <c>onBatchComplete</c> runs after the reader is closed, on the
+    /// reader's connection and transaction.
+    /// </para>
     /// </summary>
     private async Task PollStreamPerRow(
         DbCommand cmd, DbConnection connection, DbTransaction? tx,
-        string sql, long executionMs, CancellationToken ct)
+        string sql, Stopwatch stopwatch, CancellationToken ct)
     {
         var mapper = new DictionaryRowMapper();
         var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
         var rowCount = 0;
+        var inTransaction = tx != null || Transaction.Current != null;
+        long executionMs = 0;
 
-        await using (var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
+        DbConnection? rowStatementConnection = null;
+
+        // Inside a transaction the reader's connection and transaction; outside one a connection of their own, on first use.
+        async Task<DbConnection> RowStatementConnectionAsync() =>
+            inTransaction ? connection : (rowStatementConnection ??= await OpenRowStatementConnectionAsync(ct).ConfigureAwait(false));
+
+        var rowStatementTransaction = inTransaction ? tx : null;
+        var rollbackAfterReader = false;
+
+        try
         {
-            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            await using (var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
             {
-                if (_options.MaxMessagesPerPoll >= 0 && rowCount >= _options.MaxMessagesPerPoll)
-                    break;
+                // A stream is measured until its reader is open; the rows are read while the route runs.
+                executionMs = stopwatch.ElapsedMilliseconds;
 
-                var row = mapper.Map(reader);
-                var body = poco?.Map(reader) ?? row;
-                rowCount++;
+                while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                {
+                    if (_options.MaxMessagesPerPoll >= 0 && rowCount >= _options.MaxMessagesPerPoll)
+                        break;
 
-                var exchange = CreateExchange(body, row, sql, -1, executionMs);
-                IncrementInflight();
-                try
-                {
-                    await Processor.Process(exchange, ct).ConfigureAwait(false);
-                    await ExecuteLifecycleSql(connection, tx, _options.OnSuccess, row, exchange, ct).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    exchange.Exception = ex;
-                    await ExecuteLifecycleSql(connection, tx, _options.OnFailure, row, exchange, ct).ConfigureAwait(false);
-                    if (tx != null) { await tx.RollbackAsync(ct).ConfigureAwait(false); return; }
-                }
-                finally
-                {
-                    DecrementInflight();
-                    await exchange.DisposeAsync().ConfigureAwait(false);
+                    var row = mapper.Map(reader);
+                    var body = poco?.Map(reader) ?? row;
+                    rowCount++;
+
+                    var exchange = CreateExchange(body, row, sql, -1, executionMs);
+                    IncrementInflight();
+                    try
+                    {
+                        await Processor.Process(exchange, ct).ConfigureAwait(false);
+                        if (!string.IsNullOrEmpty(_options.OnSuccess))
+                        {
+                            var statementConnection = await RowStatementConnectionAsync().ConfigureAwait(false);
+                            await ExecuteOnSuccessAsync(statementConnection, rowStatementTransaction, row, exchange, ct).ConfigureAwait(false);
+                        }
+                    }
+                    // A stop is not a failure of the row: a cancellation of this poll's token goes up, onFailure does not run.
+                    catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                    {
+                        exchange.Exception = ex;
+                        if (!string.IsNullOrEmpty(_options.OnFailure))
+                        {
+                            var statementConnection = await RowStatementConnectionAsync().ConfigureAwait(false);
+                            await ExecuteLifecycleSql(statementConnection, rowStatementTransaction, _options.OnFailure, row, exchange, ct).ConfigureAwait(false);
+                        }
+                        if (tx != null) { rollbackAfterReader = true; break; }
+                    }
+                    finally
+                    {
+                        DecrementInflight();
+                        await exchange.DisposeAsync().ConfigureAwait(false);
+                    }
                 }
             }
+
+            if (rollbackAfterReader)
+            {
+                // After the reader is closed: PostgreSQL and SQL Server refuse even a rollback while it is open.
+                await tx!.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+        }
+        finally
+        {
+            if (rowStatementConnection is not null)
+                await rowStatementConnection.DisposeAsync().ConfigureAwait(false);
         }
 
         if (rowCount == 0)
@@ -266,12 +329,163 @@ internal sealed class SqlConsumer : DrainableConsumer
         if (tx != null) await tx.CommitAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// List delivery (<c>pollDelivery=List</c>, Apache Camel <c>useIterator=false</c>): reads the rows first, closes the reader,
+    /// then hands the route one exchange with all of them (<c>List&lt;T&gt;</c> with <c>outputClass</c>). An empty result is
+    /// delivered as an empty list when <c>routeEmptyResultSet</c> is set.
+    /// </summary>
+    private async Task PollAsList(
+        DbCommand cmd, DbConnection connection, DbTransaction? tx,
+        string sql, Stopwatch stopwatch, CancellationToken ct)
+    {
+        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var mapper = new DictionaryRowMapper();
+        var rows = poco?.CreateList() ?? new List<Dictionary<string, object?>>();
+
+        await using (var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                if (_options.MaxMessagesPerPoll >= 0 && rows.Count >= _options.MaxMessagesPerPoll)
+                    break;
+                rows.Add(poco != null ? poco.Map(reader) : mapper.Map(reader));
+            }
+        }
+
+        var executionMs = stopwatch.ElapsedMilliseconds;
+
+        if (rows.Count > 0 || _options.RouteEmptyResultSet)
+        {
+            var exchange = CreateExchange(rows, null, sql, rows.Count, executionMs);
+            if (await RunListExchangeAsync(exchange, connection, tx, static () => ValueTask.CompletedTask, ct).ConfigureAwait(false))
+                return;
+        }
+        else
+        {
+            await ProcessEmptyResult(sql, executionMs, ct).ConfigureAwait(false);
+        }
+
+        await ExecuteLifecycleSql(connection, tx, _options.OnBatchComplete, null, null, ct).ConfigureAwait(false);
+        if (tx != null) await tx.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Streaming list delivery (<c>outputType=StreamList</c>, <c>pollDelivery=List</c>; Apache Camel <c>useIterator=false</c>
+    /// with a result set iterator): the route gets the open stream as the body and reads the rows while it runs. The reader
+    /// is closed as soon as the route is done, so <c>onSuccess</c> / <c>onFailure</c> and <c>onBatchComplete</c> then share
+    /// the consumer's connection and transaction on every driver.
+    /// </summary>
+    private async Task PollStreamAsList(
+        DbCommand cmd, DbConnection connection, DbTransaction? tx,
+        string sql, Stopwatch stopwatch, CancellationToken ct)
+    {
+        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var mapper = new DictionaryRowMapper();
+        var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var executionMs = stopwatch.ElapsedMilliseconds;
+        var readerClosed = false;
+
+        async ValueTask CloseReaderAsync()
+        {
+            if (readerClosed)
+                return;
+            readerClosed = true;
+            await reader.DisposeAsync().ConfigureAwait(false);
+        }
+
+        try
+        {
+            if (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                Func<DbDataReader, object> map = poco != null ? poco.Map : r => mapper.Map(r);
+                var stream = ConsumerRowStream.Create(
+                    poco?.ElementType ?? typeof(Dictionary<string, object?>), reader, map, _options.MaxMessagesPerPoll);
+                var exchange = CreateExchange(stream, null, sql, -1, executionMs);
+                if (await RunListExchangeAsync(exchange, connection, tx, CloseReaderAsync, ct).ConfigureAwait(false))
+                    return;
+            }
+            else
+            {
+                await CloseReaderAsync().ConfigureAwait(false);
+                if (_options.RouteEmptyResultSet)
+                {
+                    var empty = poco?.CreateList() ?? new List<Dictionary<string, object?>>();
+                    var exchange = CreateExchange(empty, null, sql, 0, executionMs);
+                    if (await RunListExchangeAsync(exchange, connection, tx, static () => ValueTask.CompletedTask, ct).ConfigureAwait(false))
+                        return;
+                }
+                else
+                {
+                    await ProcessEmptyResult(sql, executionMs, ct).ConfigureAwait(false);
+                }
+            }
+        }
+        finally
+        {
+            await CloseReaderAsync().ConfigureAwait(false);
+        }
+
+        await ExecuteLifecycleSql(connection, tx, _options.OnBatchComplete, null, null, ct).ConfigureAwait(false);
+        if (tx != null) await tx.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Processes the one exchange of a list delivery: the route, then <paramref name="afterRoute"/> (closing a streamed list's
+    /// reader), then <c>onSuccess</c> — or, on any failure, <c>onFailure</c> and a rollback. Values of the statements come from
+    /// headers and <c>param.*</c>.
+    /// </summary>
+    /// <returns>True when the consumer transaction was rolled back and the poll cycle ends.</returns>
+    private async Task<bool> RunListExchangeAsync(
+        Exchange exchange, DbConnection connection, DbTransaction? tx, Func<ValueTask> afterRoute, CancellationToken ct)
+    {
+        IncrementInflight();
+        try
+        {
+            try
+            {
+                try
+                {
+                    await Processor.Process(exchange, ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await afterRoute().ConfigureAwait(false);
+                }
+
+                await ExecuteOnSuccessAsync(connection, tx, null, exchange, ct).ConfigureAwait(false);
+            }
+            // A stop is not a failure of the row: a cancellation of this poll's token goes up, onFailure does not run.
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                exchange.Exception = ex;
+                await ExecuteLifecycleSql(connection, tx, _options.OnFailure, null, exchange, ct).ConfigureAwait(false);
+                if (tx != null)
+                {
+                    await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                    return true;
+                }
+            }
+        }
+        finally
+        {
+            DecrementInflight();
+            await exchange.DisposeAsync().ConfigureAwait(false);
+        }
+
+        return false;
+    }
+
+    /// <summary>A connection to the primary database for the row statements of a streaming poll.</summary>
+    private Task<DbConnection> OpenRowStatementConnectionAsync(CancellationToken ct) =>
+        ResolveConnectionFactory().CreateConnectionAsync(readOnly: false, ct);
+
     /// <summary>Scalar: ExecuteScalarAsync → single exchange. Ideal for FOR XML / FOR JSON.</summary>
     private async Task PollScalar(
         DbCommand cmd, DbConnection connection, DbTransaction? tx,
-        string sql, long executionMs, CancellationToken ct)
+        string sql, Stopwatch stopwatch, CancellationToken ct)
     {
         var result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        var executionMs = stopwatch.ElapsedMilliseconds;
         if (result == DBNull.Value) result = null;
 
         if (result == null)
@@ -285,13 +499,14 @@ internal sealed class SqlConsumer : DrainableConsumer
             try
             {
                 await Processor.Process(exchange, ct).ConfigureAwait(false);
-                await ExecuteLifecycleSql(connection, tx, _options.OnSuccess, null, exchange, ct).ConfigureAwait(false);
+                await ExecuteOnSuccessAsync(connection, tx, null, exchange, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            // A stop is not a failure of the row: a cancellation of this poll's token goes up, onFailure does not run.
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 exchange.Exception = ex;
                 await ExecuteLifecycleSql(connection, tx, _options.OnFailure, null, exchange, ct).ConfigureAwait(false);
-                if (tx != null) { await tx.RollbackAsync(ct).ConfigureAwait(false); return; }
+                if (tx != null) { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); return; }
             }
             finally
             {
@@ -307,7 +522,7 @@ internal sealed class SqlConsumer : DrainableConsumer
     /// <summary>SelectOne: first row only → single exchange.</summary>
     private async Task PollSelectOne(
         DbCommand cmd, DbConnection connection, DbTransaction? tx,
-        string sql, long executionMs, CancellationToken ct)
+        string sql, Stopwatch stopwatch, CancellationToken ct)
     {
         var mapper = new DictionaryRowMapper();
         var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
@@ -323,6 +538,8 @@ internal sealed class SqlConsumer : DrainableConsumer
             }
         }
 
+        var executionMs = stopwatch.ElapsedMilliseconds;
+
         if (row == null)
         {
             await ProcessEmptyResult(sql, executionMs, ct).ConfigureAwait(false);
@@ -334,13 +551,14 @@ internal sealed class SqlConsumer : DrainableConsumer
             try
             {
                 await Processor.Process(exchange, ct).ConfigureAwait(false);
-                await ExecuteLifecycleSql(connection, tx, _options.OnSuccess, row, exchange, ct).ConfigureAwait(false);
+                await ExecuteOnSuccessAsync(connection, tx, row, exchange, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            // A stop is not a failure of the row: a cancellation of this poll's token goes up, onFailure does not run.
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 exchange.Exception = ex;
                 await ExecuteLifecycleSql(connection, tx, _options.OnFailure, row, exchange, ct).ConfigureAwait(false);
-                if (tx != null) { await tx.RollbackAsync(ct).ConfigureAwait(false); return; }
+                if (tx != null) { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); return; }
             }
             finally
             {
@@ -376,27 +594,36 @@ internal sealed class SqlConsumer : DrainableConsumer
     // ── Parameter binding for poll query ────────────────────────────
 
     /// <summary>
-    /// Binds explicit parameters from <c>.Param()</c> to the poll command.
-    /// Only constant values and SQL parameter references are supported in consumer context
-    /// (no exchange available for expression resolution).
+    /// Binds the <c>:#name</c> placeholders of the poll query. The query has no exchange, so its values come from
+    /// <c>param.*</c> only (constants and context placeholders); a placeholder without one is an error, as everywhere else.
     /// </summary>
     private void BindPollParameters(DbCommand cmd)
     {
-        var explicitParams = _options.ExplicitParameters;
-        if (explicitParams.Count == 0) return;
+        var plan = SqlParameterPlan.Create(cmd.CommandText, _options.ExplicitParameters, _options.PlaceholderStyle, _options.BackslashEscapes);
+        var values = new object?[plan.Names.Count];
 
-        var paramNames = SqlParameterParser.ExtractParameterNames(cmd.CommandText);
-
-        foreach (var name in paramNames)
+        for (var index = 0; index < plan.Names.Count; index++)
         {
-            if (!explicitParams.TryGetValue(name, out var explicitVal))
-                continue;
+            var name = plan.Names[index];
+            if (!plan.TryGetExplicit(name, out var explicitParameter))
+            {
+                throw new InvalidOperationException(SqlParameterBinder.MissingValueMessage(name, plan.SourceSql,
+                    $"a poll query has no exchange to take values from, and there is no param.{name} option"));
+            }
 
-            var param = cmd.CreateParameter();
-            param.ParameterName = name;
-            param.Value = SqlProducer.ResolveParamValue(explicitVal, null);
-            cmd.Parameters.Add(param);
+            // Without an exchange an expression cannot be evaluated, and its text must not be bound as the value.
+            if (explicitParameter.IsExpression)
+            {
+                throw new InvalidOperationException(
+                    $"SQL parameter ':#{name}' of the poll query is set to '{explicitParameter.Value}', a ${{...}} expression, and a " +
+                    $"poll query has no exchange to evaluate it in. Give param.{name} a constant or a {{{{property}}}} placeholder. " +
+                    $"Query: {plan.SourceSql}");
+            }
+
+            values[index] = explicitParameter.Resolve(null);
         }
+
+        AddPlanParameters(cmd, plan, values);
     }
 
     // ── Exchange creation ───────────────────────────────────────────
@@ -437,6 +664,27 @@ internal sealed class SqlConsumer : DrainableConsumer
         return exchange;
     }
 
+    /// <summary>
+    /// Runs <c>onSuccess</c> for a processed row. A failure is logged and rethrown: the row's failure handling
+    /// (<c>onFailure</c>, rollback) still sees it, and without <c>onFailure</c> the unmarked row — processed again on the next
+    /// poll — would otherwise pass unnoticed.
+    /// </summary>
+    private async Task ExecuteOnSuccessAsync(
+        DbConnection connection, DbTransaction? tx, Dictionary<string, object?>? row, IExchange exchange, CancellationToken ct)
+    {
+        try
+        {
+            await ExecuteLifecycleSql(connection, tx, _options.OnSuccess, row, exchange, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger?.LogError(ex,
+                "SQL consumer onSuccess failed; the row stays unmarked and will be polled again: dataSource={DataSource}",
+                _options.DataSource);
+            throw;
+        }
+    }
+
     private async Task ExecuteLifecycleSql(
         DbConnection connection,
         DbTransaction? tx,
@@ -461,42 +709,59 @@ internal sealed class SqlConsumer : DrainableConsumer
 
     private void BindParameters(DbCommand cmd, Dictionary<string, object?>? row, IExchange? exchange)
     {
-        var sql = cmd.CommandText;
-        var paramNames = SqlParameterParser.ExtractParameterNames(sql);
-        var explicitParams = _options.ExplicitParameters;
+        var plan = SqlParameterPlan.Create(cmd.CommandText, _options.ExplicitParameters, _options.PlaceholderStyle, _options.BackslashEscapes);
+        var values = new object?[plan.Names.Count];
 
-        foreach (var name in paramNames)
+        for (var index = 0; index < plan.Names.Count; index++)
         {
-            var param = cmd.CreateParameter();
-            param.ParameterName = name;
+            var name = plan.Names[index];
+            var isRedbError = name.Equals("redbError", StringComparison.OrdinalIgnoreCase);
 
-            // Special: @redbError → exception message
-            if (name.Equals("redbError", StringComparison.OrdinalIgnoreCase) && exchange?.Exception != null)
+            // Special: :#redbError → exception message
+            if (isRedbError && exchange?.Exception != null)
             {
-                param.Value = exchange.Exception.Message;
+                values[index] = exchange.Exception.Message;
             }
             // Priority 0: explicit param from .Param()
-            else if (explicitParams.TryGetValue(name, out var explicitVal))
+            else if (plan.TryGetExplicit(name, out var explicitParameter))
             {
-                param.Value = SqlProducer.ResolveParamValue(explicitVal, exchange);
+                values[index] = explicitParameter.Resolve(exchange);
             }
             // Priority 1: row data
             else if (row != null && row.TryGetValue(name, out var rowVal))
             {
-                param.Value = rowVal ?? DBNull.Value;
+                values[index] = rowVal ?? DBNull.Value;
             }
             // Priority 2: exchange headers
             else if (exchange?.In.Headers.TryGetValue(name, out var headerVal) == true)
             {
-                param.Value = headerVal ?? DBNull.Value;
+                values[index] = headerVal ?? DBNull.Value;
             }
+            // :#redbError always has a value: NULL when nothing failed
+            else if (isRedbError)
+            {
+                values[index] = DBNull.Value;
+            }
+            // As in Apache Camel: a placeholder with no value is an error, not a silent NULL
             else
             {
-                param.Value = DBNull.Value;
+                throw new InvalidOperationException(SqlParameterBinder.MissingValueMessage(name, plan.SourceSql,
+                    $"no param.{name} option, no '{name}' column in the polled row and no '{name}' header"));
             }
-
-            cmd.Parameters.Add(param);
         }
+
+        AddPlanParameters(cmd, plan, values);
+    }
+
+    /// <summary>
+    /// Writes the command text in the provider's placeholder style and adds one parameter per slot of the plan, each value
+    /// normalised as the producer normalises its own (<see cref="SqlParameterBinder.Add"/>).
+    /// </summary>
+    private static void AddPlanParameters(DbCommand cmd, SqlParameterPlan plan, object?[] values)
+    {
+        cmd.CommandText = plan.Sql;
+        for (var slot = 0; slot < plan.Slots.Count; slot++)
+            SqlParameterBinder.Add(cmd, plan.ParameterName(slot), values[plan.Slots[slot]]);
     }
 
     private string ResolveQuery(IExchange? exchange)
@@ -507,6 +772,14 @@ internal sealed class SqlConsumer : DrainableConsumer
         // If DynamicValue Query is set in options, use that instead
         if (_options.Query is { } dv)
         {
+            // A poll has no exchange: an expression cannot be resolved, and falling back to the path would hide it.
+            if (exchange == null && dv.IsDynamic)
+            {
+                throw new InvalidOperationException(
+                    "The query option is a ${...} expression, and a poll has no exchange to resolve it against. Give the poll " +
+                    "query as the URI path, a constant query option or a ref:name.");
+            }
+
             var resolved = exchange != null ? dv.Resolve(exchange) : dv.Resolve(new Exchange());
             if (resolved != null)
                 rawSql = resolved;

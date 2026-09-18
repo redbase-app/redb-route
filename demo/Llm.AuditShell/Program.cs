@@ -51,11 +51,11 @@ using redb.Route.Llm.Engine.Storage;
 // LINQ-to-SQL query above. Steps:
 //   STEP 1: uncomment the two PackageReference lines in Llm.AuditShell.csproj.
 //   STEP 2: uncomment the three `using` lines just below and the
-//           `services.AddRedb(...)` line further down.
+//           `services.AddRedbPro(...)` line further down.
 //   STEP 3: in the AgentEngine constructor, swap `new InMemoryConversationStore()`
 //           for `new RedbConversationStore(ctx)`.
-// using redb.Core.Extensions;
-// using redb.Postgres.Extensions;
+// using redb.Core.Pro.Extensions;
+// using redb.SQLite.Pro.Extensions;
 // using redb.Route.Llm.Storage.Redb;
 
 using LlmDsl = redb.Route.Llm.Fluent.Llm;
@@ -73,8 +73,9 @@ services.AddLogging(b => b
 services.AddSingleton<IRouteContext>(_ => ctx);
 services.AddSingleton<ILogger>(sp => sp.GetRequiredService<ILoggerFactory>().CreateLogger("redb.Route"));
 
-// STEP 2 of 3 — register the default unnamed IRedbService.
-// services.AddRedb(o => o.UsePostgres("Host=localhost;Port=5432;Username=postgres;Password=1;Database=redb"));
+// STEP 2 of 3 — register the default unnamed IRedbService. SQLite keeps the demo stand-free
+// (SQLite is the project default provider).
+// services.AddRedbPro(o => o.UseSqlite("Data Source=llm-audit-shell.db"));
 
 var sp = services.BuildServiceProvider();
 ctx = new RouteContext(sp, contextId: "llm-audit-shell");
@@ -99,21 +100,13 @@ ctx.AddToRegistry("haiku", new LlmConnectionFactory
 var producerTemplate = new ProducerTemplate(ctx);
 ctx.AddService(typeof(IProducerTemplate), producerTemplate);
 
-var engine = new AgentEngine(
-    logger:           null,
-    producerTemplate: producerTemplate,
-    observer:         new NoopAgentObserver(),
-    budget:           new NoopBudgetEnforcer(),
-    approval:         new AutoApproveGate(),
-    redaction:        new NoopRedactionFilter(),
-    shadow:           new NoopShadowRunner(),
-    conversation:     new InMemoryConversationStore(),
-    // STEP 3 of 3 — swap the line above for the line below to persist into Postgres,
-    // then run the LINQ-by-AuditTags query at the top of the file.
-    // conversation:     new RedbConversationStore(ctx),
-    idempotency:      null,
-    approvalStore:    null);
-ctx.AddService(typeof(IAgentEngine), engine);
+// Same shape as the HTTP shell: deliberate choices are registered, the engine is built from the context.
+ctx.AddService(typeof(IConversationStore), new InMemoryConversationStore());
+// STEP 3 of 3 — swap the line above for the line below to persist into SQLite, then run the
+// LINQ-by-AuditTags query at the top of the file.
+// ctx.AddService(typeof(IConversationStore), new RedbConversationStore(ctx));
+
+ctx.AddService(typeof(IAgentEngine), AgentEngine.FromContext(ctx));
 
 // ─── 6. Routes ───────────────────────────────────────────────────────────────
 var systemPrompt =

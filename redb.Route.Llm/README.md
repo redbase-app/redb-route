@@ -130,6 +130,15 @@ services.AddRedbRoute(route =>
 `InMemoryPromptTemplateRegistry`, `LlmComponent`, and the inline-`.Llm()`
 extension wiring.
 
+The engine itself is built from the route context (`AgentEngine.FromContext`): it
+takes the registered producer template, claims source, cache, cost calculator and
+the rest, and falls back to the shipped no-ops for the collaborators a host did not
+supply. This holds for every shape of an LLM route — `llm://` producers and
+consumers included, which look the engine up in the context and then in the
+container. Hosts therefore do not assemble an engine by hand: registering a seam is
+what replaces it, and a seam added in a future release reaches the engine without
+an edit to the host.
+
 ### 2. `To("llm://...")` — model as a pipeline step
 
 This is the most common shape. The producer treats the inbound message as **one
@@ -360,6 +369,36 @@ r.From("direct:tool-publish")
     .To("kafka://events")
     .Process(e => { e.Out ??= e.In.Clone(); e.Out.Body = "{\"ok\":true}"; });
 ```
+
+### Tools inside a route transaction
+
+A tool runs on a child of the agent exchange, in its DI scope and its ambient transaction. An agent step
+inside `.Transacted()` is therefore one unit of work with its tools: a tool's redb or `sql:` writes go into
+the route's transaction, and a Kafka or RabbitMQ send with `transacted=true` is deferred into the route's
+`TRANSACT_ACTION` set and committed with it. When the route rolls back, those writes and sends go with it,
+and so do the run's conversation turns, tool cache entries and idempotency reservations: a retry runs the
+tools again against a clean state.
+
+Two things are kept out of that unit:
+
+- **External tools.** A tool declared `SideEffect(ToolSideEffect.External)` (mail, payment, deployment)
+  does something no rollback can take back. Inside an ambient transaction the engine does not run it: the
+  model receives `{"error":"external_in_transaction"}` and observers see
+  `SkipReason = "external_in_transaction"`. Call such tools from a route without `.Transacted()`. A send
+  without `transacted=true` leaves at once, so declare that tool `External` as well.
+- **The budget.** Tokens are paid when the provider answers, so the budget is recorded outside the route's
+  transaction, and a rollback does not un-count them.
+
+What the transaction costs:
+
+- **Time.** `.Transacted()` times out after 30 seconds by default, and one model call can take longer. Set
+  `TransactionPolicy.Timeout` for the whole agent run, tool calls included.
+- **Locks.** Rows a tool writes, and the conversation root the store updates on every turn, stay locked until
+  the route commits, across every model call that follows.
+- **Retries.** A retry after a rollback calls the model again and pays for it again.
+- **SQLite.** The transaction holds SQLite's single write lock for the whole block. The budget is written
+  outside it, by a second writer, which waits for that lock and fails after the busy timeout (5 seconds).
+  With the redb budget store on SQLite, do not put `llm:` inside `.Transacted()`.
 
 ### Examples per connector
 
@@ -848,7 +887,31 @@ LlmConsumer.cs          PeriodicTimer scheduler, fires AgentEngine on each tick
       true Messages-API SSE (`message_start` / `content_block_delta` /
       `message_stop`) for streaming; Messages-API-only features (prompt
       caching, computer-use, fine-grained image blocks) land here as needed.
-- [ ] Governance hooks: budget / shadow / approval / idempotency (Phase-1 §2).
+- [x] Governance hooks — enforced in the agent loop, with the boundaries stated:
+      - [x] `IRedactionFilter` — always applied to tool input and output. An output the filter
+            changed is never written to the tool cache.
+      - [x] claims — a tool whose `RequiredClaims` cannot be verified is denied before approval and is
+            never dispatched. The default source (`ExchangePrincipalClaimsSource`) reads the caller's
+            principal from the exchange — a property a transport sets, never a client header — and
+            takes its `scope` / `scp` values; a host with another vocabulary registers its own source.
+            An anonymous caller, an unauthenticated identity and a run with no inbound request (a
+            scheduled one, or one born after a broker hop, where properties do not survive) all fail
+            the check. If a host removes the default source, a claim-declaring tool stops building at
+            all, so a dead requirement cannot ship silently.
+      - [x] approval — `IApprovalGate` is awaited when a tool sets `RequiresApproval` (discovered
+            MCP tools declare it by default). The shipped default gate auto-approves and writes an
+            audit row, so a real control point must be registered.
+      - [x] idempotency — gated on the declared `SideEffect`: a tool that is not `ReadOnly` is
+            reserved before it runs and a replay of the same `tool_use` id returns the stored
+            result. Read-only tools are not reserved at all.
+      - [x] tool-result cache — `Memoize` is answered in-process for the lifetime of the run,
+            `Persist` through `IToolCacheStore` (24 h TTL); a hit is reported to observers as
+            `cache_hit`. Only read-only tools may declare a caching policy.
+      - [x] budgets — `?budgetInputTokens=`, `?budgetOutputTokens=` and `?budgetCostUsd=` (or
+            `.Budget(...)`) reach the engine; cost is priced by `ICostCalculator`, and a cost
+            ceiling nobody can price fails the run before the first call. `AddRedbLlmStorage()`
+            swaps in cross-run accumulation over `ICostBudgetStore`.
+      - [ ] shadow runner — `IShadowRunner` is a no-op.
 - [x] **Streaming producer surface** end-to-end. `LlmProducer.ProcessStreamingAsync`
       writes `IAsyncEnumerable<string>` to `Out.Body`, sets
       `Content-Type: text/event-stream` and the `llm.streaming` header.

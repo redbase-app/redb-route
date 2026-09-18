@@ -2,7 +2,6 @@
   <xs:group name="step">
     <xs:choice>
       <xs:element ref="r:aggregate" />
-      <xs:element ref="r:beginRedbTransaction" />
       <xs:element ref="r:beginTransaction" />
       <xs:element ref="r:cache" />
       <xs:element ref="r:choice" />
@@ -25,6 +24,7 @@
       <xs:element ref="r:log" />
       <xs:element ref="r:loop" />
       <xs:element ref="r:marshal" />
+      <xs:element ref="r:messageHistory" />
       <xs:element ref="r:metered" />
       <xs:element ref="r:multicast" />
       <xs:element ref="r:normalize" />
@@ -88,14 +88,6 @@
       <xs:attribute name="completion" type="xs:string" />
       <xs:attribute name="completionSize" type="xs:int" />
       <xs:attribute name="completionTimeout" type="xs:string" />
-      <xs:attribute name="id" type="xs:string" />
-      <xs:attribute name="description" type="xs:string" />
-      <xs:anyAttribute namespace="##other" processContents="lax" />
-    </xs:complexType>
-  </xs:element>
-  <xs:element name="beginRedbTransaction">
-    <xs:complexType>
-      <xs:attribute name="storage" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -479,6 +471,14 @@
     <xs:complexType>
       <xs:attribute name="format" type="xs:string" />
       <xs:attribute name="type" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="messageHistory">
+    <xs:complexType>
+      <xs:attribute name="value" type="xs:boolean" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -1373,8 +1373,11 @@
       <xs:choice minOccurs="0" maxOccurs="unbounded">
         <xs:element name="property">
           <xs:complexType>
+            <xs:choice minOccurs="0">
+              <xs:element ref="r:bean" />
+            </xs:choice>
             <xs:attribute name="key" use="required" type="xs:string" />
-            <xs:attribute name="value" use="required" type="xs:string" />
+            <xs:attribute name="value" type="xs:string" />
             <xs:anyAttribute namespace="##other" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -1390,6 +1393,7 @@
       </xs:choice>
       <xs:attribute name="name" type="xs:string" />
       <xs:attribute name="type" use="required" type="xs:string" />
+      <xs:attribute name="factoryMethod" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
     </xs:complexType>
   </xs:element>

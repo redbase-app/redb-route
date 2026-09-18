@@ -235,6 +235,134 @@ public class As2ReceiveTests
         consumerSpan.TraceId.Should().Be(producerSpan.TraceId);
     }
 
+    [Fact]
+    public async Task Loopback_HostResolvedCaller_ReachesTheRoute()
+    {
+        var port = FreePort();
+        await using var manager = new redb.Route.Http.SharedHttpServerManager(new redb.Route.Http.HttpHostingOptions
+        {
+            // Every request is the one partner here: the resolver's own logic is not what this test is about.
+            ResolvePrincipal = _ => Task.FromResult<System.Security.Claims.ClaimsPrincipal?>(
+                new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
+                    [new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.NameIdentifier, "partner-7")], "test"))),
+        });
+        await using var context = new RouteContext();
+        context.AddComponent(new As2Component { ServerManager = manager });
+        context.AddToRegistry("me", Factory());
+
+        var callers = new List<string?>();
+        context.AddRoutes(r =>
+            r.From(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).ConnectionFactory("me"))
+                .Process(e => callers.Add(
+                    ExchangePrincipal.Get(e)?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value)));
+        await context.Start();
+
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("me")).CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("PO*WHO~") { ContentType = "application/edi-x12" }));
+
+        callers.Should().ContainSingle().Which.Should().Be("partner-7");
+    }
+
+    [Fact]
+    public async Task AsyncMdn_HostResolvedCaller_ReachesTheReceiptRoute()
+    {
+        var port = FreePort();
+        await using var manager = new redb.Route.Http.SharedHttpServerManager(new redb.Route.Http.HttpHostingOptions
+        {
+            // Only the receipt request is identified, so a pass proves the MDN receiver's own line rather
+            // than the message consumer's (that one is Loopback_HostResolvedCaller_ReachesTheRoute).
+            ResolvePrincipal = http => Task.FromResult(http.Request.Path.StartsWithSegments("/mdn")
+                ? new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(
+                    [new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.NameIdentifier, "mdn-sender")], "test"))
+                : null),
+        });
+        await using var context = new RouteContext();
+        context.AddComponent(new As2Component { ServerManager = manager });
+        context.AddToRegistry("me", new As2ConnectionFactory
+        {
+            OurCertificate = Cert, PartnerCertificate = Cert, As2From = "US", As2To = "THEM",
+            Sign = true, Encrypt = true, SignedMdn = true,
+            MdnMode = As2MdnMode.Async, AsyncMdnUrl = $"http://127.0.0.1:{port}/mdn",
+        });
+
+        var messageCallers = new System.Collections.Concurrent.ConcurrentQueue<string?>();
+        var receiptCallers = new System.Collections.Concurrent.ConcurrentQueue<string?>();
+        context.AddRoutes(r =>
+        {
+            r.From(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).ConnectionFactory("me"))
+                .Process(e => messageCallers.Enqueue(CallerId(e)));
+            r.From(As2Dsl.ReceiveMdn("/mdn").Host("127.0.0.1").Port(port).ConnectionFactory("me"))
+                .Process(e => receiptCallers.Enqueue(CallerId(e)));
+        });
+        await context.Start();
+
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("me")).CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("PO*RECEIPT~") { ContentType = "application/edi-x12" }));
+
+        // The receiver completes the producer's wait before it hands the receipt to the route, so the
+        // route may run a moment after Process returns.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (receiptCallers.IsEmpty && DateTime.UtcNow < deadline)
+            await Task.Delay(20);
+
+        messageCallers.Should().ContainSingle().Which.Should().BeNull("only the receipt request is identified here");
+        receiptCallers.Should().ContainSingle().Which.Should().Be("mdn-sender");
+    }
+
+    [Fact]
+    public async Task UnsignedMessage_InPartnershipWithoutRequiredSignature_IsNotReportedAsVerified()
+    {
+        // The README promises redbAs2.signatureValid means "the inbound signature verified against the
+        // partner cert". An unsigned message was not verified at all; reporting true lets a route that
+        // gates on the header accept it as authenticated.
+        var port = FreePort();
+        await using var context = new RouteContext();
+        context.AddComponent(new As2Component());
+        context.AddToRegistry("plain", new As2ConnectionFactory
+        {
+            OurCertificate = Cert, PartnerCertificate = Cert, As2From = "US", As2To = "THEM",
+            Sign = false, Encrypt = false, MdnMode = As2MdnMode.Sync, SignedMdn = false,
+        });
+
+        var reported = new System.Collections.Concurrent.ConcurrentQueue<bool>();
+        context.AddRoutes(r =>
+            r.From(As2Dsl.Receive("/in").Host("127.0.0.1").Port(port).ConnectionFactory("plain"))
+                .Process(e => reported.Enqueue(e.In.GetHeader<bool>(As2Headers.SignatureValid))));
+        await context.Start();
+
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/in").ConnectionFactory("plain")).CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("PO*PLAIN~") { ContentType = "application/edi-x12" }));
+
+        reported.Should().ContainSingle().Which.Should().BeFalse("nothing was verified: the message carried no signature");
+    }
+
+    [Fact]
+    public async Task SignedMessage_WithVerifiedSignature_IsReportedAsVerified()
+    {
+        var port = FreePort();
+        await using var context = new RouteContext();
+        context.AddComponent(new As2Component());
+        context.AddToRegistry("me", Factory());
+
+        var reported = new System.Collections.Concurrent.ConcurrentQueue<bool>();
+        context.AddRoutes(r =>
+            r.From(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).ConnectionFactory("me"))
+                .Process(e => reported.Enqueue(e.In.GetHeader<bool>(As2Headers.SignatureValid))));
+        await context.Start();
+
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("me")).CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("PO*SIGNED~") { ContentType = "application/edi-x12" }));
+
+        reported.Should().ContainSingle().Which.Should().BeTrue("the signature was present and verified against the partner certificate");
+    }
+
+    private static string? CallerId(IExchange e) =>
+        ExchangePrincipal.Get(e)?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
     private static As2ConnectionFactory Factory() => new()
     {
         OurCertificate = Cert,

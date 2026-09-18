@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Xml.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using redb.Route.Abstractions;
@@ -368,24 +369,69 @@ internal static class BeanSection
             args.Add(inner);
         }
         var provider = ctx.RouteContext.GetServiceProvider() ?? EmptyProvider.Instance;
-        var instance = args.Count > 0
-            ? ActivatorUtilities.CreateInstance(provider, type, args.ToArray()!)
-            : ActivatorUtilities.CreateInstance(provider, type);
+        object? instance;
+        if (ctx.Attr(element, "factoryMethod") is { Length: > 0 } factoryMethod)
+        {
+            // Some types are created by a static method and not by a public constructor
+            // (X509CertificateLoader is the reason this exists). The constructorArg values are
+            // that method's arguments, in order.
+            var method = type.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .FirstOrDefault(m => m.Name == factoryMethod && m.GetParameters().Length == args.Count);
+            if (method is null)
+            {
+                ctx.AddError(element, $"type '{type.FullName}' has no public static method " +
+                                      $"'{factoryMethod}' taking {args.Count} argument(s).");
+                return null;
+            }
+            instance = method.Invoke(null, BindArguments(method, args));
+            if (instance is null)
+            {
+                ctx.AddError(element, $"'{type.FullName}.{factoryMethod}' returned null.");
+                return null;
+            }
+        }
+        else
+        {
+            instance = args.Count > 0
+                ? ActivatorUtilities.CreateInstance(provider, type, args.ToArray()!)
+                : ActivatorUtilities.CreateInstance(provider, type);
+        }
 
         foreach (var property in element.Elements().Where(e => e.Name.LocalName == "property"))
         {
             var key = ctx.RequiredAttr(property, "key");
             var value = ctx.Attr(property, "value");
-            if (key is null || value is null)
+            var nestedProperty = property.Elements().Where(c => c.Name.LocalName == "bean").ToList();
+            if (key is null)
+                continue;
+            if ((value is null) == (nestedProperty.Count == 0) || nestedProperty.Count > 1)
             {
-                if (value is null && key is not null)
-                    ctx.AddError(property, "<property> requires the 'value' attribute.");
+                ctx.AddError(property, "<property> takes either value= or exactly one nested anonymous <bean type=...>.");
                 continue;
             }
             var propInfo = type.GetProperty(key);
             if (propInfo is null || !propInfo.CanWrite)
             {
                 ctx.AddError(property, $"type '{type.FullName}' has no writable public property '{key}'.");
+                continue;
+            }
+            if (nestedProperty.Count == 1)
+            {
+                // The property holds an OBJECT: a certificate, credentials, a serializer. Built
+                // exactly like a nested constructor argument, just assigned instead of passed.
+                var nestedTypeName = ctx.RequiredAttr(nestedProperty[0], "type");
+                if (nestedTypeName is null)
+                    continue;
+                var nestedInstance = Create(nestedTypeName, nestedProperty[0], ctx);
+                if (nestedInstance is null)
+                    continue;
+                if (!propInfo.PropertyType.IsInstanceOfType(nestedInstance))
+                {
+                    ctx.AddError(property, $"'{nestedInstance.GetType().FullName}' is not assignable to " +
+                                           $"{propInfo.PropertyType.Name} for '{key}'.");
+                    continue;
+                }
+                propInfo.SetValue(instance, nestedInstance);
                 continue;
             }
             // The whole point of the bean section: values come from configuration. {{key}} and
@@ -402,6 +448,21 @@ internal static class BeanSection
             propInfo.SetValue(instance, converted);
         }
         return instance;
+    }
+
+    /// <summary>
+    /// Converts the collected constructor arguments to what the static factory method declares:
+    /// a value argument arrives as a string, an object argument as the nested bean's instance.
+    /// </summary>
+    private static object?[] BindArguments(MethodInfo method, List<object?> args)
+    {
+        var parameters = method.GetParameters();
+        var bound = new object?[parameters.Length];
+        for (var i = 0; i < parameters.Length; i++)
+            bound[i] = args[i] is string text && parameters[i].ParameterType != typeof(string)
+                ? OptionValueConverter.Convert(text, parameters[i].ParameterType)
+                : args[i];
+        return bound;
     }
 
     /// <summary>

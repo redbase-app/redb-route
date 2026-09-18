@@ -105,7 +105,7 @@ surfaced under `redbAs2.*`:
 | Header | Meaning |
 |---|---|
 | `redbAs2.mic` / `redbAs2.micalg` | the computed Message Integrity Check + algorithm |
-| `redbAs2.signatureValid` | the inbound signature verified against the partner cert |
+| `redbAs2.signatureValid` | `true` only when the message was signed and the signature verified against the partner cert; `false` for an unsigned message (nothing was verified) |
 | `redbAs2.remoteAddress` | the sender's IP |
 | `redbAs2.partner` | the resolved connection-factory name |
 

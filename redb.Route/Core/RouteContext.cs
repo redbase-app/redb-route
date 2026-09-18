@@ -44,8 +44,10 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<Type, IProcessor>> _localExceptionHandlers = new();
 
     // Route compilation
-    private readonly ILoggerFactory? _loggerFactory;
-    private readonly ILogger? _logger;
+    // Not readonly: AddService(ILoggerFactory, ...) adopts a factory registered after construction
+    // and back-fills component loggers, so a context created without one still logs consumer failures.
+    private ILoggerFactory? _loggerFactory;
+    private ILogger? _logger;
     private readonly RouteEngineOptions _options;
     private readonly List<RouteBuilder> _builders = [];
 
@@ -298,6 +300,32 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(serviceType);
         ArgumentNullException.ThrowIfNull(service);
         _services[serviceType] = service;
+
+        // A logger factory registered after construction must actually reach components: adopt it as
+        // the context's factory (used by SetComponentContext for components added later and by the
+        // route compiler for OnException/statistics loggers) and back-fill loggers onto components that
+        // were registered before it. Without this, a context created with no factory logs nothing —
+        // consumer failures pass silently.
+        if (service is ILoggerFactory factory)
+            AdoptLoggerFactory(factory);
+    }
+
+    /// <summary>
+    /// Adopts <paramref name="factory"/> as the context logger factory and back-fills a logger onto
+    /// every already-registered component that does not have one.
+    /// </summary>
+    private void AdoptLoggerFactory(ILoggerFactory factory)
+    {
+        _loggerFactory = factory;
+        _logger ??= factory.CreateLogger<RouteContext>();
+        if (!_services.ContainsKey(typeof(ILogger)) && _logger is not null)
+            _services[typeof(ILogger)] = _logger;
+
+        foreach (var component in _components.Values)
+        {
+            if (component is ComponentBase baseComponent)
+                baseComponent.Logger ??= factory.CreateLogger(component.GetType());
+        }
     }
 
     /// <inheritdoc />
@@ -1000,13 +1028,28 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                         var oeProc = new OnExceptionProcessor(finalProcessor, oeLogger);
                         foreach (var exType in exDef.ExceptionTypes)
                         {
+                            // Pass the full handler configuration, mirroring OnExceptionDefinition.WrapBody
+                            // (the route-level path). Previously only redeliveries + handled/continued were
+                            // forwarded, so a context/builder-level OnException silently dropped OnWhen,
+                            // RetryWhile, OnRedelivery, OnPrepareFailure, the log levels and LogExhausted —
+                            // and even Handled(true) still logged "Retries exhausted ... after 0 attempts".
                             oeProc.Handle(exType, handlerBody,
                                 maxRedeliveries: exDef.MaxRedeliveries,
                                 redeliveryDelay: exDef.RedeliveryDelayValue,
                                 backoffMultiplier: exDef.BackoffMultiplierValue,
                                 useExponentialBackoff: exDef.UseExponentialBackoffValue,
                                 handled: exDef.IsHandled,
-                                continued: exDef.IsContinued);
+                                continued: exDef.IsContinued,
+                                onWhenPredicate: exDef.OnWhenPredicate,
+                                retryAttemptedLogLevel: exDef.RetryAttemptedLogLevelValue,
+                                retriesExhaustedLogLevel: exDef.RetriesExhaustedLogLevelValue,
+                                onExceptionOccurred: exDef.OnExceptionOccurredAction,
+                                retryWhile: exDef.RetryWhilePredicate,
+                                onRedelivery: exDef.OnRedeliveryAction,
+                                onPrepareFailure: exDef.OnPrepareFailureAction,
+                                useOriginalBody: exDef.IsUseOriginalBody,
+                                logStackTrace: exDef.LogStackTraceValue,
+                                logExhausted: exDef.LogExhaustedValue);
                         }
                         finalProcessor = oeProc;
                     }

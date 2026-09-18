@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace redb.Route.Http;
@@ -35,7 +36,9 @@ public static class HostingServiceCollectionExtensions
             services.Configure(configure);
 
         services.TryAddSingleton(sp =>
-            new SharedHttpServerManager(sp.GetRequiredService<IOptions<HttpHostingOptions>>().Value));
+            new SharedHttpServerManager(
+                sp.GetRequiredService<IOptions<HttpHostingOptions>>().Value,
+                sp.GetService<ILoggerFactory>()?.CreateLogger<SharedHttpServerManager>()));
 
         return services;
     }

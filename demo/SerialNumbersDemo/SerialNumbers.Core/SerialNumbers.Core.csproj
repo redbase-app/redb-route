@@ -2,8 +2,8 @@
 
   <!-- The Tsak module: InitRoute.main plus the routes, the XML contracts and the SQL it needs.
        Packed into SerialNumbers.tpkg by SerialNumbers.deploy/pack-tpkg.ps1. The redb and
-       redb.Route packages below already ship in the Tsak worker's shared libraries, so the
-       package carries only this DLL and SerialNumbers.Domain.dll. -->
+       redb.Route packages below already ship in the Tsak worker's shared libraries; the package
+       carries this DLL, SerialNumbers.Domain.dll and EF Core, which the worker does not ship. -->
   <PropertyGroup>
     <RootNamespace>SerialNumbers.Core</RootNamespace>
   </PropertyGroup>
@@ -20,9 +20,12 @@
     <PackageReference Include="redb.Route.File" Version="$(RedbVersion)" />
     <PackageReference Include="redb.Route.Sql" Version="$(RedbVersion)" />
     <PackageReference Include="redb.Route.As2" Version="$(RedbVersion)" />
+    <PackageReference Include="redb.Route.Http" Version="$(RedbVersion)" />
     <PackageReference Include="redb.Route.Quartz" Version="$(RedbVersion)" />
     <!-- The ADO.NET provider behind the sql: component; the same version redb.MSSql uses. -->
-    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.3" />
+    <!-- The product status journal is an EF Core model on the redb connection (Catalog/). -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="$(EfCoreVersion)" />
   </ItemGroup>
 
   <ItemGroup>

@@ -34,7 +34,7 @@ public class RedbXmlContributionsTests : IAsyncDisposable
         Extensions =
         [
             new RedbGetXmlContribution(), new RedbSaveXmlContribution(),
-            new RedbDeleteXmlContribution(), new BeginRedbTransactionXmlContribution(),
+            new RedbDeleteXmlContribution(),
             new RedbQueryXmlContribution(), new RedbContextXmlContribution(),
         ],
     };
@@ -120,7 +120,6 @@ public class RedbXmlContributionsTests : IAsyncDisposable
             <routes xmlns="urn:redb:route:1.0">
               <route id="redb-save">
                 <from uri="direct://redb-save-in"/>
-                <beginRedbTransaction/>
                 <redbSave type="redb.Route.Tests.Xml.RedbXmlOrderProps, redb.Route.Tests.Xml"/>
                 <redbDelete id="${header.gone}"/>
               </route>
@@ -151,6 +150,26 @@ public class RedbXmlContributionsTests : IAsyncDisposable
 
         act.Should().Throw<XmlRouteException>()
             .Which.Errors.Should().ContainSingle(e => e.Contains("byUnique") && e.Contains("type="));
+    }
+
+    [Fact]
+    public void BeginRedbTransaction_IsNotAnElement_TheTransactionScopeIsTheOnePrimitive()
+    {
+        // The verb behind it is obsolete (TRANSACTIONS_GUIDE: one primitive, .Transacted()) and a
+        // no-op under an ambient scope. Markup has no warning channel, so the element is gone —
+        // the steps go inside <transaction> instead. Red before the removal: the element loaded.
+        var act = () => _context.AddXmlRoutesFromContent("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="redb-tx">
+                <from uri="direct://redb-tx-in"/>
+                <beginRedbTransaction/>
+                <redbSave type="redb.Route.Tests.Xml.RedbXmlOrderProps, redb.Route.Tests.Xml"/>
+              </route>
+            </routes>
+            """, options: Options);
+
+        act.Should().Throw<XmlRouteException>()
+            .Which.Errors.Should().Contain(e => e.Contains("beginRedbTransaction"));
     }
 
     [Fact]
@@ -334,7 +353,6 @@ public class RedbXmlContributionsTests : IAsyncDisposable
             <routes xmlns="urn:redb:route:1.0">
               <route id="redb-gen">
                 <from uri="direct://redb-gen-in"/>
-                <beginRedbTransaction/>
                 <redbGet id="${header.oid}" depth="2"/>
                 <redbSave type="redb.Route.Tests.Xml.RedbXmlOrderProps, redb.Route.Tests.Xml" byUnique="true"/>
                 <redbDelete id="${header.gone}" storage="archive"/>
@@ -347,8 +365,7 @@ public class RedbXmlContributionsTests : IAsyncDisposable
         var code = XmlCodeGenerator.Generate(document, "RedbGenerated", "Tests.Generated", options: Options);
 
         code.Should().Contain("using redb.Route.RedbCore.Extensions;");
-        code.Should().Contain("using redb.Route.RedbCore.Transactions;");
-        code.Should().Contain("BeginRedbTransaction()");
+        code.Should().NotContain("BeginRedbTransaction", "the obsolete verb has no markup any more");
         code.Should().Contain("RedbGetJson(\"${header.oid}\", depth: 2)");
         code.Should().Contain("byUnique: true");
         code.Should().Contain("RedbDelete(\"${header.gone}\", storage: \"archive\")");

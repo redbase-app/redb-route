@@ -181,17 +181,49 @@ public sealed class SqlClaimCheckRepository : IClaimCheckRepository
         await using var conn = await _connectionFactory.CreateConnectionAsync(ct: ct).ConfigureAwait(false);
         await using var cmd = conn.CreateCommand();
 
-        cmd.CommandText = $"""
-            CREATE TABLE IF NOT EXISTS {_options.TableName} (
-                claim_key   TEXT NOT NULL PRIMARY KEY,
-                data        BLOB NOT NULL,
-                created_at  TEXT NOT NULL,
-                expires_at  TEXT NULL
-            )
-            """;
+        cmd.CommandText = BuildCreateTableDdl(conn, _options.TableName);
 
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         _tableCreated = true;
+    }
+
+    /// <summary>
+    /// Returns the CREATE TABLE statement for the connection's dialect. SQL Server (no
+    /// <c>CREATE TABLE IF NOT EXISTS</c>) gets a guarded T-SQL statement with <c>NVARCHAR</c>/
+    /// <c>VARBINARY(MAX)</c>; the binary column type also differs by dialect
+    /// (<c>BYTEA</c> on PostgreSQL, <c>LONGBLOB</c> on MySQL and MariaDB, <c>BLOB</c> on SQLite), and the
+    /// key column is a sized <c>VARCHAR(255)</c> everywhere. Detection is by
+    /// exact connection class name so siblings like <c>MySqlConnection</c> are not misread as SQL Server.
+    /// </summary>
+    private static string BuildCreateTableDdl(DbConnection conn, string table)
+    {
+        var name = conn.GetType().Name;
+        if (string.Equals(name, "SqlConnection", StringComparison.Ordinal))
+            return $"""
+                IF OBJECT_ID(N'{table}', N'U') IS NULL
+                CREATE TABLE {table} (
+                    claim_key   NVARCHAR(255)  NOT NULL PRIMARY KEY,
+                    data        VARBINARY(MAX) NOT NULL,
+                    created_at  NVARCHAR(64)   NOT NULL,
+                    expires_at  NVARCHAR(64)   NULL
+                )
+                """;
+
+        var blob = name switch
+        {
+            "NpgsqlConnection" => "BYTEA",
+            "MySqlConnection" => "LONGBLOB",
+            _ => "BLOB" // SQLite and other providers
+        };
+        // The key column is sized: MySQL and MariaDB refuse a TEXT column in a primary key (error 1170).
+        return $"""
+            CREATE TABLE IF NOT EXISTS {table} (
+                claim_key   VARCHAR(255) NOT NULL PRIMARY KEY,
+                data        {blob}       NOT NULL,
+                created_at  VARCHAR(64)  NOT NULL,
+                expires_at  VARCHAR(64)  NULL
+            )
+            """;
     }
 
     private async Task CleanupIfNeededAsync(CancellationToken ct)

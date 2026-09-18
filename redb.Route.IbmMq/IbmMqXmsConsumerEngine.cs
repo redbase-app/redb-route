@@ -201,15 +201,12 @@ internal sealed class IbmMqXmsConsumerEngine
 
         var exchange = CreateExchange(message);
 
-        // Transacted: bind commit/rollback to THIS delivering session. Registered on the exchange so a
-        // route-level .Transaction() block settles it as part of the route unit-of-work (like the poll
-        // path's IbmMqAckAction); the engine settles it below if no such block did.
+        // Transacted: commit/rollback is bound to THIS delivering session and stays with this engine. The route
+        // transaction owns the database and the outgoing sends; the session is settled below, once the whole
+        // unit of work ended well.
         IbmMqXmsAckAction? ack = null;
         if (_transacted)
-        {
             ack = new IbmMqXmsAckAction(session, _logger);
-            RegisterTransactedAction(exchange, $"ibmmq-xms-ack-{Guid.NewGuid():N}", ack);
-        }
 
         try
         {
@@ -218,6 +215,7 @@ internal sealed class IbmMqXmsConsumerEngine
             // async pipeline onto the synchronous XMS thread is intentional — there is no ambient
             // SynchronizationContext in this server-side library, so GetResult() will not deadlock.
             _processor.Process(exchange, ct).GetAwaiter().GetResult();
+            exchange.ThrowIfUnhandledFailure();
 
             // Request-reply: send the Out body back to JMSReplyTo. On the delivering session, so under
             // transacted it commits atomically with consuming the request.
@@ -255,18 +253,6 @@ internal sealed class IbmMqXmsConsumerEngine
         }
     }
 
-    /// <summary>Registers a deferred transacted action on the exchange (same registry the poll path uses).</summary>
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (!exchange.Properties.TryGetValue(TransactedProcessor.TransactActionPropertyKey, out var raw) ||
-            raw is not ConcurrentDictionary<string, ITransactedAction> dict)
-        {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties[TransactedProcessor.TransactActionPropertyKey] = dict;
-        }
-
-        dict[key] = action;
-    }
 
     // ── XMS message → redb exchange ──
 

@@ -10,20 +10,13 @@ namespace redb.Route.Sql.Repositories;
 /// Supports auto-create table and TTL-based cleanup.
 /// <para>
 /// <b>Schema bootstrap:</b> when <see cref="SqlIdempotentOptions.CreateTable"/> is true (default),
-/// the table is created on first operation via <c>CREATE TABLE IF NOT EXISTS</c>. The DDL
-/// works with SQLite and PostgreSQL natively. <b>SQL Server does not support
-/// <c>CREATE TABLE IF NOT EXISTS</c></b>; if you target SQL Server, set
-/// <see cref="SqlIdempotentOptions.CreateTable"/> = false and create the table manually using:
+/// the table is created on first operation with dialect-aware DDL: SQLite/PostgreSQL/MySQL/MariaDB use
+/// <c>CREATE TABLE IF NOT EXISTS</c> with <c>VARCHAR</c> key columns (128 for the processor name, 255 for
+/// the message key — MySQL refuses <c>TEXT</c> in a key); SQL Server (which has no such syntax) is detected
+/// from the live connection and gets a guarded <c>IF OBJECT_ID(...) IS NULL CREATE TABLE</c> with
+/// <c>NVARCHAR</c>/<c>INT</c> columns of the same sizes, inside the 900-byte clustered key limit. Set
+/// <see cref="SqlIdempotentOptions.CreateTable"/> = false to manage the schema yourself.
 /// </para>
-/// <code>
-/// CREATE TABLE [{TableName}] (
-///   processor_name NVARCHAR(255) NOT NULL,
-///   message_key    NVARCHAR(255) NOT NULL,
-///   created_at     NVARCHAR(64)  NOT NULL,
-///   confirmed      INT           NOT NULL DEFAULT 0,
-///   PRIMARY KEY (processor_name, message_key)
-/// );
-/// </code>
 /// <para>
 /// <b>Cleanup:</b> when <see cref="SqlIdempotentOptions.Ttl"/> is set, every <see cref="Add"/>
 /// runs a best-effort <c>DELETE WHERE created_at &lt; cutoff</c>. This adds latency to the hot
@@ -155,19 +148,12 @@ public sealed class SqlIdempotentRepository : IIdempotentRepository
             await using var conn = await _connectionFactory.CreateConnectionAsync(ct: ct).ConfigureAwait(false);
             await using var cmd = conn.CreateCommand();
 
-            // Portable DDL (SQLite + PostgreSQL). For SQL Server set CreateTable=false and run DDL manually
-            // (see class-level remarks). CREATE TABLE IF NOT EXISTS is idempotent at the SQL level, so
-            // even concurrent first-callers won't error — but we serialize via _ddlLock to avoid burning
-            // round-trips and to make the "set _tableCreated only after success" logic linear.
-            cmd.CommandText = $"""
-                CREATE TABLE IF NOT EXISTS {_options.TableName} (
-                    processor_name  TEXT    NOT NULL,
-                    message_key     TEXT    NOT NULL,
-                    created_at      TEXT    NOT NULL,
-                    confirmed       INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (processor_name, message_key)
-                )
-                """;
+            // Dialect-aware bootstrap. SQL Server has no CREATE TABLE IF NOT EXISTS, so it gets a
+            // guarded T-SQL statement; SQLite/PostgreSQL/MySQL keep the portable form. Both are
+            // idempotent at the SQL level, so even concurrent first-callers won't error — but we
+            // serialize via _ddlLock to avoid burning round-trips and keep the
+            // "set _tableCreated only after success" logic linear.
+            cmd.CommandText = BuildCreateTableDdl(conn, _options.TableName);
 
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             _tableCreated = true;
@@ -177,6 +163,37 @@ public sealed class SqlIdempotentRepository : IIdempotentRepository
             _ddlLock.Release();
         }
     }
+
+    /// <summary>True when the live connection is a SQL Server connection (exact class-name match,
+    /// so <c>MySqlConnection</c>/<c>NpgsqlConnection</c>/<c>SqliteConnection</c> are not misdetected).</summary>
+    private static bool IsSqlServer(DbConnection conn) =>
+        string.Equals(conn.GetType().Name, "SqlConnection", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Returns the CREATE TABLE statement for the connection's dialect. The key columns are sized: MySQL and MariaDB refuse a
+    /// <c>TEXT</c> column in a primary key (error 1170), and on SQL Server a clustered key is limited to 900 bytes — a
+    /// processor name of 128 and a message key of 255 characters (766 bytes as <c>NVARCHAR</c>) stay inside it.
+    /// </summary>
+    private static string BuildCreateTableDdl(DbConnection conn, string table) => IsSqlServer(conn)
+        ? $"""
+            IF OBJECT_ID(N'{table}', N'U') IS NULL
+            CREATE TABLE {table} (
+                processor_name  NVARCHAR(128) NOT NULL,
+                message_key     NVARCHAR(255) NOT NULL,
+                created_at      NVARCHAR(64)  NOT NULL,
+                confirmed       INT           NOT NULL DEFAULT 0,
+                PRIMARY KEY (processor_name, message_key)
+            )
+            """
+        : $"""
+            CREATE TABLE IF NOT EXISTS {table} (
+                processor_name  VARCHAR(128) NOT NULL,
+                message_key     VARCHAR(255) NOT NULL,
+                created_at      VARCHAR(64)  NOT NULL,
+                confirmed       INTEGER      NOT NULL DEFAULT 0,
+                PRIMARY KEY (processor_name, message_key)
+            )
+            """;
 
     private async Task CleanupIfNeededAsync(CancellationToken ct)
     {

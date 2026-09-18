@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using FluentAssertions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
@@ -16,6 +17,17 @@ public class InitProbe
 public class ProbeOptions
 {
     public string? ConnectionString { get; set; }
+
+    /// <summary>The creation path of a type that hides construction behind a static method.</summary>
+    public static ProbeOptions FromDsn(string dsn) => new() { ConnectionString = dsn + "/via-factory" };
+}
+
+/// <summary>A bean whose OPTIONS come through a property, not the constructor: the shape a
+/// connector factory has when it holds an object (a certificate, credentials, a serializer).</summary>
+public class ProbeHolder
+{
+    public ProbeOptions? Options { get; set; }
+    public string Describe(IExchange exchange) => $"holder:{Options?.ConnectionString}";
 }
 
 /// <summary>A bean taking an options object through the constructor.</summary>
@@ -142,6 +154,120 @@ public class XmlContextLoaderTests : IAsyncDisposable
         await producer.Process(exchange);
 
         exchange.In.Body.Should().Be("factory:Host=demo");
+    }
+
+    [Fact]
+    public async Task Property_NestedAnonymousBean_IsAssignedAsTheObject()
+    {
+        // A property whose type is an OBJECT could not be set before: <property> took a string only,
+        // so a factory holding a certificate or a credentials object forced the C# spelling.
+        _context.AddXmlContextFromContent($$"""
+            <context xmlns="urn:redb:route:1.0">
+              <bean name="probe-holder" type="{{typeof(ProbeHolder).FullName}}, {{typeof(ProbeHolder).Assembly.GetName().Name}}">
+                <property key="Options">
+                  <bean type="{{typeof(ProbeOptions).FullName}}, {{typeof(ProbeOptions).Assembly.GetName().Name}}">
+                    <property key="ConnectionString" value="Host=demo"/>
+                  </bean>
+                </property>
+              </bean>
+            </context>
+            """);
+        _context.AddXmlRoutesFromContent("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="ctx-holder">
+                <from uri="direct://ctx-holder-in"/>
+                <to uri="bean:#probe-holder?method=Describe"/>
+              </route>
+            </routes>
+            """);
+        await _context.Start();
+        var producer = _context.GetEndpoint("direct://ctx-holder-in").CreateProducer();
+        await producer.Start();
+
+        var exchange = new Exchange(new Message("x"));
+        await producer.Process(exchange);
+
+        exchange.In.Body.Should().Be("holder:Host=demo");
+    }
+
+    [Fact]
+    public async Task Bean_FactoryMethod_CreatesThroughTheStaticMethod()
+    {
+        // Some types are created by a static method, not a public constructor (X509CertificateLoader
+        // is the reason this exists). factoryMethod= names it; constructorArg values are its arguments.
+        _context.AddXmlContextFromContent($$"""
+            <context xmlns="urn:redb:route:1.0">
+              <bean name="probe-factory" type="{{typeof(ProbeFactory).FullName}}, {{typeof(ProbeFactory).Assembly.GetName().Name}}">
+                <constructorArg>
+                  <bean type="{{typeof(ProbeOptions).FullName}}, {{typeof(ProbeOptions).Assembly.GetName().Name}}"
+                        factoryMethod="FromDsn">
+                    <constructorArg value="Host=demo"/>
+                  </bean>
+                </constructorArg>
+              </bean>
+            </context>
+            """);
+        _context.AddXmlRoutesFromContent("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="ctx-static-factory">
+                <from uri="direct://ctx-static-in"/>
+                <to uri="bean:#probe-factory?method=Describe"/>
+              </route>
+            </routes>
+            """);
+        await _context.Start();
+        var producer = _context.GetEndpoint("direct://ctx-static-in").CreateProducer();
+        await producer.Start();
+
+        var exchange = new Exchange(new Message("x"));
+        await producer.Process(exchange);
+
+        exchange.In.Body.Should().Be("factory:Host=demo/via-factory");
+    }
+
+    [Fact]
+    public void Generator_PrintsTheObjectProperty_AndTheFactoryMethod()
+    {
+        // The C# spelling of the same two forms: a nested bean as the property value, and the
+        // static creator as the last argument of XmlBeans.Create.
+        var document = XDocument.Parse($$"""
+            <routes xmlns="urn:redb:route:1.0">
+              <bean name="holder" type="{{typeof(ProbeHolder).FullName}}, {{typeof(ProbeHolder).Assembly.GetName().Name}}">
+                <property key="Options">
+                  <bean type="{{typeof(ProbeOptions).FullName}}, {{typeof(ProbeOptions).Assembly.GetName().Name}}"
+                        factoryMethod="FromDsn">
+                    <constructorArg value="Host=demo"/>
+                  </bean>
+                </property>
+              </bean>
+              <route id="gen-bean">
+                <from uri="direct://gen-bean-in"/>
+                <to uri="bean:#holder?method=Describe"/>
+              </route>
+            </routes>
+            """);
+
+        var code = XmlCodeGenerator.Generate(document, "BeanGenerated", "Tests.Generated");
+
+        code.Should().Contain("(\"Options\", XmlBeans.Create(")
+            .And.Contain("\"FromDsn\")", "the factory method is the last argument");
+    }
+
+    [Fact]
+    public void Property_ValueAndNestedBean_Together_IsASchemaError()
+    {
+        var act = () => _context.AddXmlContextFromContent($$"""
+            <context xmlns="urn:redb:route:1.0">
+              <bean name="bad" type="{{typeof(ProbeHolder).FullName}}, {{typeof(ProbeHolder).Assembly.GetName().Name}}">
+                <property key="Options" value="x">
+                  <bean type="{{typeof(ProbeOptions).FullName}}, {{typeof(ProbeOptions).Assembly.GetName().Name}}"/>
+                </property>
+              </bean>
+            </context>
+            """);
+
+        act.Should().Throw<XmlRouteException>()
+            .WithMessage("*either value= or exactly one nested anonymous <bean*");
     }
 
     [Fact]

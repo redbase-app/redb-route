@@ -12,7 +12,7 @@ namespace redb.Route.Sql;
 /// URI examples:
 /// <list type="bullet">
 ///   <item><c>sql:SELECT * FROM orders?mode=Poll&amp;dataSource=main&amp;delay=5000</c></item>
-///   <item><c>sql:INSERT INTO audit(msg) VALUES(@msg)?dataSource=main</c></item>
+///   <item><c>sql:INSERT INTO audit(msg) VALUES(:#msg)?dataSource=main</c></item>
 ///   <item><c>sql:sp_Calculate?mode=Procedure&amp;dataSource=main</c></item>
 /// </list>
 /// </para>
@@ -24,9 +24,6 @@ public class SqlComponent : ComponentBase
 
     /// <summary>The path of a sql: URI IS the query text — the structured XML form takes it from CDATA content (Route-XML Ф0 §7.2).</summary>
     public override bool PathIsText => true;
-
-    /// <summary>Gets or sets the named query registry for resolving ref: queries.</summary>
-    internal ISqlNamedQueryRegistry? NamedQueryRegistry { get; set; }
 
     /// <inheritdoc />
     public override IEndpoint CreateEndpoint(EndpointUri uri)

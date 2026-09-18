@@ -44,6 +44,12 @@ public class RoutePackagingTests : IDisposable
         File.Exists(Path.Combine(dir, "schema", "redb-route-1.0.xsd")).Should().BeTrue();
         File.Exists(Path.Combine(dir, ".vscode", "settings.json")).Should().BeTrue();
 
+        // A route project is a library: without this NuGet assemblies never reach bin/, and the
+        // build-time pack gate (--bin TargetDir) sees neither connectors nor markup contributions.
+        File.ReadAllText(Path.Combine(dir, "Orders.csproj"))
+            .Should().Contain("<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>",
+                "the build-time gate reads the runtime from TargetDir");
+
         // The L4 config is module identity ONLY — no settings, no secrets (эскиз 11 §1.4).
         using var l4 = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "config", "Orders.config.json")));
         l4.RootElement.EnumerateObject().Select(p => p.Name)
@@ -104,6 +110,34 @@ public class RoutePackagingTests : IDisposable
         result.Manifest.RequiredConfigKeys.Should().Equal("mail.from", "mail.to", "tenant.name");
         result.Warnings.Should().Contain(w => w.Message.Contains("#corp-smtp"),
             "an undeclared #reference is named: module code may register it, or it is dangling");
+    }
+
+    [Fact]
+    public void RegistryReferences_AreValuesStartingWithHash_NotSqlParameters()
+    {
+        // The sql connector writes parameters Camel-style, :#name (wave 17.6). A '#' inside the
+        // SQL text is a parameter, not a registry reference — only a value that STARTS with '#'
+        // (an option value, the path after the scheme, a whole attribute) references the registry.
+        var dir = NewProject("SqlParams", "sqlparams");
+        File.WriteAllText(Path.Combine(dir, "routes", "sqlparams.route.xml"), """
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="audit">
+                <from uri="timer://audit?period=1000"/>
+                <to uri="sql:INSERT INTO auth_log(login, at) VALUES (:#login, :#at)?dataSource=#main-db&amp;param.login=${header.login}&amp;param.at=x"/>
+                <to uri="bean:#auditor?method=Handle"/>
+              </route>
+            </routes>
+            """);
+
+        var result = RoutePackage.Check(dir, "sqlparams", "1.0.0");
+
+        result.Errors.Should().BeEmpty();
+        result.Warnings.Should().NotContain(w => w.Message.Contains("'#login'") || w.Message.Contains("'#at'"),
+            ":#login and :#at are sql parameters, never registry references");
+        result.Warnings.Should().Contain(w => w.Message.Contains("'#main-db'"),
+            "an option value starting with '#' is still a reference");
+        result.Warnings.Should().Contain(w => w.Message.Contains("'#auditor'"),
+            "the path right after bean: is still a reference");
     }
 
     // ── the Ф5.4 gate: negatives ─────────────────────────────────────────────

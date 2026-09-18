@@ -1,0 +1,958 @@
+/* The Ф8 graph: every color is a VSCode THEME variable (09-UX §6) — the view lives in the
+   user's theme, light and dark both, nothing hard-coded. */
+
+body {
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  margin: 0;
+  padding: 10px 14px;
+}
+
+/* ── route ─────────────────────────────────────────────────────────── */
+
+.route {
+  margin-bottom: 14px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.route-header {
+  font-weight: 600;
+  margin: 6px 0 4px;
+  color: var(--vscode-foreground);
+}
+
+.route-header .description {
+  font-weight: 400;
+  opacity: 0.7;
+  margin-left: 8px;
+}
+
+/* ── the strip above (onException etc, §3.9) ───────────────────────── */
+
+.strip {
+  border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  padding: 2px 0 4px;
+  margin-bottom: 6px;
+  opacity: 0.9;
+}
+
+.strip > summary {
+  cursor: pointer;
+  color: var(--vscode-editorWarning-foreground);
+  list-style: none;
+}
+
+.strip > summary::before { content: "▲ "; }
+
+/* ── the main line: a horizontal row that wraps only inside branches ── */
+
+.seq {
+  display: flex;
+  flex-direction: row;
+  /* the main line runs through the vertical CENTER: a branching block forks off it and the
+     continuation visibly rejoins after the whole block, not after its first row */
+  align-items: center;
+  flex-wrap: nowrap;
+  width: max-content;
+}
+
+.seq > * { flex: none; }
+
+.edge {
+  align-self: center;
+  width: 14px;
+  flex: none;
+  border-top: 1px solid var(--vscode-descriptionForeground);
+  opacity: 0.55;
+  margin: 0 1px;
+  position: relative;
+}
+
+/* the message goes THAT way: an arrowhead on every edge */
+.edge::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: -3.5px;
+  border-left: 5px solid var(--vscode-descriptionForeground);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+}
+
+/* ── nodes (§3.2, §6): category first, icon second ─────────────────── */
+
+.node {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  border-radius: 3px;
+  padding: 1px 6px;
+  cursor: pointer;
+  /* every element is a BOX (owner request 2026-09-09): neutral steps get the muted
+     outline, category colors override it and keep the visual hierarchy */
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, #555));
+  max-width: 260px;
+  white-space: nowrap;
+}
+
+.node:hover { outline: 1px solid var(--vscode-focusBorder); }
+
+.node .t {
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+
+.node .icon { opacity: 0.9; }
+
+/* category weights and colors */
+.cat-source {
+  border-color: var(--vscode-charts-green, #89d185);
+  border-left-width: 4px;
+}
+.cat-sendExternal {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+.cat-sendExternal .t { opacity: 0.8; }
+.cat-sendInternal {
+  border-color: var(--vscode-button-background);
+  color: var(--vscode-foreground);
+}
+.cat-transform { opacity: 0.85; }
+.cat-flow {
+  border-color: var(--vscode-charts-blue, #75beff);
+  font-weight: 600;
+  padding: 3px 10px;
+}
+.cat-errors {
+  border-color: var(--vscode-editorWarning-foreground, #cca700);
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+.cat-userCode {
+  border-color: var(--vscode-charts-purple, #b180d7);
+}
+.cat-unknown {
+  border-style: dashed;
+  border-color: var(--vscode-descriptionForeground);
+  opacity: 0.8;
+}
+
+/* ── scope: a bracket over its stretch (§3.3, §3.7) ────────────────── */
+
+.scope {
+  border: 1px solid var(--vscode-charts-blue, #75beff);
+  border-radius: 6px;
+  padding: 3px 6px 4px;
+  margin: 0 2px;
+}
+
+.scope.cat-errors { border-color: var(--vscode-editorWarning-foreground, #cca700); }
+.scope.cat-transform { border-color: var(--vscode-editorWidget-border, #666); }
+
+.scope > .scope-head {
+  font-size: 0.85em;
+  opacity: 0.85;
+  margin-bottom: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.scope > .scope-head .repeat { margin-left: 4px; }
+
+/* ── branching: a stack of rows (§3.4, §3.6) ───────────────────────── */
+
+/* The GROUP CONTOUR (owner finding 2026-09-09): the whole branching is one visible box, a
+   rail runs along its left edge, and every branch row hangs off the rail with a stub — no
+   more arrows out of nowhere. */
+.branching {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--vscode-charts-blue, #75beff);
+  border-left-width: 2px;
+  border-radius: 6px;
+  padding: 3px 6px;
+  margin: 0 2px;
+}
+
+.branching.cat-errors { border-color: var(--vscode-editorWarning-foreground, #cca700); }
+
+.branch {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+/* the stub from the left rail into this branch's label */
+.branch::before {
+  content: "";
+  flex: none;
+  width: 9px;
+  border-top: 1px solid var(--vscode-descriptionForeground);
+  opacity: 0.55;
+  align-self: center;
+  margin-left: -6px;
+  margin-right: 2px;
+}
+
+.branch > .branch-label {
+  flex: none;
+  font-size: 0.85em;
+  opacity: 0.85;
+  border: 1px solid var(--vscode-editorWidget-border, #666);
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-top: 2px;
+  cursor: pointer;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch > .branch-label.warn {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  border-color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+/* ── bean declarations: a muted registry row, not steps ────────────── */
+
+.beans {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: baseline;
+  margin: 4px 0 10px;
+  opacity: 0.85;
+}
+
+.beans-title {
+  opacity: 0.6;
+  font-size: 0.85em;
+}
+
+.bean-chip {
+  border: 1px solid var(--vscode-charts-purple, #b180d7);
+  border-radius: 8px;
+  padding: 0 7px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+.bean-chip:hover { outline: 1px solid var(--vscode-focusBorder); }
+
+/* ── the layout toggle ─────────────────────────────────────────────── */
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  padding: 2px 0 6px;
+  background: var(--vscode-editor-background);
+}
+
+.toolbar button {
+  background: none;
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  color: var(--vscode-foreground);
+  border-radius: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+.toolbar button.active {
+  opacity: 1;
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-list-activeSelectionBackground, transparent);
+}
+
+.toolbar .zoom-box {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 10px;
+}
+
+.toolbar .zoom-pct { min-width: 46px; }
+
+/* The zoomed drawing surface (the toolbar and the panel stay 1:1). max-content keeps the
+   box hugging its widest child, so the curve overlay's rect covers ALL of the content. */
+.canvas {
+  position: relative;
+  width: max-content;
+  min-width: 100%;
+}
+
+/* ── the vertical layout: TD columns, routes side by side ──────────── */
+
+.routes-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  align-items: flex-start;
+}
+
+.routeV {
+  flex: none;
+  max-width: 100%;
+  margin-bottom: 10px;
+}
+
+.vcol {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: max-content;
+  max-width: 100%;
+}
+
+/* vertical edge with a DOWN arrowhead — the message goes that way */
+.vedge {
+  align-self: center;
+  height: 14px;
+  width: 0;
+  border-left: 1px solid var(--vscode-descriptionForeground);
+  opacity: 0.55;
+  position: relative;
+  margin: 1px 0;
+}
+
+.vedge::after {
+  content: "";
+  position: absolute;
+  left: -3.5px;
+  bottom: -1px;
+  border-top: 5px solid var(--vscode-descriptionForeground);
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+}
+
+/* nodes and slots center on the column's spine */
+.vcol > .node, .vcol > .slot, .vcol > .scope, .vcol > .vbranching { align-self: center; }
+.vcol > .slot { height: 12px; }
+.vertical .seq:hover > .slot { opacity: 0.45; }
+.vcol:hover > .slot { opacity: 0.45; }
+
+.vscope { margin: 2px 0; }
+.vscope > .vcol { padding: 2px 8px; }
+
+.vbranching {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 2px 0;
+  /* the group contour: choice/tryCatch and their branches are ONE visible box */
+  border: 1px solid var(--vscode-charts-blue, #75beff);
+  border-radius: 6px;
+  padding: 5px 10px 6px;
+}
+
+.vbranching.cat-errors { border-color: var(--vscode-editorWarning-foreground, #cca700); }
+
+.vbranch-head {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  border: 1px solid var(--vscode-charts-blue, #75beff);
+  border-radius: 3px;
+  padding: 1px 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.vbranch-head.cat-errors { border-color: var(--vscode-editorWarning-foreground, #cca700); }
+
+/* the RAIL under the head; every branch hangs off it with a vertical stub */
+.vfan {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  margin-top: 8px;
+  border-top: 1px solid var(--vscode-descriptionForeground);
+}
+
+.vbranch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.vbranch::before {
+  content: "";
+  height: 9px;
+  border-left: 1px solid var(--vscode-descriptionForeground);
+  opacity: 0.55;
+  margin-bottom: 2px;
+}
+
+.vbranch > .branch-label { margin-top: 0; }
+
+/* ── the mermaid look: SVG curves + shapes over the columnar layout ── */
+
+.mermaid-look { position: relative; }
+
+.edge-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.edge-overlay path {
+  stroke: var(--vscode-descriptionForeground);
+  stroke-width: 1.5;
+  opacity: 1;
+}
+
+.edge-overlay path.head {
+  fill: var(--vscode-descriptionForeground);
+  stroke: none;
+}
+
+/* the curves carry the flow — the stub edges and rails step aside */
+.mermaid-look .vedge,
+.mermaid-look .vbranch::before { display: none; }
+.mermaid-look .vfan { border-top: none; margin-top: 30px; gap: 26px; }
+.mermaid-look .vcol { row-gap: 26px; }
+.mermaid-look .vbranching { border: none; padding: 0; }
+.mermaid-look .routes-grid { gap: 8px 44px; }
+.mermaid-look .routeV { z-index: 1; }
+.mermaid-look .node,
+.mermaid-look .scope,
+.mermaid-look .vbranch-head,
+.mermaid-look .branch-label { position: relative; z-index: 1; }
+
+/* slots stay silent until pointed at — a blue plus ON a curve is noise */
+.mermaid-look .vcol:hover > .slot { opacity: 0; }
+.mermaid-look .slot:hover,
+.mermaid-look .slot.drop { opacity: 1 !important; }
+
+/* mermaid-ish fills and shapes */
+.mermaid-look .node {
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  padding: 3px 10px;
+  border-radius: 4px;
+}
+
+.mermaid-look .vbranch-head {
+  /* the decision diamond */
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  border: none;
+  background: var(--vscode-list-hoverBackground, var(--vscode-editorWidget-background));
+  padding: 14px 36px;
+}
+
+.mermaid-look .branch-label {
+  /* the condition hexagon */
+  clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%);
+  border: none;
+  background: var(--vscode-list-hoverBackground, var(--vscode-editorWidget-background));
+  box-shadow: none;
+  padding: 5px 18px;
+  max-width: 340px;
+}
+
+/* the bracket as a mermaid subgraph: light rounded box, muted title top-left,
+   the category kept as a thin left accent */
+.mermaid-look .scope {
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  border-left: 3px solid var(--vscode-charts-blue, #75beff);
+  border-radius: 10px;
+  padding: 6px 14px 10px;
+}
+
+.mermaid-look .scope.cat-errors { border-left-color: var(--vscode-editorWarning-foreground, #cca700); }
+.mermaid-look .scope.cat-transform { border-left-color: var(--vscode-editorWidget-border, #666); }
+
+/* The vscope is a plain block outside this mode; align-self on the head needs a flex
+   parent, or the head stays a full-width block hugging the left edge. */
+.mermaid-look .vscope {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.mermaid-look .scope > .scope-head {
+  /* centered above the content column — the entry curve is a short vertical, not a dive
+     from the far-left corner of a wide box */
+  align-self: center;
+  opacity: 0.75;
+  border: none;
+  padding: 0 0 6px;
+}
+
+/* ── the snake: wrapped main line with drawn U-turns (§2, §11) ─────── */
+
+.seq.measure {
+  position: absolute;
+  visibility: hidden;
+  left: -10000px;
+  top: 0;
+}
+
+.atom {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.snake {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: max-content;
+  max-width: 100%;
+}
+
+/* the route's spine: one thin line binding every row of ONE route */
+.snake.multi {
+  border-left: 2px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  padding-left: 8px;
+  border-radius: 2px;
+}
+
+.snake-row {
+  min-height: 26px;
+}
+
+/* Stretch elbows: they span the row's FULL height, so a tall scope row stays visually
+   connected to its neighbours. out: a stub at the vertical center turning down along the
+   right edge; in: down the left edge turning right at the center, with an arrowhead. */
+.wrap {
+  flex: none;
+  align-self: stretch;
+  width: 14px;
+  position: relative;
+  opacity: 0.7;
+  min-height: 22px;
+}
+
+.wrap.out { margin-left: 2px; }
+.wrap.in { margin-right: 2px; }
+
+/* The return lane between rows: ── down at the right, ALL the way back left, down into the
+   next row — the carriage return drawn in full. Width is set inline to the actual row width. */
+.uturn {
+  position: relative;
+  height: 12px;
+  flex: none;
+  opacity: 0.7;
+}
+
+/* right vertical: catches the out-stub coming down from the row above */
+.uturn::before {
+  content: "";
+  position: absolute;
+  right: 4px;
+  top: -3px;
+  bottom: 50%;
+  border-right: 1px solid var(--vscode-descriptionForeground);
+}
+
+/* the long horizontal traverse back to the left */
+.uturn::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  border-top: 1px solid var(--vscode-descriptionForeground);
+}
+
+/* left vertical: hands the line down into the next row's entry */
+.uturn i {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  bottom: -3px;
+  border-left: 1px solid var(--vscode-descriptionForeground);
+}
+
+/* Short stubs, not full-height poles: on a tall row a center-to-bottom drop was a 150px
+   stick into nowhere. The SPINE carries the row-to-row continuity; the elbow only says
+   «the line turns here». */
+.wrap.out::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 4px;
+  top: 50%;
+  border-top: 1px solid var(--vscode-descriptionForeground);
+}
+/* The stub runs from the row's CENTER to its edge: on a tall row that is a long drop, but
+   it now ENDS at the return lane — a connected turn, not a stick into nowhere. */
+.wrap.out::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  bottom: -3px;
+  border-right: 1px solid var(--vscode-descriptionForeground);
+}
+
+.wrap.in::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: -3px;
+  bottom: 50%;
+  border-left: 1px solid var(--vscode-descriptionForeground);
+}
+.wrap.in::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--vscode-descriptionForeground);
+}
+
+.wrap.in .arrowhead,
+.wrap.in i {
+  position: absolute;
+  right: -1px;
+  top: 50%;
+  margin-top: -3px;
+  border-left: 5px solid var(--vscode-descriptionForeground);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+}
+
+/* ── collapse (§4) ─────────────────────────────────────────────────── */
+
+.fold {
+  cursor: pointer;
+  opacity: 0.6;
+  padding: 0 3px;
+  user-select: none;
+}
+.fold:hover { opacity: 1; }
+
+.node.collapsed {
+  font-weight: 600;
+  border-style: solid;
+}
+
+.branching { position: relative; }
+
+.branching-fold {
+  position: absolute;
+  left: -14px;
+  top: 1px;
+}
+
+.scope.compact {
+  display: flex;
+  align-items: center;
+  border: none;
+  padding: 0;
+}
+
+.scope.compact > .scope-head {
+  margin-bottom: 0;
+  border: 1px solid var(--vscode-charts-blue, #75beff);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.scope.compact.cat-errors > .scope-head { border-color: var(--vscode-editorWarning-foreground, #cca700); }
+
+/* ── insert slots and the palette (§8.4, §8.5) ─────────────────────── */
+
+.slot {
+  align-self: center;
+  flex: none;
+  width: 10px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.seq:hover > .slot { opacity: 0.45; }
+.slot:hover { opacity: 1 !important; }
+.slot.drop { opacity: 1 !important; }
+
+.slot-plus {
+  font-weight: 700;
+  color: var(--vscode-charts-blue, #75beff);
+  pointer-events: none;
+}
+
+.slot.drop .slot-plus { color: var(--vscode-focusBorder); }
+
+[draggable="true"] { cursor: grab; }
+
+#overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 10;
+}
+
+#overlay.open { display: block; }
+
+.palette {
+  position: absolute;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 340px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.palette-search {
+  margin: 8px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 2px;
+  padding: 4px 8px;
+}
+
+.palette-list {
+  overflow-y: auto;
+  padding: 0 4px 8px;
+}
+
+.palette-cat {
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+  margin: 8px 6px 3px;
+}
+
+.palette-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.palette-item:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.palette-hint {
+  opacity: 0.55;
+  font-size: 0.85em;
+}
+
+.panel-actions button.danger {
+  margin-left: 6px;
+  color: var(--vscode-editorError-foreground, #f66);
+}
+
+/* ── the context menu: editing verbs one right-click away ──────────── */
+
+.ctx-menu {
+  position: fixed;
+  z-index: 30;
+  min-width: 170px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-editorWidget-border));
+  border-radius: 5px;
+  padding: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.ctx-item {
+  padding: 4px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ctx-item:hover {
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+  color: var(--vscode-menu-selectionForeground, inherit);
+}
+
+.ctx-item.danger { color: var(--vscode-editorError-foreground, #f66); }
+
+/* while dragging, every drop slot lights up — mermaid mode included */
+.dragging .slot { opacity: 0.55 !important; }
+
+/* ── selection and the properties panel (§8) ───────────────────────── */
+
+.selected {
+  outline: 2px solid var(--vscode-focusBorder) !important;
+  outline-offset: 1px;
+}
+
+body.with-panel { padding-right: 292px; }
+
+#panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 280px;
+  overflow-y: auto;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  border-left: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  padding: 8px 10px;
+  box-sizing: border-box;
+}
+
+#panel:empty { display: none; }
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.panel-type { font-weight: 600; }
+
+.panel-close {
+  cursor: pointer;
+  opacity: 0.6;
+  padding: 2px 5px;
+}
+.panel-close:hover { opacity: 1; }
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 7px;
+}
+
+.field label {
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.field.undeclared label { font-style: italic; }
+
+.field .value {
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 2px;
+  padding: 3px 6px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.95em;
+}
+
+.field .value:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.field .value:disabled { opacity: 0.55; }
+
+.panel-section {
+  margin: 12px 0 6px;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+  border-top: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  padding-top: 8px;
+}
+
+.content-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+
+.content-type {
+  flex: none;
+  font-size: 0.8em;
+  opacity: 0.6;
+  min-width: 52px;
+}
+
+.content-row .value { flex: 1; min-width: 0; }
+
+.content-opaque {
+  flex: 1;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.85em;
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-remove {
+  flex: none;
+  cursor: pointer;
+  opacity: 0.5;
+  padding: 0 3px;
+}
+.content-remove:hover { opacity: 1; color: var(--vscode-editorError-foreground, #f66); }
+
+.content-add { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
+
+.content-add button {
+  background: none;
+  border: 1px dashed var(--vscode-descriptionForeground);
+  color: var(--vscode-foreground);
+  border-radius: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+.content-add button:hover { opacity: 1; border-style: solid; }
+
+.panel-actions {
+  margin-top: 10px;
+  border-top: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  padding-top: 8px;
+}
+
+.panel-actions button {
+  background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+  border: none;
+  border-radius: 3px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+/* ── whole-file states ─────────────────────────────────────────────── */
+
+.notice {
+  margin: 30px auto;
+  max-width: 480px;
+  text-align: center;
+  opacity: 0.85;
+}
+
+.notice button {
+  margin-top: 10px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border: none;
+  border-radius: 3px;
+  padding: 5px 12px;
+  cursor: pointer;
+}

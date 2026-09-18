@@ -293,6 +293,7 @@ public sealed class SoapConsumer : IConsumer
 
         var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         exchange.Pattern = ExchangePattern.InOut;
+        ExchangePrincipal.Set(exchange, SharedHttpServerManager.GetResolvedPrincipal(http));
 
         try
         {

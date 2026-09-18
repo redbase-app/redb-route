@@ -20,6 +20,12 @@ appsettings.Development.json
 # Demo tpkg output
 demo/**/output/
 
+# VS Code extension: npm install, tsc output, packaged .vsix (the .vsix ships as a release asset).
+# Scoped to the extension on purpose: a bare out/ would also hide any folder of that name elsewhere.
+vscode-redb-route/node_modules/
+vscode-redb-route/out/
+vscode-redb-route/*.vsix
+
 # Internal — must never be mirrored (also stripped in step 7b, and never copied by step 2)
 docs/
 publish/

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
 using redb.Route.Abstractions;
+using redb.Route.Telemetry;
 using redb.Route.Expressions.Ast;
 using SysExpression = System.Linq.Expressions.Expression;
 
@@ -520,6 +521,12 @@ public static partial class ExpressionResolver
                 "stats(): the exchange carries no route context. Only an exchange that entered a " +
                 "route can read statistics; one built by hand cannot.");
 
+        // The OpenTelemetry layer, addressed as otel:instrument[@route][/step]. Its EIP counters and
+        // .Metered() durations exist nowhere else, and a markup route has no other way to reach them.
+        if (targetText.StartsWith(OtelPrefix, StringComparison.OrdinalIgnoreCase))
+            return ReadOtelPoint(targetText[OtelPrefix.Length..], metricText, exchange, context);
+
+
         IEndpointStatistics? stats;
         if (targetText.Equals("current", StringComparison.OrdinalIgnoreCase))
         {
@@ -540,6 +547,125 @@ public static partial class ExpressionResolver
 
         return ReadStatistic(stats, metricText);
     }
+
+    /// <summary>Prefix that sends <c>stats()</c> to the OpenTelemetry layer instead of endpoint statistics.</summary>
+    internal const string OtelPrefix = "otel:";
+
+    /// <summary>
+    /// Evaluates <c>stats('otel:instrument[@route][/step]', field)</c> — one reading of one instrument of the
+    /// <c>redb.Route</c> meter (METRICS_IN_ROUTE_PLAN, question 2). Without <c>@route</c> the instrument is read
+    /// for the route processing the exchange; <c>field</c> is count, sum, min, max or last.
+    /// </summary>
+    /// <remarks>
+    /// The in-process subscriber stays opt-in, so a missing one is an authoring error and says which call turns
+    /// it on. An instrument nobody has measured yet reads as zero: that is an answer, not a failure.
+    /// </remarks>
+    internal static object? ReadOtelPoint(string spec, string field, IExchange exchange, IRouteContext context)
+    {
+        var snapshot = context.GetMetricsSnapshot()
+            ?? throw new InvalidOperationException(
+                "stats('otel:…'): the in-process metrics subscriber is not running. Call context.UseMetricsSnapshot() " +
+                "(or services.AddMetricsSnapshot()) before a route reads the OpenTelemetry layer.");
+
+        string? step = null;
+        var slash = spec.IndexOf('/');
+        if (slash >= 0)
+        {
+            step = spec[(slash + 1)..];
+            spec = spec[..slash];
+        }
+
+        string? routeId = null;
+        var at = spec.IndexOf('@');
+        if (at >= 0)
+        {
+            routeId = spec[(at + 1)..];
+            spec = spec[..at];
+        }
+
+        var instrument = spec.Trim();
+        if (instrument.Length == 0)
+            throw new InvalidOperationException(
+                "stats('otel:…'): the instrument name is empty. Write otel:instrument[@route][/step], " +
+                "e.g. otel:redb.route.step.duration/enrich.");
+
+        routeId ??= exchange.RouteId;
+        var point = snapshot.Point(instrument, routeId, step);
+        return ReadOtelField(point, field);
+    }
+
+    /// <summary>The fields of a snapshot point <c>stats('otel:…')</c> understands.</summary>
+    internal static object? ReadOtelField(MetricSnapshotPoint? point, string field) =>
+        field.ToLowerInvariant() switch
+        {
+            "count" => point?.Count ?? 0L,
+            "sum" => point?.Sum ?? 0d,
+            "min" => point?.Min ?? 0d,
+            "max" => point?.Max ?? 0d,
+            "last" => point?.Last ?? 0d,
+            _ => throw new ArgumentException(
+                $"stats('otel:…'): unknown field '{field}'. Known: count, sum, min, max, last.")
+        };
+
+    /// <summary>Whether <paramref name="field"/> names a reading of a snapshot point.</summary>
+    internal static bool IsKnownOtelField(string field) =>
+        field.ToLowerInvariant() is "count" or "sum" or "min" or "max" or "last";
+
+    /// <summary>
+    /// Evaluates <c>messageHistory(kind)</c> — the trail the exchange left through the route, as a value.
+    /// <c>table</c> (the default) is the dump Camel prints on failure, <c>compact</c> one line, <c>json</c> an
+    /// array; <c>count</c>, <c>totalMs</c> and <c>slowestMs</c> are numbers, so markup can branch on cost, and
+    /// <c>slowest</c> / <c>lastNode</c> name a step.
+    /// </summary>
+    /// <remarks>
+    /// Message history is opt-in (<c>RouteEngineOptions.EnableMessageHistory</c>, <c>.MessageHistory()</c>), so an
+    /// exchange that recorded none reads as an empty string and zero — the one place this language answers a
+    /// missing measurement instead of failing. An unknown kind is still an authoring error.
+    /// </remarks>
+    public static object? Ast_MessageHistory(object? kind, IExchange exchange)
+    {
+        var kindText = kind?.ToString();
+        if (string.IsNullOrWhiteSpace(kindText))
+            kindText = "table";
+        kindText = kindText.Trim();
+
+        if (!IsKnownHistoryKind(kindText))
+            throw new ArgumentException(HistoryKindMessage(kindText));
+
+        var entries = Core.MessageHistory.GetEntries(exchange);
+        return kindText.ToLowerInvariant() switch
+        {
+            "table" => Core.MessageHistory.Format(exchange),
+            "compact" => string.Join(" > ", entries.Select(e => e.Label)),
+            "json" => System.Text.Json.JsonSerializer.Serialize(entries.Select(e => new
+            {
+                routeId = e.RouteId,
+                nodeId = e.NodeId,
+                label = e.Label,
+                elapsedMs = e.ElapsedMs,
+            })),
+            "count" => entries.Count,
+            "totalms" => entries.Sum(e => e.ElapsedMs),
+            "slowestms" => entries.Count == 0 ? 0d : entries.Max(e => e.ElapsedMs),
+            "slowest" => entries.Count == 0 ? string.Empty : entries.OrderByDescending(e => e.ElapsedMs).First().Label,
+            "lastnode" => entries.Count == 0 ? string.Empty : entries[^1].Label,
+            _ => throw new ArgumentException(HistoryKindMessage(kindText)),
+        };
+    }
+
+    /// <summary>Whether <paramref name="kind"/> names a shape of the message history.</summary>
+    internal static bool IsKnownHistoryKind(string kind) =>
+        kind.ToLowerInvariant() is "table" or "compact" or "json" or "count" or "totalms"
+            or "slowestms" or "slowest" or "lastnode";
+
+    private static string HistoryKindMessage(string kind) =>
+        $"messageHistory(): unknown kind '{kind}'. Known: table, compact, json, count, totalMs, slowestMs, " +
+        "slowest, lastNode.";
+
+    /// <summary>Whether the first argument of <c>stats()</c> is a literal that names the OpenTelemetry layer.</summary>
+    private static bool IsOtelTarget(AstNode target) =>
+        target is LiteralNode { Value: string literalTarget }
+        && literalTarget.StartsWith(OtelPrefix, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The statistic names <c>stats()</c> understands, and their readings.</summary>
     internal static object? ReadStatistic(IEndpointStatistics stats, string metric) =>
@@ -1124,15 +1250,44 @@ public static partial class ExpressionResolver
                     case "logical":
                         return CompileSingleArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_Logical));
 
+                    case "messagehistory":
+                    {
+                        // A literal kind is checked while the route is being built, as stats() checks its metric.
+                        if (functionNode.Arguments.Count > 0
+                            && functionNode.Arguments[0] is LiteralNode { Value: string literalKind }
+                            && !IsKnownHistoryKind(literalKind))
+                        {
+                            Ast_MessageHistory(literalKind, null!); // throws the ArgumentException with the known kinds
+                        }
+
+                        var historyArgs = functionNode.Arguments.Select(a => CompileAstNode(a, exchangeParam)).ToArray();
+                        var historyKind = historyArgs.Length > 0
+                            ? BoxToObject(historyArgs[0])
+                            : SysExpression.Constant(null, typeof(object));
+                        var historyMethod = typeof(ExpressionResolver).GetMethod(
+                            nameof(Ast_MessageHistory), BindingFlags.Public | BindingFlags.Static)!;
+                        return SysExpression.Call(historyMethod, historyKind, exchangeParam);
+                    }
+
                     case "stats":
                         // A literal metric name is checked while the route is being built — the
                         // V4 rule: a condition that can never work fails at build, not on the
                         // first message. A dynamic metric argument is checked at evaluation.
                         if (functionNode.Arguments.Count > 1
                             && functionNode.Arguments[1] is LiteralNode { Value: string literalMetric }
+                            && !IsOtelTarget(functionNode.Arguments[0])
                             && !IsKnownStatistic(literalMetric))
                         {
                             ReadStatistic(null!, literalMetric); // throws the ArgumentException with the known-names list
+                        }
+
+                        // The otel: branch has fields of its own, checked at build the same way.
+                        if (functionNode.Arguments.Count > 1
+                            && functionNode.Arguments[1] is LiteralNode { Value: string literalField }
+                            && IsOtelTarget(functionNode.Arguments[0])
+                            && !IsKnownOtelField(literalField))
+                        {
+                            ReadOtelField(null, literalField); // throws the ArgumentException with the known fields
                         }
                         return CompileTwoArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_Stats));
 

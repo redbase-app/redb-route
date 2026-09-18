@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.File;
@@ -19,6 +20,7 @@ public sealed class IntakeRouteBuilder : RouteBuilder
 
         From(RouteUris.Intake)
             .RouteId("intake")
+            .MessageHistory()
             .ConvertBody<string>()
 
             // The raw copy goes to the archive before anything can fail on its content.
@@ -27,13 +29,15 @@ public sealed class IntakeRouteBuilder : RouteBuilder
                 e.In.GetHeader<string>(SerialHeaders.FileName)!,
                 DateTimeOffset.UtcNow))
             .To(FileDsl.Write(settings.ArchiveDirectory).FileName("${header.serials.archivePath}"))
+            .Log("${header.serials.partner}: ${header.serials.fileName} archived as ${header.serials.archivePath}")
 
             .SetHeader(SerialHeaders.MessageType, e => XmlMessageInspector.RootElementName(e.In.Body as string))
             .Choice()
                 .When(e => e.In.GetHeader<string>(SerialHeaders.MessageType) is null)
                     .ProcessWithRedb(IntakeRecorder.RecordInvalidAsync)
-                    .Log("${header.serials.partner}: ${header.serials.fileName} is not well-formed XML, recorded as Invalid")
+                    .Log("${header.serials.partner}: ${header.serials.fileName} is not well-formed XML, recorded as Invalid", LogLevel.Warning)
                 .When(XPath("/SerialNumberRequest"))
+                    .Log("${header.serials.partner}: ${header.serials.fileName} is a serial number request")
                     .To(RouteUris.SerialNumberRequest)
                 .Otherwise()
                     // Handled context-wide by ExceptionRouteBuilder: archived, recorded, parked.

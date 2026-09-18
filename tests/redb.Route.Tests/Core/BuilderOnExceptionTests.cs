@@ -210,6 +210,34 @@ public class BuilderOnExceptionTests : IAsyncDisposable
         _context.HasExceptionRoute<TimeoutException>().Should().BeFalse();
     }
 
+    [Fact]
+    public async Task OnException_ForwardsFullHandlerConfig_OnExceptionOccurredFires()
+    {
+        // Builder-level OnException is compiled by RouteContext into the per-route handler wrapper.
+        // That path used to forward only redeliveries + handled/continued, silently dropping OnWhen,
+        // RetryWhile, OnRedelivery, OnPrepareFailure, the log levels, LogExhausted and OnExceptionOccurred.
+        // This asserts one of the dropped callbacks now reaches the compiled handler.
+        var occurred = 0;
+
+        _context.AddRoutes(r =>
+        {
+            r.OnException<InvalidOperationException>()
+                .OnExceptionOccurred(_ => occurred++)
+                .Handled();
+
+            r.From("direct://input")
+                .Process(_ => throw new InvalidOperationException("boom"));
+        });
+
+        await _context.Start();
+
+        var producer = _context.GetEndpoint("direct://input").CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("test")));
+
+        occurred.Should().Be(1, "OnExceptionOccurred must be forwarded to the compiled builder-level handler");
+    }
+
     // ── Test Helpers ──
 
     /// <summary>Builder that exposes OnException for testing.</summary>

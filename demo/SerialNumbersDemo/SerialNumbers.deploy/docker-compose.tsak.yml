@@ -1,0 +1,89 @@
+# The demo on Tsak: SQL Server, an SFTP server and the Tsak stack image (worker and dashboard in one container).
+#
+# From the demo folder:
+#   cp SerialNumbers.deploy/.env.example SerialNumbers.deploy/.env      # then fill in the Tsak values
+#   docker compose -f SerialNumbers.deploy/docker-compose.tsak.yml up -d sqlserver sftp
+#   dotnet run --project SerialNumbers.Worker -- seed     # database, demo data, AS2 certificates, SFTP folders
+#   pwsh SerialNumbers.deploy/pack-tpkg.ps1                # -> SerialNumbers.deploy/output/SerialNumbers.tpkg
+#   docker compose -f SerialNumbers.deploy/docker-compose.tsak.yml up -d tsak
+#
+# Then copy a sample into runtime/sftp/acme/to-hub/; the response arrives in runtime/sftp/acme/from-hub/.
+# Dashboard: http://localhost:8085 (admin and TSAK_WEB_ADMIN_PASSWORD). Product API: http://localhost:8090/api/products.
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Demo_Passw0rd"
+    ports:
+      - "1433:1433"
+
+  sftp:
+    image: atmoz/sftp:latest
+    # user:password:uid:gid:directory - the partner folders are created under /upload
+    command: testuser:secret:::upload
+    ports:
+      - "2222:22"
+    volumes:
+      # The partner's side of SFTP on the host: runtime/sftp/acme/to-hub and runtime/sftp/acme/from-hub.
+      # On Linux the folder must be writable by the container's user.
+      - ../runtime/sftp:/home/testuser/upload
+
+  tsak:
+    image: ghcr.io/redbase-app/redb-tsak-stack:${TSAK_VERSION:-4.0.1-net10}
+    restart: unless-stopped
+    depends_on:
+      - sqlserver
+      - sftp
+    ports:
+      - "127.0.0.1:9090:9090"   # worker API
+      - "127.0.0.1:8085:8085"   # dashboard
+      - "127.0.0.1:8090:8090"   # the module's product API
+    environment:
+      # The module works in the worker's default (unnamed) redb. Its provider is Tsak:Redb:Provider, and the
+      # module's schema script is written for SQL Server, so: mssql, with ConnectionStrings:MSSql. The worker
+      # ships sqlite so that it starts out of the box; the connection string alone does not change the
+      # provider. Storage:Type=Redb keeps Tsak's own state in the same database. The database itself is
+      # created by "SerialNumbers.Worker seed": redb creates its tables, not the database.
+      - ConnectionStrings__MSSql=Server=sqlserver;Database=serials_demo;User Id=sa;Password=Demo_Passw0rd;TrustServerCertificate=true
+      - Tsak__Storage__Type=Redb
+      - Tsak__Redb__Provider=mssql
+      - Tsak__Redb__UsePro=true
+
+      - Tsak__Modules__AssemblyPaths__0=/app/modules
+      - Tsak__Cluster__ApiEndpoint=http://tsak:9090
+      - Tsak__Cluster__NodeId=serials-1
+
+      # The worker's API requires a key; the dashboard in the same container calls it with the service key.
+      # The worker stores only the key's hash: HMAC-SHA256 of the key with Tsak:Auth:Secret (see .env.example).
+      - Tsak__Auth__Enabled=true
+      - Tsak__Auth__Secret=${TSAK_AUTH_SECRET:?TSAK_AUTH_SECRET required}
+      - Tsak__Auth__Keys__0__Id=svc-tsak-web
+      - Tsak__Auth__Keys__0__KeyHash=${TSAK_WEB_API_KEY_HASH:?TSAK_WEB_API_KEY_HASH required}
+      - Tsak__Auth__Keys__0__Name=tsak-web-dashboard
+      - Tsak__Auth__Keys__0__Roles=admin
+      - Tsak__Web__AdminLogin=admin
+      - Tsak__Web__AdminPassword=${TSAK_WEB_ADMIN_PASSWORD:?TSAK_WEB_ADMIN_PASSWORD required}
+      - Tsak__Web__ServiceApiKey=${TSAK_WEB_API_KEY:?TSAK_WEB_API_KEY required}
+      - Tsak__Web__Mode=cluster
+
+      # The module's settings: the Override layer of its context. Secrets go here, never into the module's
+      # config file, which is loaded after Tsak:Contexts and would win over a plain context value.
+      - Tsak__Contexts__serial-numbers__Override__Archive__Directory=/data/archive
+      - Tsak__Contexts__serial-numbers__Override__Report__Directory=/data/reports
+      - Tsak__Contexts__serial-numbers__Override__Report__Cron=0 * * * * ?
+      # Inside the compose network the SFTP server is "sftp" on port 22, not localhost:2222.
+      - Tsak__Contexts__serial-numbers__Override__Sftp__Host=sftp
+      - Tsak__Contexts__serial-numbers__Override__Sftp__Port=22
+      - Tsak__Contexts__serial-numbers__Override__Sftp__Username=testuser
+      - Tsak__Contexts__serial-numbers__Override__Sftp__Password=secret
+      # The certificates "SerialNumbers.Worker seed" wrote, and their password.
+      - Tsak__Contexts__serial-numbers__Override__As2__CertificateDirectory=/data/certs
+      - Tsak__Contexts__serial-numbers__Override__As2__CertificatePassword=demo
+    volumes:
+      - ./output:/app/modules
+      - ../runtime/certs:/data/certs:ro
+      - ../runtime/tsak/archive:/data/archive
+      - ../runtime/tsak/reports:/data/reports
+      - ../runtime/tsak/logs:/app/worker/Logs

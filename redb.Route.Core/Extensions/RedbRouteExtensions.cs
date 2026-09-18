@@ -52,7 +52,9 @@ public static class RedbRouteExtensions
     /// <list type="number">
     ///   <item>Cached scope in exchange.Properties (same exchange, second call)</item>
     ///   <item>New scope from factory in registry (first call with exchange)</item>
-    ///   <item>Singleton fallback from registry (manual RegisterRedbService / no exchange)</item>
+    ///   <item>New scope opened from the registered instance through <see cref="IRedbScopeSource"/> (first call with exchange,
+    ///   no factory: a host outside Tsak whose instance was built through a container)</item>
+    ///   <item>Singleton fallback from registry (no exchange, or an instance built without a container)</item>
     /// </list>
     /// </para>
     /// Falls back to the default (unnamed) service if the name is null or empty.
@@ -64,7 +66,8 @@ public static class RedbRouteExtensions
     /// <param name="exchange">
     /// Current exchange for per-exchange scoping. When provided, the resolved service is
     /// tied to the exchange lifecycle (thread-safe). Pass <c>null</c> for singleton fallback
-    /// (seed/diagnostics only — not safe under concurrency).
+    /// (seed/diagnostics only — not safe under concurrency). Parallel code without an exchange opens a scope of its
+    /// own per call with <see cref="CreateRedbScope"/>.
     /// </param>
     public static IRedbService GetRedbService(this IRouteContext context, string name, IExchange? exchange = null)
     {
@@ -86,8 +89,13 @@ public static class RedbRouteExtensions
             var cacheKey = ScopeCachePrefix + cleanName;
 
             // 1. Already cached in this exchange?
-            if (exchange.Properties.TryGetValue(cacheKey, out var cached) && cached is IServiceScope cachedScope)
-                return cachedScope.ServiceProvider.GetRequiredService<IRedbService>();
+            if (exchange.Properties.TryGetValue(cacheKey, out var cached))
+            {
+                if (cached is ExchangeRedbScope own)
+                    return own.Service;
+                if (cached is IServiceScope cachedScope)
+                    return cachedScope.ServiceProvider.GetRequiredService<IRedbService>();
+            }
 
             // 2. Factory registered? Create a new scope and cache it.
             if (context.GetFromRegistry<IServiceScopeFactory>(FactoryPrefix + cleanName) is { } factory)
@@ -96,9 +104,18 @@ public static class RedbRouteExtensions
                 exchange.Properties[cacheKey] = scope;
                 return scope.ServiceProvider.GetRequiredService<IRedbService>();
             }
+
+            // 3. No published factory: a host outside Tsak registered the instance itself. An instance built
+            //    through a container opens a scope of the same database for this exchange, as the factory does.
+            if (context.GetFromRegistry<IRedbService>(RegistryPrefix + cleanName) is { CanCreateScope: true } instance)
+            {
+                var redbScope = instance.CreateScope();
+                exchange.Properties[cacheKey] = new ExchangeRedbScope(redbScope); // disposed by Exchange.ReleaseScopes()
+                return redbScope.Service;
+            }
         }
 
-        // 3. Singleton fallback (manual RegisterRedbService or no exchange).
+        // 4. Singleton fallback: no exchange (start-up code), or an instance built without a container.
         return context.GetFromRegistry<IRedbService>(RegistryPrefix + cleanName)
             ?? throw new InvalidOperationException(
                 $"Named IRedbService '{name}' is not found in context registry. "
@@ -119,6 +136,95 @@ public static class RedbRouteExtensions
         ArgumentNullException.ThrowIfNull(redbService);
         context.AddToRegistry(RegistryPrefix + name.TrimStart('#'), redbService);
         return context;
+    }
+
+    /// <summary>
+    /// Opens a scope with its own <see cref="IRedbService"/>, for code that runs without an exchange and may run in
+    /// parallel: an observer, a background job, a store call made outside a route step. Every call opens a new scope,
+    /// so parallel callers never share a connection. The caller owns the scope and disposes it (<c>await using</c>).
+    /// <para>
+    /// <b>Named</b> (<paramref name="name"/> set): the scope factory a host published for the name (Tsak does, one
+    /// per named instance), otherwise a scope opened from the instance registered with
+    /// <see cref="RegisterRedbService"/> (<see cref="IRedbScopeSource"/>). <b>Default</b> (no name): a scope opened
+    /// from the service registered on the context, otherwise a scope of the context's service provider.
+    /// </para>
+    /// <para>
+    /// A service built without a DI container has no scope to open: the call throws
+    /// <see cref="InvalidOperationException"/> instead of handing out the shared instance, which is exactly the
+    /// contention this method exists to avoid. Single-threaded start-up code (scheme sync, seeding) keeps using
+    /// <see cref="GetRedbService(IRouteContext, string, IExchange?)"/> without an exchange.
+    /// </para>
+    /// <para>
+    /// A scope opened inside an ambient transaction takes part in it. Work that must survive the route's rollback
+    /// (an audit record, a budget counter) opens its scope under a suppressing <c>TransactionScope</c>.
+    /// </para>
+    /// </summary>
+    /// <param name="context">Route context.</param>
+    /// <param name="name">Registry name of a named instance (a leading <c>#</c> is stripped); null or empty for the default service.</param>
+    public static RedbScope CreateRedbScope(this IRouteContext context, string? name = null)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (string.IsNullOrEmpty(name))
+            return CreateDefaultRedbScope(context);
+
+        var cleanName = name.TrimStart('#');
+
+        if (context.GetFromRegistry<IServiceScopeFactory>(FactoryPrefix + cleanName) is { } factory)
+            return OpenRedbScope(factory, $"named IRedbService '{cleanName}'");
+
+        var instance = context.GetFromRegistry<IRedbService>(RegistryPrefix + cleanName)
+            ?? throw new InvalidOperationException(
+                $"Named IRedbService '{name}' is not found in context registry. "
+                + "Register it via context.RegisterRedbService(name, instance) or configure in Redb section.");
+
+        if (!instance.CanCreateScope)
+            throw new InvalidOperationException(
+                $"Named IRedbService '{cleanName}' was registered as an instance built without a DI container, so no scope "
+                + "can be opened for it. Build the service through a container (services.AddRedb...) before "
+                + "RegisterRedbService, or do the work on an exchange.");
+
+        return instance.CreateScope();
+    }
+
+    private static RedbScope CreateDefaultRedbScope(IRouteContext context)
+    {
+        // The service registered on the context first: it is what code without an exchange gets from GetRedbService().
+        if (context.GetService<IRedbService>() is { } registered)
+        {
+            if (!registered.CanCreateScope)
+                throw new InvalidOperationException(
+                    "The IRedbService registered on the route context was built without a DI container, so no scope can "
+                    + "be opened for it. Register it through a container (services.AddRedb...), or do the work on an exchange.");
+            return registered.CreateScope();
+        }
+
+        if (context.GetServiceProvider()?.GetService<IServiceScopeFactory>() is { } factory)
+            return OpenRedbScope(factory, "the route context's service provider");
+
+        throw new InvalidOperationException(
+            "IRedbService is not registered. Call services.AddRedb() / services.AddRedbPro(), "
+            + "or register a named instance via context.RegisterRedbService(name, instance).");
+    }
+
+    private static RedbScope OpenRedbScope(IServiceScopeFactory factory, string source)
+    {
+        var scope = factory.CreateScope();
+        var handedOver = false;
+        try
+        {
+            var service = scope.ServiceProvider.GetService<IRedbService>()
+                ?? throw new InvalidOperationException($"The scope factory of {source} does not provide IRedbService.");
+            var redbScope = new RedbScope(service, scope);
+            handedOver = true;
+            return redbScope;
+        }
+        finally
+        {
+            // A failed resolution must not strand the scope it opened.
+            if (!handedOver)
+                scope.Dispose();
+        }
     }
 
     /// <summary>
@@ -352,6 +458,33 @@ public static class RedbRouteExtensions
     /// </list>
     /// </para>
     /// </summary>
+    /// <summary>
+    /// A <see cref="RedbScope"/> cached on an exchange. The exchange releases every <see cref="IServiceScope"/> kept under
+    /// a <c>__redb_scope:</c> key when it ends, so the scope is presented as one; <see cref="Service"/> is the service
+    /// the scope was opened for.
+    /// </summary>
+    private sealed class ExchangeRedbScope : IServiceScope, IAsyncDisposable
+    {
+        private readonly RedbScope _scope;
+
+        public ExchangeRedbScope(RedbScope scope) => _scope = scope;
+
+        public IRedbService Service => _scope.Service;
+
+        public IServiceProvider ServiceProvider => _scope.ServiceProvider ?? NoServices.Instance;
+
+        public void Dispose() => _scope.Dispose();
+
+        public ValueTask DisposeAsync() => _scope.DisposeAsync();
+    }
+
+    private sealed class NoServices : IServiceProvider
+    {
+        public static readonly NoServices Instance = new();
+
+        public object? GetService(Type serviceType) => null;
+    }
+
     private static IRedbService ResolveScopedRedb(IRouteContext context, IExchange? exchange)
     {
         if (exchange != null)
@@ -361,8 +494,13 @@ public static class RedbRouteExtensions
                 return scoped;
 
             // 2. Dedicated scope cached from a previous call in this same exchange.
-            if (exchange.Properties.TryGetValue(DefaultScopeKey, out var cached) && cached is IServiceScope cachedScope)
-                return cachedScope.ServiceProvider.GetRequiredService<IRedbService>();
+            if (exchange.Properties.TryGetValue(DefaultScopeKey, out var cached))
+            {
+                if (cached is ExchangeRedbScope own)
+                    return own.Service;
+                if (cached is IServiceScope cachedScope)
+                    return cachedScope.ServiceProvider.GetRequiredService<IRedbService>();
+            }
 
             // 3. Create a dedicated per-exchange scope from the context provider's scope factory.
             //    The very fact that the unscoped singleton resolves at all proves redb is registered
@@ -377,10 +515,19 @@ public static class RedbRouteExtensions
                 }
                 scope.Dispose(); // this provider has no default redb — fall through to the registry/singleton
             }
+
+            // 4. No provider scope: a service registered on the context (a host outside Tsak) opens a scope
+            //    of the same database for this exchange when it was built through a container.
+            if (context.GetService<IRedbService>() is { CanCreateScope: true } registered)
+            {
+                var redbScope = registered.CreateScope();
+                exchange.Properties[DefaultScopeKey] = new ExchangeRedbScope(redbScope); // disposed by Exchange.ReleaseScopes()
+                return redbScope.Service;
+            }
         }
 
-        // No exchange (or no scoped redb available) — unscoped singleton. Safe only for
-        // single-threaded seed/diagnostics; request/exchange paths never reach here.
+        // No exchange, or no scope can be opened (a service built without a container): the unscoped singleton.
+        // Safe only for single-threaded seed/diagnostics.
         return context.GetRedbService();
     }
 

@@ -348,16 +348,9 @@ public sealed class AzureServiceBusIntegrationTests
         await Task.WhenAny(tcs.Task, Task.Delay(15_000));
 
         captured.Should().NotBeNull();
-        captured!.Properties.Should().ContainKey("TRANSACT_ACTION");
 
-        var actions = captured.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        actions.Should().NotBeNull();
-        actions!.Should().NotBeEmpty();
-
-        // Commit — message should be completed
-        foreach (var action in actions.Values)
-            await action.Commit();
-
+        // The acknowledgement is the consumer's: once the route returned without a failure, the message is
+        // completed here, after the route transaction has committed the database and sent what it deferred.
         await consumer.Stop();
         await epCons.Stop();
 
@@ -401,6 +394,7 @@ public sealed class AzureServiceBusIntegrationTests
         var epCons = CreateEndpoint(Queue, "transacted=true");
         IExchange? captured = null;
         var tcs = new TaskCompletionSource();
+        var deliveries = 0;
 
         var processor = Substitute.For<IProcessor>();
         processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
@@ -412,13 +406,12 @@ public sealed class AzureServiceBusIntegrationTests
                 {
                     captured = ex;
 
-                    // Rollback inside callback while ProcessMessageEventArgs is still valid
-                    var actions = captured.Properties["TRANSACT_ACTION"]
-                        as ConcurrentDictionary<string, ITransactedAction>;
-                    foreach (var act in actions!.Values)
-                        act.Rollback().GetAwaiter().GetResult();
+                    // A failure the route leaves on the exchange: the consumer must abandon the message rather than
+                    // acknowledge a unit of work that did not happen, so the broker delivers it again.
+                    if (Interlocked.Increment(ref deliveries) >= 2)
+                        tcs.TrySetResult();
 
-                    tcs.TrySetResult();
+                    ex.Exception = new InvalidOperationException("the route failed");
                 }
                 return Task.CompletedTask;
             });
@@ -426,12 +419,13 @@ public sealed class AzureServiceBusIntegrationTests
         var consumer = epCons.CreateConsumer(processor);
         await consumer.Start();
 
-        await Task.WhenAny(tcs.Task, Task.Delay(15_000));
+        await Task.WhenAny(tcs.Task, Task.Delay(20_000));
         await consumer.Stop();
         await epCons.Stop();
 
         captured.Should().NotBeNull();
-        captured!.Properties.Should().ContainKey("TRANSACT_ACTION");
+        deliveries.Should().BeGreaterThanOrEqualTo(2,
+            "a failed unit of work is not acknowledged, so the broker delivers the message again");
     }
 
     // ───── Queue: Multiple messages ─────

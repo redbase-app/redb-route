@@ -31,6 +31,9 @@ public sealed class LlmBuilder
     private string? _schedule;
     private string? _initialBodyRef;
     private string? _maxIterations;
+    private string? _budgetInputTokens;
+    private string? _budgetOutputTokens;
+    private string? _budgetCostUsd;
     private bool _cacheSystemPrompt;
     private string? _tools;
     private string? _user;
@@ -74,6 +77,29 @@ public sealed class LlmBuilder
 
     /// <summary>Maximum tool-loop iterations.</summary>
     public LlmBuilder MaxIterations(int n) { _maxIterations = n.ToString(); return this; }
+
+    /// <summary>
+    /// Per-run budget. Only the dimensions you pass reach the URI — an omitted ceiling stays absent,
+    /// because "not set" and "zero" are different states in the URI.
+    /// <para>
+    /// A value of <c>0</c> or less means <b>no ceiling for that dimension</b>, exactly as
+    /// <c>AgentBudget.Unbounded</c> does: the enforcer only checks a limit that is positive. To stop a
+    /// route from doing work, take the tool away, require an approval or require a claim — a zero ceiling
+    /// is not a switch, and pretending otherwise would silently do nothing.
+    /// </para>
+    /// <para>
+    /// The cost ceiling needs a registered <see cref="Engine.Governance.ICostCalculator"/> that can
+    /// price the model; without one the run fails fast rather than pretending to enforce it.
+    /// </para>
+    /// </summary>
+    public LlmBuilder Budget(int? inputTokens = null, int? outputTokens = null, decimal? costUsd = null)
+    {
+        if (inputTokens is not null) _budgetInputTokens = inputTokens.Value.ToString();
+        if (outputTokens is not null) _budgetOutputTokens = outputTokens.Value.ToString();
+        if (costUsd is not null)
+            _budgetCostUsd = costUsd.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return this;
+    }
 
     /// <summary>
     /// Asks the provider to cache the system prompt across turns
@@ -174,6 +200,9 @@ public sealed class LlmBuilder
         Append(sb, ref first, "schedule", _schedule);
         Append(sb, ref first, "initialBodyRef", _initialBodyRef);
         Append(sb, ref first, "maxIterations", _maxIterations);
+        Append(sb, ref first, "budgetInputTokens", _budgetInputTokens);
+        Append(sb, ref first, "budgetOutputTokens", _budgetOutputTokens);
+        Append(sb, ref first, "budgetCostUsd", _budgetCostUsd);
         if (_cacheSystemPrompt) Append(sb, ref first, "cacheSystemPrompt", "true");
         Append(sb, ref first, "tools", _tools);
         Append(sb, ref first, "user", _user);

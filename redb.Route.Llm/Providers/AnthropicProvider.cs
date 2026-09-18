@@ -451,6 +451,10 @@ public sealed class AnthropicProvider : ILlmProvider
             }));
     }
 
+    /// <summary>True for a request block of kind thinking or redacted_thinking.</summary>
+    private static bool IsThinkingBlock(JsonNode? block) =>
+        block?["type"]?.GetValue<string>() is "thinking" or "redacted_thinking";
+
     private static JsonArray BuildMessages(LlmRequest request)
     {
         var arr = new JsonArray();
@@ -473,6 +477,27 @@ public sealed class AnthropicProvider : ILlmProvider
                         {
                             ["type"] = "text",
                             ["text"] = tb.Text
+                        });
+                        break;
+
+                    // A thinking block goes back exactly as it arrived: redacted thinking as its data
+                    // payload, plain thinking as text plus the signature. The wire has no form for an
+                    // unsigned block (another provider's reasoning after a provider switch): a thinking
+                    // block without a signature is rejected, so it is not written into the request.
+                    case LlmThinkingBlock th when th.IsRedacted:
+                        content.Add(new JsonObject
+                        {
+                            ["type"] = "redacted_thinking",
+                            ["data"] = th.RedactedData
+                        });
+                        break;
+
+                    case LlmThinkingBlock th when !string.IsNullOrEmpty(th.Signature):
+                        content.Add(new JsonObject
+                        {
+                            ["type"] = "thinking",
+                            ["thinking"] = th.Text,
+                            ["signature"] = th.Signature
                         });
                         break;
 
@@ -499,13 +524,14 @@ public sealed class AnthropicProvider : ILlmProvider
                 }
             }
 
-            // A message with nothing left to say is not sent at all. It used to become an empty
-            // text block, and the API rejects those with 400 "text content blocks must be
-            // non-empty" — so ONE empty assistant reply persisted in a conversation (the model
-            // spent its whole max_tokens on thinking and produced no text) made every later call
-            // of that conversation fail until the history was edited by hand (2026-09-07).
-            // Skipping is safe: the API merges consecutive same-role turns.
-            if (content.Count == 0)
+            // A message with nothing to continue from is not sent at all: no block left, or nothing
+            // but thinking (a turn the model spent entirely on thinking, kept in the record). An
+            // empty reply used to become an empty text block, and the API rejects those with 400
+            // "text content blocks must be non-empty" — so ONE empty assistant reply persisted in a
+            // conversation made every later call of that conversation fail until the history was
+            // edited by hand (2026-09-07). A lone thinking block is not put in front of the API
+            // either. Skipping is safe: the API merges consecutive same-role turns.
+            if (content.All(IsThinkingBlock))
                 continue;
 
             // A message-level breakpoint lands on the message's LAST block: cache_control is a
@@ -535,6 +561,11 @@ public sealed class AnthropicProvider : ILlmProvider
         return arr;
     }
 
+    /// <summary>
+    /// Projects a capability into the provider's <c>tools[]</c> entry. Only the name, the description
+    /// and the input schema travel: <see cref="LlmToolSafety"/> is server-side metadata and never
+    /// appears on the wire.
+    /// </summary>
     private static JsonObject MapTool(LlmToolCapability cap)
     {
         var schema = ParseJsonOrEmpty(cap.InputSchema) as JsonObject
@@ -568,6 +599,21 @@ public sealed class AnthropicProvider : ILlmProvider
                     case "text":
                         var text = block["text"]?.GetValue<string>() ?? string.Empty;
                         blocks.Add(new LlmTextBlock(text));
+                        break;
+                    // The model's thinking comes back signed, and the signature is what the API
+                    // verifies on the way in — so the block travels on untouched, text and signature
+                    // together, into the next request of the same run.
+                    case "thinking":
+                        var thinkingText = block["thinking"]?.GetValue<string>() ?? string.Empty;
+                        var signature = block["signature"]?.GetValue<string>();
+                        blocks.Add(new LlmThinkingBlock(thinkingText, signature));
+                        break;
+                    // redacted_thinking: the model reasoned, the API withheld the text and returned an
+                    // opaque payload instead. There is nothing to read — only something to hand back.
+                    case "redacted_thinking":
+                        blocks.Add(new LlmThinkingBlock(
+                            string.Empty,
+                            RedactedData: block["data"]?.GetValue<string>()));
                         break;
                     case "tool_use":
                         var id = block["id"]?.GetValue<string>() ?? Guid.NewGuid().ToString("N");

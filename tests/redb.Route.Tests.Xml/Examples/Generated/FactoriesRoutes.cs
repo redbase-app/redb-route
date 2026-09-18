@@ -33,7 +33,7 @@ public sealed class FactoriesRoutes : RouteBuilder
         var route1 = From("direct://auth-audit");
         route1.RouteId("auth-audit");
         route1.Description("Аудит входов в main-db");
-        route1.To("sql:INSERT INTO auth_log(login, at) VALUES (@login, @at)?dataSource=#main-db&param.login=${header.login}&param.at=${dateformat(now(), 'o')}");
+        route1.To("sql:INSERT INTO auth_log(login, at) VALUES (:#login, :#at)?dataSource=#main-db&param.login=${header.login}&param.at=${dateformat(now(), 'o')}");
 
         // Уведомление о заказе по SMTP
         var route2 = From("direct://notify-mail");

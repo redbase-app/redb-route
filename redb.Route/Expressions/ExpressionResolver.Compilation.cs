@@ -898,7 +898,6 @@ public static partial class ExpressionResolver
 
 
     /// <summary>
-    /// <summary>
     /// Finds the index of the first comparison operator in the string
     /// </summary>
     private static int FindFirstOperator(string expression)
@@ -918,6 +917,7 @@ public static partial class ExpressionResolver
         return minIndex == int.MaxValue ? -1 : minIndex;
     }
 
+    /// <summary>
     /// Finds the last occurrence of an operator outside parentheses in the expression
     /// </summary>
     private static int FindLastOperatorOutsideBrackets(string expression, char op)

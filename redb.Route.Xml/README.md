@@ -110,8 +110,10 @@ Positions decide meaning — the same rule the fluent DSL follows:
 
 The expression language is the engine's own — `${header.x}`, `count(property.items) > 2 ?
 'many' : 'few'`, `${jpath('$.order.id')}`, `${xpath('/order/@id')}`, arithmetic, `uuid()`,
-`datediff(...)` — and a broken expression fails **when the document loads**, not on the first
-message. Whitespace around operators is insignificant, so `expr="header.amount>1000"` avoids
+`datediff(...)`, `messageHistory(...)` (the exchange's own trail: `'compact'`, `'count'`,
+`'slowestMs'`, ...), `stats(...)` (endpoint statistics, and the OpenTelemetry layer through
+`'otel:<instrument>'`) — and a broken expression fails **when the document loads**, not on the
+first message. Whitespace around operators is insignificant, so `expr="header.amount>1000"` avoids
 XML escaping entirely (`>` needs no escape in attribute values; `<` does).
 
 Type-shaped checks the language cannot express go through the registry:
@@ -131,7 +133,7 @@ engine pipeline (endpoint cache, statistics, mock masks, secret redaction) sees 
 
 <to>
   <sql dataSource="#main-db">
-    <![CDATA[ INSERT INTO auth_log(login, at) VALUES (@login, @at) ]]>
+    <![CDATA[ INSERT INTO auth_log(login, at) VALUES (:#login, :#at) ]]>
     <param name="login" value="${header.login}"/>
     <param name="at" value="${dateformat(now(), 'o')}"/>
   </sql>
@@ -167,6 +169,25 @@ Values resolve `{{key}}` / `{{key:default}}` through the context's configuration
 (`IConfiguration`, then context properties) **before** type conversion — `{{ldap.port:636}}`
 binds to an `int`. Nested anonymous beans build option graphs inline. Objects with real
 dependencies stay in code; XML references them by `#name`.
+
+A property takes either `value=` or one nested anonymous `<bean>`, so a factory that holds an
+OBJECT - a certificate, a credentials object, a serializer - is declarable too. When the type is
+built by a static creator rather than a constructor, `factoryMethod=` names it and the
+`<constructorArg>` values are its arguments:
+
+```xml
+<bean name="globex" type="redb.Route.As2.As2ConnectionFactory, redb.Route.As2">
+  <property key="OurCertificate">
+    <bean type="System.Security.Cryptography.X509Certificates.X509CertificateLoader, System.Security.Cryptography.X509Certificates"
+          factoryMethod="LoadPkcs12FromFile">
+      <constructorArg value="{{as2.certificates}}/hub.pfx"/>
+      <constructorArg value="{{as2.password}}"/>
+    </bean>
+  </property>
+  <property key="As2From" value="{{as2.id}}"/>
+  <property key="Sign" value="true"/>
+</bean>
+```
 
 Handlers declared at the container level apply to every route of the file:
 
@@ -349,5 +370,6 @@ Lambdas, custom processors' logic, complex seeding — code. XML references it (
 in the runtime and no second trust contour — a package's code is signed and verified before
 anything runs, and the XML only chooses which already-trusted types to use.
 
-The full format specification, decision log and phase reviews live in the repository under
-`docs/Route-XML/`.
+The schema of the format is generated from the element registry: `redb-route-xml xsd <bin directory>`
+writes it for exactly the packages in that directory, their contributed elements included, and the
+VS Code extension validates against it. See [XML Route Tools](../README.md#xml-route-tools).

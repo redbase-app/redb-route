@@ -13,6 +13,14 @@ public sealed class FakeProvider : ILlmProvider
     public string ModelId { get; init; } = "fake-model";
 
     public List<LlmRequest> CapturedRequests { get; } = new();
+
+    /// <summary>
+    /// The messages of each call as the provider saw them. <see cref="CapturedRequests"/> holds the
+    /// request objects themselves, and the engine keeps appending to the transcript a request points
+    /// at, so reading those after a run shows the grown list rather than what was sent.
+    /// </summary>
+    public List<IReadOnlyList<LlmMessage>> SentMessages { get; } = new();
+
     public int CallCount { get; private set; }
     public Func<LlmRequest, CancellationToken, Task>? OnCall { get; set; }
     public Exception? ThrowOnCall { get; set; }
@@ -49,6 +57,7 @@ public sealed class FakeProvider : ILlmProvider
     {
         CallCount++;
         CapturedRequests.Add(request);
+        SentMessages.Add(request.Messages.ToList());
         if (OnCall is not null) await OnCall(request, ct).ConfigureAwait(false);
         if (ThrowOnCall is not null) throw ThrowOnCall;
 

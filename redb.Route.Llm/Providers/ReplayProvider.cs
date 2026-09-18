@@ -215,7 +215,15 @@ public sealed class ReplayProvider : ILlmProvider
                 OutputJson = r.OutputJson,
                 IsError = r.IsError
             },
-            _ => new BlockSnapshot { Type = "unknown" }
+            LlmThinkingBlock th => new BlockSnapshot
+            {
+                Type = "thinking",
+                Text = th.Text,
+                Signature = th.Signature,
+                RedactedData = th.RedactedData
+            },
+            _ => throw new NotSupportedException(
+                $"ReplayProvider: content block type '{b.GetType().Name}' has no snapshot form.")
         }).ToList()
     };
 
@@ -241,7 +249,15 @@ public sealed class ReplayProvider : ILlmProvider
                 OutputJson = tr.OutputJson,
                 IsError = tr.IsError
             },
-            _ => new BlockSnapshot { Type = "unknown" }
+            LlmThinkingBlock th => new BlockSnapshot
+            {
+                Type = "thinking",
+                Text = th.Text,
+                Signature = th.Signature,
+                RedactedData = th.RedactedData
+            },
+            _ => throw new NotSupportedException(
+                $"ReplayProvider: content block type '{b.GetType().Name}' has no snapshot form.")
         }).ToList()
     };
 
@@ -264,6 +280,15 @@ public sealed class ReplayProvider : ILlmProvider
                     b.ToolUseId ?? string.Empty,
                     b.OutputJson ?? "{}",
                     b.IsError)); break;
+                // A recorded thinking block comes back whole — text, signature and redacted payload —
+                // so a replay of a tool loop carries the same blocks the provider issued.
+                case "thinking": blocks.Add(new LlmThinkingBlock(
+                    b.Text ?? string.Empty,
+                    b.Signature,
+                    b.RedactedData)); break;
+                default:
+                    throw new InvalidOperationException(
+                        $"ReplayProvider: fixture entry '{entry.Key}' has a block of unknown type '{b.Type}'.");
             }
         }
         if (blocks.Count == 0) blocks.Add(new LlmTextBlock(string.Empty));
@@ -325,6 +350,10 @@ public sealed class ReplayProvider : ILlmProvider
         public string? InputJson { get; set; }
         public string? OutputJson { get; set; }
         public bool IsError { get; set; }
+
+        // Thinking-block payload: the signature and the redacted data travel with the text.
+        public string? Signature { get; set; }
+        public string? RedactedData { get; set; }
     }
 
     private sealed class ResponseSnapshot

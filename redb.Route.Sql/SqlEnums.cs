@@ -44,6 +44,21 @@ public enum SqlOutputType
 }
 
 /// <summary>
+/// How a poll consumer hands the polled rows to the route.
+/// </summary>
+public enum SqlPollDelivery
+{
+    /// <summary>An exchange per row; <c>onSuccess</c> / <c>onFailure</c> run for each row.</summary>
+    PerRow,
+
+    /// <summary>
+    /// One exchange with every polled row (Apache Camel <c>useIterator=false</c>): a list, or with
+    /// <see cref="SqlOutputType.StreamList"/> the open stream; <c>onSuccess</c> / <c>onFailure</c> run once for it.
+    /// </summary>
+    List
+}
+
+/// <summary>
 /// Direction of a stored procedure parameter.
 /// </summary>
 public enum SqlParamDirection
@@ -56,4 +71,19 @@ public enum SqlParamDirection
 
     /// <summary>Bi-directional parameter (input and output).</summary>
     InOut
+}
+
+/// <summary>
+/// How a <c>:#name</c> placeholder is written in the statement the connector sends to the provider.
+/// </summary>
+public enum SqlPlaceholderStyle
+{
+    /// <summary><c>@name</c>, one parameter per name: Npgsql, SqlClient, Microsoft.Data.Sqlite, MySqlConnector, Firebird.</summary>
+    At,
+
+    /// <summary><c>:name</c>, one parameter per occurrence, so binding by name and by position both work: Oracle (ODP.NET).</summary>
+    Colon,
+
+    /// <summary><c>?</c>, one parameter per occurrence, in order: ODBC and OleDb providers.</summary>
+    Question
 }

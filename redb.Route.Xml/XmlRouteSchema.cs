@@ -174,10 +174,15 @@ public static class XmlRouteSchema
             new XElement(Xs + "complexType",
                 new XElement(Xs + "choice",
                     new XAttribute("minOccurs", "0"), new XAttribute("maxOccurs", "unbounded"),
+                    // value= for a scalar, one nested anonymous <bean> for a property that holds
+                    // an object (a certificate, credentials); the parser rejects both at once.
                     new XElement(Xs + "element", new XAttribute("name", "property"),
                         new XElement(Xs + "complexType",
+                            new XElement(Xs + "choice",
+                                new XAttribute("minOccurs", "0"),
+                                new XElement(Xs + "element", new XAttribute("ref", "r:bean"))),
                             Attribute(new AttributeSpec("key", AttributeType.String, Required: true)),
-                            Attribute(new AttributeSpec("value", AttributeType.String, Required: true)),
+                            Attribute(new AttributeSpec("value", AttributeType.String)),
                             ForeignAttributes())),
                     new XElement(Xs + "element", new XAttribute("name", "constructorArg"),
                         new XElement(Xs + "complexType",
@@ -190,6 +195,9 @@ public static class XmlRouteSchema
                 // context-dependent, so the parser enforces it and the schema stays permissive.
                 Attribute(new AttributeSpec("name", AttributeType.String)),
                 Attribute(new AttributeSpec("type", AttributeType.TypeName, Required: true)),
+                // A public static creator instead of a constructor; constructorArg values are its
+                // arguments (X509CertificateLoader.LoadPkcs12FromFile is the shape this serves).
+                Attribute(new AttributeSpec("factoryMethod", AttributeType.String)),
                 ForeignAttributes()));
 
     private static XElement RouteElement(IReadOnlyList<CatalogComponent>? catalog)

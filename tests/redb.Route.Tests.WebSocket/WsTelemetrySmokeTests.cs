@@ -59,14 +59,19 @@ public sealed class WsTelemetrySmokeTests : IAsyncLifetime
         }
 
         tracer.ForceFlush(1000);
-        activities.Should().NotBeEmpty();
-        var activity = activities.First();
+
+        // The listener is process-wide: routes in test classes running in parallel publish their own
+        // spans on the same source while this tracer is alive. Pick this producer's span by kind and by
+        // its own port, never by position.
+        var activity = activities.Should().ContainSingle(a =>
+            a.Kind == ActivityKind.Producer && IsOwnEndpoint(a, _port)).Subject;
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
-        activity.Kind.Should().Be(ActivityKind.Producer);
         activity.GetTagItem("messaging.system").Should().Be("websocket");
         activity.GetTagItem("messaging.operation").Should().Be("send");
-        activity.GetTagItem("redb.route.endpoint").Should().NotBeNull();
     }
+
+    private static bool IsOwnEndpoint(Activity activity, int port) =>
+        activity.GetTagItem("redb.route.endpoint") is string endpoint && endpoint.Contains($":{port}/");
 
     private static int GetFreePort()
     {

@@ -90,22 +90,48 @@ public sealed class McpServerOptionsBuilder
     /// <summary>Per-tool safety overrides.</summary>
     public List<McpSafetyOverride> SafetyOverrides { get; set; } = [];
 
-    /// <summary>Default safety attached when no override matches.</summary>
+    /// <summary>
+    /// Default safety attached when no override matches: external side effects and an approval
+    /// requirement, because discovery cannot know what a third-party tool does.
+    /// <para>
+    /// With the shipped <see cref="AutoApproveGate"/> this flag produces an audit row
+    /// (<c>ApprovalId = "auto"</c>), not a blocked call — replace the gate to make approval a control
+    /// point.
+    /// </para>
+    /// </summary>
     public LlmToolSafety DefaultSafety { get; set; } = new()
     {
         SideEffect = ToolSideEffect.External,
         Cost = ToolCostClass.Cheap,
-        RequiresApproval = false,
+        RequiresApproval = true,
     };
 
-    internal McpServerOptions Build() => new()
+    internal McpServerOptions Build()
     {
-        Name = Name,
-        Transport = Transport,
-        DiscoveryTimeout = DiscoveryTimeout,
-        RestartPolicy = RestartPolicy,
-        SafetyOverrides = SafetyOverrides,
-        DefaultSafety = DefaultSafety,
-    };
+        // A caching policy on a tool that is not read-only is refused here, at configuration time. The
+        // tool registry refuses it as well, but that happens during discovery — where the failure reads
+        // as "the server is silently missing from the tool set" instead of "this override is wrong".
+        ValidateSafety("DefaultSafety", DefaultSafety);
+        foreach (var ovr in SafetyOverrides)
+            ValidateSafety($"safety override '{ovr.ToolNamePattern}'", ovr.Safety);
+
+        return new McpServerOptions
+        {
+            Name = Name,
+            Transport = Transport,
+            DiscoveryTimeout = DiscoveryTimeout,
+            RestartPolicy = RestartPolicy,
+            SafetyOverrides = SafetyOverrides,
+            DefaultSafety = DefaultSafety,
+        };
+    }
+
+    private static void ValidateSafety(string what, LlmToolSafety safety)
+    {
+        if (safety.Caching != ToolCachingPolicy.None && safety.SideEffect != ToolSideEffect.ReadOnly)
+            throw new InvalidOperationException(
+                $"MCP {what} declares Caching={safety.Caching} with SideEffect={safety.SideEffect}. "
+                + "Only read-only tools may be cached — a cache hit would suppress the side effect.");
+    }
 }
 

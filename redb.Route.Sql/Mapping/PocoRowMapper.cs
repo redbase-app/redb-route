@@ -9,6 +9,12 @@ namespace redb.Route.Sql.Mapping;
 /// via reflection. Caches property accessors per type for performance.
 /// Supports case-insensitive and snake_case → PascalCase column matching.
 /// </summary>
+/// <remarks>
+/// A column without a writable property is skipped. A value reaches its property only when the conversion is lossless and
+/// unambiguous (see <see cref="SqlValueConverter"/>); a NULL sets a nullable or reference property to null. Anything else —
+/// a NULL for a value type, an overflow, a timestamp without a time zone for a <see cref="DateTimeOffset"/> — throws, as
+/// Apache Camel's <c>BeanPropertyRowMapper</c> refuses a type mismatch.
+/// </remarks>
 /// <typeparam name="T">POCO type with a parameterless constructor.</typeparam>
 public sealed class PocoRowMapper<T> : ISqlRowMapper<T> where T : new()
 {
@@ -16,6 +22,10 @@ public sealed class PocoRowMapper<T> : ISqlRowMapper<T> where T : new()
     private static readonly PropertyInfo[] _allProps = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
 
     /// <inheritdoc />
+    /// <exception cref="InvalidOperationException">
+    /// A column's value cannot be assigned to its property without loss or guessing. The message names the column, the
+    /// property and both types, never the value.
+    /// </exception>
     public T Map(DbDataReader reader)
     {
         var obj = new T();
@@ -23,60 +33,33 @@ public sealed class PocoRowMapper<T> : ISqlRowMapper<T> where T : new()
 
         for (var i = 0; i < fieldCount; i++)
         {
-            if (reader.IsDBNull(i)) continue;
-
             var columnName = reader.GetName(i);
             var prop = ResolveProperty(columnName);
             if (prop == null || !prop.CanWrite) continue;
 
-            var value = reader.GetValue(i);
+            if (reader.IsDBNull(i))
+            {
+                if (!SqlValueConverter.AcceptsNull(prop.PropertyType))
+                    throw MappingError(columnName, "NULL", prop, "a NULL cannot be assigned to a non-nullable value type; make the property nullable");
 
-            try
-            {
-                if (prop.PropertyType.IsInstanceOfType(value))
-                {
-                    prop.SetValue(obj, value);
-                }
-                else
-                {
-                    var targetType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
-                    var converted = Convert.ChangeType(value, targetType);
-                    prop.SetValue(obj, converted);
-                }
+                prop.SetValue(obj, null);
+                continue;
             }
-            catch
-            {
-                // Skip columns that can't be converted
-            }
+
+            var value = reader.GetValue(i);
+            if (!SqlValueConverter.TryConvert(value, prop.PropertyType, out var converted, out var reason))
+                throw MappingError(columnName, value.GetType().Name, prop, reason);
+
+            prop.SetValue(obj, converted);
         }
 
         return obj;
     }
 
-    private static PropertyInfo? ResolveProperty(string columnName)
-    {
-        return _propertyCache.GetOrAdd(columnName, name =>
-        {
-            // Direct case-insensitive match
-            var prop = Array.Find(_allProps, p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-            if (prop != null) return prop;
+    private static SqlRowMappingException MappingError(string column, string sourceType, PropertyInfo prop, string reason) =>
+        new($"Column '{column}' ({sourceType}) cannot be assigned to {typeof(T).Name}.{prop.Name} " +
+            $"({SqlValueConverter.TypeName(prop.PropertyType)}): {reason}.");
 
-            // [Column] attribute match
-            prop = Array.Find(_allProps, p =>
-                p.GetCustomAttribute<System.ComponentModel.DataAnnotations.Schema.ColumnAttribute>()
-                    ?.Name?.Equals(name, StringComparison.OrdinalIgnoreCase) == true);
-            if (prop != null) return prop;
-
-            // snake_case → PascalCase: user_name → UserName
-            var pascal = SnakeToPascal(name);
-            return Array.Find(_allProps, p => p.Name.Equals(pascal, StringComparison.OrdinalIgnoreCase));
-        });
-    }
-
-    private static string SnakeToPascal(string snake)
-    {
-        var parts = snake.Split('_', StringSplitOptions.RemoveEmptyEntries);
-        return string.Concat(parts.Select(p =>
-            string.Concat(char.ToUpperInvariant(p[0]).ToString(), p.AsSpan(1))));
-    }
+    private static PropertyInfo? ResolveProperty(string columnName) =>
+        _propertyCache.GetOrAdd(columnName, name => ColumnNameMatcher.Find(_allProps, name));
 }

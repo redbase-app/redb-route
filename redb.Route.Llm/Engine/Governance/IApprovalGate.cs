@@ -4,11 +4,10 @@ using redb.Route.Llm.Abstractions.Tools;
 namespace redb.Route.Llm.Engine.Governance;
 
 /// <summary>
-/// Gate that blocks a mutating or externally-irreversible tool call until an
-/// approver responds. The agent loop calls <see cref="AwaitAsync"/> before
-/// dispatching any tool whose <see cref="LlmToolCapability.Safety"/> demands
-/// approval (either via <see cref="LlmToolSafety.RequiresApproval"/> or because
-/// the run is marked <c>.RequiresApproval</c> on the DSL).
+/// Gate that blocks a tool call until an approver responds. The agent loop calls
+/// <see cref="AwaitAsync"/> before dispatching a tool whose
+/// <see cref="LlmToolSafety.RequiresApproval"/> is set — that flag is the only trigger in this
+/// release; a tool's side-effect class does not reach the gate on its own.
 /// </summary>
 public interface IApprovalGate
 {
@@ -74,8 +73,10 @@ public sealed class AutoApproveGate : IApprovalGate
 }
 
 /// <summary>
-/// Gate that denies every approval request — used as a safe default when the
-/// caller never wires an approver but mutating tools are present.
+/// Gate that denies every approval request. <b>Opt-in</b>: it is not registered by default
+/// (the shipped default is <see cref="AutoApproveGate"/>), and nothing picks it up automatically
+/// when mutating tools are present. Swap it in explicitly when a host wants approvals to fail closed:
+/// <code>services.Replace(ServiceDescriptor.Singleton&lt;IApprovalGate, DenyAllGate&gt;());</code>
 /// </summary>
 public sealed class DenyAllGate : IApprovalGate
 {

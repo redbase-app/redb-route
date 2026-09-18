@@ -3,10 +3,18 @@ using redb.Core.Attributes;
 namespace redb.Route.Llm.Storage.Redb.Schemas;
 
 /// <summary>
-/// One row per tool invocation, written by the audit observer. Designed so
-/// <c>WhereRedb</c> queries on (<see cref="ConversationId"/>, <see cref="ToolName"/>,
-/// <see cref="Outcome"/>, <see cref="InvokedAtUtc"/>) avoid the <c>_values</c>
-/// table — these are the dimensions every audit dashboard slices by.
+/// One row per tool invocation, written by the audit observer. The scheme is built around the dimensions
+/// every audit dashboard slices by — <see cref="ConversationId"/>, <see cref="ToolName"/>,
+/// <see cref="Outcome"/>, <see cref="InvokedAtUtc"/>.
+/// <para>
+/// Two different filters, and they cost differently. <c>WhereRedb</c> narrows by OBJECT rows — the columns
+/// of <c>_objects</c> (id, name, value_*, parent, dates) — which is the fast path, on the owner's
+/// measurements an order of magnitude faster. <c>Where</c> narrows by VALUES: a props-typed predicate
+/// resolves through the values table. Both are server-side; the second merely pays for the extra table.
+/// A dashboard that needs cheap slicing by tool therefore rides a base field — which is why the row
+/// <c>name</c> leads with the tool name (<c>WhereRedb(o =&gt; o.Name.Contains(tool))</c>), and a base filter
+/// combines with a props predicate in one chain — <c>WhereRedb(...).Where(...)</c>, cheap clause first.
+/// </para>
 /// </summary>
 [RedbScheme("LLM Tool Audit")]
 public class ToolAuditProps

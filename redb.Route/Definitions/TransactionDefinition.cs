@@ -77,14 +77,17 @@ public class TransactionDefinition : RouteDefinitionBase<TransactionDefinition>,
     public override IProcessor CreateProcessor(IRouteContext context)
     {
         IProcessor body = BuildPipeline(Outputs, context);
-        if (_retryAttempts > 0)
-        {
-            var retryLogger = context.GetService<ILoggerFactory>()?.CreateLogger<RetryProcessor>();
-            body = new RetryProcessor(body, RetryPolicy.Fixed(_retryAttempts, _retryDelay), retryLogger);
-        }
         var policy = _policy ?? new TransactionPolicy();
         var logger = context.GetService<ILoggerFactory>()?.CreateLogger<TransactedProcessor>();
         IProcessor txProcessor = new TransactedProcessor(body, policy, logger);
+        // Retry wraps the transaction instead of living inside it: one attempt is one unit of work. A failed attempt
+        // rolls back its own database work and its own deferred sends, so the attempt that succeeds sends only its own
+        // messages, and no transaction stays open across the retry delays.
+        if (_retryAttempts > 0)
+        {
+            var retryLogger = context.GetService<ILoggerFactory>()?.CreateLogger<RetryProcessor>();
+            txProcessor = new RetryProcessor(txProcessor, RetryPolicy.Fixed(_retryAttempts, _retryDelay), retryLogger);
+        }
         if (_deadLetterUri is not null)
         {
             var dlcLogger = context.GetService<ILoggerFactory>()?.CreateLogger<DeadLetterChannelProcessor>();

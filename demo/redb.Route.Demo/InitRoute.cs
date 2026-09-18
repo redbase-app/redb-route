@@ -20,7 +20,6 @@ using redb.Route.MqttNet;
 using redb.Route.Quartz;
 using redb.Route.RabbitMQ;
 using redb.Route.Redis;
-using redb.Route.Sftp;
 using redb.Route.Sql;
 using redb.Route.Sql.Connection;
 using redb.Route.Tcp;
@@ -66,7 +65,6 @@ public static class InitRoute
         context.AddComponent(new QuartzTimerComponent());
         context.AddComponent(new CronComponent());
         context.AddComponent(new SmtpComponent());
-        context.AddComponent(new SftpComponent());
         context.AddComponent(new LlmComponent());
         context.AddComponent(new ExecComponent());
 
@@ -119,18 +117,11 @@ public static class InitRoute
         // Result: no manual scope-factory plumbing here, scope is auto-disposed with the exchange.
         // The string "pg-test" must match the named instance configured in
         // redb.Route.Demo.config.json under the Redb section.
-        context.AddService(typeof(IAgentEngine), new AgentEngine(
-            logger: null,
-            producerTemplate: producerTemplate,
-            observer: null,
-            budget: null,
-            approval: null,
-            redaction: null,
-            shadow: null,
-            conversation: new RedbConversationStore(context, defaultRedbName: "pg-test"),
-            //conversation: new InMemoryConversationStore(),
-            idempotency: null,
-            approvalStore: null));
+        // Choices are registered, not passed: the engine is then built from the context, so a seam the
+        // package adds (claims, cache, cost) reaches this host without an edit here.
+        context.AddService(typeof(IConversationStore), new RedbConversationStore(context, defaultRedbName: "pg-test"));
+        //context.AddService(typeof(IConversationStore), new InMemoryConversationStore());
+        context.AddService(typeof(IAgentEngine), AgentEngine.FromContext(context));
         context.AddLifecycleListener(new ProducerTemplateStarter(producerTemplate, logger));
 
         // ── Register Npgsql ADO.NET provider for SQL component ──
@@ -143,6 +134,24 @@ public static class InitRoute
                 ConnectionString = PgConn,
                 ProviderName = "Npgsql"
             }));
+
+        // ── Broker connection factories ──
+        // Credentials live in the factory (referenced by name from the endpoint URI as
+        // connectionFactory=<name>), never inline in the URI. Dev defaults target the local
+        // demo containers; a real deployment would source them from config or a secret store.
+        context.AddToRegistry("rabbit-demo", new RabbitMQConnectionFactory
+        {
+            Host = "localhost", Port = 5672, Username = "admin", Password = "admin"
+        });
+        context.AddToRegistry("amqp-demo", new AmqpConnectionFactory
+        {
+            Host = "localhost", Port = 5673, User = "admin", Password = "admin"
+        });
+        context.AddToRegistry("wmq-demo", new IbmMqConnectionFactory
+        {
+            Host = "localhost", Port = 1414, Channel = "DEV.APP.SVRCONN", QueueManager = "QM1",
+            User = "app", Password = "admin"
+        });
 
         // ── Register lifecycle listener (logs context & route events) ──
         context.AddLifecycleListener(new DemoLifecycleListener(logger));

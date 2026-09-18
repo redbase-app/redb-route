@@ -156,18 +156,9 @@ ctx.AddToRegistry("haiku", new LlmConnectionFactory
 var producerTemplate = new ProducerTemplate(ctx);
 ctx.AddService(typeof(IProducerTemplate), producerTemplate);
 
-var engine = new AgentEngine(
-    logger:           sp.GetRequiredService<ILoggerFactory>().CreateLogger<AgentEngine>(),
-    producerTemplate: producerTemplate,
-    observer:         new NoopAgentObserver(),
-    budget:           new NoopBudgetEnforcer(),
-    approval:         new AutoApproveGate(),
-    redaction:        new NoopRedactionFilter(),
-    shadow:           new NoopShadowRunner(),
-    conversation:     new InMemoryConversationStore(),
-    idempotency:      null,
-    approvalStore:    null);
-ctx.AddService(typeof(IAgentEngine), engine);
+// Registered, not passed: a seam added by the package reaches this demo without touching the file.
+ctx.AddService(typeof(IConversationStore), new InMemoryConversationStore());
+ctx.AddService(typeof(IAgentEngine), AgentEngine.FromContext(ctx));
 
 // ─── 9. Routes ───────────────────────────────────────────────────────────────
 var systemPrompt =

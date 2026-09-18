@@ -14,6 +14,9 @@
     "ReceivePort": 4080,
     "CertificateDirectory": "data/serials/certs"
   },
+  "Api": {
+    "Port": 8090
+  },
   "Report": {
     "Directory": "data/serials/reports",
     "Cron": "0 0 6 * * ?",

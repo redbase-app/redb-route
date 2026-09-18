@@ -296,6 +296,26 @@ public class SqlOutputMappingTests : IDisposable
     }
 
     [Fact]
+    public async Task OutputHeader_Expression_NamesTheHeaderPerExchange()
+    {
+        var endpoint = CreateEndpoint("SELECT id FROM orders ORDER BY id", new()
+        {
+            ["dataSource"] = "main",
+            ["outputType"] = "SelectList",
+            ["outputHeader"] = "${header.target}"
+        });
+
+        var producer = endpoint.CreateProducer();
+        var exchange = CreateExchange(body: 42, headers: new() { ["target"] = "rows" });
+
+        await producer.Process(exchange, CancellationToken.None);
+
+        exchange.In.Body.Should().Be(42);
+        exchange.In.Headers.Should().ContainKey("rows", "the expression names the header");
+        exchange.In.Headers.Should().NotContainKey("${header.target}");
+    }
+
+    [Fact]
     public async Task OutputHeader_Procedure_AsFunction_PutsResultInHeader()
     {
         var endpoint = CreateEndpoint("abs", new()

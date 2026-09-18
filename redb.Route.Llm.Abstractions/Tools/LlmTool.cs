@@ -112,7 +112,12 @@ public sealed class LlmToolStaticBuilder
         return this;
     }
 
-    /// <summary>Adds a claim that the calling principal must carry for the tool to fire.</summary>
+    /// <summary>
+    /// Declares a claim the calling principal must carry for the tool to fire.
+    /// <b>Enforced</b> — the engine verifies the requirement against the registered
+    /// <c>IToolClaimsSource</c> (the caller's principal by default) and refuses the call when it cannot;
+    /// see <see cref="LlmToolSafety.RequiredClaims"/>.
+    /// </summary>
     public LlmToolStaticBuilder RequireClaim(string claim)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(claim);

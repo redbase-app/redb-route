@@ -1,0 +1,2426 @@
+[
+  {
+    "name": "aggregate",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "correlation",
+        "type": "Expression",
+        "required": true
+      },
+      {
+        "name": "strategy",
+        "type": "String",
+        "required": true
+      },
+      {
+        "name": "completion",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "completionSize",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "completionTimeout",
+        "type": "Duration",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "beginTransaction",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "policy",
+        "type": "Enum",
+        "required": false,
+        "enumValues": [
+          "default",
+          "requiresNew",
+          "suppress",
+          "mandatory"
+        ]
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "cache",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "key",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "keyFromBody",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "ttl",
+        "type": "Duration",
+        "required": false
+      },
+      {
+        "name": "sliding",
+        "type": "Duration",
+        "required": false
+      },
+      {
+        "name": "region",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "cacheHeaders",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "provider",
+        "type": "Enum",
+        "required": false,
+        "enumValues": [
+          "memory",
+          "distributed"
+        ]
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "choice",
+    "kind": "Branching",
+    "attributes": [],
+    "children": [
+      {
+        "name": "when",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": false
+          },
+          {
+            "name": "predicate",
+            "type": "Reference",
+            "required": false
+          }
+        ],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "otherwise",
+        "kind": "ConfigChild",
+        "attributes": [],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "circuitBreaker",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "failureThreshold",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "resetTimeout",
+        "type": "Duration",
+        "required": false
+      },
+      {
+        "name": "halfOpenMaxCalls",
+        "type": "Int",
+        "required": false
+      }
+    ],
+    "children": [
+      {
+        "name": "fallback",
+        "kind": "ConfigChild",
+        "attributes": [],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "claimCheck",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "operation",
+        "type": "Enum",
+        "required": true,
+        "enumValues": [
+          "Set",
+          "Get",
+          "GetAndRemove",
+          "Push",
+          "Pop"
+        ]
+      },
+      {
+        "name": "key",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "ttl",
+        "type": "Duration",
+        "required": false
+      },
+      {
+        "name": "repository",
+        "type": "Reference",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "commitTransaction",
+    "kind": "Step",
+    "attributes": [],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "controlBus",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "action",
+        "type": "Enum",
+        "required": true,
+        "enumValues": [
+          "Start",
+          "Stop",
+          "Suspend",
+          "Resume",
+          "Restart",
+          "Status",
+          "Stats",
+          "Fail"
+        ]
+      },
+      {
+        "name": "routeId",
+        "type": "String",
+        "required": true
+      },
+      {
+        "name": "async",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "convertBody",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "type",
+        "type": "TypeName",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "debounce",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "key",
+        "type": "Expression",
+        "required": true
+      },
+      {
+        "name": "quietPeriod",
+        "type": "Duration",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "delay",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "duration",
+        "type": "Duration",
+        "required": false
+      },
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "dynamicRouter",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "enrich",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "uri",
+        "type": "Uri",
+        "required": false
+      },
+      {
+        "name": "strategy",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": true
+  },
+  {
+    "name": "exceptionHandled",
+    "kind": "Step",
+    "attributes": [],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "filter",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "predicate",
+        "type": "Reference",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "idempotentConsumer",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "key",
+        "type": "Expression",
+        "required": true
+      },
+      {
+        "name": "repository",
+        "type": "Reference",
+        "required": true
+      },
+      {
+        "name": "skipDuplicate",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "intercept",
+    "kind": "Scope",
+    "attributes": [],
+    "children": [
+      {
+        "name": "when",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "interceptFrom",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "uri",
+        "type": "Uri",
+        "required": false
+      }
+    ],
+    "children": [
+      {
+        "name": "when",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "interceptSendToEndpoint",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "uri",
+        "type": "Uri",
+        "required": true
+      },
+      {
+        "name": "skipSendToOriginalEndpoint",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [
+      {
+        "name": "when",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "loadBalance",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "strategy",
+        "type": "Enum",
+        "required": true,
+        "enumValues": [
+          "roundRobin",
+          "random",
+          "failover",
+          "sticky",
+          "weighted"
+        ]
+      },
+      {
+        "name": "key",
+        "type": "Expression",
+        "required": false
+      }
+    ],
+    "children": [
+      {
+        "name": "endpoint",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "uri",
+            "type": "Uri",
+            "required": true
+          },
+          {
+            "name": "weight",
+            "type": "Int",
+            "required": false
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "log",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "level",
+        "type": "Enum",
+        "required": false,
+        "enumValues": [
+          "Trace",
+          "Debug",
+          "Information",
+          "Warning",
+          "Error",
+          "Critical"
+        ]
+      },
+      {
+        "name": "showRouteId",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [
+      {
+        "name": "message",
+        "kind": "ConfigChild",
+        "attributes": [],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": true,
+        "takesEndpoint": false
+      },
+      {
+        "name": "header",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "name",
+            "type": "String",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "property",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "name",
+            "type": "String",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": true,
+    "takesEndpoint": false
+  },
+  {
+    "name": "loop",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "count",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "while",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "copy",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "shareScope",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "marshal",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "format",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "type",
+        "type": "TypeName",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "messageHistory",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "value",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "metered",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "name",
+        "type": "String",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "multicast",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "parallel",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "maxParallelism",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "stopOnException",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "normalize",
+    "kind": "Step",
+    "attributes": [],
+    "children": [
+      {
+        "name": "when",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": true
+          },
+          {
+            "name": "transform",
+            "type": "Expression",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "whenContentType",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "type",
+            "type": "String",
+            "required": true
+          },
+          {
+            "name": "transform",
+            "type": "Expression",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "otherwise",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "transform",
+            "type": "Expression",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "ofType",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "type",
+        "type": "TypeName",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "onCompletion",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "onCompleteOnly",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "onFailureOnly",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "modeBeforeConsumer",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [
+      {
+        "name": "when",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "onException",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "exceptions",
+        "type": "TypeName",
+        "required": true
+      },
+      {
+        "name": "handled",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "maximumRedeliveries",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "redeliveryDelay",
+        "type": "Duration",
+        "required": false
+      },
+      {
+        "name": "exponentialBackOff",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "backOffMultiplier",
+        "type": "Double",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "payload",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "template",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "mediaType",
+        "type": "Enum",
+        "required": true,
+        "enumValues": [
+          "json",
+          "xml",
+          "text"
+        ]
+      },
+      {
+        "name": "target",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [
+      {
+        "name": "arg",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "name",
+            "type": "String",
+            "required": true
+          },
+          {
+            "name": "value",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": false
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": true,
+    "takesEndpoint": false
+  },
+  {
+    "name": "pollEnrich",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "uri",
+        "type": "Uri",
+        "required": false
+      },
+      {
+        "name": "strategy",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "timeout",
+        "type": "Duration",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": true
+  },
+  {
+    "name": "recipientList",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": true
+      },
+      {
+        "name": "delimiter",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "parallel",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "stopOnException",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "strategy",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "redb",
+    "kind": "ContextLevel",
+    "attributes": [
+      {
+        "name": "storage",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [
+      {
+        "name": "syncScheme",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "type",
+            "type": "TypeName",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "idempotentRepository",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "name",
+            "type": "String",
+            "required": true
+          },
+          {
+            "name": "ttl",
+            "type": "Duration",
+            "required": false
+          },
+          {
+            "name": "processorName",
+            "type": "String",
+            "required": false
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "redbDelete",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "id",
+        "type": "Expression",
+        "required": true
+      },
+      {
+        "name": "storage",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "redbGet",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "id",
+        "type": "Expression",
+        "required": true
+      },
+      {
+        "name": "type",
+        "type": "TypeName",
+        "required": false
+      },
+      {
+        "name": "depth",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "storage",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "target",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "redbQuery",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "type",
+        "type": "TypeName",
+        "required": true
+      },
+      {
+        "name": "where",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "orderBy",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "descending",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "take",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "skip",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "filter",
+        "type": "Reference",
+        "required": false
+      },
+      {
+        "name": "storage",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "target",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": true,
+    "takesEndpoint": false
+  },
+  {
+    "name": "redbSave",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "type",
+        "type": "TypeName",
+        "required": false
+      },
+      {
+        "name": "byUnique",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "storage",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "removeBody",
+    "kind": "Step",
+    "attributes": [],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "removeHeader",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "name",
+        "type": "String",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "removeHeaders",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "pattern",
+        "type": "String",
+        "required": true
+      },
+      {
+        "name": "except",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "removeProperties",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "pattern",
+        "type": "String",
+        "required": true
+      },
+      {
+        "name": "except",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "removeProperty",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "name",
+        "type": "String",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "replayable",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "name",
+        "type": "String",
+        "required": true
+      },
+      {
+        "name": "exposed",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "resequence",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "key",
+        "type": "Expression",
+        "required": true
+      },
+      {
+        "name": "batchSize",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "timeout",
+        "type": "Duration",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "rest",
+    "kind": "TopLevel",
+    "attributes": [
+      {
+        "name": "path",
+        "type": "String",
+        "required": true
+      },
+      {
+        "name": "host",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "port",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "bindingMode",
+        "type": "Enum",
+        "required": false,
+        "enumValues": [
+          "off",
+          "json"
+        ]
+      },
+      {
+        "name": "consumes",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "produces",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "openApi",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "openApiPath",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "title",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "version",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [
+      {
+        "name": "get",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "path",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "to",
+            "type": "Uri",
+            "required": false
+          },
+          {
+            "name": "consumes",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "produces",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "type",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "outType",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "bindingMode",
+            "type": "Enum",
+            "required": false,
+            "enumValues": [
+              "off",
+              "json"
+            ]
+          }
+        ],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "post",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "path",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "to",
+            "type": "Uri",
+            "required": false
+          },
+          {
+            "name": "consumes",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "produces",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "type",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "outType",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "bindingMode",
+            "type": "Enum",
+            "required": false,
+            "enumValues": [
+              "off",
+              "json"
+            ]
+          }
+        ],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "put",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "path",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "to",
+            "type": "Uri",
+            "required": false
+          },
+          {
+            "name": "consumes",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "produces",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "type",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "outType",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "bindingMode",
+            "type": "Enum",
+            "required": false,
+            "enumValues": [
+              "off",
+              "json"
+            ]
+          }
+        ],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "delete",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "path",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "to",
+            "type": "Uri",
+            "required": false
+          },
+          {
+            "name": "consumes",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "produces",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "type",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "outType",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "bindingMode",
+            "type": "Enum",
+            "required": false,
+            "enumValues": [
+              "off",
+              "json"
+            ]
+          }
+        ],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "patch",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "path",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "to",
+            "type": "Uri",
+            "required": false
+          },
+          {
+            "name": "consumes",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "produces",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "type",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "outType",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "bindingMode",
+            "type": "Enum",
+            "required": false,
+            "enumValues": [
+              "off",
+              "json"
+            ]
+          }
+        ],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "head",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "path",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "to",
+            "type": "Uri",
+            "required": false
+          },
+          {
+            "name": "consumes",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "produces",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "type",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "outType",
+            "type": "TypeName",
+            "required": false
+          },
+          {
+            "name": "bindingMode",
+            "type": "Enum",
+            "required": false,
+            "enumValues": [
+              "off",
+              "json"
+            ]
+          }
+        ],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "rollbackAll",
+    "kind": "Step",
+    "attributes": [],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "rollbackTransaction",
+    "kind": "Step",
+    "attributes": [],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "routePolicy",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "ref",
+        "type": "Reference",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "routingSlip",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": true
+      },
+      {
+        "name": "delimiter",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "ignoreInvalidEndpoints",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "saga",
+    "kind": "Step",
+    "attributes": [],
+    "children": [
+      {
+        "name": "step",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "processor",
+            "type": "Reference",
+            "required": true
+          },
+          {
+            "name": "compensate",
+            "type": "Reference",
+            "required": false
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "sample",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "messageFrequency",
+        "type": "Long",
+        "required": false
+      },
+      {
+        "name": "period",
+        "type": "Duration",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "scatterGather",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "timeout",
+        "type": "Duration",
+        "required": false
+      },
+      {
+        "name": "parallel",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "maxDop",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "stopOnException",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "strategy",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [
+      {
+        "name": "recipient",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "uri",
+            "type": "Uri",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "setBody",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "value",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "setHeader",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "name",
+        "type": "String",
+        "required": true
+      },
+      {
+        "name": "value",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "setHeaders",
+    "kind": "Step",
+    "attributes": [],
+    "children": [
+      {
+        "name": "header",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "name",
+            "type": "String",
+            "required": true
+          },
+          {
+            "name": "value",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": false
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "setProperty",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "name",
+        "type": "String",
+        "required": true
+      },
+      {
+        "name": "value",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "sort",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": true
+      },
+      {
+        "name": "by",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "descending",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "split",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "parallel",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "maxParallelism",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "stopOnException",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [
+      {
+        "name": "tokenizeLines",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "separator",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "skipEmpty",
+            "type": "Bool",
+            "required": false
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "tokenizeXml",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "element",
+            "type": "String",
+            "required": true
+          },
+          {
+            "name": "inheritNamespaceFrom",
+            "type": "String",
+            "required": false
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "tokenizeJsonArray",
+        "kind": "ConfigChild",
+        "attributes": [],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "stop",
+    "kind": "Step",
+    "attributes": [],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "streamCaching",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "spoolThreshold",
+        "type": "Long",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "threads",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "poolSize",
+        "type": "Int",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "throttle",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "maxPerPeriod",
+        "type": "Expression",
+        "required": true
+      },
+      {
+        "name": "period",
+        "type": "Duration",
+        "required": false
+      },
+      {
+        "name": "key",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "rejectOnOverflow",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "throwException",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "type",
+        "type": "TypeName",
+        "required": true
+      },
+      {
+        "name": "message",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "to",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "uri",
+        "type": "Uri",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": true
+  },
+  {
+    "name": "toD",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "uri",
+        "type": "Uri",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": true
+  },
+  {
+    "name": "traced",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "name",
+        "type": "String",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "transaction",
+    "kind": "Scope",
+    "attributes": [
+      {
+        "name": "policy",
+        "type": "Enum",
+        "required": false,
+        "enumValues": [
+          "default",
+          "requiresNew",
+          "suppress",
+          "mandatory"
+        ]
+      }
+    ],
+    "children": [],
+    "allowsSteps": true,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "transform",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "transformJson",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "spec",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "output",
+        "type": "Enum",
+        "required": false,
+        "enumValues": [
+          "string",
+          "node"
+        ]
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": true,
+    "takesEndpoint": false
+  },
+  {
+    "name": "tryCatch",
+    "kind": "Scope",
+    "attributes": [],
+    "children": [
+      {
+        "name": "try",
+        "kind": "ConfigChild",
+        "attributes": [],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "catch",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "exceptions",
+            "type": "TypeName",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "finally",
+        "kind": "ConfigChild",
+        "attributes": [],
+        "children": [],
+        "allowsSteps": true,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "unmarshal",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "format",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "type",
+        "type": "TypeName",
+        "required": false
+      },
+      {
+        "name": "target",
+        "type": "TypeName",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "validate",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": true
+      },
+      {
+        "name": "message",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "throwOnFailure",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "validateJsonSchema",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "file",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "throwOnFailure",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": true,
+    "takesEndpoint": false
+  },
+  {
+    "name": "validateXsd",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "file",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "targetNamespace",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "throwOnFailure",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": true,
+    "takesEndpoint": false
+  },
+  {
+    "name": "wireTap",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "uri",
+        "type": "Uri",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": true
+  },
+  {
+    "name": "xslt",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "file",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "output",
+        "type": "Enum",
+        "required": false,
+        "enumValues": [
+          "String",
+          "Bytes",
+          "Dom"
+        ]
+      },
+      {
+        "name": "failOnNullBody",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "allowTemplateFromHeader",
+        "type": "Bool",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": true,
+    "takesEndpoint": false
+  }
+]

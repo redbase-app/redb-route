@@ -11,7 +11,7 @@ namespace redb.Route.RedbCore.Xml;
 /// <summary>
 /// The redb storage elements of the route markup (Route-XML, Р21 contributions of this
 /// package): <c>&lt;redbGet&gt;</c>, <c>&lt;redbSave&gt;</c>, <c>&lt;redbDelete&gt;</c>,
-/// <c>&lt;beginRedbTransaction&gt;</c> in routes and the <c>&lt;redb&gt;</c> bridge block in
+/// <c>&lt;redbQuery&gt;</c> in routes and the <c>&lt;redb&gt;</c> bridge block in
 /// <c>context.xml</c>. Parse, schema shape and C# printing live together per element.
 /// </summary>
 internal static class RedbXml
@@ -267,37 +267,6 @@ public sealed class RedbDeleteXmlContribution : IXmlElementContribution
             args.Add($"storage: {XmlCodeWriter.Str(storage)}");
         code.Verb(element, "RedbDelete", [.. args]);
     }
-}
-
-/// <summary>
-/// The <c>&lt;beginRedbTransaction&gt;</c> element: opens the ambient redb transaction the
-/// transacted pipeline commits or rolls back with the exchange.
-/// </summary>
-public sealed class BeginRedbTransactionXmlContribution : IXmlElementContribution
-{
-    /// <inheritdoc />
-    public IReadOnlyList<string> GeneratedUsings => ["redb.Route.RedbCore.Transactions"];
-
-    /// <inheritdoc />
-    public string Name => "beginRedbTransaction";
-
-    /// <inheritdoc />
-    public XmlElementKind Kind => XmlElementKind.Step;
-
-    /// <inheritdoc />
-    public ElementSpec Spec => ElementSpec.Leaf(Name,
-        new AttributeSpec("storage", AttributeType.String));
-
-    /// <inheritdoc />
-    public IRouteDefinition Apply(XElement element, IRouteDefinition current, XmlParseContext context)
-        => element.Attribute("storage")?.Value is { } storage
-            ? current.BeginRedbTransaction(storage)
-            : current.BeginRedbTransaction();
-
-    /// <inheritdoc />
-    public void Print(XElement element, XmlCodeWriter code)
-        => code.Verb(element, "BeginRedbTransaction",
-            element.Attribute("storage")?.Value is { } storage ? [XmlCodeWriter.Str(storage)] : []);
 }
 
 /// <summary>

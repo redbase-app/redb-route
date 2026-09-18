@@ -660,8 +660,10 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     }
 
     /// <summary>
-    /// Apache Camel parity: unmarshal the body to <typeparamref name="T"/> using the
-    /// <see cref="IDataFormatRegistry"/> entry resolved from the incoming message's ContentType.
+    /// Converts the body to <typeparamref name="T"/> via the registered type converters —
+    /// an alias of <see cref="ConvertBody{T}"/>. This does <b>not</b> decode by format/ContentType;
+    /// for JSON/XML/etc. decoding use <see cref="Unmarshal(IMessageSerializer, System.Type)"/> with
+    /// an explicit serializer.
     /// </summary>
     public TSelf Unmarshal<T>()
     {

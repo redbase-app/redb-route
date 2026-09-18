@@ -6,7 +6,7 @@ using SerialNumbers.Domain.Services;
 namespace SerialNumbers.Worker;
 
 /// <summary>
-/// The demo's reference data: two partners and two products. Idempotent: an object whose unique
+/// The demo's reference data: two partners and three products. Idempotent: an object whose unique
 /// key already exists is left as it is.
 /// </summary>
 public static class DemoData
@@ -38,6 +38,7 @@ public static class DemoData
         {
             Gtin = "04607001234567",
             Name = "Paracetamol 500 mg, 20 tablets",
+            Status = ProductStatuses.Active,
             MaxPerRequest = 50_000,
             AnnualQuota = 10_000_000,
         });
@@ -47,8 +48,19 @@ public static class DemoData
         {
             Gtin = "04607009990001",
             Name = "Vitamin D3 drops, 10 ml",
+            Status = ProductStatuses.Active,
             MaxPerRequest = 30_000,
             AnnualQuota = 40_000,
+        });
+
+        // Not activated yet: requests for it wait on hold until someone changes its status.
+        await EnsureProductAsync(redb, new Product
+        {
+            Gtin = "04607005550001",
+            Name = "Ibuprofen 200 mg, 10 capsules",
+            Status = ProductStatuses.Draft,
+            MaxPerRequest = 20_000,
+            AnnualQuota = 1_000_000,
         });
     }
 
