@@ -9,8 +9,13 @@ This changelog covers the **NuGet-published packages**:
 | `redb.Route.Amqp` | AMQP 1.0 transport |
 | `redb.Route.As2` | AS2 (RFC 4130) B2B/EDI transport — signed/encrypted S/MIME over HTTP with MDN receipts |
 | `redb.Route.AzureServiceBus` | Azure Service Bus transport |
+| `redb.Route.Cache` | Caching as an EIP — a `.Cache(key, ttl)` scope and the `cache:` component |
 | `redb.Route.Controllers` | Transport-agnostic controller dispatch |
 | `redb.Route.Core` | Bridge to redb.Core props storage |
+| `redb.Route.DataFormats.Avro` | Apache Avro data format (Chr.Avro) — binary marshal/unmarshal |
+| `redb.Route.DataFormats.Csv` | CSV data format (CsvHelper) — POCO collections, dictionaries, raw rows |
+| `redb.Route.DataFormats.Protobuf` | Protocol Buffers data format (Google.Protobuf), optional Confluent Schema Registry |
+| `redb.Route.DataFormats.Yaml` | YAML data format (YamlDotNet) — POCOs and dynamic documents |
 | `redb.Route.Elasticsearch` | Elasticsearch 8.x transport |
 | `redb.Route.Exec` | Local process execution transport (`exec:` scheme) |
 | `redb.Route.File` | File system transport |
@@ -21,6 +26,7 @@ This changelog covers the **NuGet-published packages**:
 | `redb.Route.Http` | HTTP/HTTPS transport |
 | `redb.Route.Http.Hosting` | Shared Kestrel HTTP hosting (`SharedHttpServerManager`) reused by HTTP-based transports |
 | `redb.Route.IbmMq` | IBM MQ transport |
+| `redb.Route.JsonTransform` | Declarative JSON-to-JSON transformation (JSONata) |
 | `redb.Route.Kafka` | Apache Kafka transport |
 | `redb.Route.Ldap` | LDAP / Active Directory transport |
 | `redb.Route.Llm` | LLM transport — universal OpenAI-compatible provider + native AnthropicProvider |
@@ -40,9 +46,13 @@ This changelog covers the **NuGet-published packages**:
 | `redb.Route.Sqs` | Amazon SQS + SNS transport |
 | `redb.Route.Tcp` | Raw TCP transport |
 | `redb.Route.Telegram` | Telegram Bot transport |
+| `redb.Route.Templates` | Payload templates (Scriban) — the PayloadFactory analog |
+| `redb.Route.TestKit` | Test kit — AdviceWith, mock expectations, NotifyBuilder |
 | `redb.Route.Validation.Adapters` | FluentValidation + DataAnnotations adapters |
 | `redb.Route.WebSocket` | WebSocket transport |
 | `redb.Route.XPath2` | XPath 2.0 expressions (regex, sequences, dates, `for`/`some`/`every`) on XPath2.Net |
+| `redb.Route.Xml` | Declarative XML routes — `.route.xml` files load into the same fluent DSL |
+| `redb.Route.Xml.CodeGen` | `redb-route-xml` .NET tool — fluent C#, Mermaid diagrams and the XSD from `.route.xml`; not part of the runtime |
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -4282,7 +4292,7 @@ spoke up. It stays silent on an incremental build, which is how all of this reac
   `keys.Contains(o.ValueString)` over a `string[]` threw `NotSupportedException` from the redb query
   parser (C# 13 binds it to `MemoryExtensions.Contains`); (2) a Props-hash "skip if unchanged"
   pre-check silently dropped every re-upsert of the property-less `KnowledgeChunkProps` (empty Props →
-  constant hash). Fixed the parser (see `RedBase.Core` changelog) and removed the pre-check so bulk
+  constant hash). Fixed the parser (see `redb.Core` changelog) and removed the pre-check so bulk
   re-ingest actually updates chunk text/embeddings.
 - **DI-scope / connection leaks on the exchange lifecycle.** Several paths created a per-exchange DI
   scope (which owns a redb DB connection) that could escape without being disposed: `ThreadsProcessor`,
