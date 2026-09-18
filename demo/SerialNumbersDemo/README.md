@@ -402,7 +402,10 @@ What the worker needs, whichever way you run it:
   connection string, `ConnectionStrings:MSSql` for `mssql`. Set both `Tsak__Redb__Provider=mssql` and
   `ConnectionStrings__MSSql`: the connection string alone leaves the provider on SQLite, and the module's
   SQL Server script fails there with `near "IF": syntax error`. With `Tsak:Storage:Type=Redb`, as in the
-  compose file, Tsak keeps its own state in the same database, which is fine for this demo.
+  compose file, Tsak keeps its own state in the same database, which is fine for this demo. The compose
+  file also sets `Tsak__Redb__PropsSaveStrategy=ChangeTracking`: a request is written several times over
+  its life, and this way each save writes only what changed instead of rewriting every property. It needs
+  the Pro tier, which is free and which `Tsak__Redb__UsePro=true` turns on.
 - **The database exists before the first start.** redb creates its tables, not the database.
   `SerialNumbers.Worker seed` creates it, together with the demo partners and products, the AS2
   certificates and the ACME SFTP folders, which nothing else creates under Tsak. Without partners the

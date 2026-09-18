@@ -50,6 +50,9 @@ services:
       - Tsak__Storage__Type=Redb
       - Tsak__Redb__Provider=mssql
       - Tsak__Redb__UsePro=true
+      # Saves only the properties that actually changed instead of rewriting all of them: a request is
+      # written several times over its life, and so is a product. Needs the Pro tier above, which is free.
+      - Tsak__Redb__PropsSaveStrategy=ChangeTracking
 
       - Tsak__Modules__AssemblyPaths__0=/app/modules
       - Tsak__Cluster__ApiEndpoint=http://tsak:9090

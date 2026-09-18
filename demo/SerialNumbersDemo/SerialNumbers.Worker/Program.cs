@@ -19,8 +19,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using redb.Core;
-using redb.Core.Extensions;
-using redb.MSSql.Extensions;
+using redb.Core.Models.Configuration;
+using redb.Core.Pro.Extensions;
+using redb.MSSql.Pro.Extensions;
 using redb.Route.Core;
 using redb.Route.Http;
 using SerialNumbers.Core;
@@ -57,7 +58,12 @@ public static class Program
         services.AddLogging(b => b
             .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; })
             .SetMinimumLevel(LogLevel.Information));
-        services.AddRedb(o => o.UseMsSql(sqlConnection));
+        // The tier and the save strategy the module gets under Tsak, so the debug host behaves the same:
+        // Pro (free through redb 4.x, no license key) and ChangeTracking, which writes only the properties
+        // that changed instead of rewriting all of them on every save.
+        services.AddRedbPro(o => o
+            .UseMsSql(sqlConnection)
+            .Configure(c => c.PropsSaveStrategy = PropsSaveStrategy.ChangeTracking));
         // The HTTP servers of the process, one per port, as the Tsak worker registers them.
         services.AddRedbRouteHttpHosting();
         await using var provider = services.BuildServiceProvider();
