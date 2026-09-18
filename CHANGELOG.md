@@ -62,10 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > The first public NuGet release is **1.0.4**.
 
 ## [4.0.1] — 2026-09-18
-> **Phase 15 — LLM tool governance: declared contracts get executors** (`docs/V4/llm/`).
-> Version bump is pending: the set fits a minor release, but the items marked *behavioural* below are
-> the owner's call between a minor with explicit notes and a major
-> (`docs/V4/llm/PLAN-WAVES.md` §8).
 
 ### Added
 
@@ -130,16 +126,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`VALUES (:#login, :#at)`) was reported as an undeclared, possibly dangling bean. A reference is now
   recognised by position, as the format convention states: a value that starts with `#` (the whole
   attribute, the path right after the scheme as in `bean:#x`, or a URI option value as in
-  `dataSource=#main-db`). A `#` inside the SQL text is text. The Route-XML format spec
-  (`docs/Route-XML/02-PHASE0-FORMAT.md`) now writes its SQL examples as `:#name` and states the rule.
+  `dataSource=#main-db`). A `#` inside the SQL text is text. XML routes use the same
+  `:#name` syntax.
 
 ### Added — a public transactions guide at the root
 
 - `TRANSACTIONS.md` joins `METRICS.md` and `CONCURRENCY.md` as a public guide: the transaction model, one route end
   to end with `Retry`, a dead-letter channel and an idempotent consumer, the order a unit of work commits in, who
   acknowledges the incoming message, why `.WireTap(...)` stays outside, writing an `ITransactedAction`, one database
-  per transacted route, parallelism, and the migration off `BeginRedbTransaction()`. `docs/TRANSACTIONS_GUIDE.md`
-  now points at it, and the README section on deferred acknowledgement is corrected to the current order.
+  per transacted route, parallelism, and the migration off `BeginRedbTransaction()`.
+  The README section on deferred acknowledgement is corrected to the current order.
 
 ### Changed — behavioural — the unit of work commits database first, brokers after
 
@@ -178,7 +174,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sum`, `min`, `max` or `last`. The EIP counters (`throttle.delayed`, `circuitbreaker.tripped`, …) and `.Metered()`
   durations live only in that layer, and until now only C# could read them through the snapshot. Needs the in-process
   subscriber (`UseMetricsSnapshot()`) and says so when it is missing; an instrument nobody measured reads as zero; a
-  literal unknown field fails the route build. Closes the open question 2 of `docs/METRICS_IN_ROUTE_PLAN.md`.
+  literal unknown field fails the route build.
 - Both functions work in markup as well as in C#: XML routes have no lambdas, so `<log message="${messageHistory()}"/>`
   and `<when expr="messageHistory(\x27slowestMs\x27) &gt; 500">` were impossible to express before.
 
@@ -225,8 +221,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A scope opened inside an ambient transaction takes part in it; work that must survive the route's rollback opens
     its scope under a suppressing `TransactionScope`.
 
-- Guide: docs/REDB_SERVICE_GUIDE.md — which `IRedbService` route code gets where (steps,
-  controllers, code with and without an exchange, start-up code), transactions, Tsak and self-hosted registration.
+- Guide: [Access IRedbService from Routes](redb.Route.Core/README.md#access-iredbservice-from-routes) —
+  which `IRedbService` route code gets, with and without an exchange, and inside a transaction.
   The `redb.Route.Core` README samples are corrected: they called a `RedbIdempotentRepository(redb)` constructor and
   an `exchange.GetService<IRedbService>()` method that do not exist and imported the wrong namespace; the repository
   is registered by name with `AddRedbIdempotentRepository`, route steps use `ProcessWithRedb`.
@@ -282,7 +278,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed — the `<beginRedbTransaction>` markup element
 
 - The route markup no longer has `<beginRedbTransaction [storage=]/>`. The verb it printed,
-  `BeginRedbTransaction()`, is obsolete (`docs/TRANSACTIONS_GUIDE.md`: one primitive, `.Transacted()`)
+  `BeginRedbTransaction()`, is obsolete ([TRANSACTIONS.md](TRANSACTIONS.md): one primitive, `.Transacted()`)
   and a no-op under an ambient scope — and markup has no warning channel, so an author writing it
   inside `<transaction>` got a silent nothing. The loader now rejects it as an unknown element with
   the position; wrap the steps in `<transaction policy="…">`, the markup form of `.Transacted()`. The
@@ -420,7 +416,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OpenAI-compatible path used to send it as `content: null`, and a refused message in the history
   breaks every later call of a conversation (2026-09-07). `RedbConversationStore` throws on a content
   block type or a stored kind it has no form for, where it used to write the block's `ToString()` as
-  text and read an unknown kind back as text. Plan and reports: `docs/V4/llm-THINKING/`.
+  text and read an unknown kind back as text.
 - **Claims are enforced.** `.RequireClaim(...)` now denies the call when the claims cannot be
   verified; previously the declaration was never consulted. Claims are checked against the caller's
   principal taken from the exchange (a transport-set property — a client-supplied identity header is
@@ -561,7 +557,7 @@ followed, starting from `false`. Rejection is unaffected: the consumer's own enf
 header, and the MDN it returns does not depend on it. *Behavioural* for a route that reads the header on
 an unsigned flow: it now sees `false`.
 
-### Changed — behavioural — SQL batch writes (phase 17, `docs/V4/sql/`)
+### Changed — behavioural — SQL batch writes
 
 The batch mode of `redb.Route.Sql` (`batchSize` above zero with a list body) no longer reports writes that did not
 happen. Measured on PostgreSQL, SQL Server and SQLite: continuing past a failed item committed nothing on PostgreSQL
@@ -758,7 +754,7 @@ had ended it.
 - *Migration:* replace every `@name` placeholder with `:#name` in `sql:` URIs, lifecycle SQL, named queries and Route-XML;
   keep `@` only where the database itself means it.
 
-### Fixed — SQL connector review after 4.0.0 (`docs/V4/sql/REVIEW-POST-400-2026-09-16.md`)
+### Fixed — SQL connector review after 4.0.0
 
 A code review of everything the SQL connector gained after 4.0.0, with Apache Camel as the reference. Every finding is
 fixed; the ones that change behaviour are marked.
