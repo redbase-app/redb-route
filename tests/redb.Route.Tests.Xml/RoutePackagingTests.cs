@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text.Json;
 using FluentAssertions;
+using redb.Route.Xml;
 using redb.Route.Xml.Packaging;
 
 namespace redb.Route.Tests.Xml;
@@ -113,6 +114,69 @@ public class RoutePackagingTests : IDisposable
     }
 
     [Fact]
+    public void AConditionThatComparesOutsideAPlaceholder_IsAWarning()
+    {
+        // ${header.kind} == 'order' renders to the text «refund == 'order'», which is non-empty and
+        // therefore true whatever the header holds: the branch always wins, silently. The gate names
+        // the line and leaves the decision to the author — a warning, not an error.
+        var dir = NewProject("Cond", "cond");
+        File.WriteAllText(Path.Combine(dir, "routes", "cond.route.xml"), """
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="cond-in">
+                <from uri="timer://cond?period=1000"/>
+                <choice>
+                  <when expr="${header.kind} == 'order'">
+                    <setBody value="order"/>
+                  </when>
+                  <otherwise>
+                    <setBody value="other"/>
+                  </otherwise>
+                </choice>
+              </route>
+            </routes>
+            """);
+
+        var result = RoutePackage.Check(dir, "cond", "1.0.0");
+
+        result.Errors.Should().BeEmpty("a template in a condition still loads and runs");
+        result.Warnings.Should().ContainSingle(w => w.Message.Contains("compares OUTSIDE"))
+            .Which.File.Should().Contain("cond.route.xml(5,", "the warning carries the position of the attribute");
+    }
+
+    [Fact]
+    public void ConditionsThatAreSpelledProperly_AreNotWarnedAbout()
+    {
+        // Three shapes that read correctly and must stay silent: the comparison without braces, a
+        // lone placeholder (it renders to true/false and is read as a boolean word), and a
+        // comparison entirely inside the braces (evaluated, never rendered). Plus a VALUE position,
+        // where a template with an operator is ordinary text.
+        var dir = NewProject("CondOk", "condok");
+        File.WriteAllText(Path.Combine(dir, "routes", "condok.route.xml"), """
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="condok-in">
+                <from uri="timer://condok?period=1000"/>
+                <filter expr="header.enabled">
+                  <setBody expr="${header.a} == ${header.b}"/>
+                </filter>
+                <choice>
+                  <when expr="header.kind == 'order'">
+                    <setBody value="order"/>
+                  </when>
+                  <when expr="${header.kind == 'refund'}">
+                    <setBody value="refund"/>
+                  </when>
+                </choice>
+              </route>
+            </routes>
+            """);
+
+        var result = RoutePackage.Check(dir, "condok", "1.0.0");
+
+        result.Errors.Should().BeEmpty();
+        result.Warnings.Should().NotContain(w => w.Message.Contains("compares OUTSIDE"));
+    }
+
+    [Fact]
     public void RegistryReferences_AreValuesStartingWithHash_NotSqlParameters()
     {
         // The sql connector writes parameters Camel-style, :#name (wave 17.6). A '#' inside the
@@ -138,6 +202,86 @@ public class RoutePackagingTests : IDisposable
             "an option value starting with '#' is still a reference");
         result.Warnings.Should().Contain(w => w.Message.Contains("'#auditor'"),
             "the path right after bean: is still a reference");
+    }
+
+    // ── resources outside the gate: the tool reads them where the package keeps them ──
+
+    [Fact]
+    public void ResourceRoot_OfAPackageRoute_IsTheResourcesDirectory()
+    {
+        // A route under <project>/routes/ references its schemas by file name, and the package
+        // keeps them in <project>/resources/ - where the gate and the Tsak loader look. The
+        // generator looked next to the route file instead (SerialNumbers.Xml, 2026-09-18).
+        var dir = NewProject("Res");
+        File.WriteAllText(Path.Combine(dir, "resources", "order.xsd"), """
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="order"/></xs:schema>
+            """);
+        var route = Path.Combine(dir, "routes", "res.route.xml");
+        File.WriteAllText(route, """
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="res-in">
+                <from uri="direct://res-in"/>
+                <validateXsd file="order.xsd"/>
+              </route>
+            </routes>
+            """);
+
+        RoutePackage.ResourceRootFor(route).Should().Be(Path.Combine(dir, "resources"));
+        var code = XmlCodeGenerator.Generate(System.Xml.Linq.XDocument.Load(route), "ResRoutes", "Tests.Generated",
+            sourceName: route);
+        code.Should().Contain("xs:element name=", "the schema body is read from resources/ and inlined");
+    }
+
+    [Fact]
+    public void ResourceRoot_OfALooseRouteFile_IsItsOwnDirectory()
+    {
+        var loose = Path.Combine(_root, "loose");
+        Directory.CreateDirectory(loose);
+        RoutePackage.ResourceRootFor(Path.Combine(loose, "any.route.xml")).Should().Be(loose);
+    }
+
+    // ── steps that can never run ─────────────────────────────────────────────
+
+    [Fact]
+    public void StepsAfterATerminalStep_AreFlagged_WithThePosition()
+    {
+        // <rollbackAll/> is Camel's markRollbackOnly() now (119e76d7): it stops the route, like
+        // <stop/>; <throwException> always throws. A step written after any of them never runs.
+        var dir = ProjectWithBean("", """
+            <rollbackAll/>
+            <log>after the rollback</log>
+            <choice>
+              <when expr="header.x == 'y'">
+                <throwException type="System.InvalidOperationException" message="no"/>
+                <to uri="direct://never"/>
+              </when>
+            </choice>
+            """);
+
+        var warnings = RoutePackage.Check(dir, "p", "1.0.0").Warnings.ToList();
+
+        warnings.Should().Contain(w => w.Message.Contains("<log>") && w.Message.Contains("<rollbackAll/>")
+                                       && w.File.StartsWith("routes/deep.route.xml("),
+            "the first unreachable step is named, with its position");
+        warnings.Should().Contain(w => w.Message.Contains("<to>") && w.Message.Contains("<throwException/>"),
+            "a branch body is a step list too");
+    }
+
+    [Fact]
+    public void ATerminalStepAtTheEnd_IsNotFlagged()
+    {
+        var dir = ProjectWithBean("", """
+            <tryCatch>
+              <try><removeBody/></try>
+              <catch exceptions="System.TimeoutException">
+                <log>timed out</log>
+                <stop/>
+              </catch>
+            </tryCatch>
+            """);
+
+        RoutePackage.Check(dir, "p", "1.0.0").Warnings
+            .Should().NotContain(w => w.Message.Contains("never runs"));
     }
 
     // ── the Ф5.4 gate: negatives ─────────────────────────────────────────────
@@ -217,6 +361,41 @@ public class RoutePackagingTests : IDisposable
             </routes>
             """);
         return dir;
+    }
+
+    [Fact]
+    public void DeepChecks_ResolveEveryTypeAttribute_WithThePosition()
+    {
+        // exceptions= is a comma-separated LIST of types, so an assembly-qualified name splits into
+        // two entries and the second ('redb.Route') resolves to nothing. The gate held the built
+        // assemblies and said nothing; the worker failed at load (SerialNumbers.Xml, 2026-09-18).
+        var dir = ProjectWithBean("", """
+            <tryCatch>
+              <try><removeBody/></try>
+              <catch exceptions="System.TimeoutException, redb.Route"><removeBody/></catch>
+            </tryCatch>
+            <unmarshal format="application/json" target="No.Such.Target, Nowhere"/>
+            """);
+
+        var errors = RoutePackage.Check(dir, "p", "1.0.0", TestResolver).Errors;
+
+        errors.Should().Contain(e => e.Message.Contains("'redb.Route'") && e.File.StartsWith("routes/deep.route.xml("),
+            "every entry of a type list is resolved, and the finding carries the position");
+        errors.Should().Contain(e => e.Message.Contains("'No.Such.Target, Nowhere'"));
+        errors.Should().NotContain(e => e.Message.Contains("'System.TimeoutException'"));
+    }
+
+    [Fact]
+    public void DeepChecks_AcceptTypeListsThatResolve()
+    {
+        var dir = ProjectWithBean("", """
+            <tryCatch>
+              <try><removeBody/></try>
+              <catch exceptions="System.TimeoutException, System.InvalidOperationException"><removeBody/></catch>
+            </tryCatch>
+            """);
+
+        RoutePackage.Check(dir, "p", "1.0.0", TestResolver).Errors.Should().BeEmpty();
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Reflection;
 using redb.Route.Core;
 
 namespace redb.Route.Llm;
@@ -41,10 +42,10 @@ public sealed class LlmEndpointOptions : EndpointOptions
     public string Conversation { get; set; } = "none";
 
     /// <summary>
-    /// Streaming behaviour: when <c>true</c>, the producer opens a streaming response
-    /// and writes tokens to <c>exchange.Out.Body</c> as an <see cref="IAsyncEnumerable{T}"/> of strings.
+    /// Streaming mode (<see cref="LlmStreamMode"/>): <c>stream=calls</c> or <c>stream=body</c>; absent means no
+    /// streaming. Any other value, <c>stream=true</c> included, is refused when the endpoint is created.
     /// </summary>
-    public bool Stream { get; set; }
+    public LlmStreamMode Stream { get; set; }
 
     /// <summary>
     /// <c>cacheSystemPrompt=true</c> — ask the provider to cache the system prompt so repeated
@@ -174,16 +175,18 @@ public sealed class LlmEndpointOptions : EndpointOptions
         if (Temperature is < 0 or > 2)
             throw new ArgumentException("Temperature must be between 0 and 2.", nameof(Temperature));
 
-        // Streaming bypasses the agent engine entirely (no tool loop, no governance, no conversation
-        // persistence), so a tool-using agent configured to stream would run its tools nowhere while
-        // reporting success. See docs/LLM/ROADMAP.md (Phase 3) for the streaming tool loop; this check
-        // disappears with it. ArgumentException like the other option checks in this method: the option
-        // combination is the problem, and the offending option is named.
-        if (Stream && !string.IsNullOrWhiteSpace(Tools))
+        // The core binder leaves a parameter it cannot place — a name no option has, or a value that does not convert
+        // to the option's type — among the unmapped parameters, where nothing reads it: a typo would drop the option
+        // without a word and the endpoint would run with its default ('stream=true', the old switch, would silently
+        // not stream). Every such parameter is refused, each one named.
+        if (UnmappedParameters.Count > 0)
             throw new ArgumentException(
-                "'stream=true' bypasses the agent engine, so tools cannot be dispatched. "
-                + "Use the non-streaming path for tool-using agents, or drop 'tools=' to stream plain completions.",
-                nameof(Stream));
+                string.Join(" ", UnmappedParameters.Select(p => DescribeUnmapped(p.Key, p.Value))),
+                UnmappedParameters.Keys.First());
+
+        // Enum.Parse also takes a number, which may name no mode at all.
+        if (!Enum.IsDefined(Stream))
+            throw new ArgumentException(DescribeUnmapped("stream", ((int)Stream).ToString()), nameof(Stream));
 
         if (BudgetInputTokens is < 0)
             throw new ArgumentException("BudgetInputTokens must be >= 0.", nameof(BudgetInputTokens));
@@ -193,5 +196,62 @@ public sealed class LlmEndpointOptions : EndpointOptions
 
         if (BudgetCostUsd is < 0m)
             throw new ArgumentException("BudgetCostUsd must be >= 0.", nameof(BudgetCostUsd));
+    }
+
+    /// <summary>The options this endpoint reads, by the name the URI gives them.</summary>
+    private static readonly PropertyInfo[] Options = typeof(LlmEndpointOptions)
+        .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+        .Where(p => p.CanWrite)
+        .OrderBy(p => p.Name, StringComparer.Ordinal)
+        .ToArray();
+
+    private static string UriName(PropertyInfo option) => char.ToLowerInvariant(option.Name[0]) + option.Name[1..];
+
+    /// <summary>Why a parameter the binder could not place is refused, and what would be accepted.</summary>
+    private static string DescribeUnmapped(string name, string value)
+    {
+        if (name.Equals("stream", StringComparison.OrdinalIgnoreCase))
+            return $"'stream={value}' is not a streaming mode. Use 'stream=calls': the agent engine streams every model "
+                + "call inside the route, tools, the conversation and the route's transaction work as without streaming, "
+                + "the pieces go to IAgentObserver.OnDeltaAsync and Out.Body is the final text. Or 'stream=body': the "
+                + "agent run happens when the body is read, and its text streams into Out.Body while the model writes it.";
+
+        var option = Array.Find(Options, o => o.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (option is not null)
+        {
+            var type = Nullable.GetUnderlyingType(option.PropertyType) ?? option.PropertyType;
+            var expected = type.IsEnum
+                ? "one of " + string.Join(", ", Enum.GetNames(type).Select(n => n.ToLowerInvariant()))
+                : type.Name;
+            return $"'{UriName(option)}={value}' is not a valid value: {UriName(option)} takes {expected}.";
+        }
+
+        var nearest = Options
+            .Select(o => (Name: UriName(o), Distance: EditDistance(name.ToLowerInvariant(), o.Name.ToLowerInvariant())))
+            .MinBy(o => o.Distance);
+        return nearest.Distance <= 2
+            ? $"'{name}' is not an llm: option; did you mean '{nearest.Name}'?"
+            : $"'{name}' is not an llm: option. Options: {string.Join(", ", Options.Select(UriName))}.";
+    }
+
+    /// <summary>Levenshtein distance: how many single-character edits turn one name into the other.</summary>
+    private static int EditDistance(string a, string b)
+    {
+        var previous = new int[b.Length + 1];
+        var current = new int[b.Length + 1];
+        for (var j = 0; j <= b.Length; j++) previous[j] = j;
+
+        for (var i = 1; i <= a.Length; i++)
+        {
+            current[0] = i;
+            for (var j = 1; j <= b.Length; j++)
+            {
+                var substitution = previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1);
+                current[j] = Math.Min(Math.Min(previous[j] + 1, current[j - 1] + 1), substitution);
+            }
+            (previous, current) = (current, previous);
+        }
+
+        return previous[b.Length];
     }
 }

@@ -1,10 +1,9 @@
 using System.Diagnostics;
-using OpenTelemetry;
-using OpenTelemetry.Trace;
 using redb.Route.Abstractions;
 using redb.Route.AzureServiceBus;
 using redb.Route.Core;
 using redb.Route.Telemetry;
+using redb.Route.Tests.Shared;
 using Xunit.Abstractions;
 
 namespace redb.Route.Tests.AzureServiceBus;
@@ -14,6 +13,7 @@ namespace redb.Route.Tests.AzureServiceBus;
 /// Requires Azure Service Bus emulator on localhost:5300 with queue.1.
 /// </summary>
 [Trait("Category", "Integration")]
+[Collection(AsbEmulatorQueue.Name)]
 public sealed class AzureServiceBusTelemetrySmokeTests
 {
     private const string ConnectionString =
@@ -32,11 +32,7 @@ public sealed class AzureServiceBusTelemetrySmokeTests
         var producer = endpoint.CreateProducer();
         await producer.Start();
 
-        var activities = new List<Activity>();
-        using var tracer = Sdk.CreateTracerProviderBuilder()
-            .AddSource(RouteActivitySource.SourceName)
-            .AddInMemoryExporter(activities)
-            .Build()!;
+        using var capture = new SpanCapture();   // this test's spans only
 
         try
         {
@@ -52,7 +48,7 @@ public sealed class AzureServiceBusTelemetrySmokeTests
             await endpoint.Stop();
         }
 
-        tracer.ForceFlush(1000);
+        var activities = capture.Spans;
         activities.Should().NotBeEmpty();
         var activity = activities.First();
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);

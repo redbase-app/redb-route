@@ -9,5 +9,9 @@
     <PackageReference Include="Testcontainers.Redis" Version="4.14.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- One span capture for the smoke tests: the test root trace keeps parallel test classes out. -->
+    <Compile Include="../Shared/SpanCapture.cs" Link="Shared/SpanCapture.cs" />
+  </ItemGroup>
 </Project>
 

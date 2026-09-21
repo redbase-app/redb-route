@@ -162,7 +162,7 @@ Plus: type-safe fluent builders (`Kafka.Topic(...).GroupId(...)` instead of URI 
 | In-process dispatch to handler classes (`RedbController` behind `direct:`) | **redb.Route** + `redb.Route.Controllers` |
 | Async in-process pub/sub with `RouteBuilder` consumer classes | **redb.Route** (`seda:` + `RouteBuilder`) |
 | Durable orchestrated saga state machine persisted across process restarts | MassTransit / NServiceBus / Wolverine |
-| Transactional pipeline (deferred broker commit/ack tied to route outcome) | **redb.Route** (`.Transacted()` + `ITransactedAction`: Kafka EOS, RabbitMQ tx, IBM MQ, AMQP) |
+| Transactional pipeline (database first, broker sends after the commit, ack last) | **redb.Route** (`.Transacted()`: RabbitMQ, AMQP 1.0, Kafka, IBM MQ, Azure Service Bus, SQS/SNS, Redis PUBLISH/XADD) |
 | Managed transactional outbox container (auto table + background retry daemon) | MassTransit / NServiceBus / Wolverine |
 
 > redb.Route and MassTransit/NServiceBus solve different problems. redb.Route is a **pipeline and transport integration engine** (Apache Camel for .NET). MassTransit/NServiceBus are **message-bus frameworks** centered on consumer registration and managed saga state. You can use both together — redb.Route for cross-protocol routing and transformation, MassTransit for durable long-running workflows.
@@ -341,6 +341,15 @@ secrets are replaced with a constant `****` — never a partial prefix.
 
 To register a credential parameter that is not an annotated option, call
 `EndpointUri.AddSensitiveKeys("myCustomToken")` at startup.
+
+**3. The id of an unnamed route carries neither.** A route that declares no `RouteId("...")` is named
+after its endpoint: the scheme, the path and a deterministic UUID of the whole URI
+(`kafka://orders?brokers=...` becomes `kafka-orders-1b4e28ba-2fa1-11d2-883f-0016d3cca427`). The query
+string stays out of the name and `user:pw@host` credentials are dropped from it, so the id is safe to
+print; the UUID is RFC 4122 version 5 in the URL namespace over the normalized endpoint URI, so it is
+the same on every start and every node — metric series, stored checkpoints and `controlbus:route`
+commands survive a restart — and any UUID library recomputes it from the URI. The name holds only
+`A-Z a-z 0-9 _ -`: a `/` or a `:` breaks dashboard labels and metric tags.
 
 ### Engine options
 
@@ -651,15 +660,15 @@ All modifiers below are valid inside an `OnException(...).EndOnException()` scop
 | `RedeliveryDelay(TimeSpan)` | Base delay between attempts |
 | `BackOffMultiplier(d)` | Multiplier applied to delay between attempts |
 | `UseExponentialBackOff()` | Switch from fixed to exponential backoff |
-| `Handled()` / `Handled(false)` | Mark exception as handled (exchange continues normally) |
-| `Continued()` | Continue routing the *original* exchange after handler |
+| `Handled()` / `Handled(false)` | Suppress the failure; the route ends where it failed |
+| `Continued()` | Suppress the failure and pick the route up at the step after the one that failed (Camel's `continued(true)`) |
 | `OnWhen(predicate)` | Only fire the handler when predicate matches |
 | `RetryWhile(predicate)` | Continue retrying only while predicate is true |
 | `UseOriginalMessage()` | Restore the original message (before processing) for the handler |
 | `UseOriginalBody()` | Restore only the original body |
-| `OnRedelivery(action)` | Callback fired before each retry attempt |
-| `OnPrepareFailure(action)` | Callback fired before invoking the handler |
-| `OnExceptionOccurred(action)` | Callback fired the moment exception is caught |
+| `OnRedelivery(action)` / `OnRedelivery(processor)` | Callback fired before each retry attempt |
+| `OnPrepareFailure(action)` / `OnPrepareFailure(processor)` | Callback fired before invoking the handler |
+| `OnExceptionOccurred(action)` / `OnExceptionOccurred(processor)` | Callback fired the moment exception is caught; the processor form is what a markup route can name |
 | `RetryAttemptedLogLevel(level)` | Log level for retry attempt messages |
 | `RetriesExhaustedLogLevel(level)` | Log level for retries-exhausted message |
 | `LogStackTrace(bool)` | Whether to log full stack trace |
@@ -959,7 +968,7 @@ From(Mqtt.Subscribe("telemetry/#").Qos(1).ConcurrentConsumers(5)).Process(Ingest
 
 ## Reliability
 
-redb.Route provides four primitives for at-least-once and exactly-once delivery. They compose: enable confirms on the producer, persistent dedup on the consumer, polling outbox in your service \u2014 you have the same guarantees that frameworks bundle as `UseOutbox()`, just spelled out.
+redb.Route provides four primitives for at-least-once and exactly-once delivery. They compose: enable confirms on the producer, persistent dedup on the consumer, polling outbox in your service — you have the same guarantees that frameworks bundle as `UseOutbox()`, just spelled out.
 
 ### RabbitMQ Publisher Confirms + Deferred Consumer Ack
 
@@ -989,8 +998,8 @@ The deferred send pattern is implemented uniformly across the brokers. When `.Tr
 | **AMQP 1.0** producer | `sender.Send(msg)` fires | message dropped |
 | **IBM MQ** consumer | `QueueManager.Commit()` (MQCMIT) | `QueueManager.Backout()` (MQBACK) |
 | **IBM MQ** producer | MQPUT + MQCMIT | message dropped |
-| **Kafka** consumer | `consumer.Commit(result)` — offset committed | offset not committed (message will be re-delivered) |
-| **Kafka** producer | `ProduceAsync` fires (inside Kafka transaction if EOS enabled) | message dropped |
+| **Kafka** consumer | offset committed after the route, or inside the producer's Kafka transaction (below) | offset not committed; `breakOnFirstError=true` reads the record again |
+| **Kafka** producer | `ProduceAsync` fires; with `transactionalIdPrefix` the block's sends commit as one Kafka transaction | message dropped |
 
 A unit of work ends in one order: the database transaction completes and closes, then the deferred sends go out, then the consumer acknowledges the incoming message. The acknowledgement belongs to the consumer, not to the transaction: a delivery is settled only after the whole unit of work succeeded, and left unsettled when it was not, so the broker redelivers it. See [TRANSACTIONS.md](TRANSACTIONS.md). IBM MQ additionally tracks `BackoutCount`; if it reaches `BackoutThreshold`, the message moves to a backout queue instead of rolling back into the main queue indefinitely (poison message handling).
 
@@ -1000,7 +1009,7 @@ From(Rabbit.Queue("orders").Transacted(true))
     .Transacted()
     .Process(async (e, ct) => await SaveToDb(e, ct))
     .To(Rabbit.Queue("processed").Transacted(true));
-// Commit: BasicAck(orders) + BasicPublish(processed) — atomic
+// Commit: the database, then BasicPublish(processed), then BasicAck(orders)
 // Rollback: BasicNack(orders, requeue=true) + send dropped
 
 From("wmq://ORDERS.IN?transacted=true")
@@ -1013,61 +1022,78 @@ From("wmq://ORDERS.IN?transacted=true")
 From(Kafka.Topic("payments").GroupId("svc"))
     .Transacted()
     .Process(async (e, ct) => await SaveToDb(e, ct))
-    .To(Kafka.Topic("processed").EnableTransactionalProducer(true).Acks("All"));
-// Commit: offset committed + produce inside Kafka transaction
-// Rollback: offset not committed — message re-delivered on next poll
+    .To(Kafka.Topic("processed").TransactionalIdPrefix("payments-svc"));
+// Commit: the database, then one Kafka transaction with the send and the consumed offset
+// Rollback: nothing sent, offset not committed
 ```
 
-### Kafka Exactly-Once Semantics (EOS)
+### Kafka exactly-once (EOS)
+
+`TransactionalIdPrefix` switches a Kafka producer to Kafka transactions. The sends it defers in a `.Transacted()` block
+commit as one Kafka transaction, all or none; when the route consumed from Kafka on the same cluster, the consumed
+offset commits in that transaction too (`SendOffsetsToTransaction`), so the output and the offset move together.
+Readers use `read_committed`, librdkafka's default. The database is not part of the Kafka transaction: it commits first,
+and the idempotent consumer covers a failure between the two.
 
 ```csharp
-.To(Kafka.Topic(\"orders\")
-    .Brokers(\"broker1:9092,broker2:9092\")
-    .Acks(\"All\")                          // wait for all in-sync replicas
-    .EnableTransactionalProducer(true)    // transactional.id assigned per producer
-    .TransactionIdPrefix(\"order-svc\")
-    .EnableIdempotence(true))
+From(Kafka.Topic("orders").Brokers("broker1:9092,broker2:9092").GroupId("order-svc"))
+    .Transacted()
+        .To(Kafka.Topic("orders.enriched")
+            .Brokers("broker1:9092,broker2:9092")
+            .TransactionalIdPrefix("order-svc"))   // acks=all and idempotence come with it
+    .End();
 ```
 
-Consumer side pairs with `IsolationLevel=ReadCommitted` and manual commits to read only committed messages. The transport supports the full Confluent.Kafka transactional API.
+The prefix names the producer; the connector appends the machine, the process and the producer's number, so nodes
+deploying one configuration never fence each other. Details in the
+[Kafka connector README](redb.Route.Kafka/README.md).
 
 ### Persistent Idempotent Consumer (de-facto outbox for dedup)
 
-`IdempotentConsumer` rejects duplicate messages by key. With a persistent backend it survives restarts and crashes \u2014 the same role an Outbox `processed_messages` table plays in MassTransit / NServiceBus.
+`IdempotentConsumer` claims a message's key before its block runs and skips a message whose key is already claimed. With a persistent backend the claim survives restarts and is shared by every node on the same database, the same role an Outbox `processed_messages` table plays in MassTransit / NServiceBus: the database's unique key decides which node processes a message.
 
 Three backends ship today:
 
-| Backend | Storage | Two-phase commit |
+| Backend | Storage | Across nodes |
 |---------|---------|:--:|
-| `InMemoryIdempotentRepository` | Process memory | \u2014 |
-| `SqlIdempotentRepository` | ADO.NET (any provider) \u2014 DDL ships with the package | \u2705 (`Confirmed` column) |
-| `RedbIdempotentRepository` | redb.Core RTTI storage (cluster-wide via redb backend) | \u2705 (`Confirmed` flag) |
+| `InMemoryIdempotentRepository` | Process memory | — |
+| `SqlIdempotentRepository` | ADO.NET table (any provider), DDL ships with the package | ✅ |
+| `RedbIdempotentRepository` | redb object guarded by a unique key | ✅ |
 
-Two-phase commit means the key is **claimed** before processing and **confirmed** after. A crash mid-processing leaves the key unconfirmed; on retry the consumer re-acquires and re-processes. Same semantic as a transactional outbox.
+The key is settled when the exchange's unit of work ends, before the consumer acknowledges the message or hands it back (Apache Camel's defaults): confirmed on success, removed on failure anywhere in the route, so the redelivery is processed again. Inside `.Transacted()` the key follows the transaction instead: it commits with the work and goes with a rollback. Details in [TRANSACTIONS.md](TRANSACTIONS.md#idempotent-consumer).
 
 ```csharp
-// Register persistent backend in DI\nbuilder.Services.AddSingleton<IIdempotentRepository, SqlIdempotentRepository>();
+// Register a persistent backend under a name
+context.AddRedbIdempotentRepository("payments-inbound", ttl: TimeSpan.FromDays(7));
 
-// Use in any route\nFrom(\"kafka://payments\")\n    .IdempotentConsumer(e => e.Message.GetHeader<string>(\"messageId\"))   // claims + confirms\n    .Process(...)\n    .To(\"sql://payments\");
+// Use it in any route
+From("kafka://payments")
+    .Transacted()
+        .IdempotentConsumer(Header("messageId"), "payments-inbound")
+            .Process(/* the work */)
+        .EndIdempotentConsumer()
+    .End();
 ```
 
 ### Outbox via Sql polling
 
-The classic transactional outbox pattern \u2014 producers write to an `outbox` table inside the same DB transaction as the business write, a poller picks them up and publishes:
+The classic transactional outbox pattern: the service writes the event as a row of an `outbox` table in the same database
+transaction as the business write, and a relay route polls the rows and publishes them, marking each one only after the
+broker has taken it:
 
 ```csharp
-// Producer side (your service code)\nawait db.Transaction(async tx => {\n    await tx.SaveOrder(order);\n    await tx.InsertOutbox(orderEvent);   // same DB transaction\n});
-
-// Outbox processor (redb.Route)\nFrom(Sql.Poll(\"SELECT * FROM outbox WHERE processed = 0 ORDER BY id LIMIT 100\")\n        .DataSource(\"main\")\n        .Delay(1000)\n        .OnSuccess(\"UPDATE outbox SET processed = 1, processed_at = NOW() WHERE id = ANY(@ids)\")\n        .Transacted())\n    .Split(Body())\n    .To(\"kafka://order-events\");
+// The relay: one exchange per unsent row; onSuccess marks the row once the send went through.
+From(Sql.Poll("select id, payload from outbox where sent = false order by id")
+        .DataSource("main")
+        .Delay(1000)
+        .OnSuccess("update outbox set sent = true where id = :#id"))
+    .SetBody(ex => ex.In.Headers["payload"])
+    .To("kafka://order-events");
 ```
 
-The `OnSuccess` UPDATE runs in the same `TransactionScope` as the publish step \u2014 either both succeed or both roll back. Combine with publisher confirms / EOS on the sink side for end-to-end guarantee.
-
-### Combined: end-to-end exactly-once
-
-```csharp
-From(Sql.Poll(\"SELECT * FROM outbox WHERE processed = 0 LIMIT 100\")\n        .DataSource(\"main\")\n        .OnSuccess(\"UPDATE outbox SET processed = 1 WHERE id = ANY(@ids)\")\n        .Transacted())                                       // outbox: atomic claim + publish\n    .Split(Body())\n    .IdempotentConsumer(\n        e => e.Message.GetHeader<string>(\"eventId\"))      // dedup on republish\n    .To(Kafka.Topic(\"events\")\n        .EnableTransactionalProducer(true)\n        .Acks(\"All\"));                                       // EOS on the broker side
-```
+A failed send leaves the row unmarked and the next poll sends it again; a crash between the send and `onSuccess` sends it
+twice, so the receiving side deduplicates. The full recipe, both routes, is in
+[TRANSACTIONS.md](TRANSACTIONS.md#routes-that-do-not-start-from-a-broker-the-outbox-recipe).
 
 ---
 
@@ -1459,14 +1485,18 @@ dotnet tool install -g redb.Route.Xml.CodeGen
 
 redb-route-xml xsd bin/Debug/net10.0 --out schema                  # the schema editors validate against
 redb-route-xml csharp routes/main.route.xml --namespace My.Routes  # the fluent C# the XML parses into
-redb-route-xml mermaid routes/main.route.xml                       # a flowchart of the routes
+redb-route-xml mermaid routes/main.route.xml --bin bin/Debug/net10.0  # a flowchart of the routes
 redb-route-xml new MyRoutes                                        # scaffold a route project
 redb-route-xml check .                                             # validate a route project
 redb-route-xml pack . --version 1.0.0                              # package it for a worker
 ```
 
+`--bin` gives `mermaid` the project's build output: a route that names its own types (`<unmarshal
+target=>`) or package elements (`<redbSave>`, `<cache>`) needs it, a plain one does not. Schemas and other
+`file=` references resolve from the project's `resources/`, as they do in the package.
+
 Keep the tool on the same version as the runtime. Whenever it reads a bin directory (`xsd`, `elements`,
-`catalog`, `check`, `pack`) it compares its own `redb.Route.Xml` with the one there and refuses to run on
+`catalog`, `check`, `pack`, `mermaid --bin`) it compares its own `redb.Route.Xml` with the one there and refuses to run on
 a mismatch: a tool of another version would read their types as nothing at all.
 Upgrade it together with the packages: `dotnet tool update -g redb.Route.Xml.CodeGen --version <version>`.
 

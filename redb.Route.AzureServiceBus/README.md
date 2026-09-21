@@ -53,7 +53,7 @@ var id = exchange.In.Headers[AzureServiceBusHeaders.MessageId];
 
 ### Batch Mode
 
-Enable with `enableBatch=true`. Body must be `IEnumerable`. Each item is serialized to `BinaryData` and added to a batch respecting `batchMaxMessages` and `batchMaxSizeBytes`.
+Enable with `enableBatch=true`. Body must be `IEnumerable`. Each item is serialized to `BinaryData` and added to one batch, which Service Bus takes whole or not at all. A body with more items than `batchMaxMessages`, or items that do not fit in `batchMaxSizeBytes`, fails the send and nothing is sent.
 
 ```csharp
 .To(Asb.Queue("orders")
@@ -195,27 +195,36 @@ Enable session-aware FIFO processing with `enableSessions=true`:
 
 The session consumer uses `ServiceBusSessionProcessor` and guarantees message ordering within a session. `MaxConcurrentSessions` controls parallelism across sessions; messages within the same session are always processed sequentially.
 
-## Transacted Mode
+## Transactions
 
-When `transacted=true`, message acknowledgement is deferred. The consumer registers `ITransactedAction` instances in `exchange.Properties["TRANSACT_ACTION"]` — a `ConcurrentDictionary<string, ITransactedAction>`:
+The consumer settles a delivery itself once the route has finished: it completes the message on success and abandons
+it on failure. Inside `.Transacted()` that comes last, after the database and the deferred sends have committed.
+
+A producer inside `.Transacted()` joins the transaction: the message is sent once the database has committed and
+dropped if the block rolls back.
 
 ```csharp
-.From(Asb.Queue("orders")
-    .ConnectionString("...")
-    .Transacted(true))
-
-// In your processor:
-var actions = exchange.Properties["TRANSACT_ACTION"]
-    as ConcurrentDictionary<string, ITransactedAction>;
-
-// On success:
-foreach (var action in actions!.Values)
-    await action.Commit();   // CompleteMessageAsync
-
-// On failure:
-foreach (var action in actions!.Values)
-    await action.Rollback(); // AbandonMessageAsync
+From(Asb.Queue("orders.in").ConnectionString("..."))
+    .Transacted()
+        .ProcessWithRedb(async (redb, ex, ct) => await redb.SaveAsync((Order)ex.In.Body!, ct))
+        .To(Asb.Queue("orders.created").ConnectionString("..."))                    // sent after the commit
+        .To(Asb.Queue("alerts").ConnectionString("...").Transacted(false))          // sent at once
+    .End();
 ```
+
+- `transacted=false` sends at once, outside the transaction, even if the block later rolls back.
+- `transacted=true` requires an enclosing block; outside one the step fails instead of losing the message.
+- The Service Bus client would enlist a send in the ambient `System.Transactions` transaction by itself. The connector
+  never lets it: a send that leaves at once runs with the ambient transaction suppressed and a deferred one after the
+  transaction closed, so Service Bus never becomes a second resource next to the database.
+- By default the sends a producer deferred in a block go out one after the other. With `batchCommit=true`
+  (`.BatchCommit()`) they leave as **one batch** when the block commits: Service Bus takes a batch to one entity whole
+  or not at all. The block's messages must fit in one batch (`batchMaxSizeBytes`, and the entity's limit — 256 KB on
+  Standard); a block whose messages do not fit fails its commit and sends nothing. On a partitioned or session entity
+  the messages of one batch must share the partition key or session id.
+
+See the framework-wide **Transactions** guide (`TRANSACTIONS.md` in the
+[redb.Route repository](https://github.com/redbase-app/redb)) for the commit order and nesting.
 
 ## Topic / Subscription
 
@@ -292,7 +301,7 @@ services.AddRedbRouteAzureServiceBus();
 | `subQueue` | — | `deadletter` or `transferdeadletter` |
 | `autoDeadLetter` | `false` | Dead-letter on processing error |
 | `deadLetterReason` | — | Dead-letter reason string |
-| `transacted` | `false` | Deferred ack via `ITransactedAction` |
+| `transacted` | unset | Producer: unset follows an enclosing `.Transacted()` block, `false` sends at once, `true` requires a block |
 
 ### Sessions
 

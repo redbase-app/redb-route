@@ -238,7 +238,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
             // ConnectableProducer-based transports demand Start() before Process().
             await producer.Start(cancellationToken).ConfigureAwait(false);
             await ProcessCounted(endpoint, producer, exchange, cancellationToken).ConfigureAwait(false);
-            return exchange.Out?.Body ?? exchange.In.Body;
+            return ReplyBody(exchange, endpoint);
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
     }
@@ -266,7 +266,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
             // ConnectableProducer-based transports demand Start() before Process().
             await producer.Start(cancellationToken).ConfigureAwait(false);
             await ProcessCounted(endpoint, producer, exchange, cancellationToken).ConfigureAwait(false);
-            return exchange.Out?.Body ?? exchange.In.Body;
+            return ReplyBody(exchange, endpoint);
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
     }
@@ -288,15 +288,40 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         if (result is T typed)
             return typed;
 
+        // A nullable target converts to its underlying type; a reply that does not convert is an error, not a default.
+        var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
         try
         {
-            return (T)Convert.ChangeType(result, typeof(T));
+            return (T)Convert.ChangeType(result, target);
         }
-        catch
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
         {
-            return default;
+            throw new InvalidCastException(
+                $"The reply of '{endpoint.Uri}' is a {result.GetType().Name} and does not convert to {target.Name}.", ex);
         }
     }
+
+    /// <summary>
+    /// The reply body of a request whose exchange ends when the caller returns. A body that reads from resources of the
+    /// exchange (<see cref="IExchangeBoundBody"/>) would be dead by then, so it is refused here, at the call, instead of
+    /// failing at its first read.
+    /// </summary>
+    private static object? ReplyBody(IExchange exchange, IEndpoint endpoint)
+    {
+        var body = exchange.Out?.Body ?? exchange.In.Body;
+        if (body is IExchangeBoundBody)
+            throw new InvalidOperationException(
+                $"The reply of '{endpoint.Uri}' is a {ReadableName(body.GetType())} that reads from resources of its exchange, and " +
+                "RequestBody ends the exchange before it returns, so the body could not be read. Use " +
+                "RequestAsync(endpoint, exchange), read the body, then dispose the exchange.");
+        return body;
+    }
+
+    /// <summary><c>StreamedQueryResult&lt;Order&gt;</c> rather than the runtime name <c>StreamedQueryResult`1</c>.</summary>
+    private static string ReadableName(Type type) =>
+        type.IsGenericType
+            ? $"{type.Name[..type.Name.IndexOf('`')]}<{string.Join(", ", type.GetGenericArguments().Select(ReadableName))}>"
+            : type.Name;
 
     /// <inheritdoc />
     public async Task<T?> RequestBody<T>(string endpointUri, object body, CancellationToken cancellationToken = default)

@@ -53,23 +53,29 @@ public sealed class RollbackTransactionDefinition : ProcessorDefinition
 }
 
 /// <summary>
-/// Leaf definition that rolls back all transacted actions registered on the exchange properties.
+/// Leaf definition for <c>.RollbackAll()</c>, Camel's <c>markRollbackOnly()</c>: marks the unit of work for rollback,
+/// rolls back the deferred sends and stops the route. The enclosing <c>.Transacted()</c> block then rolls the database
+/// back without an exception, and the consumer does not acknowledge the message.
 /// </summary>
 public sealed class RollbackAllDefinition : ProcessorDefinition
 {
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
-        => new DelegateProcessor(async (exchange, ct) =>
+    {
+        var logger = context.GetService<ILoggerFactory>()?.CreateLogger<RollbackTransactionProcessor>();
+        return new DelegateProcessor(async (exchange, ct) =>
         {
-            if (exchange.Properties.TryGetValue(TransactedProcessor.TransactActionPropertyKey, out var raw) &&
-                raw is System.Collections.Concurrent.ConcurrentDictionary<string, ITransactedAction> actions)
-            {
-                foreach (var kvp in actions)
-                    await kvp.Value.Rollback(ct).ConfigureAwait(false);
-                actions.Clear();
-            }
-            exchange.Properties["RollbackOnly"] = true;
+            exchange.MarkRollbackOnly();
+
+            // An imperative block is rolled back here: the route stops, so its CommitTransaction never runs.
+            if (exchange.Properties.ContainsKey(BeginTransactionProcessor.ScopePropertyKey))
+                await new RollbackTransactionProcessor(logger).Process(exchange, ct).ConfigureAwait(false);
+            else
+                await TransactedActions.RollbackAll(exchange, logger, ct).ConfigureAwait(false);
+
+            exchange.Stop();
         });
+    }
 }
 
 /// <summary>

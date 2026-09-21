@@ -14,7 +14,7 @@ namespace redb.Route.Predicates;
 /// differently, and this type is the boundary between them.
 /// </para>
 /// </summary>
-internal static class PredicateFactory
+public static class PredicateFactory
 {
     /// <summary>
     /// Builds a predicate from a condition string. Three shapes, one rule each:
@@ -35,7 +35,7 @@ internal static class PredicateFactory
     /// <returns>A predicate that evaluates the condition against an exchange.</returns>
     /// <exception cref="ArgumentException">Thrown when <paramref name="condition"/> is null, empty or whitespace.</exception>
     /// <exception cref="ExpressionCompilationException">Thrown when the condition cannot be compiled.</exception>
-    internal static IPredicate FromString(string condition)
+    public static IPredicate FromString(string condition)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(condition);
 
@@ -76,7 +76,7 @@ internal static class PredicateFactory
     /// </summary>
     /// <param name="expression">The expression written in a condition position.</param>
     /// <returns>A predicate that evaluates the expression against an exchange.</returns>
-    internal static IPredicate FromExpression(IExpression expression)
+    public static IPredicate FromExpression(IExpression expression)
     {
         ArgumentNullException.ThrowIfNull(expression);
 

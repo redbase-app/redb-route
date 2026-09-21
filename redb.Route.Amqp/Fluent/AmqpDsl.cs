@@ -59,7 +59,8 @@ public sealed class AmqpBuilder
     private string? _groupId;
     private bool _replyTo;
     private int? _timeout;
-    private bool _transacted;
+    private bool? _transacted;
+    private bool _localTransactions;
     private bool _declare;
     private string? _routingType;
 
@@ -180,6 +181,18 @@ public sealed class AmqpBuilder
     /// <summary>Enable transacted sessions.</summary>
     public AmqpBuilder Transacted() { _transacted = true; return this; }
 
+    /// <summary>
+    /// Sets <c>transacted</c> explicitly. <c>false</c> sends at once even inside a <c>.Transacted()</c> block, outside its
+    /// transaction; left unset, a producer follows the block.
+    /// </summary>
+    public AmqpBuilder Transacted(bool value) { _transacted = value; return this; }
+
+    /// <summary>
+    /// Sets <c>localTransactions</c>: the sends this producer defers in a <c>.Transacted()</c> block commit in one AMQP
+    /// local transaction, all or none. The broker must support AMQP local transactions (Artemis, Qpid, Azure Service Bus).
+    /// </summary>
+    public AmqpBuilder LocalTransactions() { _localTransactions = true; return this; }
+
     /// <summary>Declare the address on the broker if it does not exist.</summary>
     public AmqpBuilder Declare() { _declare = true; return this; }
 
@@ -258,7 +271,8 @@ public sealed class AmqpBuilder
         AppendIf("groupId", _groupId);
         AppendBool("replyTo", _replyTo);
         AppendInt("timeout", _timeout);
-        AppendBool("transacted", _transacted);
+        if (_transacted is { } transacted) Append("transacted", transacted ? "true" : "false");
+        if (_localTransactions) Append("localTransactions", "true");
         AppendBool("declare", _declare);
         AppendIf("routingType", _routingType);
 

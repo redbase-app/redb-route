@@ -66,8 +66,11 @@ Raw URIs work too: `sqs://orders?waitTimeSeconds=20&concurrentConsumers=4`,
   for redelivery after the **visibility timeout** (or reset to 0 immediately with
   `resetVisibilityOnFailure=true`).
 - **`extendMessageVisibility=true`** keeps a message hidden while a long handler runs (heartbeat).
-- **`transacted=true`** defers the delete into the route transaction (`.Transacted()`), committing /
-  rolling back together with redb DB work.
+- **Inside `.Transacted()`** the delete comes last, after the database and the deferred sends have committed.
+- **Producers join the transaction.** Inside `.Transacted()` an SQS send or an SNS publish leaves once the database has
+  committed and is dropped if the block rolls back. `transacted=false` sends at once, outside the transaction;
+  `transacted=true` requires an enclosing block and fails outside one. See the **Transactions** guide
+  (`TRANSACTIONS.md` in the [redb.Route repository](https://github.com/redbase-app/redb)).
 - **Ordering** is preserved only per FIFO message group and only with `concurrentConsumers=1`.
 
 ## Key options
@@ -76,8 +79,9 @@ Raw URIs work too: `sqs://orders?waitTimeSeconds=20&concurrentConsumers=4`,
 |---|---|---|
 | `region`, `serviceUrl`, `accessKey`/`secretKey`, `sessionToken`, `profileName`, `useDefaultCredentialsProvider` | both | `serviceUrl` targets LocalStack/ElasticMQ |
 | `waitTimeSeconds` (0–20), `maxNumberOfMessages` (1–10), `visibilityTimeout` | SQS consumer | long-poll + batch + hide time |
-| `concurrentConsumers`, `extendMessageVisibility`, `deleteAfterRead`, `resetVisibilityOnFailure`, `transacted` | SQS consumer | concurrency + ack |
+| `concurrentConsumers`, `extendMessageVisibility`, `deleteAfterRead`, `resetVisibilityOnFailure` | SQS consumer | concurrency + ack |
 | `delaySeconds`, `messageGroupId`, `messageDeduplicationId`, `enableBatch` | SQS producer | FIFO + batch send |
+| `transacted` | SQS and SNS producer | unset follows an enclosing `.Transacted()` block, `false` sends at once, `true` requires a block |
 | `autoCreateQueue` / `autoCreateTopic`, `topicArn`, `subject`, `messageStructure` | both | topology + SNS payload |
 | `subscribeSnsToSqs` + `subscribeQueueArn` | SNS | subscribe a queue to the topic on start |
 | `rawMessageDelivery` | SNS | on that auto-subscription, deliver the bare payload + map SNS attrs → SQS attrs (default `false` = JSON envelope) |

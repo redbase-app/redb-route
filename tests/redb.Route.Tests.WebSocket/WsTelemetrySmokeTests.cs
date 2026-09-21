@@ -1,11 +1,10 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using OpenTelemetry;
-using OpenTelemetry.Trace;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Telemetry;
+using redb.Route.Tests.Shared;
 using redb.Route.WebSocket;
 
 namespace redb.Route.Tests.WebSocket;
@@ -40,11 +39,7 @@ public sealed class WsTelemetrySmokeTests : IAsyncLifetime
         _serverConsumer = new WsConsumer(endpoint, processor, endpoint.EndpointOptions);
         await _serverConsumer.Start();
 
-        var activities = new List<Activity>();
-        using var tracer = Sdk.CreateTracerProviderBuilder()
-            .AddSource(RouteActivitySource.SourceName)
-            .AddInMemoryExporter(activities)
-            .Build()!;
+        using var capture = new SpanCapture();   // this test's spans only
 
         var producer = (WsProducer)endpoint.CreateProducer();
         await producer.Start();
@@ -58,11 +53,10 @@ public sealed class WsTelemetrySmokeTests : IAsyncLifetime
             await producer.Stop();
         }
 
-        tracer.ForceFlush(1000);
+        var activities = capture.Spans;
 
-        // The listener is process-wide: routes in test classes running in parallel publish their own
-        // spans on the same source while this tracer is alive. Pick this producer's span by kind and by
-        // its own port, never by position.
+        // The capture keeps only this test's trace; pick the producer's span in it by kind and by its own port,
+        // never by position.
         var activity = activities.Should().ContainSingle(a =>
             a.Kind == ActivityKind.Producer && IsOwnEndpoint(a, _port)).Subject;
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);

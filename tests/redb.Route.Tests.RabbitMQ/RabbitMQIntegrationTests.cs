@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Text;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Transactions;
+using redb.Route.Processors;
 using redb.Route.RabbitMQ;
 using Xunit.Abstractions;
 
@@ -154,6 +156,10 @@ public sealed class RabbitMQIntegrationTests
         captured.In.Headers.Should().ContainKey("X-Trace");
     }
 
+    /// <summary>Runs <paramref name="body"/> inside a transacted block, as <c>.Transacted()</c> on a route does.</summary>
+    private static Task InTransaction(IExchange exchange, Func<IExchange, CancellationToken, Task> body) =>
+        new TransactedProcessor(new DelegateProcessor(body), new TransactionPolicy()).Process(exchange);
+
     [Fact]
     public async Task TransactedProducer_Commit_DeliversMessage()
     {
@@ -163,16 +169,7 @@ public sealed class RabbitMQIntegrationTests
         await producer.Start();
 
         var exchange = new Exchange(new Message("transacted"));
-        await producer.Process(exchange);
-
-        exchange.Properties.Should().ContainKey("TRANSACT_ACTION");
-        var actions = exchange.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        actions.Should().NotBeNull();
-        actions!.Should().NotBeEmpty();
-
-        // Commit — message should be published
-        foreach (var action in actions.Values)
-            await action.Commit();
+        await InTransaction(exchange, (ex, ct) => producer.Process(ex, ct));   // the send is committed as the block ends
 
         await producer.Stop();
         await epProd.Stop();
@@ -210,12 +207,12 @@ public sealed class RabbitMQIntegrationTests
         await producer.Start();
 
         var exchange = new Exchange(new Message("should-not-arrive"));
-        await producer.Process(exchange);
-
-        // Rollback instead of commit
-        var actions = exchange.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        foreach (var action in actions!.Values)
-            await action.Rollback();
+        var failed = () => InTransaction(exchange, async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            throw new InvalidOperationException("the unit of work failed");
+        });
+        await failed.Should().ThrowAsync<InvalidOperationException>();   // the send is rolled back with it
 
         await producer.Stop();
         await epProd.Stop();
@@ -239,6 +236,136 @@ public sealed class RabbitMQIntegrationTests
         await epCons.Stop();
 
         received.Should().BeEmpty("message was rolled back, not committed");
+    }
+
+    /// <summary>Sends one message from inside a <c>.Transacted()</c> block that then fails; returns what reached the queue.</summary>
+    private async Task<IReadOnlyCollection<string>> SendFromAFailedBlock(string queue, string? producerParams)
+    {
+        var epProd = CreateEndpoint(queue, producerParams);
+        var producer = (RabbitMQProducer)epProd.CreateProducer();
+        await producer.Start();
+
+        var failed = () => InTransaction(new Exchange(new Message("sent-from-a-failed-block")), async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            throw new InvalidOperationException("the unit of work failed");
+        });
+        await failed.Should().ThrowAsync<InvalidOperationException>();
+        await producer.Stop();
+        await epProd.Stop();
+
+        var epCons = CreateEndpoint(queue);
+        var received = new ConcurrentBag<string>();
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                received.Add(Encoding.UTF8.GetString((byte[])callInfo.Arg<IExchange>().In.Body!));
+                return Task.CompletedTask;
+            });
+        var consumer = (RabbitMQConsumer)epCons.CreateConsumer(processor);
+        await consumer.Start();
+        await Task.Delay(3000);
+        await consumer.Stop();
+        await epCons.Stop();
+        return received;
+    }
+
+    [Fact]
+    public async Task Producer_without_transacted_joins_the_block_and_sends_nothing_when_it_fails()
+    {
+        var received = await SendFromAFailedBlock($"test-join-{Guid.NewGuid():N}", producerParams: null);
+
+        received.Should().BeEmpty("inside .Transacted() a send joins the transaction unless transacted=false opts out");
+    }
+
+    [Fact]
+    public async Task Producer_with_transacted_false_sends_at_once_even_from_a_failed_block()
+    {
+        var received = await SendFromAFailedBlock($"test-optout-{Guid.NewGuid():N}", "transacted=false");
+
+        received.Should().ContainSingle().Which.Should().Be("sent-from-a-failed-block");
+    }
+
+    [Fact]
+    public async Task Deferred_publishes_of_one_producer_commit_together_or_not_at_all()
+    {
+        var queue = $"test-batch-{Guid.NewGuid():N}";
+        var epProd = CreateEndpoint(queue, "routingKey=${header.rk}");
+        var producer = (RabbitMQProducer)epProd.CreateProducer();
+        await producer.Start();
+
+        var exchange = new Exchange(new Message("batch-first"));
+        exchange.In.Headers["rk"] = queue;
+        var commitFailed = () => InTransaction(exchange, async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);                           // routed to the queue
+            ex.In.Headers["rk"] = new string('k', 300);               // an AMQP short string holds 255 bytes: this publish fails
+            ex.In.Body = "batch-second";
+            await producer.Process(ex, ct);
+        });
+        await commitFailed.Should().ThrowAsync<Exception>();
+        await producer.Stop();
+        await epProd.Stop();
+
+        var epCons = CreateEndpoint(queue);
+        var received = new ConcurrentBag<string>();
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                received.Add(Encoding.UTF8.GetString((byte[])callInfo.Arg<IExchange>().In.Body!));
+                return Task.CompletedTask;
+            });
+        var consumer = (RabbitMQConsumer)epCons.CreateConsumer(processor);
+        await consumer.Start();
+        await Task.Delay(3000);
+        await consumer.Stop();
+        await epCons.Stop();
+
+        received.Should().BeEmpty("the publishes of one producer in a block commit in one channel transaction or not at all");
+    }
+
+    [Fact]
+    public async Task Consumer_does_not_acknowledge_a_rolled_back_unit_of_work()
+    {
+        var queue = $"test-rbonly-{Guid.NewGuid():N}";
+        var epProd = CreateEndpoint(queue);
+        var producer = (RabbitMQProducer)epProd.CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("rolled-back")));
+        await producer.Stop();
+        await epProd.Stop();
+
+        // What .RollbackAll() does inside .Transacted(): mark the unit of work rollback-only and stop the route.
+        var deliveries = 0;
+        var deliveredAgain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var route = new TransactedProcessor(new DelegateProcessor(ex =>
+        {
+            if (Interlocked.Increment(ref deliveries) >= 2) deliveredAgain.TrySetResult();
+            ex.MarkRollbackOnly();
+            ex.Stop();
+        }), new TransactionPolicy());
+
+        var epCons = CreateEndpoint(queue);
+        var consumer = (RabbitMQConsumer)epCons.CreateConsumer(route);
+        await consumer.Start();
+        await Task.WhenAny(deliveredAgain.Task, Task.Delay(10_000));
+        await consumer.Stop();
+        await epCons.Stop();
+
+        deliveries.Should().BeGreaterThanOrEqualTo(2,
+            "a rolled-back unit of work is not acknowledged, so the broker delivers the message again");
+    }
+
+    [Fact]
+    public void Request_reply_producer_refuses_transacted_true()
+    {
+        var endpoint = CreateEndpoint($"test-rpc-{Guid.NewGuid():N}", "replyTo=true&transacted=true");
+
+        var act = () => endpoint.CreateProducer();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*replyTo*transacted*");
     }
 
     [Fact]

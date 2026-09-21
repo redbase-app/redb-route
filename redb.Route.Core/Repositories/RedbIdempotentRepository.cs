@@ -59,6 +59,13 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
         => scope.ServiceProvider.GetRequiredService<IRedbService>();
 
     /// <summary>
+    /// True: inside an ambient transaction redb writes on the transaction's connection (core <c>AmbientConnectionRegistry</c>,
+    /// on every provider — SQLite through a transaction of its own enlisted with the scope), so the key commits and rolls
+    /// back with the work of the <c>.Transacted()</c> block.
+    /// </summary>
+    public bool JoinsAmbientTransaction => true;
+
+    /// <summary>
     /// Composite identity name for a (processor, key) pair. Stored in the indexed
     /// <c>_objects._name</c> column for fast lookup and in <c>_objects._value_unique</c>
     /// for the database-enforced uniqueness guarantee.

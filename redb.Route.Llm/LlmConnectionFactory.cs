@@ -67,8 +67,38 @@ public sealed class LlmConnectionFactory
     /// <summary>Default top-p sampling parameter.</summary>
     public double? TopP { get; set; }
 
-    /// <summary>Per-call request timeout in milliseconds (default: 120 000).</summary>
-    public int RequestTimeoutMs { get; set; } = 120_000;
+    /// <summary>
+    /// Limit of one call to the model, in milliseconds (default: 600 000, ten minutes, like the official Anthropic
+    /// and OpenAI SDKs; at least 1 000). It covers the whole call, waiting for the answer and reading it, on every
+    /// provider and whatever client sends it; running out throws <see cref="Providers.LlmTimeoutException"/>. A
+    /// non-streaming answer from a thinking model is minutes of generation, so set it to the longest answer you
+    /// expect. A streamed call is limited the same way, from the send to the last piece; a stream's silence has a
+    /// limit of its own, <see cref="StreamIdleTimeoutMs"/>. A client passed in by the host keeps its own
+    /// <see cref="HttpClient.Timeout"/> as well.
+    /// </summary>
+    public int RequestTimeoutMs { get; set; } = 600_000;
+
+    /// <summary>
+    /// Longest silence of a streamed call, in milliseconds: how long the provider may send nothing at all — no text,
+    /// no thinking, not even a keep-alive comment or <c>ping</c> — before the call fails with
+    /// <see cref="Providers.LlmTimeoutException"/> (<see cref="Providers.LlmTimeoutKind.StreamIdle"/>). It counts only
+    /// the waits on the provider, not the time the reader spends between pieces. Off by default (<c>null</c>): the
+    /// whole call is still limited by <see cref="RequestTimeoutMs"/>, and some reasoning models stream nothing for
+    /// minutes before their first token. Must be positive when set.
+    /// </summary>
+    public int? StreamIdleTimeoutMs
+    {
+        get => _streamIdleTimeoutMs;
+        set
+        {
+            if (value is <= 0)
+                throw new ArgumentOutOfRangeException(nameof(value), value,
+                    "StreamIdleTimeoutMs must be positive; leave it unset (null) to turn the silence limit off.");
+            _streamIdleTimeoutMs = value;
+        }
+    }
+
+    private int? _streamIdleTimeoutMs;
 
     // Retries was removed (Ф11 мелочи): it was never read, and the Llm engine's resilience
     // policy is deliberately fallback-to-another-factory, not retry-the-same-provider.

@@ -69,8 +69,17 @@ public sealed class AzureServiceBusBuilder
     /// <summary>Sets maximum auto lock renewal duration in seconds.</summary>
     public AzureServiceBusBuilder MaxAutoLockRenewalDuration(int sec) => Set("maxAutoLockRenewalDuration", sec);
 
-    /// <summary>Enables transacted consumer (deferred complete/abandon).</summary>
+    /// <summary>
+    /// Sets <c>transacted</c> for a producer: <c>true</c> requires an enclosing <c>.Transacted()</c> block,
+    /// <c>false</c> sends at once even inside one; left unset, the producer follows the block.
+    /// </summary>
     public AzureServiceBusBuilder Transacted(bool v = true) => Set("transacted", v);
+
+    /// <summary>
+    /// Sets <c>batchCommit</c>: the sends this producer defers in a <c>.Transacted()</c> block leave as one Service Bus
+    /// batch, all or none; the block's messages must fit in one batch.
+    /// </summary>
+    public AzureServiceBusBuilder BatchCommit(bool v = true) => Set("batchCommit", v);
 
     /// <summary>Enables automatic dead-lettering on processing error.</summary>
     public AzureServiceBusBuilder AutoDeadLetter(bool v = true) => Set("autoDeadLetter", v);

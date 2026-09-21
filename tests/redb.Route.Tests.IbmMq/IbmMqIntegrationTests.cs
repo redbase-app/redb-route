@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Transactions;
+using redb.Route.Processors;
 using redb.Route.IbmMq;
 using Xunit.Abstractions;
 
@@ -176,6 +178,10 @@ public sealed class IbmMqIntegrationTests
 
     // ───── Transacted producer — commit ─────
 
+    /// <summary>Runs <paramref name="body"/> inside a transacted block, as <c>.Transacted()</c> on a route does.</summary>
+    private static Task InTransaction(IExchange exchange, Func<IExchange, CancellationToken, Task> body) =>
+        new TransactedProcessor(new DelegateProcessor(body), new TransactionPolicy()).Process(exchange);
+
     [Fact]
     public async Task TransactedProducer_Commit_DeliversMessage()
     {
@@ -186,15 +192,7 @@ public sealed class IbmMqIntegrationTests
         await producer.Start();
 
         var exchange = new Exchange(new Message("transacted-commit"));
-        await producer.Process(exchange);
-
-        exchange.Properties.Should().ContainKey("TRANSACT_ACTION");
-        var actions = exchange.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        actions.Should().NotBeNull();
-        actions!.Should().NotBeEmpty();
-
-        foreach (var action in actions.Values)
-            await action.Commit();
+        await InTransaction(exchange, (ex, ct) => producer.Process(ex, ct));   // the send is committed as the block ends
 
         await producer.Stop();
         await epProd.Stop();
@@ -235,11 +233,12 @@ public sealed class IbmMqIntegrationTests
         await producer.Start();
 
         var exchange = new Exchange(new Message("should-not-arrive"));
-        await producer.Process(exchange);
-
-        var actions = exchange.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        foreach (var action in actions!.Values)
-            await action.Rollback();
+        var failed = () => InTransaction(exchange, async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            throw new InvalidOperationException("the unit of work failed");
+        });
+        await failed.Should().ThrowAsync<InvalidOperationException>();   // the send is rolled back with it
 
         await producer.Stop();
         await epProd.Stop();
@@ -263,6 +262,111 @@ public sealed class IbmMqIntegrationTests
         await epCons.Stop();
 
         received.Should().NotContain("should-not-arrive", "message was rolled back");
+    }
+
+    /// <summary>
+    /// Sends one uniquely marked message from inside a <c>.Transacted()</c> block that then fails; returns what reached
+    /// the shared queue during the receive window.
+    /// </summary>
+    private async Task<IReadOnlyCollection<string>> SendFromAFailedBlock(string body, string? producerParams)
+    {
+        const string queue = "DEV.QUEUE.2";
+        var epProd = CreateEndpoint(queue, producerParams);
+        var producer = (IbmMqProducer)epProd.CreateProducer();
+        await producer.Start();
+
+        var failed = () => InTransaction(new Exchange(new Message(body)), async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            throw new InvalidOperationException("the unit of work failed");
+        });
+        await failed.Should().ThrowAsync<InvalidOperationException>();
+        await producer.Stop();
+        await epProd.Stop();
+
+        var epCons = CreateEndpoint(queue, "waitInterval=2000");
+        var received = new ConcurrentBag<string>();
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                received.Add(callInfo.Arg<IExchange>().In.Body?.ToString() ?? "");
+                return Task.CompletedTask;
+            });
+        var consumer = (IbmMqConsumer)epCons.CreateConsumer(processor);
+        await consumer.Start();
+        await Task.Delay(5_000);
+        await consumer.Stop();
+        await epCons.Stop();
+        return received;
+    }
+
+    [Fact]
+    public async Task Producer_without_transacted_joins_the_block_and_sends_nothing_when_it_fails()
+    {
+        var body = $"join-{Guid.NewGuid():N}";
+
+        var received = await SendFromAFailedBlock(body, producerParams: null);
+
+        received.Should().NotContain(body, "inside .Transacted() a send joins the transaction unless transacted=false opts out");
+    }
+
+    [Fact]
+    public async Task Producer_with_transacted_false_sends_at_once_even_from_a_failed_block()
+    {
+        var body = $"optout-{Guid.NewGuid():N}";
+
+        var received = await SendFromAFailedBlock(body, "transacted=false");
+
+        received.Should().Contain(body);
+    }
+
+    [Fact]
+    public async Task Deferred_puts_of_one_producer_commit_together_or_not_at_all()
+    {
+        const string queue = "DEV.QUEUE.2";
+        var first = $"batch-first-{Guid.NewGuid():N}";
+        var epProd = CreateEndpoint(queue);
+        var producer = (IbmMqProducer)epProd.CreateProducer();
+        await producer.Start();
+
+        // Two puts in one block; the second is larger than the queue and channel accept, so it fails at the commit.
+        var commitFailed = () => InTransaction(new Exchange(new Message(first)), async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            ex.In.Body = new string('x', 5 * 1024 * 1024);
+            await producer.Process(ex, ct);
+        });
+        await commitFailed.Should().ThrowAsync<Exception>();
+        await producer.Stop();
+        await epProd.Stop();
+
+        var epCons = CreateEndpoint(queue, "waitInterval=2000");
+        var received = new ConcurrentBag<string>();
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                received.Add(callInfo.Arg<IExchange>().In.Body?.ToString() ?? "");
+                return Task.CompletedTask;
+            });
+        var consumer = (IbmMqConsumer)epCons.CreateConsumer(processor);
+        await consumer.Start();
+        await Task.Delay(5_000);
+        await consumer.Stop();
+        await epCons.Stop();
+
+        received.Should().NotContain(first, "the puts of one producer in a block commit in one unit of work or not at all");
+    }
+
+    [Fact]
+    public void Request_reply_producer_refuses_transacted_true()
+    {
+        var endpoint = CreateEndpoint("DEV.QUEUE.1", "replyTo=true&transacted=true");
+
+        var act = () => endpoint.CreateProducer();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*replyTo*transacted*");
     }
 
     // ───── Multiple messages roundtrip ─────

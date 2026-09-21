@@ -1,5 +1,7 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using System.Transactions;
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Telemetry;
 
 namespace redb.Route.Processors;
@@ -61,9 +63,20 @@ public sealed class IdempotentConsumerProcessor : IProcessor
             return;
         }
 
+        // A redelivery of the whole route (OnException) comes back here with the key this exchange claimed on the
+        // previous attempt: it is not a duplicate of itself.
+        var claim = ExchangeResources.FindCompletion<KeyClaim>(exchange, c => ReferenceEquals(c.Consumer, this) && c.Key == key);
         var isNew = await _repository.Add(key, ct).ConfigureAwait(false);
 
-        if (!isNew)
+        if (!isNew && claim is { State: ClaimState.Done })
+        {
+            // The block's work is done and a later step failed. Camel redelivers that step alone; skipping the block
+            // is the same outcome: the work is not done twice.
+            _logger?.LogDebug("Idempotent consumer: key {Key} was processed by this exchange already; the block is skipped on the redelivery.", key);
+            return;
+        }
+
+        if (!isNew && claim is not { State: ClaimState.Failed })
         {
             // Duplicate detected
             ProcessorMetrics.IdempotentDuplicate.Add(1);
@@ -82,34 +95,123 @@ public sealed class IdempotentConsumerProcessor : IProcessor
             return;
         }
 
+        // The key is this exchange's: just added, or still held after the block failed on the previous attempt.
+        if (claim is null)
+        {
+            claim = new KeyClaim(this, key);
+            ExchangeResources.OnCompletion(exchange, claim);
+        }
+        if (isNew)
+            claim.Bind(Transaction.Current);
+        claim.State = ClaimState.Running;
+
         try
         {
             await _inner.Process(exchange, ct).ConfigureAwait(false);
-            await _repository.Confirm(key, ct).ConfigureAwait(false);
-            ProcessorMetrics.IdempotentPassed.Add(1);
         }
         catch
         {
-            // Under an ambient transaction the key insert is part of that transaction (redb enlists via
-            // core's AmbientConnectionRegistry): the rollback removes the key on its own, so an explicit
-            // Remove is unnecessary — and harmful, because a Remove issued inside a doomed transaction
-            // throws and would mask the original processing failure. Outside a transaction, remove the key
-            // so a redelivery can re-process; if that Remove itself fails, keep the original exception
-            // (never let a cleanup failure replace the real cause).
-            if (System.Transactions.Transaction.Current is null)
-            {
-                try
-                {
-                    await _repository.Remove(key, ct).ConfigureAwait(false);
-                }
-                catch (Exception removeEx)
-                {
-                    _logger?.LogError(removeEx,
-                        "Idempotent consumer: failed to remove key '{Key}' after a processing failure; " +
-                        "preserving the original error — the key may need manual cleanup.", key);
-                }
-            }
+            claim.State = ClaimState.Failed;
             throw;
+        }
+
+        if (exchange.EndedInFailure())
+        {
+            claim.State = ClaimState.Failed;
+            return;
+        }
+        claim.State = ClaimState.Done;
+
+        // A key bound to a transaction is confirmed with the work; otherwise when the exchange completes.
+        if (claim.FollowsTransaction)
+            await _repository.Confirm(key, ct).ConfigureAwait(false);
+        ProcessorMetrics.IdempotentPassed.Add(1);
+    }
+
+    private enum ClaimState { Running, Done, Failed }
+
+    /// <summary>
+    /// The key this exchange claimed, and what happens to it when the exchange's unit of work ends (Apache Camel's
+    /// idempotent consumer with <c>completionEager=false</c> and <c>removeOnFailure=true</c>, the defaults).
+    /// <list type="bullet">
+    ///   <item>Claimed outside a transaction: the key is confirmed when the exchange completes and removed when it fails,
+    ///   wherever the failure happened (inside the block or after it), so the redelivery is processed again.</item>
+    ///   <item>Claimed inside a transaction: the key follows the transaction, not the exchange. It commits with the work
+    ///   and stays even if the exchange fails later (a send after the database commit, say), so the redelivery does not
+    ///   redo committed work. It goes with a rollback: by itself for a repository that
+    ///   <see cref="IIdempotentRepository.JoinsAmbientTransaction"/>, removed by the consumer for one that does not.</item>
+    /// </list>
+    /// </summary>
+    private sealed class KeyClaim : IExchangeCompletion
+    {
+        public KeyClaim(IdempotentConsumerProcessor consumer, string key)
+        {
+            Consumer = consumer;
+            Key = key;
+        }
+
+        public IdempotentConsumerProcessor Consumer { get; }
+        public string Key { get; }
+        public ClaimState State { get; set; }
+        public bool FollowsTransaction { get; private set; }
+
+        public void Bind(Transaction? transaction)
+        {
+            FollowsTransaction = transaction is not null;
+            if (transaction is not null && !Consumer._repository.JoinsAmbientTransaction)
+                transaction.TransactionCompleted += RemoveUnlessCommitted;
+        }
+
+        public Task OnComplete(IExchange exchange, CancellationToken ct) =>
+            FollowsTransaction ? Task.CompletedTask : Consumer._repository.Confirm(Key, ct);
+
+        public async Task OnFailure(IExchange exchange, CancellationToken ct)
+        {
+            if (FollowsTransaction)
+                return;
+            try
+            {
+                await Consumer._repository.Remove(Key, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Idempotent consumer: the exchange failed and removing its key '{Key}' failed too; until the key is " +
+                    "removed, the redelivery is skipped as a duplicate.", ex);
+            }
+        }
+
+        /// <summary>
+        /// The repository keeps its keys outside the transaction, so the rollback cannot take the key back: the work it
+        /// guarded did not commit, and a key left behind would make the redelivery look like a duplicate. Runs while the
+        /// transaction completes, before the route returns to the consumer.
+        /// </summary>
+        private void RemoveUnlessCommitted(object? sender, TransactionEventArgs e)
+        {
+            var status = e.Transaction?.TransactionInformation.Status;
+            if (status == TransactionStatus.Committed)
+                return;
+            if (status != TransactionStatus.Aborted)
+            {
+                Consumer._logger?.LogError(
+                    "Idempotent consumer: the outcome of the transaction holding key '{Key}' is {Status}; the key is kept, " +
+                    "check whether the work committed.", Key, status);
+                return;
+            }
+
+            // A synchronous event: the removal is waited for here, so it lands before the consumer hands the message back.
+            // It runs outside the completed transaction, which a repository opening a connection must not try to join.
+            try
+            {
+                using var noTransaction = new TransactionScope(TransactionScopeOption.Suppress, TransactionScopeAsyncFlowOption.Enabled);
+                Consumer._repository.Remove(Key, CancellationToken.None).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                Consumer._logger?.LogError(ex,
+                    "Idempotent consumer: the transaction rolled back and removing key '{Key}' failed; until the key is " +
+                    "removed, the redelivery is skipped as a duplicate.", Key);
+            }
         }
     }
 }

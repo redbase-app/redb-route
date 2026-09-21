@@ -47,7 +47,7 @@ internal sealed class StreamedQueryResultRelease(IStreamedQueryResult result) : 
 /// (committing that transaction), when the reading stops early or fails, or — through the handle registered with the
 /// exchange — when the exchange ends without anyone reading. The rows can be read once.
 /// </summary>
-internal sealed class StreamedQueryResult<T> : IAsyncEnumerable<T>, IStreamedQueryResult
+internal sealed class StreamedQueryResult<T> : IAsyncEnumerable<T>, IStreamedQueryResult, IExchangeBoundBody
 {
     private readonly DbDataReader _reader;
     private readonly Func<DbDataReader, object> _map;

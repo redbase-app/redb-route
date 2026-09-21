@@ -11,9 +11,9 @@
     <ProjectReference Include="..\..\redb.Route.Llm.Abstractions\redb.Route.Llm.Abstractions.csproj" />
     <ProjectReference Include="..\..\redb.Route.Llm.Tools\redb.Route.Llm.Tools.csproj" />
     <ProjectReference Include="..\..\redb.Route.Exec\redb.Route.Exec.csproj" />
-    <PackageReference Include="redb.Core.Pro" Version="4.0.1" />
-    <PackageReference Include="redb.Postgres.Pro" Version="4.0.1" />
-    <PackageReference Include="redb.MSSql.Pro" Version="4.0.1" />
+    <PackageReference Include="redb.Core.Pro" Version="4.1.0" />
+    <PackageReference Include="redb.Postgres.Pro" Version="4.1.0" />
+    <PackageReference Include="redb.MSSql.Pro" Version="4.1.0" />
     <ProjectReference Include="..\..\..\redb.SQLite.Pro\redb.SQLite.Pro.csproj" />
   </ItemGroup>
 

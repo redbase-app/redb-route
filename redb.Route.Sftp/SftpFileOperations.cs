@@ -74,16 +74,18 @@ internal sealed class SftpFileOperations : IRemoteFileOperations
     /// <inheritdoc />
     public Task<List<GenericFileInfo>> ListFilesAsync(
         string directory, bool recursive, int maxDepth, int minDepth,
+        Func<string, string, bool>? directoryFilter = null,
         CancellationToken ct = default)
     {
         var client = RequireClient();
-        var result = EnumerateFiles(client, directory, directory, 0, recursive, maxDepth, minDepth);
+        var result = EnumerateFiles(client, directory, directory, 0, recursive, maxDepth, minDepth, directoryFilter);
         return Task.FromResult(result);
     }
 
     private List<GenericFileInfo> EnumerateFiles(
         SftpClient client, string dirPath, string basePath,
-        int depth, bool recursive, int maxDepth, int minDepth)
+        int depth, bool recursive, int maxDepth, int minDepth,
+        Func<string, string, bool>? directoryFilter)
     {
         var result = new List<GenericFileInfo>();
 
@@ -107,9 +109,15 @@ internal sealed class SftpFileOperations : IRemoteFileOperations
                 if (recursive && (maxDepth == 0 || depth < maxDepth))
                 {
                     var subPath = CombinePath(dirPath, entry.Name);
+
+                    // Asked before the descent: a directory turned down here costs no listing,
+                    // which is the point of filterDirectory on a tree of partner directories.
+                    if (directoryFilter != null && !directoryFilter(subPath, GetRelativePath(basePath, subPath)))
+                        continue;
+
                     try
                     {
-                        result.AddRange(EnumerateFiles(client, subPath, basePath, depth + 1, recursive, maxDepth, minDepth));
+                        result.AddRange(EnumerateFiles(client, subPath, basePath, depth + 1, recursive, maxDepth, minDepth, directoryFilter));
                     }
                     catch (Renci.SshNet.Common.SftpPathNotFoundException)
                         when (!_options.DirectoryMustExist && !client.Exists(subPath))

@@ -25,6 +25,7 @@ It shows the pieces a real integration needs, each in the place it belongs:
 | Web and in-process calls | REST DSL `PUT /api/products/{gtin}/status`, and a `ProducerTemplate` to the same `direct:` endpoint |
 | Serial numbers | one random number per block of 10 000, issued by one set-based SQL statement |
 | Polling while things fail | SFTP consumer backoff: fewer polls while the server or the database is down |
+| Several directories of one partner | one consumer on their parent with `Recursive()` and `AntInclude(...)`, so one connection serves them all |
 | Seeing messages flow | `.Log(...)` at every stage, `.MessageHistory()` on the intake and request routes |
 | Context-wide error handling | `OnException<T>().Handled(true)` in its own route builder |
 | Reliable delivery | an outbox table written in the same transaction, read by `Sql.Poll` with `OnSuccess` / `OnFailure` |

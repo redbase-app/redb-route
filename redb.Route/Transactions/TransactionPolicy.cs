@@ -62,6 +62,13 @@ public sealed class TransactionPolicy
     public IsolationLevel IsolationLevel { get; init; } = IsolationLevel.ReadCommitted;
 
     /// <summary>
+    /// Whether a block with this policy joins a transaction that is already running (Required, Mandatory) rather than
+    /// running a unit of work of its own (RequiresNew, Suppress).
+    /// </summary>
+    internal bool JoinsRunningTransaction =>
+        ScopeOption == TransactionScopeOption.Required || ScopeOption == MandatoryScopeMarker;
+
+    /// <summary>
     /// Creates a <see cref="TransactionScope"/> based on this policy with <see cref="TransactionScopeAsyncFlowOption.Enabled"/>.
     /// </summary>
     /// <returns>A configured transaction scope.</returns>

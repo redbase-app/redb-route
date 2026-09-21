@@ -45,4 +45,14 @@ public interface IIdempotentRepository
     /// </summary>
     /// <param name="ct">Cancellation token.</param>
     Task Clear(CancellationToken ct = default);
+
+    /// <summary>
+    /// Whether <see cref="Add"/> writes through an ambient <see cref="System.Transactions.Transaction"/>, so that its
+    /// rollback takes the key back. The idempotent consumer relies on it inside a <c>.Transacted()</c> block: a key that
+    /// is part of the transaction goes with its rollback and stays with its commit, and the consumer must not remove it
+    /// afterwards — another node may already hold the same key again. A repository that keeps its keys outside the
+    /// transaction (in memory, say) returns <see langword="false"/>, the default, and the consumer removes the key itself
+    /// when the transaction does not commit.
+    /// </summary>
+    bool JoinsAmbientTransaction => false;
 }

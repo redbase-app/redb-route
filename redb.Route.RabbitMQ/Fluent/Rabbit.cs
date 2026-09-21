@@ -55,7 +55,7 @@ public sealed class RabbitBuilder
     private string? _concurrentConsumers;
     private string? _prefetchCount;
     private bool _autoAck;
-    private bool _transacted;
+    private bool? _transacted;
     private bool? _mandatory;
     private bool _replyTo;
     private string? _timeout;
@@ -200,12 +200,18 @@ public sealed class RabbitBuilder
     /// <summary>
     /// Broker-side auto-acknowledge. When enabled the broker settles every delivery on hand-off
     /// (at-most-once): no manual ack/nack and a failed turn does NOT requeue. Default off (at-least-once).
-    /// Cannot be combined with <see cref="Transacted"/>.
+    /// Cannot be combined with <see cref="Transacted()"/>.
     /// </summary>
     public RabbitBuilder AutoAck(bool enabled = true) { _autoAck = enabled; return this; }
 
     /// <summary>Enable transacted channel.</summary>
     public RabbitBuilder Transacted() { _transacted = true; return this; }
+
+    /// <summary>
+    /// Sets <c>transacted</c> explicitly. <c>false</c> sends at once even inside a <c>.Transacted()</c> block, outside its
+    /// transaction; left unset, a producer follows the block.
+    /// </summary>
+    public RabbitBuilder Transacted(bool value) { _transacted = value; return this; }
 
     /// <summary>Set mandatory flag on published messages.</summary>
     public RabbitBuilder Mandatory() { _mandatory = true; return this; }
@@ -358,7 +364,7 @@ public sealed class RabbitBuilder
         AppendIf("concurrentConsumers", _concurrentConsumers);
         AppendIf("prefetchCount", _prefetchCount);
         AppendBool("autoAck", _autoAck);
-        AppendBool("transacted", _transacted);
+        if (_transacted is { } transacted) Append("transacted", transacted ? "true" : "false");
         AppendBoolExplicit("mandatory", _mandatory);
         AppendBool("replyTo", _replyTo);
         AppendIf("timeout", _timeout);

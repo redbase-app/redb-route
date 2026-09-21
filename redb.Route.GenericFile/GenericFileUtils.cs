@@ -8,6 +8,87 @@ namespace redb.Route.GenericFile;
 public static class GenericFileUtils
 {
     /// <summary>
+    /// Ant-style path matching, as Apache Camel's <c>antInclude</c>/<c>antExclude</c> use it:
+    /// <c>?</c> is one character, <c>*</c> matches within a single path segment and stops at a
+    /// separator, and <c>**</c> spans any number of segments. Several patterns are separated by
+    /// commas, and the path is matched with <c>/</c> as the separator whatever the transport wrote.
+    /// <para>
+    /// This is deliberately not <see cref="GlobMatch"/> with a longer input: there <c>*</c> becomes
+    /// <c>.*</c> and crosses separators, so <c>*/x.csv</c> and <c>**/x.csv</c> would mean the same
+    /// thing and a pattern could never name one level.
+    /// </para>
+    /// </summary>
+    /// <param name="relativePath">Path relative to the polled directory (e.g. "TYPE_A/outbox/a.csv").</param>
+    /// <param name="pattern">One or more comma-separated Ant patterns.</param>
+    /// <param name="caseSensitive">Whether matching respects case (Camel's <c>antFilterCaseSensitive</c>, default true).</param>
+    /// <returns>True when any pattern matches the path.</returns>
+    public static bool AntMatch(string relativePath, string pattern, bool caseSensitive = true)
+    {
+        ArgumentNullException.ThrowIfNull(relativePath);
+        ArgumentNullException.ThrowIfNull(pattern);
+
+        var path = relativePath.Replace('\\', '/').TrimStart('/');
+
+        foreach (var single in pattern.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var regex = AntPatternCache.GetOrAdd((single, caseSensitive), static key => BuildAntRegex(key.Pattern, key.CaseSensitive));
+            if (regex.IsMatch(path))
+                return true;
+        }
+
+        return false;
+    }
+
+    // One compiled Regex per (pattern, case) pair: a poll runs the same handful of patterns over
+    // every file it listed, and a directory filter runs them again per directory.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Pattern, bool CaseSensitive), Regex> AntPatternCache = new();
+
+    private static Regex BuildAntRegex(string pattern, bool caseSensitive)
+    {
+        var normalized = pattern.Replace('\\', '/').TrimStart('/');
+        var sb = new System.Text.StringBuilder("^");
+
+        for (var i = 0; i < normalized.Length; i++)
+        {
+            var c = normalized[i];
+            if (c == '*')
+            {
+                var isDouble = i + 1 < normalized.Length && normalized[i + 1] == '*';
+                if (isDouble)
+                {
+                    i++;
+                    // "**/" also matches zero segments, so "**/x.csv" matches "x.csv" at the root.
+                    if (i + 1 < normalized.Length && normalized[i + 1] == '/')
+                    {
+                        i++;
+                        sb.Append("(?:.*/)?");
+                    }
+                    else
+                    {
+                        sb.Append(".*");
+                    }
+                }
+                else
+                {
+                    sb.Append("[^/]*");
+                }
+            }
+            else if (c == '?')
+            {
+                sb.Append("[^/]");
+            }
+            else
+            {
+                sb.Append(Regex.Escape(c.ToString()));
+            }
+        }
+
+        sb.Append('$');
+        var options = RegexOptions.Compiled | (caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase);
+        return new Regex(sb.ToString(), options);
+    }
+
+    /// <summary>
     /// Simple glob matching supporting * and ? wildcards.
     /// Supports comma-separated patterns: "*.csv,*.json".
     /// </summary>

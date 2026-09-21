@@ -100,8 +100,13 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
 
     // ── Transactions ──
 
-    /// <summary>Enable transacted mode for the channel.</summary>
-    public bool Transacted { get; set; }
+    /// <summary>
+    /// Consumer: <c>true</c> takes the delivery on a transacted channel. Producer: whether the send joins the enclosing
+    /// <c>.Transacted()</c> block. Unset, it follows the block: deferred until the database commits inside one, sent at
+    /// once outside. <c>true</c> requires a block and fails outside one; <c>false</c> sends at once even inside one.
+    /// A request-reply producer (<see cref="ReplyTo"/>) always sends at once and refuses <c>true</c>.
+    /// </summary>
+    public bool? Transacted { get; set; }
 
     /// <summary>Use mandatory flag. Null = auto-detect by exchange type.</summary>
     public bool? Mandatory { get; set; }
@@ -210,7 +215,7 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
         if (Timeout <= 0)
             throw new ArgumentOutOfRangeException(nameof(Timeout), "Timeout must be greater than 0.");
 
-        if (AutoAck && Transacted)
+        if (AutoAck && Transacted == true)
             throw new ArgumentException(
                 "AutoAck cannot be combined with Transacted: an auto-acked delivery is settled by the broker on hand-off and cannot be transactionally committed or rolled back.");
     }

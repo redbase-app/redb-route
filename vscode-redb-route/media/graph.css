@@ -61,25 +61,13 @@ body {
 
 .seq > * { flex: none; }
 
+/* The gap between two steps: the SVG overlay draws the curve and its arrowhead through it. */
 .edge {
   align-self: center;
-  width: 14px;
+  width: 30px;
   flex: none;
-  border-top: 1px solid var(--vscode-descriptionForeground);
-  opacity: 0.55;
   margin: 0 1px;
   position: relative;
-}
-
-/* the message goes THAT way: an arrowhead on every edge */
-.edge::after {
-  content: "";
-  position: absolute;
-  right: -1px;
-  top: -3.5px;
-  border-left: 5px solid var(--vscode-descriptionForeground);
-  border-top: 3px solid transparent;
-  border-bottom: 3px solid transparent;
 }
 
 /* ── nodes (§3.2, §6): category first, icon second ─────────────────── */
@@ -164,38 +152,27 @@ body {
 
 /* ── branching: a stack of rows (§3.4, §3.6) ───────────────────────── */
 
-/* The GROUP CONTOUR (owner finding 2026-09-09): the whole branching is one visible box, a
-   rail runs along its left edge, and every branch row hangs off the rail with a stub — no
-   more arrows out of nowhere. */
+/* The decision diamond with the stack of branches beside it; the curves of the overlay carry
+   the fan out and the merge back, so the group needs no box and no rail of its own. */
 .branching {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  border: 1px solid var(--vscode-charts-blue, #75beff);
-  border-left-width: 2px;
-  border-radius: 6px;
-  padding: 3px 6px;
+  flex-direction: row;
+  align-items: center;
+  gap: 40px;
   margin: 0 2px;
 }
 
-.branching.cat-errors { border-color: var(--vscode-editorWarning-foreground, #cca700); }
+/* the stack of branch rows to the right of the diamond */
+.lstack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
 
 .branch {
   display: flex;
   align-items: center;
   gap: 0;
-}
-
-/* the stub from the left rail into this branch's label */
-.branch::before {
-  content: "";
-  flex: none;
-  width: 9px;
-  border-top: 1px solid var(--vscode-descriptionForeground);
-  opacity: 0.55;
-  align-self: center;
-  margin-left: -6px;
-  margin-right: 2px;
 }
 
 .branch > .branch-label {
@@ -205,7 +182,6 @@ body {
   border: 1px solid var(--vscode-editorWidget-border, #666);
   border-radius: 3px;
   padding: 1px 6px;
-  margin-top: 2px;
   cursor: pointer;
   max-width: 280px;
   overflow: hidden;
@@ -489,7 +465,7 @@ body {
   padding: 0 0 6px;
 }
 
-/* ── the snake: wrapped main line with drawn U-turns (§2, §11) ─────── */
+/* ── the snake: the main line wrapped into rows (§2, §11) ──────────── */
 
 .seq.measure {
   position: absolute;
@@ -512,118 +488,29 @@ body {
   max-width: 100%;
 }
 
-/* the route's spine: one thin line binding every row of ONE route */
-.snake.multi {
-  border-left: 2px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
-  padding-left: 8px;
-  border-radius: 2px;
-}
-
 .snake-row {
-  min-height: 26px;
+  min-height: 34px;
 }
 
-/* Stretch elbows: they span the row's FULL height, so a tall scope row stays visually
-   connected to its neighbours. out: a stub at the vertical center turning down along the
-   right edge; in: down the left edge turning right at the center, with an arrowhead. */
+/* The elbows at the ends of a wrapped row: they only hold the room the carriage return
+   turns in, the overlay draws the turn itself. */
 .wrap {
   flex: none;
   align-self: stretch;
   width: 14px;
   position: relative;
-  opacity: 0.7;
   min-height: 22px;
 }
 
 .wrap.out { margin-left: 2px; }
 .wrap.in { margin-right: 2px; }
 
-/* The return lane between rows: ── down at the right, ALL the way back left, down into the
-   next row — the carriage return drawn in full. Width is set inline to the actual row width. */
+/* The lane between two rows the carriage return runs along; the overlay draws it, the lane
+   only holds its height. Width is set inline to the actual row width. */
 .uturn {
   position: relative;
-  height: 12px;
+  height: 24px;
   flex: none;
-  opacity: 0.7;
-}
-
-/* right vertical: catches the out-stub coming down from the row above */
-.uturn::before {
-  content: "";
-  position: absolute;
-  right: 4px;
-  top: -3px;
-  bottom: 50%;
-  border-right: 1px solid var(--vscode-descriptionForeground);
-}
-
-/* the long horizontal traverse back to the left */
-.uturn::after {
-  content: "";
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  top: 50%;
-  border-top: 1px solid var(--vscode-descriptionForeground);
-}
-
-/* left vertical: hands the line down into the next row's entry */
-.uturn i {
-  position: absolute;
-  left: 4px;
-  top: 50%;
-  bottom: -3px;
-  border-left: 1px solid var(--vscode-descriptionForeground);
-}
-
-/* Short stubs, not full-height poles: on a tall row a center-to-bottom drop was a 150px
-   stick into nowhere. The SPINE carries the row-to-row continuity; the elbow only says
-   «the line turns here». */
-.wrap.out::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 4px;
-  top: 50%;
-  border-top: 1px solid var(--vscode-descriptionForeground);
-}
-/* The stub runs from the row's CENTER to its edge: on a tall row that is a long drop, but
-   it now ENDS at the return lane — a connected turn, not a stick into nowhere. */
-.wrap.out::after {
-  content: "";
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  bottom: -3px;
-  border-right: 1px solid var(--vscode-descriptionForeground);
-}
-
-.wrap.in::before {
-  content: "";
-  position: absolute;
-  left: 4px;
-  top: -3px;
-  bottom: 50%;
-  border-left: 1px solid var(--vscode-descriptionForeground);
-}
-.wrap.in::after {
-  content: "";
-  position: absolute;
-  left: 4px;
-  right: 0;
-  top: 50%;
-  border-top: 1px solid var(--vscode-descriptionForeground);
-}
-
-.wrap.in .arrowhead,
-.wrap.in i {
-  position: absolute;
-  right: -1px;
-  top: 50%;
-  margin-top: -3px;
-  border-left: 5px solid var(--vscode-descriptionForeground);
-  border-top: 3px solid transparent;
-  border-bottom: 3px solid transparent;
 }
 
 /* ── collapse (§4) ─────────────────────────────────────────────────── */
@@ -639,14 +526,6 @@ body {
 .node.collapsed {
   font-weight: 600;
   border-style: solid;
-}
-
-.branching { position: relative; }
-
-.branching-fold {
-  position: absolute;
-  left: -14px;
-  top: 1px;
 }
 
 .scope.compact {
@@ -954,5 +833,36 @@ body.with-panel { padding-right: 292px; }
   border: none;
   border-radius: 3px;
   padding: 5px 12px;
+  cursor: pointer;
+}
+
+/* ── the mermaid look over the snake: left to right, curves carry the flow ── */
+
+/* the rows sit right under one another: the curve, not a gap, carries the eye across */
+.mermaid-look.lr .snake { gap: 0; }
+
+/* a bracket reads left to right as well: its title first, the body beside it */
+.mermaid-look.lr .scope {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 30px;
+  padding: 10px 16px;
+}
+.mermaid-look.lr .scope > .scope-head {
+  align-self: center;
+  padding: 0;
+  margin: 0;
+}
+
+.mermaid-look .lbranch-head {
+  /* the decision diamond, as in the top-down mermaid look */
+  position: relative;
+  z-index: 1;
+  flex: none;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  background: var(--vscode-list-hoverBackground, var(--vscode-editorWidget-background));
+  padding: 14px 34px;
+  white-space: nowrap;
   cursor: pointer;
 }

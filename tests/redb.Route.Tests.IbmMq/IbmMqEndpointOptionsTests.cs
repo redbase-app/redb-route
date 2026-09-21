@@ -20,7 +20,7 @@ public sealed class IbmMqEndpointOptionsTests
         opts.ResolvedConcurrentConsumers.Should().Be(1);
         opts.WaitInterval.Should().Be(5000);
         opts.BatchSize.Should().Be(0);
-        opts.Transacted.Should().BeFalse();
+        opts.Transacted.Should().BeNull("unset, a producer follows the enclosing .Transacted() block");
         opts.Persistence.Should().Be(IbmMqPersistence.AsQDef);
         opts.Priority.Should().Be(-1);
         opts.Expiry.Should().Be(-1);

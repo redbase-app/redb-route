@@ -112,7 +112,7 @@ public sealed class RedisBuilder
     // Common
     private string? _ttl;
     private bool _usePattern;
-    private bool _transacted;
+    private bool? _transacted;
     private string? _pollDelayMs;
     private string? _command;
 
@@ -146,7 +146,9 @@ public sealed class RedisBuilder
     private bool? _streamApproximate;
     private string? _streamReadCount;
     private string? _streamBlockTimeMs;
-    private bool? _streamAutoAck;
+    private bool _streamNoAck;
+    private string? _streamClaimMinIdleMs;
+    private string? _processingList;
     private string? _streamStartPosition;
 
     internal RedisBuilder(string operation, string resource)
@@ -187,8 +189,14 @@ public sealed class RedisBuilder
     /// <summary>Use pattern matching for SUBSCRIBE/key operations.</summary>
     public RedisBuilder UsePattern() { _usePattern = true; return this; }
 
-    /// <summary>Enable transacted (pipeline) mode.</summary>
+    /// <summary>Defers the operation to the commit of the enclosing <c>.Transacted()</c> block (<c>transacted=true</c>).</summary>
     public RedisBuilder Transacted() { _transacted = true; return this; }
+
+    /// <summary>
+    /// Sets <c>transacted</c> explicitly. <c>false</c> makes PUBLISH and XADD go out at once even inside a
+    /// <c>.Transacted()</c> block; left unset, they follow the block and every other write runs at once.
+    /// </summary>
+    public RedisBuilder Transacted(bool value) { _transacted = value; return this; }
 
     /// <summary>Poll delay for consumer operations in milliseconds. Default 1000.</summary>
     public RedisBuilder PollDelay(int ms) { _pollDelayMs = ms.ToString(); return this; }
@@ -299,11 +307,30 @@ public sealed class RedisBuilder
     /// <summary>Stream block time from an expression.</summary>
     public RedisBuilder StreamBlockTime(IExpression ms) { _streamBlockTimeMs = ms.ToTemplateString(); return this; }
 
-    /// <summary>Auto-acknowledge stream messages. Default true.</summary>
-    public RedisBuilder StreamAutoAck(bool ack = true) { _streamAutoAck = ack; return this; }
+    /// <summary>
+    /// A group consumer reads with NOACK: an entry counts as delivered when it is read, and one whose route failed is not
+    /// read again (at-most-once). Without it the consumer acknowledges after the route succeeded (at-least-once).
+    /// </summary>
+    public RedisBuilder StreamNoAck() { _streamNoAck = true; return this; }
 
-    /// <summary>Starting position for XREAD: "&gt;" (new), "0" (all), or specific ID.</summary>
+    /// <summary>
+    /// A group consumer claims entries of its group pending for at least <paramref name="ms"/> milliseconds (a failed
+    /// one, or one a dead consumer left) and processes them again. Must exceed the longest time a route takes.
+    /// </summary>
+    public RedisBuilder StreamClaimMinIdle(int ms) { _streamClaimMinIdleMs = ms.ToString(); return this; }
+
+    /// <summary>
+    /// Where a stream consumer starts: unset, at the entries added from now on; "0" from the beginning; an entry id after
+    /// it. "&gt;" only with a consumer group.
+    /// </summary>
     public RedisBuilder StreamStartPosition(string position) { _streamStartPosition = position; return this; }
+
+    /// <summary>
+    /// A BLPOP/BRPOP consumer moves each item into <paramref name="key"/> while its route runs and removes it after
+    /// success; a failed item goes back to the queue, and a previous run's leftovers are returned at start
+    /// (at-least-once). One consumer per processing list.
+    /// </summary>
+    public RedisBuilder ProcessingList(string key) { _processingList = key; return this; }
 
     // ── Build ─────────────────────────────────────────────────────────
 
@@ -340,7 +367,7 @@ public sealed class RedisBuilder
         // Common
         AppendIf("ttl", _ttl);
         AppendBool("usePattern", _usePattern);
-        AppendBool("transacted", _transacted);
+        AppendBoolExplicit("transacted", _transacted);
         AppendIf("pollDelayMs", _pollDelayMs);
         AppendIf("command", _command);
 
@@ -374,7 +401,9 @@ public sealed class RedisBuilder
         AppendBoolExplicit("streamApproximate", _streamApproximate);
         AppendIf("streamReadCount", _streamReadCount);
         AppendIf("streamBlockTimeMs", _streamBlockTimeMs);
-        AppendBoolExplicit("streamAutoAck", _streamAutoAck);
+        AppendBool("streamNoAck", _streamNoAck);
+        AppendIf("streamClaimMinIdleMs", _streamClaimMinIdleMs);
+        AppendIf("processingList", _processingList);
         AppendIf("streamStartPosition", _streamStartPosition);
 
         return sb.ToString();

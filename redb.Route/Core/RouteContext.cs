@@ -834,11 +834,13 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                         $"Route '{definition.GetRouteId() ?? "(unnamed)"}': the consumer URI '{EndpointUri.Sanitize(fromUri)}' contains a ${{...}} " +
                         "placeholder, but a consumer has no message to resolve it against. Use {{key}} configuration placeholders or a constant.");
 
-                var normalizedFrom = EndpointUriParser.Parse(fromUri).NormalizedKey;
-                // Unnamed routes fall back to the endpoint key as their id; sanitize it so a
-                // secret in the URI does not leak through every {RouteId} log line. Endpoint
-                // dedup below still keys on the raw normalizedFrom, so identity is unaffected.
-                var routeId = definition.GetRouteId() ?? EndpointUri.Sanitize(normalizedFrom);
+                var parsedFrom = EndpointUriParser.Parse(fromUri);
+                var normalizedFrom = parsedFrom.NormalizedKey;
+                // Unnamed routes are named after their endpoint: scheme, path and a deterministic
+                // UUID of the URI (RouteIdFactory) — no separator a dashboard label chokes on and no
+                // query string a secret could ride in. Endpoint dedup below still keys on the raw
+                // normalizedFrom, so identity is unaffected.
+                var routeId = definition.GetRouteId() ?? RouteIdFactory.ForEndpoint(parsedFrom);
 
                 if (!usedRouteIds.Add(routeId))
                     throw new InvalidOperationException(
@@ -890,11 +892,11 @@ public class RouteContext : IRouteContext, IAsyncDisposable
             foreach (var definition in builder.Definitions)
             {
                 var fromUri = ResolvePlaceholders(definition.GetFromUri()!);
-                // Unnamed routes fall back to the (sanitized) endpoint key as their id so a
-                // URI secret never leaks through {RouteId}. Kept in sync with the validation
-                // loop above; endpoint identity/dedup still keys on the raw normalizedFrom.
+                // Unnamed routes are named after their endpoint (see RouteIdFactory). Kept in sync
+                // with the validation loop above; endpoint identity/dedup still keys on the raw
+                // normalizedFrom.
                 var routeId = definition.GetRouteId()
-                    ?? EndpointUri.Sanitize(EndpointUriParser.Parse(fromUri).NormalizedKey);
+                    ?? RouteIdFactory.ForEndpoint(EndpointUriParser.Parse(fromUri));
 
                 PipelineProcessor pipeline;
                 _compilingRouteId = routeId;   // so nested ReplayableDefinition registers under this route
@@ -1049,7 +1051,10 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                                 onPrepareFailure: exDef.OnPrepareFailureAction,
                                 useOriginalBody: exDef.IsUseOriginalBody,
                                 logStackTrace: exDef.LogStackTraceValue,
-                                logExhausted: exDef.LogExhaustedValue);
+                                logExhausted: exDef.LogExhaustedValue,
+                                onExceptionOccurredProcessor: exDef.OnExceptionOccurredProcessor,
+                                onRedeliveryProcessor: exDef.OnRedeliveryProcessor,
+                                onPrepareFailureProcessor: exDef.OnPrepareFailureProcessor);
                         }
                         finalProcessor = oeProc;
                     }
@@ -1059,6 +1064,11 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 // and a handled error is a completion. Their bodies compile detached (no intercepts).
                 if (completionHandlers.Count > 0)
                     finalProcessor = new OnCompletionProcessor(finalProcessor, completionHandlers, routeId, _loggerFactory?.CreateLogger<OnCompletionProcessor>());
+
+                // The exchange's unit of work: outside every error handler, inside the statistics, inflight tracking and
+                // exchange events, so a completion (an idempotent key confirmed or removed) has run before the consumer
+                // settles the message and before a listener hears the exchange finished.
+                finalProcessor = new UnitOfWorkProcessor(finalProcessor, _loggerFactory?.CreateLogger<UnitOfWorkProcessor>());
 
                 // Create consumer on the From endpoint
                 var endpoint = GetEndpoint(fromUri);

@@ -691,7 +691,33 @@
         "required": true
       }
     ],
-    "children": [],
+    "children": [
+      {
+        "name": "tag",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "name",
+            "type": "String",
+            "required": true
+          },
+          {
+            "name": "fromHeader",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": false
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
     "allowsSteps": true,
     "allowsText": false,
     "takesEndpoint": false
@@ -848,11 +874,16 @@
     "attributes": [
       {
         "name": "exceptions",
-        "type": "TypeName",
+        "type": "TypeNameList",
         "required": true
       },
       {
         "name": "handled",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "continued",
         "type": "Bool",
         "required": false
       },
@@ -875,9 +906,96 @@
         "name": "backOffMultiplier",
         "type": "Double",
         "required": false
+      },
+      {
+        "name": "useOriginalBody",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "logStackTrace",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "logExhausted",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "retryAttemptedLogLevel",
+        "type": "Enum",
+        "required": false,
+        "enumValues": [
+          "Trace",
+          "Debug",
+          "Information",
+          "Warning",
+          "Error",
+          "Critical"
+        ]
+      },
+      {
+        "name": "retriesExhaustedLogLevel",
+        "type": "Enum",
+        "required": false,
+        "enumValues": [
+          "Trace",
+          "Debug",
+          "Information",
+          "Warning",
+          "Error",
+          "Critical"
+        ]
+      },
+      {
+        "name": "onExceptionOccurred",
+        "type": "Reference",
+        "required": false
+      },
+      {
+        "name": "onRedelivery",
+        "type": "Reference",
+        "required": false
+      },
+      {
+        "name": "onPrepareFailure",
+        "type": "Reference",
+        "required": false
       }
     ],
-    "children": [],
+    "children": [
+      {
+        "name": "when",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      },
+      {
+        "name": "retryWhile",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": true
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
     "allowsSteps": true,
     "allowsText": false,
     "takesEndpoint": false
@@ -2073,6 +2191,16 @@
         "name": "poolSize",
         "type": "Int",
         "required": true
+      },
+      {
+        "name": "maxQueueSize",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "enqueueTimeout",
+        "type": "Duration",
+        "required": false
       }
     ],
     "children": [],
@@ -2189,6 +2317,21 @@
           "suppress",
           "mandatory"
         ]
+      },
+      {
+        "name": "deadLetterChannel",
+        "type": "Uri",
+        "required": false
+      },
+      {
+        "name": "retryAttempts",
+        "type": "Int",
+        "required": false
+      },
+      {
+        "name": "retryDelay",
+        "type": "Duration",
+        "required": false
       }
     ],
     "children": [],
@@ -2255,7 +2398,7 @@
         "attributes": [
           {
             "name": "exceptions",
-            "type": "TypeName",
+            "type": "TypeNameList",
             "required": true
           }
         ],

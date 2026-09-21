@@ -6,11 +6,13 @@ using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Llm.Abstractions.Tools;
 using redb.Route.Llm.Engine;
+using redb.Route.Llm.Engine.Observability;
 using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Providers;
 using redb.Route.Llm.Telemetry;
 using redb.Route.Llm.Tools;
 using redb.Route.Telemetry;
+using redb.Route.Transactions;
 
 namespace redb.Route.Llm;
 
@@ -67,17 +69,6 @@ public sealed class LlmProducer : ConnectableProducer
                 $"LLM connection factory '{_endpoint.ConnectionFactoryName}' " +
                 $"is not registered in the route context.");
 
-        // Stream mode bypasses the agent engine (no tool-loop, no governance) and
-        // writes an IAsyncEnumerable<string> of token deltas into Out.Body so HTTP
-        // / SSE consumers can forward chunks as they arrive. Tool-using agents
-        // must remain on the non-streaming path until the engine grows a
-        // streaming surface.
-        if (_options.Stream)
-        {
-            await ProcessStreamingAsync(exchange, factory, ct).ConfigureAwait(false);
-            return;
-        }
-
         var engine = ResolveEngine(exchange)
             ?? throw new InvalidOperationException(
                 "No IAgentEngine is registered. Call services.AddRedbRouteLlm() — it registers the engine " +
@@ -86,16 +77,20 @@ public sealed class LlmProducer : ConnectableProducer
                 "AgentEngine.FromContext(context)), which wires the same seams: a bare new AgentEngine() " +
                 "answers no claims and cannot dispatch a tool.");
 
-        using var activity = RouteActivitySource.Source.StartActivity(
-            $"llm {factory.Provider}:{factory.ModelId}", ActivityKind.Client);
+        // stream=body runs the agent when the body is read, after the route. A .Transacted() block around this step
+        // would commit before the answer exists, and the run's tools would not join it: the run is a unit of work of
+        // its own, like any exchange that outlives its block. Refused here rather than leaving tools silently outside
+        // the transaction the route declared, as a transacted send outside a block is refused.
+        if (_options.Stream == LlmStreamMode.Body
+            && (TransactedActions.IsActive(exchange) || System.Transactions.Transaction.Current is not null))
+            throw new InvalidOperationException(
+                "'stream=body' runs the agent after the route, when the body is read, so inside .Transacted() its tools "
+                + "would not join the transaction and the block would commit before the answer exists. Use "
+                + "'stream=calls' inside a transaction: it streams every model call inside the route. Or move this "
+                + "step out of the .Transacted() block.");
 
-        if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag("llm.provider", factory.Provider);
-            activity.SetTag("llm.model.id", factory.ModelId);
-            activity.SetTag("messaging.system", "llm");
-            activity.SetTag("messaging.operation", "complete");
-        }
+        // stream=body starts its span when the body is read, where the run is; the other modes run here.
+        using var activity = _options.Stream == LlmStreamMode.Body ? null : StartActivity(factory, "complete");
 
         var userContent = BuildUserContent(exchange);
         var systemPrompt = await ResolveSystemPromptAsync(exchange, ct).ConfigureAwait(false);
@@ -113,7 +108,7 @@ public sealed class LlmProducer : ConnectableProducer
             .Sum(b => b.Text is null ? 0 : Encoding.UTF8.GetByteCount(b.Text));
         if (promptBytes > 0) _endpoint.RecordBytesOut(promptBytes);
 
-        var agentRequest = new AgentRequest
+        AgentRequest Request(Func<AgentDeltaContext, CancellationToken, Task>? onDelta) => new()
         {
             Factory = factory,
             Exchange = exchange,
@@ -132,22 +127,113 @@ public sealed class LlmProducer : ConnectableProducer
             PromptTemplateVersion = _options.PromptTemplateVersion,
             UserId = userId,
             AuditTags = auditTags,
-            PropagateToolHeaders = ToolHeaderPolicy.ParseCsv(_options.PropagateToolHeaders)
+            PropagateToolHeaders = ToolHeaderPolicy.ParseCsv(_options.PropagateToolHeaders),
+            StreamModelCalls = _options.Stream != LlmStreamMode.Off,
+            OnDelta = onDelta
         };
 
+        if (_options.Stream == LlmStreamMode.Body)
+        {
+            StreamIntoBody(exchange, factory, engine, Request);
+            return;
+        }
+
         var sw = Stopwatch.StartNew();
-        var response = await engine.RunAsync(agentRequest, ct).ConfigureAwait(false);
+        var response = await engine.RunAsync(Request(null), ct).ConfigureAwait(false);
         sw.Stop();
 
         WriteResponse(exchange, response, factory);
+        RecordRun(factory, response, sw.Elapsed, activity);
+    }
 
-        var providerTag = new KeyValuePair<string, object?>("llm.provider", factory.Provider);
-        var modelTag = new KeyValuePair<string, object?>("llm.model.id", factory.ModelId);
-        var factoryTag = new KeyValuePair<string, object?>("llm.factory", factory.Name);
+    /// <summary>
+    /// <c>stream=body</c>: <c>Out.Body</c> becomes a <see cref="LazyAgentBody"/>, and the agent run happens when the body
+    /// is read. The summary headers are written after the run, as late-bound headers; the body is released with the
+    /// exchange.
+    /// </summary>
+    private void StreamIntoBody(
+        IExchange exchange, LlmConnectionFactory factory, IAgentEngine engine,
+        Func<Func<AgentDeltaContext, CancellationToken, Task>?, AgentRequest> request)
+    {
+        var body = new LazyAgentBody(async (onDelta, ct) =>
+        {
+            using var activity = StartActivity(factory, "stream");
+            var textPieces = 0;
+            var bytesIn = 0;
+            var sw = Stopwatch.StartNew();
+
+            AgentResponse response;
+            try
+            {
+                response = await engine.RunAsync(request((delta, token) =>
+                {
+                    if (delta.Kind == AgentDeltaKind.Text)
+                    {
+                        textPieces++;
+                        bytesIn += Encoding.UTF8.GetByteCount(delta.Text);
+                    }
+                    return onDelta(delta, token);
+                }), ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The body is read outside Producer.Process, so nothing else counts this failure for the endpoint.
+                _endpoint.RecordError(ex);
+                LlmMetrics.AgentRuns.Add(1, ProviderTag(factory), ModelTag(factory), FactoryTag(factory),
+                    new KeyValuePair<string, object?>("llm.stop_reason", "error"));
+                throw;
+            }
+
+            // An engine that ignores AgentRequest.OnDelta would leave the body empty and report success.
+            if (textPieces == 0 && !string.IsNullOrEmpty(response.Text))
+                throw new InvalidOperationException(
+                    $"The registered IAgentEngine ({engine.GetType().Name}) answered without streaming a piece of its text: "
+                    + "stream=body needs an engine that calls AgentRequest.OnDelta, as AgentEngine does.");
+
+            WriteSummaryHeaders(exchange.Out!, response, factory);
+            if (bytesIn > 0) _endpoint.RecordBytesIn(bytesIn);
+            RecordRun(factory, response, sw.Elapsed, activity);
+        });
+
+        ExchangeResources.ReleaseWithExchange(exchange, body.Release);
+
+        exchange.Out ??= exchange.In.Clone();
+        exchange.Out.Body = body;
+        // A stream of events whatever type the request carried: Out starts as a copy of In, and a request's
+        // text/plain would make the HTTP consumer drop the SSE framing and the summary event.
+        exchange.Out.ContentType = "text/event-stream";
+        exchange.Out.Headers[LlmHeaders.Streaming] = true;
+        exchange.Out.Headers[LlmHeaders.ProviderId] = factory.Provider;
+        exchange.Out.Headers[LlmHeaders.ModelId] = factory.ModelId;
+    }
+
+    private static Activity? StartActivity(LlmConnectionFactory factory, string operation)
+    {
+        var activity = RouteActivitySource.Source.StartActivity(
+            operation == "stream" ? $"llm {factory.Provider}:{factory.ModelId} stream" : $"llm {factory.Provider}:{factory.ModelId}",
+            ActivityKind.Client);
+
+        if (activity is { IsAllDataRequested: true })
+        {
+            activity.SetTag("llm.provider", factory.Provider);
+            activity.SetTag("llm.model.id", factory.ModelId);
+            activity.SetTag("messaging.system", "llm");
+            activity.SetTag("messaging.operation", operation);
+            if (operation == "stream") activity.SetTag("llm.streaming", true);
+        }
+
+        return activity;
+    }
+
+    private static KeyValuePair<string, object?> ProviderTag(LlmConnectionFactory factory) => new("llm.provider", factory.Provider);
+    private static KeyValuePair<string, object?> ModelTag(LlmConnectionFactory factory) => new("llm.model.id", factory.ModelId);
+    private static KeyValuePair<string, object?> FactoryTag(LlmConnectionFactory factory) => new("llm.factory", factory.Name);
+
+    private static void RecordRun(LlmConnectionFactory factory, AgentResponse response, TimeSpan elapsed, Activity? activity)
+    {
         var stopTag = new KeyValuePair<string, object?>("llm.stop_reason", response.StopReason.ToString());
-
-        LlmMetrics.AgentRuns.Add(1, providerTag, modelTag, factoryTag, stopTag);
-        LlmMetrics.AgentIterations.Record(response.Iterations, providerTag, modelTag, factoryTag);
+        LlmMetrics.AgentRuns.Add(1, ProviderTag(factory), ModelTag(factory), FactoryTag(factory), stopTag);
+        LlmMetrics.AgentIterations.Record(response.Iterations, ProviderTag(factory), ModelTag(factory), FactoryTag(factory));
 
         if (activity is { IsAllDataRequested: true })
         {
@@ -155,7 +241,7 @@ public sealed class LlmProducer : ConnectableProducer
             activity.SetTag("llm.tokens.out", response.Usage.OutputTokens);
             activity.SetTag("llm.tool.iterations", response.Iterations);
             activity.SetTag("llm.stop_reason", response.StopReason.ToString());
-            activity.SetTag("llm.duration.ms", sw.Elapsed.TotalMilliseconds);
+            activity.SetTag("llm.duration.ms", elapsed.TotalMilliseconds);
         }
     }
 
@@ -326,145 +412,22 @@ public sealed class LlmProducer : ConnectableProducer
     {
         exchange.Out ??= exchange.In.Clone();
         exchange.Out.Body = response.Text;
-        exchange.Out.Headers[LlmHeaders.ProviderId] = factory.Provider;
-        exchange.Out.Headers[LlmHeaders.ModelId] = factory.ModelId;
-        exchange.Out.Headers[LlmHeaders.TokensIn] = response.Usage.InputTokens;
-        exchange.Out.Headers[LlmHeaders.TokensOut] = response.Usage.OutputTokens;
+        WriteSummaryHeaders(exchange.Out, response, factory);
+    }
+
+    /// <summary>The summary of a run: on the reply of an in-route run, late-bound on a <c>stream=body</c> reply.</summary>
+    private static void WriteSummaryHeaders(IMessage message, AgentResponse response, LlmConnectionFactory factory)
+    {
+        message.Headers[LlmHeaders.ProviderId] = factory.Provider;
+        message.Headers[LlmHeaders.ModelId] = factory.ModelId;
+        message.Headers[LlmHeaders.TokensIn] = response.Usage.InputTokens;
+        message.Headers[LlmHeaders.TokensOut] = response.Usage.OutputTokens;
         // Written unconditionally, zeros included: a caller that reads "cache read = 0" learns
         // something (the cache is not being hit), while a missing header is indistinguishable
         // from an older engine that never reported it.
-        exchange.Out.Headers[LlmHeaders.CacheWriteTokens] = response.Usage.CacheCreationInputTokens;
-        exchange.Out.Headers[LlmHeaders.CacheReadTokens] = response.Usage.CacheReadInputTokens;
-        exchange.Out.Headers[LlmHeaders.ToolIterations] = response.Iterations;
-        exchange.Out.Headers[LlmHeaders.StopReason] = response.StopReason.ToString();
-    }
-
-    private async Task ProcessStreamingAsync(IExchange exchange, LlmConnectionFactory factory, CancellationToken ct)
-    {
-        using var activity = RouteActivitySource.Source.StartActivity(
-            $"llm {factory.Provider}:{factory.ModelId} stream", ActivityKind.Client);
-
-        if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag("llm.provider", factory.Provider);
-            activity.SetTag("llm.model.id", factory.ModelId);
-            activity.SetTag("llm.streaming", true);
-            activity.SetTag("messaging.system", "llm");
-            activity.SetTag("messaging.operation", "stream");
-        }
-
-        var userContent = BuildUserContent(exchange);
-        var systemPrompt = await ResolveSystemPromptAsync(exchange, ct).ConfigureAwait(false);
-        var preamble = ResolvePreamble(exchange);
-
-        var promptBytes = userContent.OfType<LlmTextBlock>()
-            .Sum(b => b.Text is null ? 0 : Encoding.UTF8.GetByteCount(b.Text));
-        if (promptBytes > 0) _endpoint.RecordBytesOut(promptBytes);
-
-        var llmRequest = new LlmRequest
-        {
-            ModelId = factory.ModelId,
-            SystemPrompt = systemPrompt,
-            CacheSystemPrompt = _options.CacheSystemPrompt,
-            // The preamble opens the transcript here too: stream mode has no history, but the
-            // fixed opening exchange is part of the assistant, not of the history.
-            Messages = [.. preamble, new LlmMessage { Role = "user", Content = userContent }],
-            // Tools are intentionally not passed in stream mode — the producer
-            // does not run a tool-loop here. Use the non-streaming path with
-            // ?tools= when tool dispatch is required.
-            Tools = [],
-            Temperature = _options.Temperature ?? factory.Temperature,
-            MaxTokens = _options.MaxTokens ?? factory.MaxTokens,
-            TopP = factory.TopP
-        };
-
-        var provider = factory.Build();
-        var stream = StreamTextDeltasAsync(provider, llmRequest, factory, exchange, activity, ct);
-
-        exchange.Out ??= exchange.In.Clone();
-        exchange.Out.Body = stream;
-        exchange.Out.ContentType ??= "text/event-stream";
-        exchange.Out.Headers[LlmHeaders.Streaming] = true;
-        exchange.Out.Headers[LlmHeaders.ProviderId] = factory.Provider;
-        exchange.Out.Headers[LlmHeaders.ModelId] = factory.ModelId;
-    }
-
-    private async IAsyncEnumerable<string> StreamTextDeltasAsync(
-        ILlmProvider provider,
-        LlmRequest llmRequest,
-        LlmConnectionFactory factory,
-        IExchange exchange,
-        Activity? activity,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-    {
-        var providerTag = new KeyValuePair<string, object?>("llm.provider", factory.Provider);
-        var modelTag = new KeyValuePair<string, object?>("llm.model.id", factory.ModelId);
-        var factoryTag = new KeyValuePair<string, object?>("llm.factory", factory.Name);
-
-        LlmUsage? finalUsage = null;
-        LlmStopReason? finalStop = null;
-        var bytesOut = 0;
-        var sw = Stopwatch.StartNew();
-        LlmMetrics.Calls.Add(1, providerTag, modelTag, factoryTag);
-
-        // Manual enumeration so a mid-stream failure can be recorded (the stream is drained by the consumer,
-        // outside Producer.Process, so an exception there would otherwise vanish — no endpoint error, no metric).
-        await using var enumerator = provider.StreamAsync(llmRequest, ct).GetAsyncEnumerator(ct);
-        while (true)
-        {
-            try
-            {
-                if (!await enumerator.MoveNextAsync().ConfigureAwait(false)) break;
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                _endpoint.RecordError(ex);
-                LlmMetrics.AgentRuns.Add(1, providerTag, modelTag, factoryTag,
-                    new KeyValuePair<string, object?>("llm.stop_reason", "error"));
-                throw;
-            }
-
-            var chunk = enumerator.Current;
-            foreach (var block in chunk.Content)
-            {
-                if (block is LlmTextBlock { Text: { Length: > 0 } text })
-                {
-                    bytesOut += text.Length;
-                    yield return text;
-                }
-            }
-            if (chunk.StopReason is not null) finalStop = chunk.StopReason;
-            if (chunk.Usage is not null) finalUsage = chunk.Usage;
-        }
-
-        sw.Stop();
-        var usage = finalUsage ?? LlmUsage.Empty;
-        var stopReason = finalStop ?? LlmStopReason.EndTurn;
-
-        // Late-bind summary headers — readable after the consumer drained the stream.
-        exchange.Out!.Headers[LlmHeaders.TokensIn] = usage.InputTokens;
-        exchange.Out.Headers[LlmHeaders.TokensOut] = usage.OutputTokens;
-        exchange.Out.Headers[LlmHeaders.CacheWriteTokens] = usage.CacheCreationInputTokens;
-        exchange.Out.Headers[LlmHeaders.CacheReadTokens] = usage.CacheReadInputTokens;
-        exchange.Out.Headers[LlmHeaders.ToolIterations] = 1;
-        exchange.Out.Headers[LlmHeaders.StopReason] = stopReason.ToString();
-
-        // The response ARRIVES at the endpoint. This value used to be computed and then thrown
-        // away (`_ = bytesOut;`) because the statistics surface had no outgoing counter and the
-        // incoming one was already taken by the prompt; both halves have their own place now.
-        if (bytesOut > 0) _endpoint.RecordBytesIn(bytesOut);
-
-        var stopTag = new KeyValuePair<string, object?>("llm.stop_reason", stopReason.ToString());
-        LlmMetrics.AgentRuns.Add(1, providerTag, modelTag, factoryTag, stopTag);
-        LlmMetrics.AgentIterations.Record(1, providerTag, modelTag, factoryTag);
-
-        if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag("llm.tokens.in", usage.InputTokens);
-            activity.SetTag("llm.tokens.out", usage.OutputTokens);
-            activity.SetTag("llm.stop_reason", stopReason.ToString());
-            activity.SetTag("llm.duration.ms", sw.Elapsed.TotalMilliseconds);
-        }
+        message.Headers[LlmHeaders.CacheWriteTokens] = response.Usage.CacheCreationInputTokens;
+        message.Headers[LlmHeaders.CacheReadTokens] = response.Usage.CacheReadInputTokens;
+        message.Headers[LlmHeaders.ToolIterations] = response.Iterations;
+        message.Headers[LlmHeaders.StopReason] = response.StopReason.ToString();
     }
 }

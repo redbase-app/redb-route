@@ -200,7 +200,7 @@ public sealed class IbmMqConsumer : IConsumer
         if (_options.Convert)
             gmo.Options |= MQC.MQGMO_CONVERT;
 
-        if (_options.Transacted)
+        if (_options.Transacted == true)
             gmo.Options |= MQC.MQGMO_SYNCPOINT;
         else
             gmo.Options |= MQC.MQGMO_NO_SYNCPOINT;
@@ -349,7 +349,7 @@ public sealed class IbmMqConsumer : IConsumer
 
             // Commit in non-transacted mode is implicitly done by MQGET without syncpoint. In transacted mode the
             // consumer commits the syncpoint here, once the route and its transaction have succeeded.
-            if (_options.Transacted)
+            if (_options.Transacted == true)
             {
                 var ackAction = new IbmMqAckAction(worker.Qm, _logger);
                 await ackAction.Commit(ct).ConfigureAwait(false);
@@ -362,7 +362,7 @@ public sealed class IbmMqConsumer : IConsumer
             _logger?.LogError(ex, "IBM MQ message processing error: destination={Destination}, msgId={MsgId}",
                 _endpoint.Destination, IbmMqMessageHelper.BytesToHex(mqMsg.MessageId));
 
-            if (_options.Transacted)
+            if (_options.Transacted == true)
             {
                 try
                 {

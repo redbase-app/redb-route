@@ -196,7 +196,7 @@ public sealed class AzureServiceBusEndpointOptionsTests
         options.EnableSessions.Should().BeFalse();
         options.MaxConcurrentSessions.Should().Be(1);
         options.AutoDeadLetter.Should().BeFalse();
-        options.Transacted.Should().BeFalse();
+        options.Transacted.Should().BeNull("unset, a producer follows the enclosing .Transacted() block");
         options.EnableBatch.Should().BeFalse();
         options.BatchMaxMessages.Should().Be(100);
         options.BatchMaxSizeBytes.Should().Be(256 * 1024);

@@ -49,13 +49,7 @@ public static class RouteContextSendExtensions
         try
         {
             var reply = await template.RequestAsync(endpointUri, exchange, ct).ConfigureAwait(false);
-            var replyBody = reply.Out?.Body ?? reply.In.Body;
-            return replyBody switch
-            {
-                null => default,
-                T typed => typed,
-                _ => (T)Convert.ChangeType(replyBody, typeof(T), System.Globalization.CultureInfo.InvariantCulture),
-            };
+            return ReplyAs<T>(reply, endpointUri);
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
     }
@@ -71,13 +65,7 @@ public static class RouteContextSendExtensions
         try
         {
             var reply = await template.RequestAsync(endpointUri, exchange, ct).ConfigureAwait(false);
-            var replyBody = reply.Out?.Body ?? reply.In.Body;
-            return replyBody switch
-            {
-                null => default,
-                T typed => typed,
-                _ => (T)Convert.ChangeType(replyBody, typeof(T), System.Globalization.CultureInfo.InvariantCulture),
-            };
+            return ReplyAs<T>(reply, endpointUri);
         }
         finally { await exchange.DisposeAsync().ConfigureAwait(false); }
     }
@@ -110,4 +98,33 @@ public static class RouteContextSendExtensions
             message.Headers[key] = value;
         return message;
     }
+
+    /// <summary>
+    /// The reply body converted to <typeparamref name="T"/>, taken before the helper ends the exchange. A body that reads
+    /// from resources of the exchange (<see cref="IExchangeBoundBody"/>) would be dead once the helper returns, so it is
+    /// refused; a nullable <typeparamref name="T"/> converts to its underlying type.
+    /// </summary>
+    private static T? ReplyAs<T>(IExchange reply, string endpointUri)
+    {
+        var replyBody = reply.Out?.Body ?? reply.In.Body;
+        if (replyBody is IExchangeBoundBody)
+            throw new InvalidOperationException(
+                $"The reply of '{EndpointUri.Sanitize(endpointUri)}' is a {ReadableName(replyBody.GetType())} that reads from " +
+                "resources of its exchange, and the helper ends the exchange before it returns. Use " +
+                "ProducerTemplate.RequestAsync, read the body, then dispose the exchange.");
+
+        return replyBody switch
+        {
+            null => default,
+            T typed => typed,
+            _ => (T)Convert.ChangeType(replyBody, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T),
+                System.Globalization.CultureInfo.InvariantCulture),
+        };
+    }
+
+    /// <summary><c>StreamedQueryResult&lt;Order&gt;</c> rather than the runtime name <c>StreamedQueryResult`1</c>.</summary>
+    private static string ReadableName(Type type) =>
+        type.IsGenericType
+            ? $"{type.Name[..type.Name.IndexOf('`')]}<{string.Join(", ", type.GetGenericArguments().Select(ReadableName))}>"
+            : type.Name;
 }

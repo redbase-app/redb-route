@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Telemetry;
+using redb.Route.Transactions;
 
 namespace redb.Route.Sqs;
 
@@ -102,10 +103,20 @@ internal sealed class SnsProducer : ConnectableProducer
                 request.MessageDeduplicationId = dedup;
         }
 
-        var response = await _client!.PublishAsync(request, ct).ConfigureAwait(false);
-        exchange.In.Headers[SnsHeaders.MessageId] = response.MessageId;
-        if (!string.IsNullOrEmpty(response.SequenceNumber))
-            exchange.In.Headers[SnsHeaders.SequenceNumber] = response.SequenceNumber;
+        async Task Publish(CancellationToken token)
+        {
+            var response = await _client!.PublishAsync(request, token).ConfigureAwait(false);
+            exchange.In.Headers[SnsHeaders.MessageId] = response.MessageId;
+            if (!string.IsNullOrEmpty(response.SequenceNumber))
+                exchange.In.Headers[SnsHeaders.SequenceNumber] = response.SequenceNumber;
+        }
+
+        // The request is built now, from the exchange as it is at this step; only the publish itself waits for the
+        // commit when the producer joins the enclosing .Transacted() block.
+        if (TransactedActions.Defers(exchange, _options.Transacted))
+            TransactedActions.RegisterSend(exchange, $"sns-publish-{Guid.NewGuid():N}", Publish, ProducerName);
+        else
+            await Publish(ct).ConfigureAwait(false);
         // No RecordMessageOut: the core (ToProcessor / the template) owns it (ownership audit).
     }
 

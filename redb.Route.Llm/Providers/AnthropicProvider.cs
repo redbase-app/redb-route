@@ -80,10 +80,15 @@ public sealed class AnthropicProvider : ILlmProvider
     public string ModelId => _factory.ModelId;
 
     /// <inheritdoc />
-    public async Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
+    /// <remarks>Limited as a whole by <see cref="LlmConnectionFactory.RequestTimeoutMs"/>.</remarks>
+    public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        return LlmHttpTransport.WithinCallLimitAsync(_factory, ProviderId, t => CompleteCoreAsync(request, t), ct);
+    }
 
+    private async Task<LlmResponse> CompleteCoreAsync(LlmRequest request, CancellationToken ct)
+    {
         var body = BuildRequestBody(request, stream: false);
         using var http = new HttpRequestMessage(HttpMethod.Post, _endpoint)
         {
@@ -106,7 +111,12 @@ public sealed class AnthropicProvider : ILlmProvider
         return ParseResponse(json);
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Anthropic SSE streaming. Pieces are yielded as they arrive: visible text as <see cref="LlmTextBlock"/>, the
+    /// model's thinking as <see cref="LlmThinkingBlock"/>. The last chunk carries the completed tool calls and
+    /// <see cref="LlmStreamChunk.Response"/>: the stream assembled into the message a plain call returns and read by
+    /// the same parser, so thinking keeps its signature and the streamed answer cannot differ from the plain one.
+    /// </summary>
     public async IAsyncEnumerable<LlmStreamChunk> StreamAsync(
         LlmRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -126,29 +136,28 @@ public sealed class AnthropicProvider : ILlmProvider
         http.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         ApplyHeaders(http);
 
-        using var resp = await _http.SendAsync(http, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        // RequestTimeoutMs covers the whole call, the stream included; StreamIdleTimeoutMs the waits on the provider.
+        using var call = new LlmStreamCall(_factory, ProviderId, ct);
+        using var resp = await call.SendAsync(_http, http).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
             await ThrowMappedAsync(resp, ct).ConfigureAwait(false);
 
-        using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var stream = await call.OpenAsync(resp).ConfigureAwait(false);
         using var reader = new StreamReader(stream);
 
-        var blocks = new SortedDictionary<int, BlockAccumulator>();
-        LlmStopReason? finalStop = null;
+        // The stream is assembled into the message a plain call returns and read by the same parser, so the streamed
+        // answer cannot differ from the plain one: blocks in their order, thinking with its signature, redacted
+        // thinking, tool input, usage, the stop reason and the message id.
+        JsonObject? message = null;
+        var blocks = new SortedDictionary<int, JsonObject>();
+        var toolInputs = new Dictionary<int, StringBuilder>();
+        var usage = new JsonObject();
         string? rawStop = null;
-        int inputTokens = 0;
-        int outputTokens = 0;
-        int cacheWriteTokens = 0;
-        int cacheReadTokens = 0;
-
+        JsonNode? stopSequence = null;
         string? currentEvent = null;
 
-        while (true)
+        while (await call.ReadLineAsync(reader).ConfigureAwait(false) is { } line)
         {
-            ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
-            if (line is null) break;
-
             if (line.Length == 0)
             {
                 currentEvent = null;
@@ -157,167 +166,172 @@ public sealed class AnthropicProvider : ILlmProvider
 
             if (line.StartsWith("event:", StringComparison.Ordinal))
             {
-                currentEvent = line.AsSpan(6).TrimStart().ToString();
+                currentEvent = line.AsSpan(6).Trim().ToString();
                 continue;
             }
 
             if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
 
-            var payload = line.AsSpan(5).TrimStart().ToString();
+            var payload = line.AsSpan(5).Trim().ToString();
             if (payload.Length == 0) continue;
 
-            JsonObject? frame;
-            try { frame = JsonNode.Parse(payload) as JsonObject; }
-            catch (JsonException) { continue; }
-            if (frame is null) continue;
-
-            var evt = currentEvent ?? frame["type"]?.GetValue<string>();
+            var frame = LlmStreamFrames.Read(ProviderId, payload);
+            var evt = currentEvent ?? LlmStreamFrames.Text(frame["type"]);
 
             switch (evt)
             {
                 case "message_start":
-                    if (frame["message"] is JsonObject msg
-                        && msg["usage"] is JsonObject uStart)
-                    {
-                        inputTokens = uStart["input_tokens"]?.GetValue<int>() ?? 0;
-                        outputTokens = uStart["output_tokens"]?.GetValue<int>() ?? 0;
-                        cacheWriteTokens = uStart["cache_creation_input_tokens"]?.GetValue<int>() ?? 0;
-                        cacheReadTokens = uStart["cache_read_input_tokens"]?.GetValue<int>() ?? 0;
-                    }
+                    message = frame["message"] is JsonObject started
+                        ? (JsonObject)started.DeepClone()
+                        : throw new InvalidOperationException(
+                            $"anthropic: message_start without a message: {LlmStreamFrames.Shown(payload)}");
+                    if (message["usage"] is JsonObject startUsage) Overlay(usage, startUsage);
                     break;
 
                 case "content_block_start":
                 {
-                    var idx = frame["index"]?.GetValue<int>() ?? 0;
-                    var block = frame["content_block"] as JsonObject;
-                    var kind = block?["type"]?.GetValue<string>() ?? "text";
-                    var acc = new BlockAccumulator { Kind = kind };
-                    if (kind == "tool_use")
-                    {
-                        acc.ToolUseId = block?["id"]?.GetValue<string>();
-                        acc.ToolName = block?["name"]?.GetValue<string>();
-                    }
-                    blocks[idx] = acc;
+                    var index = BlockIndex(frame, payload);
+                    var block = frame["content_block"] is JsonObject startedBlock
+                        ? (JsonObject)startedBlock.DeepClone()
+                        : throw new InvalidOperationException(
+                            $"anthropic: content_block_start without a block: {LlmStreamFrames.Shown(payload)}");
+                    blocks[index] = block;
+                    if (LlmStreamFrames.Text(block["type"]) == "tool_use") toolInputs[index] = new StringBuilder();
                     break;
                 }
 
                 case "content_block_delta":
                 {
-                    var idx = frame["index"]?.GetValue<int>() ?? 0;
-                    if (!blocks.TryGetValue(idx, out var acc)) break;
-                    var delta = frame["delta"] as JsonObject;
-                    var dType = delta?["type"]?.GetValue<string>();
+                    var index = BlockIndex(frame, payload);
+                    if (!blocks.TryGetValue(index, out var block))
+                        throw new InvalidOperationException(
+                            $"anthropic: a delta for block {index}, which never started: {LlmStreamFrames.Shown(payload)}");
 
-                    if (dType == "text_delta"
-                        && delta?["text"]?.GetValue<string>() is { Length: > 0 } textDelta)
+                    var delta = frame["delta"] as JsonObject;
+                    switch (LlmStreamFrames.Text(delta?["type"]))
                     {
-                        acc.Buffer.Append(textDelta);
-                        yield return new LlmStreamChunk(
-                            [new LlmTextBlock(textDelta)], StopReason: null, Usage: null);
-                    }
-                    else if (dType == "input_json_delta"
-                             && delta?["partial_json"]?.GetValue<string>() is { } partial)
-                    {
-                        acc.Buffer.Append(partial);
+                        case "text_delta" when LlmStreamFrames.Text(delta!["text"]) is { Length: > 0 } piece:
+                            block["text"] = LlmStreamFrames.Text(block["text"]) + piece;
+                            yield return new LlmStreamChunk([new LlmTextBlock(piece)], StopReason: null, Usage: null);
+                            break;
+
+                        case "thinking_delta" when LlmStreamFrames.Text(delta!["thinking"]) is { Length: > 0 } piece:
+                            block["thinking"] = LlmStreamFrames.Text(block["thinking"]) + piece;
+                            yield return new LlmStreamChunk([new LlmThinkingBlock(piece)], StopReason: null, Usage: null);
+                            break;
+
+                        case "signature_delta":
+                            block["signature"] = LlmStreamFrames.Text(block["signature"]) + LlmStreamFrames.Text(delta!["signature"]);
+                            break;
+
+                        case "input_json_delta":
+                            if (!toolInputs.TryGetValue(index, out var input))
+                                throw new InvalidOperationException(
+                                    $"anthropic: tool input for block {index}, which is not a tool call: {LlmStreamFrames.Shown(payload)}");
+                            input.Append(LlmStreamFrames.Text(delta!["partial_json"]));
+                            break;
+
+                        // Other deltas (citations_delta and the like) carry what the plain parser does not read either.
                     }
                     break;
                 }
 
                 case "content_block_stop":
-                    // Block is complete — we emit text deltas live and reassemble
-                    // tool_use blocks at message_stop so they surface as one block.
+                    FinishToolInput(blocks, toolInputs, BlockIndex(frame, payload));
                     break;
 
                 case "message_delta":
-                    if (frame["delta"] is JsonObject mdDelta)
+                    if (frame["delta"] is JsonObject messageDelta)
                     {
-                        if (mdDelta["stop_reason"]?.GetValue<string>() is { Length: > 0 } sr)
-                        {
-                            rawStop = sr;
-                            finalStop = MapStopReason(sr);
-                        }
+                        if (LlmStreamFrames.Text(messageDelta["stop_reason"]) is { Length: > 0 } stopReason)
+                            rawStop = stopReason;
+                        stopSequence = messageDelta["stop_sequence"]?.DeepClone();
                     }
-                    if (frame["usage"] is JsonObject mdU)
-                    {
-                        // message_delta carries the running output_tokens count.
-                        outputTokens = mdU["output_tokens"]?.GetValue<int>() ?? outputTokens;
-                    }
-                    break;
-
-                case "message_stop":
-                    // Loop will terminate at end-of-stream.
+                    // Running counts: what message_delta reports replaces what message_start did.
+                    if (frame["usage"] is JsonObject deltaUsage) Overlay(usage, deltaUsage);
                     break;
 
                 case "error":
                 {
                     var err = frame["error"] as JsonObject;
                     var type = err?["type"]?.GetValue<string>() ?? "unknown";
-                    var message = err?["message"]?.GetValue<string>() ?? "stream error";
+                    var errorMessage = err?["message"]?.GetValue<string>() ?? "stream error";
                     if (type == "overloaded_error")
-                        throw new LlmTransientException(ProviderId, $"anthropic SSE overloaded: {message}");
+                        throw new LlmTransientException(ProviderId, $"anthropic SSE overloaded: {errorMessage}");
                     if (type == "rate_limit_error")
-                        throw new LlmRateLimitException(ProviderId, $"anthropic SSE rate limit: {message}");
-                    throw new HttpRequestException($"anthropic SSE error ({type}): {message}");
+                        throw new LlmRateLimitException(ProviderId, $"anthropic SSE rate limit: {errorMessage}");
+                    throw new HttpRequestException($"anthropic SSE error ({type}): {errorMessage}");
                 }
+
+                // message_stop and ping carry nothing to take. Event types this reader does not know are skipped:
+                // Anthropic adds new ones and documents that clients ignore those they do not know.
             }
         }
 
-        // Final chunk: completed tool_use blocks + stop reason + usage.
-        var finalBlocks = new List<LlmContentBlock>();
-        foreach (var (_, acc) in blocks)
-        {
-            if (acc.Kind != "tool_use") continue;
-            finalBlocks.Add(new LlmToolUseBlock(
-                acc.ToolUseId ?? Guid.NewGuid().ToString("N"),
-                acc.ToolName ?? string.Empty,
-                acc.Buffer.Length == 0 ? "{}" : acc.Buffer.ToString()));
-        }
+        foreach (var index in toolInputs.Keys.ToList())
+            FinishToolInput(blocks, toolInputs, index);
 
+        // Without a stop_reason the model never said it was done: the connection ended mid-answer, and handing the
+        // pieces on as a finished answer would store a cut one.
+        if (message is null || rawStop is null)
+            throw new InvalidOperationException(
+                "anthropic: the stream ended before the model said why it stopped (no stop_reason); the answer is cut.");
+
+        var content = new JsonArray();
+        foreach (var block in blocks.Values)
+            content.Add(block);
+        message["content"] = content;
+        message["stop_reason"] = rawStop;
+        message["stop_sequence"] = stopSequence;
+        message["usage"] = usage;
+
+        var response = ParseResponse(message);
         yield return new LlmStreamChunk(
-            finalBlocks,
-            finalStop ?? LlmStopReason.EndTurn,
-            new LlmUsage(inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens));
-    }
-
-    private sealed class BlockAccumulator
-    {
-        public string Kind { get; set; } = "text";
-        public string? ToolUseId { get; set; }
-        public string? ToolName { get; set; }
-        public StringBuilder Buffer { get; } = new();
-    }
-
-    internal static HttpClient BuildDefaultClient(LlmConnectionFactory factory)
-    {
-        ArgumentNullException.ThrowIfNull(factory);
-        return new HttpClient(BuildDefaultHandler())
+            [.. response.Content.OfType<LlmToolUseBlock>()],
+            response.StopReason,
+            response.Usage)
         {
-            Timeout = TimeSpan.FromMilliseconds(Math.Max(1000, factory.RequestTimeoutMs)),
-            // HTTP/2 when the server offers it (api.anthropic.com does), so the keep-alive pings
-            // below have a frame to ride on; HTTP/1.1 stays the fallback.
-            DefaultRequestVersion = HttpVersion.Version20,
-            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+            Response = response
         };
     }
 
-    /// <summary>
-    /// Transport of the default client. A non-streaming completion is one POST whose response
-    /// arrives only when the model has finished — tens of seconds during which NOTHING crosses the
-    /// wire. Middleboxes (VPN tunnels, NAT, corporate proxies) routinely drop a TLS connection that
-    /// has been silent for ~50 s, and the caller then sees "The response ended prematurely" at
-    /// exactly that mark: a long answer never arrives, and no retry helps because the retry is
-    /// just as long. HTTP/2 PING frames sent while a request is in flight keep the connection
-    /// visibly alive without touching the request itself; on HTTP/1.1 they are simply not sent.
-    /// Measured 2026-09-04 through a sing-tun/xray tunnel: 45 s of silence survived, 55 s was
-    /// cut; with a ping every 15 s four consecutive 50-second waits all completed.
-    /// </summary>
-    internal static SocketsHttpHandler BuildDefaultHandler() => new()
+    private static int BlockIndex(JsonObject frame, string payload) =>
+        frame["index"] is JsonValue value && value.TryGetValue<int>(out var index)
+            ? index
+            : throw new InvalidOperationException(
+                $"anthropic: a block event without an index: {LlmStreamFrames.Shown(payload)}");
+
+    /// <summary>Puts the streamed input of a finished tool block in place of the start block's empty one.</summary>
+    private static void FinishToolInput(
+        SortedDictionary<int, JsonObject> blocks, Dictionary<int, StringBuilder> inputs, int index)
     {
-        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-        KeepAlivePingDelay = TimeSpan.FromSeconds(15),
-        KeepAlivePingTimeout = TimeSpan.FromSeconds(20),
-        KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
-    };
+        if (!inputs.Remove(index, out var input) || input.Length == 0) return;
+
+        JsonNode? parsed;
+        try
+        {
+            parsed = JsonNode.Parse(input.ToString());
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"anthropic: the streamed input of tool block {index} is not JSON: {LlmStreamFrames.Shown(input.ToString())}", ex);
+        }
+
+        blocks[index]["input"] = parsed;
+    }
+
+    private static void Overlay(JsonObject target, JsonObject source)
+    {
+        foreach (var (key, value) in source)
+            target[key] = value?.DeepClone();
+    }
+
+    /// <summary>The package's default client for model calls: HTTP/2 with keep-alive pings (<see cref="LlmHttpTransport"/>).</summary>
+    internal static HttpClient BuildDefaultClient(LlmConnectionFactory factory) => LlmHttpTransport.BuildClient(factory);
+
+    /// <summary>Transport of the default client (<see cref="LlmHttpTransport.BuildHandler"/>).</summary>
+    internal static SocketsHttpHandler BuildDefaultHandler() => LlmHttpTransport.BuildHandler();
 
     private void ApplyHeaders(HttpRequestMessage http)
     {

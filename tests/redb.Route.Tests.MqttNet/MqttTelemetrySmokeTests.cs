@@ -1,13 +1,12 @@
 using System.Diagnostics;
 using MQTTnet;
 using MQTTnet.Protocol;
-using OpenTelemetry;
-using OpenTelemetry.Trace;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.MqttNet;
 using redb.Route.MqttNet.Connection;
 using redb.Route.Telemetry;
+using redb.Route.Tests.Shared;
 
 namespace redb.Route.Tests.MqttNet;
 
@@ -42,16 +41,12 @@ public sealed class MqttTelemetrySmokeTests
         var producer = (MqttProducer)endpoint.CreateProducer();
         await producer.Start();
 
-        var activities = new List<Activity>();
-        using var tracer = Sdk.CreateTracerProviderBuilder()
-            .AddSource(RouteActivitySource.SourceName)
-            .AddInMemoryExporter(activities)
-            .Build()!;
+        using var capture = new SpanCapture();   // this test's spans only
 
         await producer.Process(new Exchange(new Message("hello")));
         await producer.Stop();
 
-        tracer.ForceFlush(1000);
+        var activities = capture.Spans;
         activities.Should().NotBeEmpty();
         var activity = activities.First();
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);

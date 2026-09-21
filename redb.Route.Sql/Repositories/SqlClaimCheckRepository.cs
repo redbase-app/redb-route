@@ -2,6 +2,7 @@ using System;
 using System.Data.Common;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Transactions;
 using redb.Route.Abstractions;
 using redb.Route.Sql.Connection;
 
@@ -178,12 +179,17 @@ public sealed class SqlClaimCheckRepository : IClaimCheckRepository
     {
         if (_tableCreated || !_options.CreateTable) return;
 
+        // The table is the repository's, not the message's: the first call may run inside the transaction of whatever
+        // message came first, and DDL there would go with its rollback (PostgreSQL, SQL Server) or commit it implicitly
+        // (MySQL, Oracle). As Apache Camel creates the table outside any exchange, it is created outside the transaction.
+        using var outsideTransaction = new TransactionScope(TransactionScopeOption.Suppress, TransactionScopeAsyncFlowOption.Enabled);
         await using var conn = await _connectionFactory.CreateConnectionAsync(ct: ct).ConfigureAwait(false);
         await using var cmd = conn.CreateCommand();
 
         cmd.CommandText = BuildCreateTableDdl(conn, _options.TableName);
 
         await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        outsideTransaction.Complete();
         _tableCreated = true;
     }
 

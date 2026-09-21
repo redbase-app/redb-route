@@ -61,7 +61,10 @@ public sealed class SqsBuilder
     public SqsBuilder DeleteAfterRead(bool value = true) => Set("deleteAfterRead", value ? "true" : "false");
     /// <summary>Reset visibility to 0 on failure for immediate redelivery.</summary>
     public SqsBuilder ResetVisibilityOnFailure(bool value = true) => Set("resetVisibilityOnFailure", value ? "true" : "false");
-    /// <summary>Enrol the ack (delete) into the route transaction.</summary>
+    /// <summary>
+    /// Sets <c>transacted</c> for a producer: <c>true</c> requires an enclosing <c>.Transacted()</c> block,
+    /// <c>false</c> sends at once even inside one; left unset, the producer follows the block.
+    /// </summary>
     public SqsBuilder Transacted(bool value = true) => Set("transacted", value ? "true" : "false");
 
     // ── Producer ──
@@ -145,6 +148,12 @@ public sealed class SnsBuilder
     /// bare payload (and SNS attributes map to SQS attributes) instead of the JSON notification envelope.
     /// </summary>
     public SnsBuilder RawMessageDelivery(bool value = true) => Set("rawMessageDelivery", value ? "true" : "false");
+
+    /// <summary>
+    /// Sets <c>transacted</c>: <c>true</c> requires an enclosing <c>.Transacted()</c> block, <c>false</c> publishes at
+    /// once even inside one; left unset, the publish follows the block.
+    /// </summary>
+    public SnsBuilder Transacted(bool value = true) => Set("transacted", value ? "true" : "false");
 
     /// <summary>Sets an arbitrary URI parameter not covered by a typed method.</summary>
     public SnsBuilder Param(string key, string value) => Set(key, value);

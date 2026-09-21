@@ -27,7 +27,7 @@ public sealed class RabbitMQEndpointOptionsTests
         opts.ContentType.Should().Be("application/json");
         opts.ResolvedConcurrentConsumers.Should().Be(1);
         opts.PrefetchCount.Should().Be(10);
-        opts.Transacted.Should().BeFalse();
+        opts.Transacted.Should().BeNull("unset, a producer follows the enclosing .Transacted() block");
         opts.ReplyTo.Should().BeFalse();
         opts.Timeout.Should().Be(60);
         opts.MessageTtl.Should().Be(0);

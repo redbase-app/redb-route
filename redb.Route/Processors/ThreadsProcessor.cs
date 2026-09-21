@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Transactions;
 
 namespace redb.Route.Processors;
 
@@ -159,6 +160,8 @@ public sealed class ThreadsProcessor : IProcessor, IRouteLifecycleListener
         // Clone (own DI scope, owned by the worker) and enqueue; the caller returns immediately and its
         // poll loop can dispatch the next exchange. The bounded queue applies backpressure at capacity.
         var copy = exchange.Clone();
+        // The worker is a transaction boundary: the copy must not see the sending .Transacted() block as its own.
+        TransactedActions.DetachFromBlock(copy);
 
         if (_shuttingDown)
         {

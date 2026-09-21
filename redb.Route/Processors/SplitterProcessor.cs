@@ -134,6 +134,9 @@ public class SplitterProcessor : IProcessor
                 catch (Exception ex)
                 {
                     firstException ??= ex;
+                    // The branch's own record of its failure, as Multicast and RecipientList keep it: its unit of work
+                    // ends with the branch and reads the outcome from it.
+                    splitExchange.Exception = ex;
 
                     // S4: aggregateOnException — include failed split exchange into aggregate
                     if (_aggregateOnException && _aggregationStrategy != null)
@@ -208,6 +211,7 @@ public class SplitterProcessor : IProcessor
                     catch (Exception ex)
                     {
                         exceptions[idx] = ex;
+                        splitExchange.Exception = ex;
                         if (_stopOnException)
                         {
                             Interlocked.Exchange(ref shouldStop, 1);

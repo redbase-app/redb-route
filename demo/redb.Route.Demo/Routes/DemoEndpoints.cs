@@ -56,8 +56,8 @@ internal static class DemoEndpoints
         + "?dataSource=#pg-demo&outputType=SelectList";
 
     // ── Redis ───────────────────────────────────────────────────────────────
-    public const string RedisPub = "redis:PUBLISH:demo-events?host=localhost";
-    public const string RedisSub = "redis:SUBSCRIBE:demo-events?host=localhost";
+    public const string RedisPub = "redis:PUBLISH:demo-events?connectionString=localhost:6379";
+    public const string RedisSub = "redis:SUBSCRIBE:demo-events?connectionString=localhost:6379";
 
     // ── TCP ─────────────────────────────────────────────────────────────────
     public const string TcpServer = "tcp://0.0.0.0:9099";

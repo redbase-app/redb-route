@@ -2,6 +2,7 @@ using System.Data;
 using System.Data.Common;
 using System.Transactions;
 using Microsoft.Data.Sqlite;
+using redb.Route.Components;
 using redb.Route.Core;
 using redb.Route.Sql;
 using redb.Route.Sql.Connection;
@@ -145,6 +146,68 @@ public sealed class SqlProducerStreamListLifetimeTests : IDisposable
         thrown.Should().BeOfType<InvalidOperationException>(Outcome.Describe(thrown))
             .Which.Message.Should().Contain("StreamList");
         factory.Requests.Should().Be(0, "the refusal comes before any connection is opened");
+    }
+
+    // ── ProducerTemplate: the request ends the exchange that owns the stream ──
+
+    [Fact]
+    public async Task StreamList_RequestBody_IsRefusedAtTheCall_AndTheConnectionIsReturned()
+    {
+        var factory = new TrackingFactory(_db.ConnectionString);
+        await using var context = await StartStreamRouteAsync(factory, "direct:stream-body");
+        var template = new ProducerTemplate(context);
+        template.Start();
+        try
+        {
+            var thrown = await Outcome.Of(() => template.RequestBody("direct:stream-body", "go"));
+
+            thrown.Should().BeOfType<InvalidOperationException>(
+                    "RequestBody ends the exchange before it returns, and the stream reads from that exchange's connection: " +
+                    Outcome.Describe(thrown))
+                .Which.Message.Should().Contain("RequestAsync", "the message points to the call that keeps the exchange open");
+            factory.Open.Should().Be(0, "the refused reply's exchange was still released, with the connection behind the stream");
+        }
+        finally
+        {
+            template.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task StreamList_RequestAsync_ReadThenDispose_ReadsEveryRow()
+    {
+        var factory = new TrackingFactory(_db.ConnectionString);
+        await using var context = await StartStreamRouteAsync(factory, "direct:stream-async");
+        var template = new ProducerTemplate(context);
+        template.Start();
+        try
+        {
+            var ids = new List<object?>();
+            await using (var exchange = await template.RequestAsync("direct:stream-async", new Exchange(new Message("go"))))
+            {
+                var body = exchange.Out?.Body ?? exchange.In.Body;
+                await foreach (var row in (IAsyncEnumerable<Dictionary<string, object?>>)body!)
+                    ids.Add(row["id"]);
+            }
+
+            ids.Should().Equal(1L, 2L, 3L);
+            factory.Open.Should().Be(0);
+        }
+        finally
+        {
+            template.Stop();
+        }
+    }
+
+    private static async Task<RouteContext> StartStreamRouteAsync(TrackingFactory factory, string from)
+    {
+        var context = new RouteContext();
+        context.AddComponent(new DirectComponent());
+        context.AddComponent(new SqlComponent());
+        context.AddToRegistry("stream-db", (ISqlConnectionFactory)factory);
+        context.AddRoutes(r => r.From(from).To($"sql:{Select}?dataSource=stream-db&outputType=StreamList"));
+        await context.Start();
+        return context;
     }
 
     private async Task<Exchange> ProduceAsync(TrackingFactory factory, Dictionary<string, string>? extra = null)

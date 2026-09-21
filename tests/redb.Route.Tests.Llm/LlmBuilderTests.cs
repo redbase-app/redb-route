@@ -61,9 +61,11 @@ public sealed class LlmBuilderTests
     }
 
     [Fact]
-    public void Stream_SetsTrue()
+    public void Stream_SetsTheMode()
     {
-        LlmDsl.Factory("c").Stream().AsUri().Should().Contain("stream=true");
+        LlmDsl.Factory("c").Stream(LlmStreamMode.Calls).AsUri().Should().Contain("stream=calls");
+        LlmDsl.Factory("c").Stream(LlmStreamMode.Body).AsUri().Should().Contain("stream=body");
+        LlmDsl.Factory("c").AsUri().Should().NotContain("stream", "no streaming is the absence of the option");
     }
 
     [Fact]
@@ -111,13 +113,13 @@ public sealed class LlmBuilderTests
             .Temperature(0.0)
             .MaxTokens(512)
             .ConversationFromHeader()
-            .Stream()
+            .Stream(LlmStreamMode.Body)
             .AsUri();
 
         uri.Should().Contain("temperature=0");
         uri.Should().Contain("maxTokens=512");
         uri.Should().Contain("conversation=header");
-        uri.Should().Contain("stream=true");
+        uri.Should().Contain("stream=body");
     }
 
     [Fact]

@@ -334,6 +334,29 @@ public class FileConsumerTests : IDisposable
     // ── Failure handling: MoveFailed ────────────────────────────────
 
     [Fact]
+    public async Task Consumer_RollbackOnlyExchange_IsNotCommitted_TheFileGoesToMoveFailed()
+    {
+        CreateFile("rolled-back.txt", "data");
+        var failedDir = Path.Combine(_tempDir, "failed");
+
+        // .RollbackAll() leaves no exception, only the rollback-only mark: the work was rolled back, so the file must
+        // not be treated as done (Camel's file consumer rolls back on isRollbackOnly as well).
+        var endpoint = CreateEndpoint(new() { ["moveFailed"] = failedDir, ["delay"] = "100" });
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask)
+            .AndDoes(x => x.Arg<IExchange>().MarkRollbackOnly());
+
+        var consumer = (FileConsumer)endpoint.CreateConsumer(processor);
+        await consumer.Start();
+        await WaitForCondition(() => System.IO.File.Exists(Path.Combine(failedDir, "rolled-back.txt")), 3000);
+        await consumer.Stop();
+
+        System.IO.File.Exists(Path.Combine(failedDir, "rolled-back.txt"))
+            .Should().BeTrue("a rolled-back file takes the failure path, not the success path");
+    }
+
+    [Fact]
     public async Task Consumer_ProcessingFails_WithMoveFailed_QuarantinesFile()
     {
         CreateFile("poison.txt", "bad");

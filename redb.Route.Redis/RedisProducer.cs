@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Transactions;
 using redb.Route.Core;
 using redb.Route.Telemetry;
 using StackExchange.Redis;
@@ -12,7 +13,8 @@ namespace redb.Route.Redis;
 /// Redis producer. Dispatches to the correct Redis command based on
 /// <see cref="RedisEndpoint.OperationType"/>. Supports all major Redis data structures:
 /// strings, lists, hashes, sets, sorted sets, pub/sub, streams, geo, HyperLogLog, bitmap.
-/// Transacted mode defers writes via <see cref="ITransactedAction"/>.
+/// Inside <c>.Transacted()</c>, PUBLISH and XADD wait for the commit (unless <c>transacted=false</c>); other writes wait
+/// for it only with <c>transacted=true</c>, and run the same code on a snapshot of the exchange once it commits.
 /// </summary>
 public sealed class RedisProducer : ConnectableProducer
 {
@@ -27,6 +29,11 @@ public sealed class RedisProducer : ConnectableProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+
+        if (_options.Transacted == true && !CanDefer(_endpoint.OperationType))
+            throw new InvalidOperationException(
+                $"'{ProducerName}': {_endpoint.OperationType} exists for what it returns, so it cannot wait for the commit " +
+                $"of a transaction. Drop transacted=true: {_endpoint.OperationType} always runs at once.");
     }
 
     /// <inheritdoc />
@@ -56,9 +63,9 @@ public sealed class RedisProducer : ConnectableProducer
             destination: _endpoint.Resource,
             operation: _endpoint.OperationType.ToString());
 
-        if (_options.Transacted && IsWriteOperation(_endpoint.OperationType))
+        if (DefersToTheCommit(exchange))
         {
-            ProcessTransactional(exchange);
+            DeferToTheCommit(exchange);
             return;
         }
 
@@ -186,7 +193,7 @@ public sealed class RedisProducer : ConnectableProducer
         switch (_endpoint.OperationType)
         {
             case RedisOperationType.SET:
-                var value = exchange.In.Body?.ToString() ?? string.Empty;
+                var value = BodyToRedisValue(exchange.In.Body);
                 if (_options.Ttl > 0)
                     await _db!.StringSetAsync(key, value, TimeSpan.FromSeconds(_options.Ttl)).ConfigureAwait(false);
                 else
@@ -226,7 +233,7 @@ public sealed class RedisProducer : ConnectableProducer
                 break;
 
             case RedisOperationType.SETNX:
-                var setnxValue = exchange.In.Body?.ToString() ?? string.Empty;
+                var setnxValue = BodyToRedisValue(exchange.In.Body);
                 bool wasSet;
                 if (_options.Ttl > 0)
                     wasSet = await _db!.StringSetAsync(key, setnxValue, TimeSpan.FromSeconds(_options.Ttl), When.NotExists).ConfigureAwait(false);
@@ -245,7 +252,7 @@ public sealed class RedisProducer : ConnectableProducer
     {
         var channel = _options.ResolveOption(_options.Channel ?? _endpoint.Resource, exchange)
                       ?? _endpoint.Resource;
-        var message = exchange.In.Body?.ToString() ?? string.Empty;
+        var message = BodyToRedisValue(exchange.In.Body);
         var recipients = await _subscriber!.PublishAsync(
             new RedisChannel(channel, RedisChannel.PatternMode.Literal), message).ConfigureAwait(false);
 
@@ -562,18 +569,56 @@ public sealed class RedisProducer : ConnectableProducer
     // Transactional (deferred write)
     // ═══════════════════════════════════════════════════════════
 
-    private void ProcessTransactional(IExchange exchange)
-    {
-        // Capture state — resolve dynamic values NOW, exchange won't be available at commit
-        var db = _db!;
-        var op = _endpoint.OperationType;
-        var key = ResolveKey(exchange);
-        var bodyText = exchange.In.Body?.ToString() ?? string.Empty;
-        string? field = _options.Field != null ? _options.ResolveOption(_options.Field, exchange) : null;
+    /// <summary>
+    /// PUBLISH and XADD announce work, like a broker send: they follow the enclosing <c>.Transacted()</c> block unless
+    /// <c>transacted</c> says otherwise. Every other operation changes data and waits for the commit only when
+    /// <c>transacted=true</c> asks for it (the constructor has already refused it for an operation that cannot wait).
+    /// </summary>
+    private bool DefersToTheCommit(IExchange exchange) =>
+        _endpoint.OperationType is RedisOperationType.PUBLISH or RedisOperationType.XADD
+            ? TransactedActions.Defers(exchange, _options.Transacted)
+            : _options.Transacted == true;
 
-        var action = new RedisWriteAction(db, op, key, bodyText, field, _options.Score, Logger);
-        RegisterTransactedAction(exchange, $"redis-write-{Guid.NewGuid():N}", action);
+    private void DeferToTheCommit(IExchange exchange)
+    {
+        // The same operation, carried out after the commit on a snapshot of the exchange as it is at this step: the key,
+        // body, fields, headers and ttl are the ones the step sees now, whatever the route does to the exchange later.
+        var snapshot = exchange.Snapshot();
+        var op = _endpoint.OperationType;
+
+        TransactedActions.RegisterSend(exchange, $"redis-{op}-{Guid.NewGuid():N}", async ct =>
+        {
+            await DispatchOperationAsync(snapshot, ct).ConfigureAwait(false);
+
+            // What an announcement reports reaches the exchange with the commit.
+            var reported = op switch
+            {
+                RedisOperationType.XADD => RedisHeaders.StreamMessageId,
+                RedisOperationType.PUBLISH => RedisHeaders.PublishRecipients,
+                _ => null
+            };
+            if (reported is not null && snapshot.In.Headers.TryGetValue(reported, out var value))
+                exchange.In.Headers[reported] = value;
+        }, ProducerName);
     }
+
+    /// <summary>
+    /// Whether an operation can wait for a commit: the writes can; an operation that exists for what it returns (a read,
+    /// a pop) or that consumes cannot. Listed one by one, so a new operation is classified on purpose.
+    /// </summary>
+    private static bool CanDefer(RedisOperationType op) => op switch
+    {
+        RedisOperationType.SET or RedisOperationType.SETNX or RedisOperationType.DEL or RedisOperationType.EXPIRE or
+        RedisOperationType.INCR or RedisOperationType.DECR or
+        RedisOperationType.PUBLISH or RedisOperationType.XADD or
+        RedisOperationType.LPUSH or RedisOperationType.RPUSH or
+        RedisOperationType.HSET or RedisOperationType.HMSET or RedisOperationType.HDEL or
+        RedisOperationType.SADD or RedisOperationType.SREM or
+        RedisOperationType.ZADD or RedisOperationType.ZREM or
+        RedisOperationType.GEOADD or RedisOperationType.PFADD or RedisOperationType.PFMERGE or RedisOperationType.SETBIT or
+        RedisOperationType.COMMAND => true,
+        _ => false
+    };
 
     // ═══════════════════════════════════════════════════════════
     // Helpers
@@ -651,121 +696,4 @@ public sealed class RedisProducer : ConnectableProducer
         "ft" => GeoUnit.Feet,
         _ => GeoUnit.Meters
     };
-
-    private static bool IsWriteOperation(RedisOperationType op) => op switch
-    {
-        RedisOperationType.GET or RedisOperationType.EXISTS or RedisOperationType.LLEN or
-        RedisOperationType.LRANGE or RedisOperationType.HGET or RedisOperationType.HMGET or
-        RedisOperationType.HGETALL or RedisOperationType.HLEN or RedisOperationType.SMEMBERS or
-        RedisOperationType.SCARD or RedisOperationType.SISMEMBER or RedisOperationType.ZRANGE or
-        RedisOperationType.ZCARD or RedisOperationType.ZSCORE or RedisOperationType.ZRANGEBYSCORE or
-        RedisOperationType.GEODIST or RedisOperationType.GEORADIUS or RedisOperationType.PFCOUNT or
-        RedisOperationType.GETBIT or RedisOperationType.BITCOUNT => false,
-        _ => true
-    };
-
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (!exchange.Properties.TryGetValue("TRANSACT_ACTION", out var raw) ||
-            raw is not ConcurrentDictionary<string, ITransactedAction> dict)
-        {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties["TRANSACT_ACTION"] = dict;
-        }
-
-        dict[key] = action;
-    }
-}
-
-/// <summary>
-/// Deferred Redis write action. Executes the write on commit; discards on rollback.
-/// </summary>
-internal sealed class RedisWriteAction : ITransactedAction
-{
-    private readonly IDatabase _db;
-    private readonly RedisOperationType _op;
-    private readonly string _key;
-    private readonly string _body;
-    private readonly string? _field;
-    private readonly double? _score;
-    private readonly ILogger? _logger;
-
-    public RedisWriteAction(
-        IDatabase db, RedisOperationType op, string key, string body,
-        string? field, double? score, ILogger? logger)
-    {
-        _db = db;
-        _op = op;
-        _key = key;
-        _body = body;
-        _field = field;
-        _score = score;
-        _logger = logger;
-    }
-
-    public async Task Commit(CancellationToken ct = default)
-    {
-        switch (_op)
-        {
-            case RedisOperationType.SET:
-                await _db.StringSetAsync(_key, _body).ConfigureAwait(false);
-                break;
-            case RedisOperationType.SETNX:
-                await _db.StringSetAsync(_key, _body, when: When.NotExists).ConfigureAwait(false);
-                break;
-            case RedisOperationType.DEL:
-                await _db.KeyDeleteAsync(_key).ConfigureAwait(false);
-                break;
-            case RedisOperationType.INCR:
-                await _db.StringIncrementAsync(_key).ConfigureAwait(false);
-                break;
-            case RedisOperationType.DECR:
-                await _db.StringDecrementAsync(_key).ConfigureAwait(false);
-                break;
-            case RedisOperationType.EXPIRE:
-                await _db.KeyExpireAsync(_key, TimeSpan.FromHours(1)).ConfigureAwait(false);
-                break;
-            case RedisOperationType.LPUSH:
-                await _db.ListLeftPushAsync(_key, _body).ConfigureAwait(false);
-                break;
-            case RedisOperationType.RPUSH:
-                await _db.ListRightPushAsync(_key, _body).ConfigureAwait(false);
-                break;
-            case RedisOperationType.PUBLISH:
-                await _db.PublishAsync(new RedisChannel(_key, RedisChannel.PatternMode.Literal), _body).ConfigureAwait(false);
-                break;
-            case RedisOperationType.SADD:
-                await _db.SetAddAsync(_key, _body).ConfigureAwait(false);
-                break;
-            case RedisOperationType.SREM:
-                await _db.SetRemoveAsync(_key, _body).ConfigureAwait(false);
-                break;
-            case RedisOperationType.HSET:
-                var field = _field ?? throw new InvalidOperationException("Field required for transacted HSET.");
-                await _db.HashSetAsync(_key, field, _body).ConfigureAwait(false);
-                break;
-            case RedisOperationType.HDEL:
-                field = _field ?? throw new InvalidOperationException("Field required for transacted HDEL.");
-                await _db.HashDeleteAsync(_key, field).ConfigureAwait(false);
-                break;
-            case RedisOperationType.ZADD:
-                var score = _score ?? throw new InvalidOperationException("Score required for transacted ZADD.");
-                await _db.SortedSetAddAsync(_key, _body, score).ConfigureAwait(false);
-                break;
-            case RedisOperationType.ZREM:
-                await _db.SortedSetRemoveAsync(_key, _body).ConfigureAwait(false);
-                break;
-            default:
-                _logger?.LogWarning("Transacted commit for {Op} not implemented — executing as no-op", _op);
-                break;
-        }
-
-        _logger?.LogDebug("Redis transacted write committed: {Op} {Key}", _op, _key);
-    }
-
-    public Task Rollback(CancellationToken ct = default)
-    {
-        _logger?.LogDebug("Redis transacted write rolled back: {Op} {Key}", _op, _key);
-        return Task.CompletedTask;
-    }
 }

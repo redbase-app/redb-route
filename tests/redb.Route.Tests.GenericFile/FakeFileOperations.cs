@@ -81,37 +81,59 @@ public sealed class FakeFileOperations : IFileOperations
     // ── Enumeration ─────────────────────────────────────────────────
 
     public Task<List<GenericFileInfo>> ListFilesAsync(
-        string directory, bool recursive, int maxDepth, int minDepth, CancellationToken ct = default)
+        string directory, bool recursive, int maxDepth, int minDepth,
+        Func<string, string, bool>? directoryFilter = null, CancellationToken ct = default)
     {
         var basePath = directory.TrimEnd('/');
         if (basePath.Length == 0) basePath = "/";
-        var prefix = basePath == "/" ? "/" : basePath + "/";
 
         var result = new List<GenericFileInfo>();
-        foreach (var (path, entry) in _files)
-        {
-            if (!path.StartsWith(prefix, StringComparison.Ordinal)) continue;
-
-            var rel = path[prefix.Length..];
-            var depth = rel.Count(c => c == '/');
-
-            if (!recursive && depth > 0) continue;
-            if (maxDepth > 0 && depth > maxDepth) continue;
-            if (minDepth > 0 && depth < minDepth) continue;
-
-            result.Add(new GenericFileInfo
-            {
-                Name = GetFileName(path),
-                FullPath = path,
-                BasePath = basePath,
-                Length = entry.Data.Length,
-                LastModified = entry.LastModified,
-                Depth = depth
-            });
-        }
-
+        Walk(basePath, basePath, 0);
         return Task.FromResult(result);
+
+        // Walks directory by directory, the way a real transport does, so a directory the filter
+        // rejects is never listed — which is the whole point of filterDirectory, and what
+        // ListedDirectories lets a test observe.
+        void Walk(string dir, string root, int depth)
+        {
+            ListedDirectories.Add(dir);
+            var prefix = dir == "/" ? "/" : dir + "/";
+
+            foreach (var (path, entry) in _files)
+            {
+                if (!path.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                if (path[prefix.Length..].Contains('/', StringComparison.Ordinal)) continue; // deeper: its own walk
+                if (minDepth > 0 && depth < minDepth) continue;
+
+                result.Add(new GenericFileInfo
+                {
+                    Name = GetFileName(path),
+                    FullPath = path,
+                    BasePath = root,
+                    Length = entry.Data.Length,
+                    LastModified = entry.LastModified,
+                    Depth = depth
+                });
+            }
+
+            if (!recursive || (maxDepth > 0 && depth >= maxDepth))
+                return;
+
+            foreach (var sub in _dirs.Where(d => d.StartsWith(prefix, StringComparison.Ordinal)
+                                                 && !d[prefix.Length..].Contains('/', StringComparison.Ordinal))
+                                     .OrderBy(d => d, StringComparer.Ordinal)
+                                     .ToList())
+            {
+                var relative = sub[(root == "/" ? 1 : root.Length + 1)..];
+                if (directoryFilter != null && !directoryFilter(sub, relative))
+                    continue;
+                Walk(sub, root, depth + 1);
+            }
+        }
     }
+
+    /// <summary>Every directory a listing actually walked into, in order — for filterDirectory tests.</summary>
+    public List<string> ListedDirectories { get; } = [];
 
     // ── Read ────────────────────────────────────────────────────────
 

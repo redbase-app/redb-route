@@ -803,7 +803,11 @@ public interface IRouteDefinition : IProcessorDefinition
     /// <summary>Marks the exchange exception as handled: clears the exception and sets <c>ExceptionHandled = true</c>.</summary>
     IRouteDefinition ExceptionHandled();
 
-    /// <summary>Rolls back all transacted actions registered on the exchange and sets the <c>RollbackOnly</c> flag.</summary>
+    /// <summary>
+    /// Camel's <c>markRollbackOnly()</c>: marks the unit of work for rollback (the <c>RollbackOnly</c> property), rolls
+    /// back the deferred sends and stops the route. The enclosing transaction rolls the database back without an
+    /// exception, and the consumer does not acknowledge the message, so the broker delivers it again.
+    /// </summary>
     IRouteDefinition RollbackAll();
 
     /// <summary>

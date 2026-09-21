@@ -1,4 +1,6 @@
 using System.Data.Common;
+using System.Globalization;
+using System.Transactions;
 using redb.Route.Abstractions;
 using redb.Route.Sql.Connection;
 
@@ -30,6 +32,11 @@ public sealed class SqlIdempotentRepository : IIdempotentRepository
     private readonly SemaphoreSlim _ddlLock = new(1, 1);
     private bool _tableCreated;
 
+    // What the connections of this repository do in an ambient transaction: 0 until the first one is seen.
+    private const int Joins = 1;
+    private const int StaysOutside = 2;
+    private int _ambientBehaviour;
+
     /// <summary>Creates an idempotent repository with the given connection factory and options.</summary>
     /// <param name="connectionFactory">Factory for creating database connections.</param>
     /// <param name="options">Repository configuration.</param>
@@ -41,6 +48,16 @@ public sealed class SqlIdempotentRepository : IIdempotentRepository
         _options = options;
     }
 
+    /// <summary>
+    /// True when the repository's connections enlist in an ambient transaction, so that <see cref="Add"/> inside a
+    /// <c>.Transacted()</c> block is rolled back with it: Npgsql (PostgreSQL) and SqlClient (SQL Server), unless the
+    /// connection string sets <c>Enlist=false</c>. False for other providers (Microsoft.Data.Sqlite does not enlist) and
+    /// with <c>Enlist=false</c>; the idempotent consumer then removes the key itself after a rollback. It is learnt from the
+    /// connection <see cref="Add"/> opens, and the consumer reads it after <see cref="Add"/>; before the first connection it
+    /// is false.
+    /// </summary>
+    public bool JoinsAmbientTransaction => Volatile.Read(ref _ambientBehaviour) == Joins;
+
     /// <inheritdoc />
     public async Task<bool> Add(string key, CancellationToken ct = default)
     {
@@ -48,6 +65,8 @@ public sealed class SqlIdempotentRepository : IIdempotentRepository
         await CleanupIfNeededAsync(ct).ConfigureAwait(false);
 
         await using var conn = await _connectionFactory.CreateConnectionAsync(ct: ct).ConfigureAwait(false);
+        if (Volatile.Read(ref _ambientBehaviour) == 0)
+            Volatile.Write(ref _ambientBehaviour, EnlistsInAmbientTransaction(conn) ? Joins : StaysOutside);
         await using var cmd = conn.CreateCommand();
 
         cmd.CommandText = $"""
@@ -145,6 +164,10 @@ public sealed class SqlIdempotentRepository : IIdempotentRepository
         {
             if (_tableCreated) return;
 
+            // The table is the repository's, not the message's: the first call may run inside the transaction of whatever
+            // message came first, and DDL there would go with its rollback (PostgreSQL, SQL Server) or commit it implicitly
+            // (MySQL, Oracle). As Apache Camel creates the table outside any exchange, it is created outside the transaction.
+            using var outsideTransaction = new TransactionScope(TransactionScopeOption.Suppress, TransactionScopeAsyncFlowOption.Enabled);
             await using var conn = await _connectionFactory.CreateConnectionAsync(ct: ct).ConfigureAwait(false);
             await using var cmd = conn.CreateCommand();
 
@@ -156,6 +179,7 @@ public sealed class SqlIdempotentRepository : IIdempotentRepository
             cmd.CommandText = BuildCreateTableDdl(conn, _options.TableName);
 
             await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            outsideTransaction.Complete();
             _tableCreated = true;
         }
         finally
@@ -168,6 +192,21 @@ public sealed class SqlIdempotentRepository : IIdempotentRepository
     /// so <c>MySqlConnection</c>/<c>NpgsqlConnection</c>/<c>SqliteConnection</c> are not misdetected).</summary>
     private static bool IsSqlServer(DbConnection conn) =>
         string.Equals(conn.GetType().Name, "SqlConnection", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether <paramref name="conn"/> enlists in an ambient transaction. Npgsql and SqlClient do by default (<c>Enlist</c> is
+    /// on) and are the providers this is established for; any other provider, and <c>Enlist=false</c> or <c>no</c>, is taken as
+    /// staying outside, so the consumer removes the key itself rather than leave one whose work never committed.
+    /// </summary>
+    private static bool EnlistsInAmbientTransaction(DbConnection conn)
+    {
+        if (conn.GetType().Name is not ("NpgsqlConnection" or "SqlConnection"))
+            return false;
+
+        var settings = new DbConnectionStringBuilder { ConnectionString = conn.ConnectionString };
+        return !settings.TryGetValue("Enlist", out var enlist)
+            || Convert.ToString(enlist, CultureInfo.InvariantCulture)?.Trim().ToLowerInvariant() is not ("false" or "no");
+    }
 
     /// <summary>
     /// Returns the CREATE TABLE statement for the connection's dialect. The key columns are sized: MySQL and MariaDB refuse a

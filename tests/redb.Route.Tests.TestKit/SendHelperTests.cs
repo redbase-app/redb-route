@@ -45,6 +45,31 @@ public class SendHelperTests
     }
 
     [Fact]
+    public async Task RequestBody_NullableTarget_ConvertsTheReply()
+    {
+        await using var ctx = new RouteContext().AddRoutes(b => b.From("direct://answer-n").SetBody("42"));
+        await ctx.Start();
+
+        (await ctx.RequestBody<int?>("direct://answer-n", "?")).Should().Be(42);
+    }
+
+    private sealed class ExchangeBoundStream : redb.Route.Abstractions.IExchangeBoundBody;
+
+    [Fact]
+    public async Task RequestBody_ExchangeBoundReply_IsRefused()
+    {
+        await using var ctx = new RouteContext().AddRoutes(b =>
+            b.From("direct://bound").SetBody(_ => new ExchangeBoundStream()));
+        await ctx.Start();
+
+        var act = () => ctx.RequestBody<ExchangeBoundStream>("direct://bound", "?");
+
+        await act.Should().ThrowAsync<InvalidOperationException>(
+                "the helper ends the exchange before it returns, and the body could no longer be read")
+            .WithMessage("*RequestAsync*");
+    }
+
+    [Fact]
     public async Task RequestBodyAndHeaders_SeesHeaders()
     {
         await using var ctx = new RouteContext().AddRoutes(b =>

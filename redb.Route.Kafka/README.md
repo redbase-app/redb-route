@@ -1,6 +1,6 @@
 # redb.Route.Kafka
 
-Apache Kafka transport for redb.Route. Consumer (subscribe), producer (publish), consumer groups, deferred-commit routing (idempotent producer, at-least-once — see the transactions note below), and full Confluent.Kafka configuration.
+Apache Kafka transport for redb.Route. Consumer (subscribe), producer (publish), consumer groups, deferred-commit routing (idempotent producer), Kafka transactions with exactly-once consume-process-produce (`transactionalIdPrefix`), and full Confluent.Kafka configuration.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Kafka?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Kafka)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
@@ -22,7 +22,7 @@ kafka://topic-name?brokers=host:port&groupId=my-group&autoOffsetReset=earliest
 ### Fluent DSL
 
 ```csharp
-using redb.Route.Kafka.Fluent;
+using redb.Route.Kafka;
 
 // Consumer
 From(Kafka.Topic("orders")
@@ -41,23 +41,72 @@ From("direct://outbound")
         .Key("order-key")
         .Compression(CompressionType.Lz4));
 
-// Deferred-commit producer: the send happens at the route's transaction boundary
+// Inside a transacted block the send joins the transaction: it goes out once the database has
+// committed. The builder's .Transacted() also makes the producer idempotent and requires the block.
 From("direct://critical")
     .Transacted()
-    .To(Kafka.Topic("audit")
-        .Brokers("localhost:9092")
-        .Transacted());
+        .To(Kafka.Topic("audit")
+            .Brokers("localhost:9092")
+            .Transacted())
+        .To(Kafka.Topic("alerts")
+            .Brokers("localhost:9092")
+            .Transacted(false))          // goes out at once, even if the block rolls back
+    .End();
 ```
 
-### Transactions: what `.Transacted()` is and is not
+### Transactions: `.Transacted()` and Kafka transactions
 
-`.Transacted()` on a Kafka producer means an **idempotent producer whose send is deferred to the
-route's transaction boundary** — the message is published when the route commits, discarded when
-it rolls back. Together with the consumer's post-process offset commit this is **at-least-once**,
-not Kafka exactly-once: no `transactional.id` is configured and no `InitTransactions` is called.
-Why, and what real EOS would take, is written down in
-docs/KAFKA_TRANSACTIONS_TODO.md. Deduplication belongs to
-the route: `IdempotentConsumer(...)` with a real key.
+Inside a route's `.Transacted()` block a Kafka send **joins the transaction**: the message is
+published after the database commits and discarded when the block rolls back. The `transacted`
+parameter states the exceptions: `false` sends at once, outside the transaction; `true` also makes
+the producer idempotent and fails the step outside a block. On its own this is **at-least-once**:
+the deferred sends go out one after the other, and the consumer commits its offset after the route.
+
+**Kafka transactions** are a separate switch, `transactionalIdPrefix`:
+
+```csharp
+From(Kafka.Topic("orders").Brokers("b1:9092,b2:9092").GroupId("billing"))
+    .Transacted()
+        .IdempotentConsumer(Header("orderId"), "billing-inbound")   // the database work
+            .Process(/* ... */)
+        .EndIdempotentConsumer()
+        .To(Kafka.Topic("invoices").Brokers("b1:9092,b2:9092")
+            .TransactionalIdPrefix("billing"))
+    .End();
+```
+
+- The sends such a producer defers in a block commit as **one Kafka transaction** when the block
+  commits (after the database): all of them or none. `read_committed` readers, librdkafka's default,
+  never see an aborted one.
+- When the route started from a Kafka consumer of the **same cluster** (the same brokers), the
+  consumed offset commits **in that transaction** (`SendOffsetsToTransaction`) and the consumer does
+  not commit it itself: the output and the offset move together — exactly-once within Kafka. With
+  `enableAutoCommit=false` the offset stays the application's to commit.
+- A send outside a block (`transacted=false`, or no block) is a transaction of its own, a little
+  slower than a plain send.
+- The prefix names the producer; the connector appends the machine name, the process id and the
+  producer's number, so nodes deploying the same configuration never fence each other.
+- Two transactional producers in one block commit two transactions, one after the other: atomic per
+  producer, as for IBM MQ and RabbitMQ. The database and Kafka still do not commit as one: the
+  database commits first, and a failure between the two is covered by the redelivery and the
+  idempotent consumer.
+
+A raw `transactional.id` in `additionalProperties` is refused: it would put the client into
+transactional mode with nobody opening transactions. The decisions and their reasons are in
+docs/KAFKA_EOS_2026_09_19.md.
+
+A parameter the endpoint cannot read — a misspelt option, or a value of the wrong type — is refused
+by name when the endpoint is created: a misspelt `transactionalIdPrefix` would otherwise leave the
+producer without transactions.
+
+### Delivery defaults
+
+A producer defaults to `acks=all` and an **idempotent producer**, as the Kafka 3 client and Camel 4
+do: a send is confirmed once every in-sync replica has it, and a retried send is not written twice.
+`enableIdempotence` left unset follows the effective `acks` (on with `all`, off otherwise);
+`enableIdempotence=true` with another `acks`, or `transacted=true` or `transactionalIdPrefix` with an
+explicit `acks` other than `all`, is refused when the endpoint is created. A route that wants the lower latency of
+`acks=leader` sets it explicitly and gets a non-idempotent producer.
 
 ### Failed messages
 
@@ -73,7 +122,7 @@ blocks its partition — pair it with a route error handler that dead-letters.
 |----------|---------|
 | **Connection** | `.Brokers()`, `.SecurityProtocol()`, `.Sasl(mechanism, user, pass)`, `.SslCa()`, `.SslCert()`, `.ConnectionFactory()` |
 | **Consumer** | `.GroupId()`, `.AutoOffsetReset()`, `.MaxPollRecords()`, `.PollTimeout()`, `.SeekTo()`, `.TopicIsPattern()`, `.BreakOnFirstError()`, `.SessionTimeout()`, `.HeartbeatInterval()`, `.MaxPollInterval()`, `.PartitionAssignmentStrategy()`, `.IsolationLevel()` |
-| **Producer** | `.Acks()`, `.Key()`, `.Partition()`, `.Transacted()`, `.Linger()`, `.BatchSize()`, `.Compression()`, `.MessageTimeout()`, `.Retries()`, `.RecordMetadata()` |
+| **Producer** | `.Acks()`, `.EnableIdempotence()`, `.Key()`, `.Partition()`, `.Transacted()`, `.TransactionalIdPrefix()`, `.Linger()`, `.BatchSize()`, `.Compression()`, `.MessageTimeout()`, `.Retries()`, `.RecordMetadata()` |
 
 > Most builder methods accept both constant values and `IExpression` for runtime resolution via the expression engine.
 

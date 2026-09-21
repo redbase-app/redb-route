@@ -60,6 +60,8 @@ export interface BranchView {
     path: number[];
     /** `when ${…}` / `otherwise` / `catch X` / `finally` / plain index for multicast. */
     label: string;
+    /** The same text uncapped: the label is cut to keep a stack of branches readable, the tooltip is not. */
+    tooltip: string;
     warn: boolean;
     steps: StepView[];
     span: Span;
@@ -332,7 +334,7 @@ function buildChoice(element: XmlElement, index: ElementIndex, path: number[], r
 function buildTryCatch(element: XmlElement, index: ElementIndex, path: number[], resolver: UriResolver = IDENTITY_RESOLVER): BranchingView {
     // The format has the explicit <try> wrapper (spec children: try/catch/finally); loose
     // steps directly under <tryCatch> are read as the body too.
-    const body: BranchView = { path, label: "try", warn: false, steps: [], span: element.span };
+    const body: BranchView = { path, label: "try", tooltip: "try", warn: false, steps: [], span: element.span };
     const branches: BranchView[] = [body];
     childElements(element).forEach((child, i) => {
         const childPath = [...path, i];
@@ -355,6 +357,7 @@ function buildMulticast(element: XmlElement, index: ElementIndex, path: number[]
     const branches = childElements(element).map((child, i) => ({
         path: [...path, i],
         label: String(i + 1),
+        tooltip: String(i + 1),
         warn: false,
         steps: [buildStep(child, index, [...path, i], resolver)],
         span: child.span,
@@ -366,6 +369,7 @@ function branch(label: string, warn: boolean, element: XmlElement, index: Elemen
     return {
         path,
         label: trimLabel(label, 40),
+        tooltip: label,
         warn,
         steps: childElements(element).map((child, i) => buildStep(child, index, [...path, i], resolver)),
         span: element.span,

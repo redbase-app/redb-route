@@ -135,6 +135,9 @@ public class TryCatchProcessor : IProcessor
                         ex.GetType().Name, ex.Message);
                     await clause.Handler.Process(exchange, ct).ConfigureAwait(false);
                     exchange.ExceptionHandled = true;
+                    // The catch clause is where this failure ends; the steps left in the try body are deliberately
+                    // abandoned, so nothing replays them later (OnException ... Continued()).
+                    ResumePoints.Forget(exchange, ex);
                     matched = true;
                     break;
                 }

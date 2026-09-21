@@ -136,7 +136,10 @@ public sealed class AmqpEndpointOptions : EndpointOptions
     /// <summary>Enable request/reply pattern (creates temp reply-to address). (default: false)</summary>
     public bool ReplyTo { get; set; }
 
-    /// <summary>Request/reply timeout in seconds. (default: 30)</summary>
+    /// <summary>
+    /// Request/reply timeout in seconds; with <see cref="LocalTransactions"/> it also bounds each step of a transaction
+    /// (declare, every send, discharge). (default: 30)
+    /// </summary>
     public int Timeout { get; set; } = 30;
 
     /// <summary>
@@ -148,8 +151,22 @@ public sealed class AmqpEndpointOptions : EndpointOptions
 
     // ── Transacted ──
 
-    /// <summary>Enable transacted mode (AMQP transactions via Coordinator). (default: false)</summary>
-    public bool Transacted { get; set; }
+    /// <summary>
+    /// Producer: whether the send joins the enclosing <c>.Transacted()</c> block. Unset, it follows the block: deferred
+    /// until the database commits inside one, sent at once outside. <c>true</c> requires a block and fails outside one;
+    /// <c>false</c> sends at once even inside one, outside the block's transaction. A request-reply producer
+    /// (<see cref="ReplyTo"/>) always sends at once and refuses <c>true</c>.
+    /// </summary>
+    public bool? Transacted { get; set; }
+
+    /// <summary>
+    /// Producer: the sends it defers in a <c>.Transacted()</c> block commit in one AMQP local transaction when the block
+    /// commits — a coordinator link declares it, the sends carry it, one discharge commits it — so they arrive together
+    /// or not at all; a rejected send, or any failure before the discharge, discharges it as failed. The broker must
+    /// support AMQP local transactions (ActiveMQ Artemis, Qpid, Azure Service Bus; not RabbitMQ's AMQP 1.0 plugin): one
+    /// that refuses the coordinator fails the commit. Unset, the deferred sends go out one after the other.
+    /// </summary>
+    public bool LocalTransactions { get; set; }
 
     // ── Topology ──
 
@@ -187,6 +204,15 @@ public sealed class AmqpEndpointOptions : EndpointOptions
 
         // A typo must fail at endpoint creation, not silently at terminus build time.
         ResolveExpiryPolicy();
+
+        if (LocalTransactions && ReplyTo)
+            throw new ArgumentException(
+                "'localTransactions' commits deferred sends, and a request-reply producer (replyTo=true) never defers " +
+                "one: its request has to leave at once for the reply to come. Drop one of the two.");
+        if (LocalTransactions && Transacted == false)
+            throw new ArgumentException(
+                "'localTransactions' commits the sends deferred in a .Transacted() block, and 'transacted=false' sends at " +
+                "once, deferring none. Drop one of the two.");
     }
 
     /// <summary>

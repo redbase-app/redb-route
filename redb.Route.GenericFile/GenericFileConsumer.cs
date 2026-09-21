@@ -132,7 +132,8 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
         }
 
         var files = await Operations.ListFilesAsync(
-            BasePath, Options.Recursive, Options.MaxDepth, Options.MinDepth, ct).ConfigureAwait(false);
+            BasePath, Options.Recursive, Options.MaxDepth, Options.MinDepth,
+            DirectoryFilter(), ct).ConfigureAwait(false);
 
         var filtered = ApplyFilters(files);
         var sorted = ApplySort(filtered);
@@ -266,7 +267,8 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
                 await exchange.DisposeAsync().ConfigureAwait(false);
             }
 
-            if (exchange.Exception != null && !exchange.ExceptionHandled)
+            // A rollback-only exchange (.RollbackAll()) counts as failed too: its work was rolled back.
+            if (exchange.EndedInFailure())
             {
                 // Processing failed — remove idempotent key so it can be retried
                 if (_idempotentRepo != null)
@@ -343,8 +345,90 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
             files = files.Where(f => !GenericFileUtils.GlobMatch(f.Name, Options.Exclude));
         }
 
+        // Path filters (Ant patterns over the path relative to the polled directory) — the name
+        // globs above cannot see a directory, so this is what selects one out of a recursive poll.
+        if (!string.IsNullOrEmpty(Options.AntInclude))
+        {
+            files = files.Where(f => GenericFileUtils.AntMatch(
+                RelativePathOf(f), Options.AntInclude, Options.AntFilterCaseSensitive));
+        }
+
+        if (!string.IsNullOrEmpty(Options.AntExclude))
+        {
+            files = files.Where(f => !GenericFileUtils.AntMatch(
+                RelativePathOf(f), Options.AntExclude, Options.AntFilterCaseSensitive));
+        }
+
+        // Condition over the file's own headers, and then the registry bean. Both run before the
+        // file is read, moved or deleted: a file turned down here is left exactly as it was found.
+        if (!string.IsNullOrEmpty(Options.FilterFile))
+        {
+            var predicate = _fileFilter ??= Predicates.PredicateFactory.FromString(Options.FilterFile);
+            files = files.Where(f => predicate.Matches(Probe(f, f.FullPath)));
+        }
+
+        if (Options.FilterInstance is { } bean)
+        {
+            files = files.Where(bean.Accept);
+        }
+
         return files;
     }
+
+    /// <summary>Path of a polled file relative to the directory it was enumerated from.</summary>
+    private string RelativePathOf(GenericFileInfo file) => Operations.GetRelativePath(file.BasePath, file.FullPath);
+
+    /// <summary>
+    /// A headers-only exchange standing for a file or a directory, used to evaluate
+    /// <c>filterFile</c> / <c>filterDirectory</c>. Nothing is read: the conditions see exactly the
+    /// headers the route would see, which is why they are written the same way as any other
+    /// condition in the DSL.
+    /// </summary>
+    private IExchange Probe(GenericFileInfo file, string path)
+    {
+        var message = new Message();
+        SetExchangeHeaders(message, file, path);
+        return new Exchange(message);
+    }
+
+    /// <summary>
+    /// Builds the directory predicate handed to the listing: the <c>filterDirectory</c> condition
+    /// and the filter bean, or null when neither is configured and every subdirectory is walked.
+    /// </summary>
+    private Func<string, string, bool>? DirectoryFilter()
+    {
+        var condition = string.IsNullOrEmpty(Options.FilterDirectory)
+            ? null
+            : _directoryFilter ??= Predicates.PredicateFactory.FromString(Options.FilterDirectory);
+        var bean = Options.FilterInstance;
+
+        if (condition is null && bean is null)
+            return null;
+
+        return (fullPath, relativePath) =>
+        {
+            if (bean is not null && !bean.AcceptDirectory(fullPath, relativePath))
+                return false;
+
+            if (condition is null)
+                return true;
+
+            // The directory stands in for a file: name, path and parent are what a condition can
+            // ask about; size and timestamp are not a directory's business and stay at zero.
+            var asFile = new GenericFileInfo
+            {
+                Name = Operations.GetFileName(fullPath),
+                FullPath = fullPath,
+                BasePath = BasePath,
+                Length = 0,
+                LastModified = default
+            };
+            return condition.Matches(Probe(asFile, fullPath));
+        };
+    }
+
+    private IPredicate? _fileFilter;
+    private IPredicate? _directoryFilter;
 
     private IEnumerable<GenericFileInfo> ApplySort(IEnumerable<GenericFileInfo> files) => Options.SortBy switch
     {

@@ -8,7 +8,8 @@ namespace redb.Route.Transactions;
 /// Imperative transaction processor that rolls back the <see cref="TransactionScope"/>
 /// previously opened by <see cref="BeginTransactionProcessor"/>.
 /// Rolls back all deferred <see cref="ITransactedAction"/> instances, then disposes the scope
-/// without calling <see cref="TransactionScope.Complete"/>.
+/// without calling <see cref="TransactionScope.Complete"/>. Joined to an enclosing block, it marks the enclosing
+/// transaction for rollback, and the enclosing block rolls back the database and every send.
 /// </summary>
 public sealed class RollbackTransactionProcessor : IProcessor
 {
@@ -31,27 +32,21 @@ public sealed class RollbackTransactionProcessor : IProcessor
             return;
         }
 
-        // Rollback all deferred transport actions
-        var actions = TransactedProcessor.GetActionsPublic(exchange);
-        if (actions is not null)
-        {
-            foreach (var kvp in actions)
-            {
-                try
-                {
-                    await kvp.Value.Rollback(ct).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogWarning(ex, "Rollback failed for action '{ActionKey}'. Suppressing.", kvp.Key);
-                }
-            }
-            actions.Clear();
-        }
-
-        // Dispose without Complete → automatic rollback
-        scope.Dispose();
         exchange.Properties.Remove(BeginTransactionProcessor.ScopePropertyKey);
+        var ownsActions = BeginTransactionProcessor.TryTakeOwnActions(exchange, out var enclosing);
+        try
+        {
+            if (ownsActions)
+                await TransactedActions.RollbackAll(exchange, _logger, ct).ConfigureAwait(false);
+
+            // Dispose without Complete → automatic rollback
+            scope.Dispose();
+        }
+        finally
+        {
+            if (ownsActions)
+                TransactedActions.Close(exchange, enclosing);
+        }
 
         _logger?.LogDebug("Transaction rolled back imperatively.");
     }

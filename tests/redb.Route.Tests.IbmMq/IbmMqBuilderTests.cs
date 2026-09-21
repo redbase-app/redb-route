@@ -206,6 +206,20 @@ public sealed class IbmMqBuilderTests
         uri.Should().Contain("transacted=true");
     }
 
+    [Fact]
+    public void Transacted_false_is_written_out_to_send_at_once_inside_a_block()
+    {
+        var uri = IbmMqDsl.Queue("Q").Transacted(false).Build();
+        uri.Should().Contain("transacted=false");
+    }
+
+    [Fact]
+    public void Transacted_left_unset_is_not_written_so_the_producer_follows_the_block()
+    {
+        var uri = IbmMqDsl.Queue("Q").Build();
+        uri.Should().NotContain("transacted");
+    }
+
     // DeadLetterQueue/MaxRedeliveries tests removed with the verbs (часть B): a second, dead
     // vocabulary for poison handling - the implemented one is BackoutThreshold/BackoutQueue.
     // These *_SetsParam tests are exactly the coverage that let dead options survive: they

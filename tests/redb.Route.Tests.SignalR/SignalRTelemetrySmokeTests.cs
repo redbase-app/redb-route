@@ -1,12 +1,11 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using OpenTelemetry;
-using OpenTelemetry.Trace;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.SignalR;
 using redb.Route.Telemetry;
+using redb.Route.Tests.Shared;
 
 namespace redb.Route.Tests.SignalR;
 
@@ -50,15 +49,11 @@ public sealed class SignalRTelemetrySmokeTests : IAsyncLifetime
         _producer = (SignalRProducer)pEndpoint.CreateProducer();
         await _producer.Start();
 
-        var activities = new List<Activity>();
-        using var tracer = Sdk.CreateTracerProviderBuilder()
-            .AddSource(RouteActivitySource.SourceName)
-            .AddInMemoryExporter(activities)
-            .Build()!;
+        using var capture = new SpanCapture();   // this test's spans only
 
         await _producer.Process(new Exchange(new Message("hello")));
 
-        tracer.ForceFlush(1000);
+        var activities = capture.Spans;
         activities.Should().NotBeEmpty();
         var activity = activities.First();
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);

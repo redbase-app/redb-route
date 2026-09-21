@@ -8,8 +8,9 @@ namespace redb.Route.Processors;
 /// (<see cref="IRouteLifecycleListener.OnExchangeReceived"/>, <see cref="IRouteLifecycleListener.OnExchangeCompleted"/>,
 /// <see cref="IRouteLifecycleListener.OnExchangeFailed"/>) to the context's listener set.
 /// <para>
-/// Sits outside inflight tracking and every error handler, so "completed" means the consumer
-/// would see a normal return and "failed" means the exception is about to reach the consumer.
+/// Sits outside inflight tracking and every error handler and reaches the consumer's verdict: "failed"
+/// means an exception is about to reach the consumer, or the route returned with a failure left
+/// unhandled on the exchange or a rollback-only mark; "completed" means the consumer acknowledges.
 /// When no listener is registered the wrapper is a plain pass-through with no awaits added.
 /// </para>
 /// </summary>
@@ -47,6 +48,12 @@ internal sealed class ExchangeEventsProcessor : IProcessor
             await _context.NotifyExchangeFailed(_routeId, exchange, ex, ct).ConfigureAwait(false);
             throw;
         }
-        await _context.NotifyExchangeCompleted(_routeId, exchange, ct).ConfigureAwait(false);
+
+        // A normal return with a failure left unhandled on the exchange (OnException without Handled) or a rollback-only
+        // mark (.RollbackAll()) is a failure: the consumer does not acknowledge it.
+        if (ExchangeFailureExtensions.FailureOf(exchange) is { } failure)
+            await _context.NotifyExchangeFailed(_routeId, exchange, failure, ct).ConfigureAwait(false);
+        else
+            await _context.NotifyExchangeCompleted(_routeId, exchange, ct).ConfigureAwait(false);
     }
 }

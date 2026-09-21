@@ -3,6 +3,8 @@ using System.Text;
 using Confluent.Kafka;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Transactions;
+using redb.Route.Processors;
 using redb.Route.Kafka;
 using Xunit.Abstractions;
 
@@ -250,6 +252,10 @@ public sealed class KafkaIntegrationTests
         processedMessages.Should().NotBeEmpty();
     }
 
+    /// <summary>Runs <paramref name="body"/> inside a transacted block, as <c>.Transacted()</c> on a route does.</summary>
+    private static Task InTransaction(IExchange exchange, Func<IExchange, CancellationToken, Task> body) =>
+        new TransactedProcessor(new DelegateProcessor(body), new TransactionPolicy()).Process(exchange);
+
     [Fact]
     public async Task TransactedProducer_DeferredCommit_Delivers()
     {
@@ -263,11 +269,8 @@ public sealed class KafkaIntegrationTests
         await producer.Start();
 
         var exchange = new Exchange(new Message("tx-real-msg"));
-        await producer.Process(exchange);   // registers the deferred KafkaSendAction
-
-        var actions = (ConcurrentDictionary<string, ITransactedAction>)exchange.Properties["TRANSACT_ACTION"]!;
-        foreach (var a in actions.Values)
-            await a.Commit();                // ← the deferred ProduceAsync; must NOT throw
+        // The block commits the deferred KafkaSendAction, i.e. the deferred ProduceAsync; it must NOT throw.
+        await InTransaction(exchange, (ex, ct) => producer.Process(ex, ct));
 
         await producer.Stop();
 
@@ -276,21 +279,55 @@ public sealed class KafkaIntegrationTests
     }
 
     [Fact]
-    public async Task TransactedProducer_RegistersDeferredAction()
+    public async Task TransactedProducer_OutsideTransactedBlock_Refuses()
     {
         var topic = $"test-transact-{Guid.NewGuid():N}";
         var ep = CreateEndpoint(topic, "transacted=true");
         var producer = (KafkaProducer)ep.CreateProducer();
         await producer.Start();
 
-        var exchange = new Exchange(new Message("transacted-msg"));
-        await producer.Process(exchange);
-        await producer.Stop();
+        // Nothing would ever commit a send deferred outside .Transacted(), so the producer refuses it.
+        var act = () => producer.Process(new Exchange(new Message("transacted-msg")));
 
-        exchange.Properties.Should().ContainKey("TRANSACT_ACTION");
-        var actions = exchange.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        actions.Should().NotBeNull();
-        actions!.Should().NotBeEmpty();
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*Transacted()*");
+        await producer.Stop();
+    }
+
+    /// <summary>Sends one message from inside a <c>.Transacted()</c> block that then fails.</summary>
+    private async Task SendFromAFailedBlock(string topic, string? producerParams)
+    {
+        var ep = CreateEndpoint(topic, producerParams);
+        var producer = (KafkaProducer)ep.CreateProducer();
+        await producer.Start();
+
+        var failed = () => InTransaction(new Exchange(new Message("sent-from-a-failed-block")), async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            throw new InvalidOperationException("the unit of work failed");
+        });
+        await failed.Should().ThrowAsync<InvalidOperationException>();
+        await producer.Stop();
+    }
+
+    [Fact]
+    public async Task Producer_without_transacted_joins_the_block_and_sends_nothing_when_it_fails()
+    {
+        var topic = $"test-join-{Guid.NewGuid():N}";
+
+        await SendFromAFailedBlock(topic, producerParams: null);
+
+        (await ConsumeOneMessage(topic, $"verify-{Guid.NewGuid():N}", timeoutMs: 8000))
+            .Should().BeNull("inside .Transacted() a send joins the transaction unless transacted=false opts out");
+    }
+
+    [Fact]
+    public async Task Producer_with_transacted_false_sends_at_once_even_from_a_failed_block()
+    {
+        var topic = $"test-optout-{Guid.NewGuid():N}";
+
+        await SendFromAFailedBlock(topic, "transacted=false");
+
+        (await ConsumeOneMessage(topic, $"verify-{Guid.NewGuid():N}")).Should().Be("sent-from-a-failed-block");
     }
 
     [Fact]

@@ -17,5 +17,9 @@
     <PackageReference Include="Google.Protobuf" Version="3.31.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- One span capture for the smoke tests: the test root trace keeps parallel test classes out. -->
+    <Compile Include="../Shared/SpanCapture.cs" Link="Shared/SpanCapture.cs" />
+  </ItemGroup>
 </Project>
 

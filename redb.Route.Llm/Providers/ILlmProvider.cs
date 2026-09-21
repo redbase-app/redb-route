@@ -21,16 +21,18 @@ public interface ILlmProvider
     Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default);
 
     /// <summary>
-    /// Performs a streaming completion. Yields content blocks (text deltas,
-    /// tool-use begin/end, partial JSON) until <c>stop_reason</c> is received.
-    /// Default implementation buffers <see cref="CompleteAsync"/> as a single chunk —
-    /// override for true token-streaming.
+    /// Performs a streaming completion. Yields the pieces as they arrive (visible text as
+    /// <see cref="LlmTextBlock"/>, thinking as <see cref="LlmThinkingBlock"/>) and ends with a chunk that
+    /// carries the stop reason, the usage and <see cref="LlmStreamChunk.Response"/>: the whole answer,
+    /// exactly what <see cref="CompleteAsync"/> returns for it. A stream that ends before the model said
+    /// why it stopped is a cut answer and fails. Default implementation buffers <see cref="CompleteAsync"/>
+    /// as a single chunk — override for true token-streaming.
     /// </summary>
     async IAsyncEnumerable<LlmStreamChunk> StreamAsync(
         LlmRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         var response = await CompleteAsync(request, ct).ConfigureAwait(false);
-        yield return new LlmStreamChunk(response.Content, response.StopReason, response.Usage);
+        yield return new LlmStreamChunk(response.Content, response.StopReason, response.Usage) { Response = response };
     }
 }

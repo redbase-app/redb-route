@@ -48,8 +48,8 @@ public sealed class KafkaConnectionFactory
 
     // ── Producer defaults ──
 
-    /// <summary>Default acknowledgment level: None, Leader, All.</summary>
-    public string Acks { get; set; } = "Leader";
+    /// <summary>Default acknowledgment level: None, Leader, All. Default All, as in the Kafka 3 client and Camel 4.</summary>
+    public string Acks { get; set; } = "All";
 
     /// <summary>Default number of retries for failed sends.</summary>
     public int Retries { get; set; } = 3;

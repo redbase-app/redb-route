@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using NSubstitute;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Processors;
 using redb.Route.Transactions;
 
 namespace redb.Route.Tests.Transactions;
@@ -42,25 +43,40 @@ public class TransactedProcessorTests
             throw new InvalidOperationException("Rollback failed deliberately.");
     }
 
-    /// <summary>Registers a tracking action in the exchange and returns it.</summary>
+    private const string TransportStepsKey = "test:transport-steps";
+
+    /// <summary>
+    /// Arranges a tracking action that a transport step registers once the block runs, the only place a deferred
+    /// action can be registered (<see cref="TransactedActions.Register"/> refuses it outside a block).
+    /// </summary>
     private static TrackingTransactedAction RegisterAction(IExchange exchange, string key = "test-action")
     {
-        var actions = GetOrCreateActions(exchange);
         var action = new TrackingTransactedAction();
-        actions[key] = action;
+        RegisterInBlock(exchange, key, action);
         return action;
     }
 
-    private static ConcurrentDictionary<string, ITransactedAction> GetOrCreateActions(IExchange exchange)
+    private static void RegisterInBlock(IExchange exchange, string key, ITransactedAction action)
     {
-        if (!exchange.Properties.TryGetValue(TransactedProcessor.TransactActionPropertyKey, out var raw) ||
-            raw is not ConcurrentDictionary<string, ITransactedAction> dict)
+        if (!exchange.Properties.TryGetValue(TransportStepsKey, out var raw) ||
+            raw is not List<(string Key, ITransactedAction Action)> steps)
         {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties[TransactedProcessor.TransactActionPropertyKey] = dict;
+            steps = [];
+            exchange.Properties[TransportStepsKey] = steps;
         }
-        return dict;
+        steps.Add((key, action));
     }
+
+    /// <summary>The block's body: the transport steps register their actions first, then the rest of the route runs.</summary>
+    private static IProcessor WithTransportSteps(IProcessor inner) => new DelegateProcessor(async (ex, ct) =>
+    {
+        if (ex.Properties.TryGetValue(TransportStepsKey, out var raw) && raw is List<(string Key, ITransactedAction Action)> steps)
+        {
+            foreach (var (key, action) in steps)
+                TransactedActions.Register(ex, key, action, "test-transport");
+        }
+        await inner.Process(ex, ct);
+    });
 
     // ── Constructor ──
 
@@ -77,7 +93,7 @@ public class TransactedProcessorTests
     {
         var inner = Substitute.For<IProcessor>();
 
-        var act = () => new TransactedProcessor(inner, null!);
+        var act = () => new TransactedProcessor(WithTransportSteps(inner), null!);
 
         act.Should().Throw<ArgumentNullException>();
     }
@@ -88,7 +104,7 @@ public class TransactedProcessorTests
     public async Task Process_CallsInnerProcessor()
     {
         var inner = Substitute.For<IProcessor>();
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.Default);
         var exchange = CreateExchange();
 
         await processor.Process(exchange);
@@ -100,7 +116,7 @@ public class TransactedProcessorTests
     public async Task Process_CommitsActionsOnSuccess()
     {
         var inner = Substitute.For<IProcessor>();
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.Default);
         var exchange = CreateExchange();
         var action = RegisterAction(exchange);
 
@@ -114,7 +130,7 @@ public class TransactedProcessorTests
     public async Task Process_CommitsMultipleActionsOnSuccess()
     {
         var inner = Substitute.For<IProcessor>();
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.Default);
         var exchange = CreateExchange();
         var action1 = RegisterAction(exchange, "kafka-topic-1");
         var action2 = RegisterAction(exchange, "redis-stream-1");
@@ -126,18 +142,25 @@ public class TransactedProcessorTests
     }
 
     [Fact]
-    public async Task Process_InitializesTransactActionsDictionaryWhenMissing()
+    public async Task Process_OpensTransactActionsDictionaryForTheBlockOnly()
     {
+        object? inside = null;
         var inner = Substitute.For<IProcessor>();
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        inner.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                ci.Arg<IExchange>().Properties.TryGetValue(TransactedProcessor.TransactActionPropertyKey, out inside);
+                return Task.CompletedTask;
+            });
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.Default);
         var exchange = CreateExchange();
 
-        // No TRANSACT_ACTION set — processor should create it
+        // No TRANSACT_ACTION set: the processor creates it for the block and removes it when the block ends,
+        // so a transacted step after the block cannot defer a send nobody would commit.
         await processor.Process(exchange);
 
-        exchange.Properties.Should().ContainKey(TransactedProcessor.TransactActionPropertyKey);
-        exchange.Properties[TransactedProcessor.TransactActionPropertyKey]
-            .Should().BeOfType<ConcurrentDictionary<string, ITransactedAction>>();
+        inside.Should().BeAssignableTo<ConcurrentDictionary<string, ITransactedAction>>();
+        exchange.Properties.Should().NotContainKey(TransactedProcessor.TransactActionPropertyKey);
     }
 
     // ── Failure path ──
@@ -149,7 +172,7 @@ public class TransactedProcessorTests
         inner.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
             .Returns(x => throw new InvalidOperationException("Processing failed."));
 
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.Default);
         var exchange = CreateExchange();
         var action = RegisterAction(exchange);
 
@@ -167,7 +190,7 @@ public class TransactedProcessorTests
         inner.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
             .Returns(x => throw new ApplicationException("Boom"));
 
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.Default);
         var exchange = CreateExchange();
         var action1 = RegisterAction(exchange, "action-a");
         var action2 = RegisterAction(exchange, "action-b");
@@ -187,7 +210,7 @@ public class TransactedProcessorTests
         inner.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
             .Returns(x => throw new OperationCanceledException());
 
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.Default);
         var exchange = CreateExchange();
         var action = RegisterAction(exchange);
 
@@ -207,12 +230,11 @@ public class TransactedProcessorTests
         inner.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
             .Returns(x => throw new InvalidOperationException("Original"));
 
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.Default);
         var exchange = CreateExchange();
 
         // Register a failing rollback action
-        var actions = GetOrCreateActions(exchange);
-        actions["failing-rollback"] = new FailingRollbackAction();
+        RegisterInBlock(exchange, "failing-rollback", new FailingRollbackAction());
 
         var act = () => processor.Process(exchange);
 
@@ -240,7 +262,7 @@ public class TransactedProcessorTests
                 return Task.CompletedTask;
             });
 
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.Default);
         var exchange = CreateExchange();
 
         await processor.Process(exchange);
@@ -254,7 +276,7 @@ public class TransactedProcessorTests
     public async Task Process_SucceedsWithNoRegisteredActions()
     {
         var inner = Substitute.For<IProcessor>();
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.Default);
         var exchange = CreateExchange();
 
         // No actions registered — should still succeed
@@ -269,7 +291,7 @@ public class TransactedProcessorTests
     public async Task Process_WorksWithRequiresNewPolicy()
     {
         var inner = Substitute.For<IProcessor>();
-        var processor = new TransactedProcessor(inner, TransactionPolicy.RequiresNew);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.RequiresNew);
         var exchange = CreateExchange();
         var action = RegisterAction(exchange);
 
@@ -282,7 +304,7 @@ public class TransactedProcessorTests
     public async Task Process_WorksWithSuppressPolicy()
     {
         var inner = Substitute.For<IProcessor>();
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Suppress);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), TransactionPolicy.Suppress);
         var exchange = CreateExchange();
         var action = RegisterAction(exchange);
 
@@ -302,7 +324,7 @@ public class TransactedProcessorTests
         };
 
         var inner = Substitute.For<IProcessor>();
-        var processor = new TransactedProcessor(inner, policy);
+        var processor = new TransactedProcessor(WithTransportSteps(inner), policy);
         var exchange = CreateExchange();
         var action = RegisterAction(exchange);
 

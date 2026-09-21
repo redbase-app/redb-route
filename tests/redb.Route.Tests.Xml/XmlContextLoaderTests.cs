@@ -226,6 +226,28 @@ public class XmlContextLoaderTests : IAsyncDisposable
     }
 
     [Fact]
+    public void StructuredEndpoint_CarriesAnExplicitFalse_AndOmitsAnAbsentOption()
+    {
+        // transacted on a producer is tri-state now (119e76d7): absent waits for the enclosing
+        // transaction, "false" sends at once. The structured form must keep the two apart: an
+        // absent attribute stays absent in the URI, an explicit false reaches it verbatim.
+        var document = XDocument.Parse("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="gen-transacted">
+                <from uri="direct://gen-transacted-in"/>
+                <to><kafka path="orders" transacted="false"/></to>
+                <to><kafka path="audit"/></to>
+              </route>
+            </routes>
+            """);
+
+        var code = XmlCodeGenerator.Generate(document, "TransactedGenerated", "Tests.Generated");
+
+        code.Should().Contain("\"kafka://orders?transacted=false\"");
+        code.Should().Contain("\"kafka://audit\"", "an attribute that is not written is not an option");
+    }
+
+    [Fact]
     public void Generator_PrintsTheObjectProperty_AndTheFactoryMethod()
     {
         // The C# spelling of the same two forms: a nested bean as the property value, and the

@@ -1,10 +1,9 @@
 using System.Diagnostics;
-using OpenTelemetry;
-using OpenTelemetry.Trace;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Elasticsearch;
 using redb.Route.Telemetry;
+using redb.Route.Tests.Shared;
 using Xunit.Abstractions;
 
 namespace redb.Route.Tests.Elasticsearch;
@@ -28,11 +27,7 @@ public sealed class ElasticsearchTelemetrySmokeTests
         var producer = endpoint.CreateProducer();
         await producer.Start();
 
-        var activities = new List<Activity>();
-        using var tracer = Sdk.CreateTracerProviderBuilder()
-            .AddSource(RouteActivitySource.SourceName)
-            .AddInMemoryExporter(activities)
-            .Build()!;
+        using var capture = new SpanCapture();   // this test's spans only
 
         var ex = new Exchange(new Message("""{"title":"smoke"}"""));
         try
@@ -46,9 +41,10 @@ public sealed class ElasticsearchTelemetrySmokeTests
         finally
         {
             await producer.Stop();
+            await DeleteIndex(index);
         }
 
-        tracer.ForceFlush(1000);
+        var activities = capture.Spans;
         activities.Should().NotBeEmpty();
         var activity = activities.First();
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
@@ -56,5 +52,17 @@ public sealed class ElasticsearchTelemetrySmokeTests
         activity.GetTagItem("db.system").Should().Be("elasticsearch");
         activity.GetTagItem("messaging.destination.name").Should().Be(index);
         activity.GetTagItem("redb.route.endpoint").Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// Deletes the test's index by name (Elasticsearch 8 refuses a wildcard delete); a failed index attempt leaves none.
+    /// </summary>
+    private static async Task DeleteIndex(string index)
+    {
+        var client = new Elastic.Clients.Elasticsearch.ElasticsearchClient(
+            new Elastic.Clients.Elasticsearch.ElasticsearchClientSettings(new Uri("http://localhost:9200")));
+        var deleted = await client.Indices.DeleteAsync(index, d => d.IgnoreUnavailable(true));
+        if (!deleted.IsValidResponse)
+            throw new InvalidOperationException($"The smoke test's index was not deleted: {deleted.DebugInformation}");
     }
 }

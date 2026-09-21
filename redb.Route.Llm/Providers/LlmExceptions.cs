@@ -78,8 +78,9 @@ public sealed class LlmRateLimitException : Exception
 
 /// <summary>
 /// Transient provider failure that is safe to retry (HTTP 5xx, Anthropic's
-/// <c>overloaded</c> 529, network resets, timeouts). The caller is expected
-/// to apply its own back-off / circuit-breaker policy.
+/// <c>overloaded</c> 529, network resets). The caller is expected
+/// to apply its own back-off / circuit-breaker policy. A call that ran out of
+/// its time limit is <see cref="LlmTimeoutException"/>, not this.
 /// </summary>
 public sealed class LlmTransientException : Exception
 {
@@ -99,5 +100,48 @@ public sealed class LlmTransientException : Exception
         ProviderId = providerId;
         StatusCode = statusCode;
         RawBody = rawBody;
+    }
+}
+
+/// <summary>Which limit of a model call ran out.</summary>
+public enum LlmTimeoutKind
+{
+    /// <summary><see cref="LlmConnectionFactory.RequestTimeoutMs"/>: the whole call, streamed or not.</summary>
+    Call,
+
+    /// <summary><see cref="LlmConnectionFactory.StreamIdleTimeoutMs"/>: the provider sent nothing for too long.</summary>
+    StreamIdle
+}
+
+/// <summary>
+/// A limit of the call to the model ran out (<see cref="Kind"/>). <see cref="LlmConnectionFactory.RequestTimeoutMs"/>
+/// covers the whole call, waiting for the response and reading it, streamed or not, whatever client sends it;
+/// <see cref="LlmConnectionFactory.StreamIdleTimeoutMs"/> covers a stream's silence. A cancellation by the caller is
+/// not this: it stays an <see cref="OperationCanceledException"/>. Retrying the same call with the same limit usually
+/// runs out again; a long generation needs a larger <see cref="LlmConnectionFactory.RequestTimeoutMs"/>.
+/// </summary>
+public sealed class LlmTimeoutException : TimeoutException
+{
+    /// <summary>Provider identifier.</summary>
+    public string ProviderId { get; }
+
+    /// <summary>Name of the connection factory whose limit ran out, when it has one.</summary>
+    public string? FactoryName { get; }
+
+    /// <summary>The limit that ran out.</summary>
+    public TimeSpan Limit { get; }
+
+    /// <summary>Which limit ran out.</summary>
+    public LlmTimeoutKind Kind { get; }
+
+    /// <summary>Creates a timeout exception.</summary>
+    public LlmTimeoutException(
+        string providerId, string? factoryName, TimeSpan limit, LlmTimeoutKind kind, string message, Exception? inner = null)
+        : base(message, inner)
+    {
+        ProviderId = providerId;
+        FactoryName = factoryName;
+        Limit = limit;
+        Kind = kind;
     }
 }

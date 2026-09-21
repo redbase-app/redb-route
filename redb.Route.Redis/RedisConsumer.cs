@@ -12,9 +12,10 @@ namespace redb.Route.Redis;
 ///   <item><see cref="RedisOperationType.SUBSCRIBE"/>/<see cref="RedisOperationType.PSUBSCRIBE"/> —
 ///     Pub/Sub with <see cref="ISubscriber"/> event-driven callback.</item>
 ///   <item><see cref="RedisOperationType.XREAD"/>/<see cref="RedisOperationType.XGROUP"/> —
-///     Redis Streams polling loop with consumer groups.</item>
+///     Redis Streams polling loop: with a consumer group, acknowledged after the route (or NOACK) and pending entries
+///     claimed again after an idle time; without one, a position of its own that moves past every entry read.</item>
 ///   <item><see cref="RedisOperationType.BLPOP"/>/<see cref="RedisOperationType.BRPOP"/> —
-///     Blocking list pop via polling.</item>
+///     list pop via polling (a blocking pop would hold the shared connection); at-least-once with a processing list.</item>
 /// </list>
 /// </summary>
 public sealed class RedisConsumer : DrainableConsumer
@@ -65,7 +66,9 @@ public sealed class RedisConsumer : DrainableConsumer
         var subscriber = await _endpoint.GetSubscriberAsync(processingCt).ConfigureAwait(false);
         var channel = _options.Channel ?? _endpoint.Resource;
 
-        var redisChannel = _options.UsePattern
+        // PSUBSCRIBE is a pattern subscription by itself; usePattern makes SUBSCRIBE one too.
+        var pattern = _endpoint.OperationType == RedisOperationType.PSUBSCRIBE || _options.UsePattern;
+        var redisChannel = pattern
             ? new RedisChannel(channel, RedisChannel.PatternMode.Pattern)
             : new RedisChannel(channel, RedisChannel.PatternMode.Literal);
 
@@ -74,8 +77,7 @@ public sealed class RedisConsumer : DrainableConsumer
         {
             queue = await subscriber.SubscribeAsync(redisChannel).ConfigureAwait(false);
 
-            Logger?.LogInformation("Redis subscribed to channel: {Channel} (pattern={UsePattern})",
-                channel, _options.UsePattern);
+            Logger?.LogInformation("Redis subscribed to channel: {Channel} (pattern={Pattern})", channel, pattern);
 
             while (!pollCt.IsCancellationRequested)
             {
@@ -140,10 +142,11 @@ public sealed class RedisConsumer : DrainableConsumer
         {
             try
             {
+                // Unset position: the group starts at the stream's end ($), as StackExchange.Redis does by default.
                 await db.StreamCreateConsumerGroupAsync(
                     streamName,
                     consumerGroup,
-                    _options.StreamStartPosition,
+                    _options.StreamStartPosition is { } start ? start : null,
                     createStream: true).ConfigureAwait(false);
 
                 Logger?.LogInformation("Redis stream consumer group created: {Group} for {Stream}",
@@ -155,6 +158,12 @@ public sealed class RedisConsumer : DrainableConsumer
             }
         }
 
+        // Without a group the position is this consumer's to keep, and it moves past every entry read.
+        var position = string.IsNullOrEmpty(consumerGroup)
+            ? await StartPositionAsync(db, streamName).ConfigureAwait(false)
+            : default;
+        RedisValue claimCursor = "0-0";
+
         Logger?.LogInformation("Redis stream consumer started: stream={Stream}, group={Group}, consumer={Consumer}",
             streamName, consumerGroup, consumerName);
 
@@ -163,22 +172,40 @@ public sealed class RedisConsumer : DrainableConsumer
             try
             {
                 StreamEntry[] entries;
+                var claimedAny = false;
 
                 if (!string.IsNullOrEmpty(consumerGroup))
                 {
+                    if (_options.StreamClaimMinIdleMs is { } minIdle)
+                    {
+                        // Entries of the group pending for longer than minIdle — a failed entry of this consumer, or one
+                        // a dead consumer left behind — are taken over and processed again. The cursor walks the
+                        // pending list and comes back to the start once it has seen all of it.
+                        var claimed = await db.StreamAutoClaimAsync(
+                            streamName, consumerGroup, consumerName, minIdle, claimCursor, _options.StreamReadCount)
+                            .ConfigureAwait(false);
+                        claimCursor = claimed.NextStartId;
+                        foreach (var entry in claimed.ClaimedEntries.Where(e => !e.IsNull))
+                        {
+                            claimedAny = true;
+                            await ProcessStreamEntryAsync(entry, db, streamName, consumerGroup, processingCt)
+                                .ConfigureAwait(false);
+                        }
+                    }
+
                     entries = await db.StreamReadGroupAsync(
                         streamName,
                         consumerGroup,
                         consumerName,
-                        ">",
+                        StreamPosition.NewMessages,
                         _options.StreamReadCount,
-                        noAck: !_options.StreamAutoAck).ConfigureAwait(false);
+                        noAck: _options.StreamNoAck).ConfigureAwait(false);
                 }
                 else
                 {
                     entries = await db.StreamReadAsync(
                         streamName,
-                        _options.StreamStartPosition,
+                        position,
                         _options.StreamReadCount).ConfigureAwait(false);
                 }
 
@@ -188,9 +215,13 @@ public sealed class RedisConsumer : DrainableConsumer
                     {
                         await ProcessStreamEntryAsync(entry, db, streamName, consumerGroup, processingCt)
                             .ConfigureAwait(false);
+                        // Past a failed entry too: without a group nothing keeps it pending, as a Kafka consumer
+                        // without breakOnFirstError moves on.
+                        if (string.IsNullOrEmpty(consumerGroup))
+                            position = entry.Id;
                     }
                 }
-                else
+                else if (!claimedAny)
                 {
                     await Task.Delay(_options.StreamBlockTimeMs, pollCt).ConfigureAwait(false);
                 }
@@ -203,6 +234,22 @@ public sealed class RedisConsumer : DrainableConsumer
                 catch (OperationCanceledException) { break; }
             }
         }
+    }
+
+    /// <summary>
+    /// Where an XREAD consumer without a group starts. Unset or <c>$</c>: the entries added from now on. XREAD takes
+    /// <c>$</c> as "after the last entry at the time of this call", which a polling loop would evaluate again on every
+    /// call and so skip whatever arrived in between: it is pinned once, to the id of the stream's last entry, or to the
+    /// start of an empty stream. Anything else (<c>0</c>, an entry id) is taken as given.
+    /// </summary>
+    private async Task<RedisValue> StartPositionAsync(IDatabase db, string streamName)
+    {
+        if (_options.StreamStartPosition is not (null or "$"))
+            return _options.StreamStartPosition;
+
+        var last = await db.StreamRangeAsync(streamName, "-", "+", count: 1, messageOrder: Order.Descending)
+            .ConfigureAwait(false);
+        return last.Length > 0 ? last[0].Id : "0-0";
     }
 
     private async Task ProcessStreamEntryAsync(
@@ -235,8 +282,9 @@ public sealed class RedisConsumer : DrainableConsumer
                 await Processor.Process(exchange, ct).ConfigureAwait(false);
                 exchange.ThrowIfUnhandledFailure();
 
-                // Acknowledge the entry now that the whole unit of work, the route transaction included, is done.
-                if (!string.IsNullOrEmpty(consumerGroup) && _options.StreamAutoAck)
+                // Acknowledge the entry now that the whole unit of work, the route transaction included, is done. A
+                // failed entry is not acknowledged: it stays pending, for streamClaimMinIdleMs to claim again.
+                if (!string.IsNullOrEmpty(consumerGroup) && !_options.StreamNoAck)
                 {
                     await db.StreamAcknowledgeAsync(streamName, consumerGroup, entry.Id).ConfigureAwait(false);
                 }
@@ -264,26 +312,51 @@ public sealed class RedisConsumer : DrainableConsumer
         var db = await _endpoint.GetDatabaseAsync(processingCt).ConfigureAwait(false);
         var key = _options.Key ?? _endpoint.Resource;
 
-        Logger?.LogInformation("Redis list consumer started: key={Key}, operation={Op}",
-            key, _endpoint.OperationType);
+        // BLPOP takes from the head, BRPOP from the tail. Both poll: a blocking pop would hold the multiplexed
+        // connection every other command of this process shares.
+        var side = _endpoint.OperationType == RedisOperationType.BLPOP ? ListSide.Left : ListSide.Right;
+        var processing = _options.ProcessingList;
+
+        Logger?.LogInformation("Redis list consumer started: key={Key}, operation={Op}, processing list={Processing}",
+            key, _endpoint.OperationType, processing);
+
+        if (processing is not null)
+            await ReturnLeftoversAsync(db, processing, key, side).ConfigureAwait(false);
 
         while (!pollCt.IsCancellationRequested)
         {
             try
             {
-                RedisValue result;
+                // With a processing list the item is moved there (LMOVE) and leaves it only once processed; without one
+                // it is popped, and a failed item is gone.
+                var result = processing is null
+                    ? side == ListSide.Left
+                        ? await db.ListLeftPopAsync(key).ConfigureAwait(false)
+                        : await db.ListRightPopAsync(key).ConfigureAwait(false)
+                    : await db.ListMoveAsync(key, processing, side, ListSide.Left).ConfigureAwait(false);
 
-                if (_endpoint.OperationType == RedisOperationType.BLPOP)
-                    result = await db.ListLeftPopAsync(key).ConfigureAwait(false);
-                else
-                    result = await db.ListRightPopAsync(key).ConfigureAwait(false);
-
-                if (result.HasValue)
+                if (!result.HasValue)
                 {
-                    await ProcessListMessageAsync(result, key, processingCt).ConfigureAwait(false);
+                    await Task.Delay(_options.PollDelayMs, pollCt).ConfigureAwait(false);
+                    continue;
+                }
+
+                var processed = await ProcessListMessageAsync(result, key, processingCt).ConfigureAwait(false);
+                if (processing is null)
+                    continue;
+
+                if (processed)
+                {
+                    await db.ListRemoveAsync(processing, result, count: 1).ConfigureAwait(false);
                 }
                 else
                 {
+                    // Back to the side it was taken from, so it is the next one taken; atomically, so a crash in
+                    // between cannot leave it in both lists or in neither.
+                    var back = db.CreateTransaction();
+                    _ = back.ListRemoveAsync(processing, result, count: 1);
+                    _ = side == ListSide.Left ? back.ListLeftPushAsync(key, result) : back.ListRightPushAsync(key, result);
+                    await back.ExecuteAsync().ConfigureAwait(false);
                     await Task.Delay(_options.PollDelayMs, pollCt).ConfigureAwait(false);
                 }
             }
@@ -297,7 +370,24 @@ public sealed class RedisConsumer : DrainableConsumer
         }
     }
 
-    private async Task ProcessListMessageAsync(RedisValue message, string key, CancellationToken ct)
+    /// <summary>
+    /// Returns what a previous run left in the processing list — items it took and never finished — to the side of the
+    /// queue this consumer takes from, oldest first.
+    /// </summary>
+    private async Task ReturnLeftoversAsync(IDatabase db, string processing, string key, ListSide side)
+    {
+        var returned = 0;
+        // The newest item sits at the head of the processing list; moving from the head to the taking side, one by one,
+        // leaves the oldest nearest to it.
+        while ((await db.ListMoveAsync(processing, key, ListSide.Left, side).ConfigureAwait(false)).HasValue)
+            returned++;
+        if (returned > 0)
+            Logger?.LogWarning("Redis list consumer returned {Count} unfinished item(s) from {Processing} to {Key}",
+                returned, processing, key);
+    }
+
+    /// <returns>Whether the route succeeded with the item.</returns>
+    private async Task<bool> ProcessListMessageAsync(RedisValue message, string key, CancellationToken ct)
     {
         var exchange = Exchange.Create(new Message(message.ToString()), _endpoint.ScopeFactory);
         exchange.Pattern = ExchangePattern.InOnly;
@@ -311,10 +401,12 @@ public sealed class RedisConsumer : DrainableConsumer
             await Processor.Process(exchange, ct).ConfigureAwait(false);
             exchange.ThrowIfUnhandledFailure();
             ProcessedCount++;
+            return true;
         }
         catch (Exception ex)
         {
             Logger?.LogError(ex, "Error processing list message from {Key}", key);
+            return false;
         }
         finally
         {
@@ -323,38 +415,4 @@ public sealed class RedisConsumer : DrainableConsumer
         }
     }
 
-}
-
-/// <summary>
-/// Deferred stream acknowledgement action. Acks on commit, does nothing on rollback (retry via pending list).
-/// </summary>
-internal sealed class RedisStreamAckAction : ITransactedAction
-{
-    private readonly IDatabase _db;
-    private readonly string _streamName;
-    private readonly string _consumerGroup;
-    private readonly RedisValue _messageId;
-    private readonly ILogger? _logger;
-
-    public RedisStreamAckAction(IDatabase db, string streamName, string consumerGroup, RedisValue messageId, ILogger? logger)
-    {
-        _db = db;
-        _streamName = streamName;
-        _consumerGroup = consumerGroup;
-        _messageId = messageId;
-        _logger = logger;
-    }
-
-    public async Task Commit(CancellationToken ct = default)
-    {
-        await _db.StreamAcknowledgeAsync(_streamName, _consumerGroup, _messageId).ConfigureAwait(false);
-        _logger?.LogDebug("Redis stream ack committed: {Stream}/{MessageId}", _streamName, _messageId);
-    }
-
-    public Task Rollback(CancellationToken ct = default)
-    {
-        _logger?.LogDebug("Redis stream ack rolled back (message remains pending): {Stream}/{MessageId}",
-            _streamName, _messageId);
-        return Task.CompletedTask;
-    }
 }

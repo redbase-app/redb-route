@@ -56,6 +56,7 @@ From(Sftp.Directory("/data")
 | **Proxy** | `.Proxy(type, host, port)`, `.ProxyAuth(user, pass)` |
 | **Reconnect** | `.MaximumReconnectAttempts()`, `.ReconnectDelay()`, `.Disconnect()` |
 | **Consumer** | `.Delay()`, `.InitialDelay()`, `.Include()`, `.Exclude()`, `.Recursive()`, `.MaxDepth()`, `.MinDepth()`, `.SortBy()`, `.MaxMessagesPerPoll()`, `.MinAge()`, `.MaxAge()` |
+| **Path filters** | `.AntInclude()`, `.AntExclude()`, `.AntFilterCaseSensitive()`, `.FilterDirectory()`, `.FilterFile()`, `.Filter()` — see [the base package](../redb.Route.GenericFile/README.md#path-filters); this is how one session polls named directories out of a partner tree instead of one route per directory |
 | **Poll backoff** | `.BackoffMultiplier()`, `.BackoffIdleThreshold()`, `.BackoffErrorThreshold()`, `.BackoffOnFailedExchanges()` |
 | **Post-process** | `.Noop()`, `.Delete()`, `.MoveTo()`, `.MoveExisting()`, `.PreMove()`, `.MoveFailed()` |
 | **Idempotency** | `.Idempotent()`, `.DoneFileName()` |

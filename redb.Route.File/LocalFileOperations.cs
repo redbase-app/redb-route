@@ -10,45 +10,59 @@ namespace redb.Route.File;
 internal sealed class LocalFileOperations : IFileOperations
 {
     public Task<List<GenericFileInfo>> ListFilesAsync(
-        string directory, bool recursive, int maxDepth, int minDepth, CancellationToken ct)
+        string directory, bool recursive, int maxDepth, int minDepth,
+        Func<string, string, bool>? directoryFilter = null, CancellationToken ct = default)
     {
         var dir = new DirectoryInfo(directory);
         if (!dir.Exists)
             return Task.FromResult(new List<GenericFileInfo>());
 
-        var searchOption = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
         var result = new List<GenericFileInfo>();
-
-        try
-        {
-            foreach (var file in dir.EnumerateFiles("*", searchOption))
-            {
-                ct.ThrowIfCancellationRequested();
-
-                var relPath = Path.GetRelativePath(directory, file.FullName);
-                var depth = relPath.Count(c => c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar);
-
-                if (maxDepth > 0 && depth > maxDepth)
-                    continue;
-
-                if (minDepth > 0 && depth < minDepth)
-                    continue;
-
-                result.Add(new GenericFileInfo
-                {
-                    Name = file.Name,
-                    FullPath = file.FullName,
-                    BasePath = directory,
-                    Length = file.Length,
-                    LastModified = new DateTimeOffset(file.LastWriteTimeUtc, TimeSpan.Zero),
-                    Depth = depth
-                });
-            }
-        }
-        catch (UnauthorizedAccessException) { }
-        catch (DirectoryNotFoundException) { }
-
+        Walk(dir, 0);
         return Task.FromResult(result);
+
+        // Walks level by level instead of asking the framework for the whole tree at once: a
+        // directory the filter turns down is not entered, and maxDepth stops the descent rather
+        // than discarding what was already enumerated.
+        void Walk(DirectoryInfo current, int depth)
+        {
+            try
+            {
+                foreach (var file in current.EnumerateFiles())
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    if (minDepth > 0 && depth < minDepth)
+                        continue;
+
+                    result.Add(new GenericFileInfo
+                    {
+                        Name = file.Name,
+                        FullPath = file.FullName,
+                        BasePath = directory,
+                        Length = file.Length,
+                        LastModified = new DateTimeOffset(file.LastWriteTimeUtc, TimeSpan.Zero),
+                        Depth = depth
+                    });
+                }
+
+                if (!recursive || (maxDepth > 0 && depth >= maxDepth))
+                    return;
+
+                foreach (var sub in current.EnumerateDirectories())
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    if (directoryFilter != null &&
+                        !directoryFilter(sub.FullName, Path.GetRelativePath(directory, sub.FullName)))
+                        continue;
+
+                    Walk(sub, depth + 1);
+                }
+            }
+            catch (UnauthorizedAccessException) { }
+            catch (DirectoryNotFoundException) { }
+        }
     }
 
     public Task<byte[]> ReadAllBytesAsync(string path, CancellationToken ct)

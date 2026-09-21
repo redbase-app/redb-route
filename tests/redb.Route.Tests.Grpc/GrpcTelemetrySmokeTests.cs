@@ -1,12 +1,11 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using OpenTelemetry;
-using OpenTelemetry.Trace;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Grpc;
 using redb.Route.Telemetry;
+using redb.Route.Tests.Shared;
 
 namespace redb.Route.Tests.Grpc;
 
@@ -55,21 +54,16 @@ public sealed class GrpcTelemetrySmokeTests : IAsyncLifetime
         var clientEndpoint = (GrpcEndpoint)component.CreateEndpoint(clientUri);
         _producer = new GrpcProducer(clientEndpoint, clientEndpoint.EndpointOptions);
 
-        var activities = new List<Activity>();
-        using var tracer = Sdk.CreateTracerProviderBuilder()
-            .AddSource(RouteActivitySource.SourceName)
-            .AddInMemoryExporter(activities)
-            .Build()!;
+        using var capture = new SpanCapture();   // this test's spans only
 
         await _producer.Start();
         await _producer.Process(new Exchange(new Message("hello")));
 
-        tracer.ForceFlush(1000);
+        var activities = capture.Spans;
         activities.Should().NotBeEmpty();
 
-        // Both sides now emit a span (the consumer opens "grpc receive" as a Server span, mirroring the
-        // As2 and Soap consumers), and the exporter also sees spans from test classes running in
-        // parallel — so select the producer's span by name and kind instead of taking whatever is first.
+        // Both sides emit a span in this test's trace (the consumer opens "grpc receive" as a Server span,
+        // mirroring the As2 and Soap consumers), so select the producer's span by name and kind.
         var activity = activities.First(a => a.Kind == ActivityKind.Client && a.OperationName == "grpc.invoke");
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
         activity.GetTagItem("rpc.system").Should().Be("grpc");

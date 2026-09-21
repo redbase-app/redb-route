@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using redb.Route.Abstractions;
+using redb.Route.Transactions;
 using redb.Route.Core;
 using redb.Route.Telemetry;
 
@@ -46,6 +47,12 @@ public sealed class RabbitMQProducer : ConnectableProducer
     /// </summary>
     private readonly SemaphoreSlim _publishLock = new(1, 1);
 
+    // The deferred publishes of a block go out as one batch per producer, on a channel of its own in tx mode (a channel
+    // with publisher confirms cannot run transactions); the batches take turns on it.
+    private readonly string _batchKey = $"rabbitmq-batch-{Guid.NewGuid():N}";
+    private readonly SemaphoreSlim _commitLock = new(1, 1);
+    private IChannel? _txChannel;
+
     /// <summary>Known AMQP basic property names that should not be propagated as custom headers.</summary>
     private static readonly HashSet<string> BasicPropertyNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -65,6 +72,13 @@ public sealed class RabbitMQProducer : ConnectableProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+
+        // A request-reply send cannot wait for the commit: the reply it waits for would never come.
+        if (_options.ReplyTo && _options.Transacted == true)
+            throw new InvalidOperationException(
+                $"'{ProducerName}' is a request-reply producer (replyTo=true): the request has to leave at once for its " +
+                "reply to arrive, so it cannot be deferred to the commit of a transaction. Drop transacted=true: a " +
+                "request-reply send always goes out at once, outside the transaction.");
     }
 
     /// <inheritdoc />
@@ -113,6 +127,14 @@ public sealed class RabbitMQProducer : ConnectableProducer
         _responseConsumer = null;
         _responseConsumerTag = null;
         _rpcSetup = false;
+
+        if (_txChannel is not null)
+        {
+            try { await _txChannel.CloseAsync(ct).ConfigureAwait(false); }
+            catch (Exception ex) { Logger?.LogDebug(ex, "RabbitMQ: error closing the transacted channel during stop"); }
+            _txChannel.Dispose();
+            _txChannel = null;
+        }
     }
 
     /// <inheritdoc />
@@ -144,7 +166,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
         {
             await ProcessRpcAsync(exchange, properties, body, ct).ConfigureAwait(false);
         }
-        else if (_options.Transacted)
+        else if (TransactedActions.Defers(exchange, _options.Transacted))
         {
             ProcessTransactional(exchange, properties, body);
         }
@@ -203,17 +225,26 @@ public sealed class RabbitMQProducer : ConnectableProducer
         Buffer.BlockCopy(body, 0, capturedBody, 0, body.Length);
         var capturedProperties = CloneProperties(properties);
 
-        var action = new RabbitMQSendAction(
-            _channel!,
-            _publishLock,
-            capturedExchange,
-            capturedRoutingKey,
-            capturedMandatory,
-            capturedProperties,
-            capturedBody,
-            Logger);
+        var batch = TransactedActions.JoinBatch(exchange, _batchKey,
+            () => new RabbitMQSendBatch(TransactedChannelAsync, _commitLock, Logger), ProducerName);
+        batch.Add(new RabbitMQDeferredPublish(
+            capturedExchange, capturedRoutingKey, capturedMandatory, capturedProperties, capturedBody));
+    }
 
-        RegisterTransactedAction(exchange, $"rabbitmq-send-{Guid.NewGuid():N}", action);
+    /// <summary>
+    /// The producer's channel in tx mode, opened for the first batch and again after a failed batch closed it. A batch
+    /// calls it under the commit lock.
+    /// </summary>
+    private async Task<IChannel> TransactedChannelAsync(CancellationToken ct)
+    {
+        if (_txChannel is { IsOpen: true } open)
+            return open;
+
+        _txChannel?.Dispose();
+        var channel = await _endpoint.CreateChannelAsync(publisherConfirms: false, ct: ct).ConfigureAwait(false);
+        await channel.TxSelectAsync(ct).ConfigureAwait(false);
+        _txChannel = channel;
+        return channel;
     }
 
     // ── RPC (request/reply) ──
@@ -626,18 +657,6 @@ public sealed class RabbitMQProducer : ConnectableProducer
         return clone;
     }
 
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (!exchange.Properties.TryGetValue("TRANSACT_ACTION", out var raw) ||
-            raw is not ConcurrentDictionary<string, ITransactedAction> dict)
-        {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties["TRANSACT_ACTION"] = dict;
-        }
-
-        dict[key] = action;
-    }
-
     // ── Publish diagnostics ──
 
     private void LogPublishDiagnostics(
@@ -697,87 +716,98 @@ public sealed class RabbitMQProducer : ConnectableProducer
     }
 }
 
+/// <summary>One deferred publish, captured (cloned) when the step ran.</summary>
+internal sealed record RabbitMQDeferredPublish(
+    string Exchange, string RoutingKey, bool Mandatory, BasicProperties Properties, byte[] Body);
+
 /// <summary>
-/// Deferred RabbitMQ send action. The message body and properties are captured (cloned) at creation time.
-/// On <see cref="Commit"/> the message is published. On <see cref="Rollback"/> it is discarded.
+/// The deferred publishes of one producer in one transacted block. On commit they are published on the producer's
+/// transacted channel and committed with one <c>tx.commit</c>, so the block's messages arrive together or not at all.
+/// On rollback nothing has been published.
 /// </summary>
-internal sealed class RabbitMQSendAction : ITransactedAction
+internal sealed class RabbitMQSendBatch : ITransactedAction
 {
-    private readonly IChannel _channel;
-    private readonly SemaphoreSlim _publishLock;
-    private readonly string _exchange;
-    private readonly string _routingKey;
-    private readonly bool _mandatory;
-    private readonly BasicProperties _properties;
-    private readonly byte[] _body;
+    private readonly ConcurrentQueue<RabbitMQDeferredPublish> _publishes = new();
+    private readonly Func<CancellationToken, Task<IChannel>> _transactedChannel;
+    private readonly SemaphoreSlim _commitLock;
     private readonly ILogger? _logger;
 
-    public RabbitMQSendAction(
-        IChannel channel,
-        SemaphoreSlim publishLock,
-        string exchange,
-        string routingKey,
-        bool mandatory,
-        BasicProperties properties,
-        byte[] body,
-        ILogger? logger)
+    /// <param name="transactedChannel">The producer's channel in tx mode, opened again when the last one was closed.</param>
+    /// <param name="commitLock">
+    /// The producer's lock: a channel transaction belongs to the channel, so one batch at a time publishes and commits on
+    /// it. Another batch's tx.commit would otherwise commit half of this one.
+    /// </param>
+    public RabbitMQSendBatch(Func<CancellationToken, Task<IChannel>> transactedChannel, SemaphoreSlim commitLock, ILogger? logger)
     {
-        _channel = channel;
-        _publishLock = publishLock;
-        _exchange = exchange;
-        _routingKey = routingKey;
-        _mandatory = mandatory;
-        _properties = properties;
-        _body = body;
+        _transactedChannel = transactedChannel;
+        _commitLock = commitLock;
         _logger = logger;
     }
 
+    /// <summary>Adds a publish to the batch, after the ones the block deferred before it.</summary>
+    public void Add(RabbitMQDeferredPublish publish) => _publishes.Enqueue(publish);
+
     public async Task Commit(CancellationToken ct = default)
     {
+        await _commitLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await _publishLock.WaitAsync(ct).ConfigureAwait(false);
+            var channel = await _transactedChannel(ct).ConfigureAwait(false);
             try
             {
-                await _channel.BasicPublishAsync(
-                    exchange: _exchange,
-                    routingKey: _routingKey,
-                    mandatory: _mandatory,
-                    basicProperties: _properties,
-                    body: _body,
-                    cancellationToken: ct).ConfigureAwait(false);
-            }
-            finally { _publishLock.Release(); }
+                foreach (var p in _publishes)
+                {
+                    await channel.BasicPublishAsync(
+                        exchange: p.Exchange,
+                        routingKey: p.RoutingKey,
+                        mandatory: p.Mandatory,
+                        basicProperties: p.Properties,
+                        body: p.Body,
+                        cancellationToken: ct).ConfigureAwait(false);
+                }
 
-            _logger?.LogDebug("RabbitMQ transactional send committed: exchange={Exchange}, routingKey={RoutingKey}",
-                _exchange, _routingKey);
+                await channel.TxCommitAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Closing the channel discards its open transaction, so none of the batch is delivered, and the next
+                // batch starts on a fresh channel instead of committing what this one left behind.
+                await CloseAsync(channel).ConfigureAwait(false);
+                _logger?.LogError(ex,
+                    "RabbitMQ transactional batch failed; none of its {Count} messages was published. First target: " +
+                    "exchange={Exchange}, routingKey={RoutingKey}",
+                    _publishes.Count, _publishes.FirstOrDefault()?.Exchange, _publishes.FirstOrDefault()?.RoutingKey);
+                throw;
+            }
+
+            _logger?.LogDebug("RabbitMQ transactional batch committed: messages={Count}", _publishes.Count);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        finally
         {
-            var sb = new StringBuilder();
-            sb.AppendLine("═══════════════════════════════════════════════════════════");
-            sb.AppendLine("RabbitMQ PUBLISH DIAGNOSTICS (Transactional Commit)");
-            sb.AppendLine("═══════════════════════════════════════════════════════════");
-            sb.AppendLine($"⚠️ Error in COMMIT phase — transaction may be partially committed");
-            sb.AppendLine($"Exception: {ex.GetType().FullName}: {ex.Message}");
-            if (ex.InnerException != null)
-                sb.AppendLine($"Inner: {ex.InnerException.GetType().FullName}: {ex.InnerException.Message}");
-            sb.AppendLine("───────────────────────────────────────────────────────────");
-            sb.AppendLine("CHANNEL STATE:");
-            try { sb.AppendLine($"  IsOpen: {_channel.IsOpen}"); sb.AppendLine($"  CloseReason: {_channel.CloseReason?.ReplyText ?? "N/A"}"); }
-            catch (Exception chEx) { sb.AppendLine($"  ERROR reading channel state: {chEx.Message}"); }
-            sb.AppendLine("───────────────────────────────────────────────────────────");
-            sb.AppendLine($"Exchange: {_exchange ?? "(default)"}  RoutingKey: {_routingKey}");
-            sb.AppendLine($"Mandatory: {_mandatory}  BodySize: {_body.Length} bytes");
-            sb.AppendLine("═══════════════════════════════════════════════════════════");
-            _logger?.LogError(ex, "{Diagnostics}", sb.ToString());
-            throw;
+            _commitLock.Release();
         }
     }
 
     public Task Rollback(CancellationToken ct = default)
     {
-        _logger?.LogDebug("RabbitMQ transactional send rolled back (message discarded): exchange={Exchange}", _exchange);
+        _logger?.LogDebug("RabbitMQ transactional batch rolled back (messages discarded): messages={Count}", _publishes.Count);
         return Task.CompletedTask;
+    }
+
+    private async Task CloseAsync(IChannel channel)
+    {
+        try
+        {
+            await channel.CloseAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception closeEx)
+        {
+            _logger?.LogWarning(closeEx,
+                "RabbitMQ: closing the transacted channel after a failed batch failed; it is dropped and replaced.");
+        }
+        finally
+        {
+            channel.Dispose();
+        }
     }
 }

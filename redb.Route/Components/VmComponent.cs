@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Transactions;
 
 namespace redb.Route.Components;
 
@@ -125,6 +126,9 @@ public class VmProducer : IProducer
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         var copy = exchange.Clone();
+        // The copy runs later on the vm consumer, a unit of work of its own: it must not see the sending
+        // .Transacted() block as its own.
+        TransactedActions.DetachFromBlock(copy);
         try
         {
             await _endpoint.Channel.Writer.WriteAsync(copy, ct).ConfigureAwait(false);

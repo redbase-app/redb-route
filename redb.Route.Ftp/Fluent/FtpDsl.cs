@@ -59,6 +59,12 @@ public sealed class FtpBuilder
     private string? _initialDelay;
     private string? _include;
     private string? _exclude;
+    private string? _antInclude;
+    private string? _antExclude;
+    private bool? _antFilterCaseSensitive;
+    private string? _filterDirectory;
+    private string? _filterFile;
+    private string? _filter;
     private bool _recursive;
     private string? _maxDepth;
     private string? _minDepth;
@@ -206,6 +212,24 @@ public sealed class FtpBuilder
 
     /// <summary>File name pattern to exclude.</summary>
     public FtpBuilder Exclude(string pattern) { _exclude = pattern; return this; }
+
+    /// <summary>Ant-style patterns over the path relative to the polled directory, several separated by commas ("TYPE_A/outbox/*.csv"). Sees directories, which Include does not.</summary>
+    public FtpBuilder AntInclude(string patterns) { _antInclude = patterns; return this; }
+
+    /// <summary>Ant-style patterns over the relative path that drop a file ("archive/**").</summary>
+    public FtpBuilder AntExclude(string patterns) { _antExclude = patterns; return this; }
+
+    /// <summary>Whether the Ant patterns respect case (default true).</summary>
+    public FtpBuilder AntFilterCaseSensitive(bool value = true) { _antFilterCaseSensitive = value; return this; }
+
+    /// <summary>Condition deciding whether a subdirectory is walked into at all — evaluated before it is listed.</summary>
+    public FtpBuilder FilterDirectory(string condition) { _filterDirectory = condition; return this; }
+
+    /// <summary>Condition deciding whether a polled file is taken, evaluated before it is read or moved.</summary>
+    public FtpBuilder FilterFile(string condition) { _filterFile = condition; return this; }
+
+    /// <summary>Name of an IGenericFileFilter in the route registry ("#myFilter") deciding for files and directories.</summary>
+    public FtpBuilder Filter(string registryName) { _filter = registryName; return this; }
 
     /// <summary>Recurse into subdirectories.</summary>
     public FtpBuilder Recursive() { _recursive = true; return this; }
@@ -391,6 +415,12 @@ public sealed class FtpBuilder
         AppendIf("initialDelay", _initialDelay);
         AppendIf("include", _include);
         AppendIf("exclude", _exclude);
+        AppendIf("antInclude", _antInclude);
+        AppendIf("antExclude", _antExclude);
+        if (_antFilterCaseSensitive is { } cs) AppendIf("antFilterCaseSensitive", cs ? "true" : "false");
+        AppendIf("filterDirectory", _filterDirectory);
+        AppendIf("filterFile", _filterFile);
+        AppendIf("filter", _filter);
         AppendBool("recursive", _recursive);
         AppendIf("maxDepth", _maxDepth);
         AppendIf("minDepth", _minDepth);

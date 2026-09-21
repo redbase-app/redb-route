@@ -58,6 +58,14 @@ public enum AttributeType
     Duration,
     /// <summary>One of a fixed set of names — <see cref="AttributeSpec.EnumValues"/>.</summary>
     Enum,
+    /// <summary>
+    /// A comma-separated list of CLR type names (<c>exceptions=</c>): the comma SEPARATES entries,
+    /// so an entry is a full name without an assembly suffix. Distinct from <see cref="TypeName"/>
+    /// because the pack gate resolves each entry, and an assembly-qualified single name also has
+    /// a comma. Appended LAST on purpose: package contributions compiled against an earlier
+    /// version store the numeric values of the members above, so an insertion would shift them.
+    /// </summary>
+    TypeNameList,
 }
 
 /// <summary>One attribute of a format element — the schema/catalog/editor description (Ф4 §2).</summary>
@@ -65,7 +73,16 @@ public sealed record AttributeSpec(
     string Name,
     AttributeType Type,
     bool Required = false,
-    IReadOnlyList<string>? EnumValues = null);
+    IReadOnlyList<string>? EnumValues = null)
+{
+    /// <summary>
+    /// The attribute is read as a CONDITION (a predicate), not as a value: <c>&lt;filter expr&gt;</c>,
+    /// <c>&lt;when expr&gt;</c>, <c>&lt;loop while&gt;</c>. The pack gate reads this to warn about a
+    /// condition written as a template, which is true whatever it renders. An init property, never a
+    /// positional parameter: a released package contribution is compiled against this record.
+    /// </summary>
+    public bool Condition { get; init; }
+}
 
 /// <summary>
 /// The public description of one format element (Ф4 §2): the single source the parser hints,
@@ -82,6 +99,14 @@ public sealed record ElementSpec(
     bool AllowsTextContent = false,
     bool TakesEndpoint = false)
 {
+    /// <summary>
+    /// The step ends the route for the exchange (<c>stop</c>, <c>rollbackAll</c>,
+    /// <c>throwException</c>): a step written after it in the same list never runs, and the pack
+    /// gate says so. An init-only property, not a constructor parameter, so a package
+    /// contribution compiled against an earlier version keeps binding.
+    /// </summary>
+    public bool Terminal { get; init; }
+
     /// <summary>A leaf with attributes only.</summary>
     public static ElementSpec Leaf(string name, params AttributeSpec[] attributes)
         => new(name, XmlElementKind.Step, attributes, []);

@@ -16,7 +16,7 @@
         <unmarshal format="application/xml"
                    target="SerialNumbers.Core.Integration.Xml.SerialNumberRequestXml, SerialNumbers.Core"/>
       </try>
-      <catch exceptions="redb.Route.Validation.ValidationException, redb.Route">
+      <catch exceptions="redb.Route.Validation.ValidationException">
         <to uri="bean:#intake?method=RecordInvalid"/>
         <log level="Warning">${header.serials.partner}: ${header.serials.fileName} violates the schema, recorded as Invalid</log>
         <stop/>
@@ -30,11 +30,11 @@
     <transaction>
       <to uri="bean:#serial-requests?method=Register"/>
       <choice>
-        <when expr="${header.serials.decision} == 'Accepted'">
+        <when expr="header.serials.decision == 'Accepted'">
           <to uri="bean:#serial-requests?method=Allocate"/>
           <to uri="bean:#serial-requests?method=QueueResponse"/>
         </when>
-        <when expr="${header.serials.decision} == 'Rejected'">
+        <when expr="header.serials.decision == 'Rejected'">
           <to uri="bean:#serial-requests?method=Reject"/>
           <to uri="bean:#serial-requests?method=QueueResponse"/>
         </when>
@@ -43,10 +43,10 @@
 
     <!-- Logged after the commit: the line says what has happened, not what was about to. -->
     <choice>
-      <when expr="${header.serials.decision} == 'OnHold'">
+      <when expr="header.serials.decision == 'OnHold'">
         <log>${header.serials.partner}: request ${header.serials.requestId} is on hold until its product is activated</log>
       </when>
-      <when expr="${header.serials.decision} == 'AlreadyDecided'">
+      <when expr="header.serials.decision == 'AlreadyDecided'">
         <log>${header.serials.partner}: request ${header.serials.requestId} was decided by another release, nothing to do</log>
       </when>
       <otherwise>

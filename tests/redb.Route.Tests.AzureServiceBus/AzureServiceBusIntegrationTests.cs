@@ -20,6 +20,7 @@ namespace redb.Route.Tests.AzureServiceBus;
 /// when dotnet test runs all target frameworks in parallel.
 /// </summary>
 [Trait("Category", "Integration")]
+[Collection(AsbEmulatorQueue.Name)]
 public sealed class AzureServiceBusIntegrationTests
 {
     private const string ConnectionString =

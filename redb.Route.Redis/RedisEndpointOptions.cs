@@ -43,7 +43,9 @@ public sealed class RedisEndpointOptions : EndpointOptions
     /// <summary>Redis command for COMMAND operation type.</summary>
     public string? Command { get; set; }
 
-    /// <summary>Use pattern subscription for Pub/Sub.</summary>
+    /// <summary>
+    /// Subscribe to <see cref="Channel"/> as a pattern. PSUBSCRIBE always does; this makes SUBSCRIBE do it too.
+    /// </summary>
     public bool UsePattern { get; set; }
 
     // ── TTL and score ──
@@ -110,16 +112,45 @@ public sealed class RedisEndpointOptions : EndpointOptions
     /// <summary>Block time in ms when no stream entries available.</summary>
     public int StreamBlockTimeMs { get; set; } = 1000;
 
-    /// <summary>Auto-ack stream entries after processing.</summary>
-    public bool StreamAutoAck { get; set; } = true;
+    /// <summary>
+    /// A group consumer reads with NOACK: an entry counts as delivered when it is read and never enters the group's
+    /// pending list, so an entry whose route failed is not read again (at-most-once). Default <c>false</c>: the consumer
+    /// acknowledges (XACK) an entry after its route succeeded, and a failed one stays pending (at-least-once).
+    /// </summary>
+    public bool StreamNoAck { get; set; }
 
-    /// <summary>Starting position for stream reads (&gt; = new messages).</summary>
-    public string StreamStartPosition { get; set; } = ">";
+    /// <summary>
+    /// Where a stream consumer starts. Unset: at the entries added from now on — for a group, the group is created at the
+    /// stream's end; without one, the consumer pins the stream's last entry when it starts. <c>0</c> reads from the
+    /// beginning, an entry id after that entry. <c>&gt;</c> only means something to a group and is refused without one.
+    /// </summary>
+    public string? StreamStartPosition { get; set; }
+
+    /// <summary>
+    /// A group consumer claims (XAUTOCLAIM) entries of its group that have stayed pending for at least this many
+    /// milliseconds — a failed entry of its own, or one a consumer that died left behind — and processes them again.
+    /// Unset: pending entries are not claimed. Must exceed the longest time a route takes: a slower one would have its
+    /// entry claimed while it still works on it. Not with <see cref="StreamNoAck"/>, which leaves nothing pending.
+    /// </summary>
+    public int? StreamClaimMinIdleMs { get; set; }
+
+    /// <summary>
+    /// A BLPOP/BRPOP consumer moves an item into this list (LMOVE) instead of popping it, and removes it from there after
+    /// its route succeeded: a failed item goes back to the head of the queue and is processed again, and what a
+    /// previous run left in this list is returned to the queue when the consumer starts (at-least-once). Unset: the item
+    /// is popped and a failed one is gone (at-most-once). One consumer per processing list.
+    /// </summary>
+    public string? ProcessingList { get; set; }
 
     // ── Transactions ──
 
-    /// <summary>Enable transacted mode.</summary>
-    public bool Transacted { get; set; }
+    /// <summary>
+    /// Producer: whether the operation waits for the commit of the enclosing <c>.Transacted()</c> block. PUBLISH and XADD
+    /// announce work and follow the block when unset: deferred inside one, at once outside; <c>false</c> sends at once even
+    /// inside one. Every other write runs at once unless <c>true</c> defers it; <c>true</c> requires a block and is refused
+    /// at start for an operation that exists for what it returns (GET, LPOP and the other reads).
+    /// </summary>
+    public bool? Transacted { get; set; }
 
     // ── Resilience ──
 
@@ -131,5 +162,36 @@ public sealed class RedisEndpointOptions : EndpointOptions
     {
         if (StreamReadCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(StreamReadCount), "StreamReadCount must be > 0.");
+        if (StreamClaimMinIdleMs is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(StreamClaimMinIdleMs), "StreamClaimMinIdleMs must be > 0.");
+        if (StreamClaimMinIdleMs is not null && StreamNoAck)
+            throw new ArgumentException(
+                "'streamClaimMinIdleMs' claims pending entries, and 'streamNoAck=true' leaves none: they contradict each other.");
+        if (ProcessingList is not null && string.IsNullOrWhiteSpace(ProcessingList))
+            throw new ArgumentException("'processingList' is empty: name the list, or leave it unset.");
+
+        // The core binder leaves a parameter it cannot place — a name no option has, or a value that does not convert to
+        // the option's type — among the unmapped parameters, where nothing reads it: a typo would drop the option without
+        // a word. Each one is refused, by name only: the value may be a secret.
+        if (UnmappedParameters.Count > 0)
+            throw new ArgumentException(
+                string.Join(" ", UnmappedParameters.Keys.Select(DescribeUnmapped)), UnmappedParameters.Keys.First());
+    }
+
+    private static string DescribeUnmapped(string name)
+    {
+        if (name.Equals("streamAutoAck", StringComparison.OrdinalIgnoreCase))
+            return "'streamAutoAck' is gone: 'streamAutoAck=false' read with NOACK while its name promised a manual " +
+                   "acknowledgement. A group consumer acknowledges after its route succeeded; 'streamNoAck=true' reads " +
+                   "with NOACK (at-most-once).";
+
+        var option = Array.Find(
+            typeof(RedisEndpointOptions).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance),
+            p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (option is null)
+            return $"'{name}' is not an option of the Redis endpoint, so it would be dropped without a word.";
+
+        var type = Nullable.GetUnderlyingType(option.PropertyType) ?? option.PropertyType;
+        return $"'{name}': the value is not a {type.Name}, so the option would be dropped without a word.";
     }
 }

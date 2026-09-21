@@ -106,6 +106,28 @@ public class SftpBuilderTests
     }
 
     [Fact]
+    public void PathFilters_SetTheirParams()
+    {
+        var uri = SftpDsl.Directory("/d")
+            .Recursive()
+            .AntInclude("TYPE_A/outbox/*.csv")
+            .AntExclude("archive/**")
+            .AntFilterCaseSensitive(false)
+            .FilterDirectory("header.redbSftp.Name != 'tmp'")
+            .FilterFile("header.redbSftp.Length > 0")
+            .Filter("#partnerFilter")
+            .Build();
+
+        var parsed = EndpointUriParser.Parse(uri);
+        parsed.RawParameters["antInclude"].Should().Be("TYPE_A/outbox/*.csv");
+        parsed.RawParameters["antExclude"].Should().Be("archive/**");
+        parsed.RawParameters["antFilterCaseSensitive"].Should().Be("false");
+        parsed.RawParameters["filterDirectory"].Should().Be("header.redbSftp.Name != 'tmp'");
+        parsed.RawParameters["filterFile"].Should().Be("header.redbSftp.Length > 0");
+        parsed.RawParameters["filter"].Should().Be("#partnerFilter");
+    }
+
+    [Fact]
     public void Exclude_SetsParam()
     {
         var uri = SftpDsl.Directory("/d").Exclude("*.tmp").Build();

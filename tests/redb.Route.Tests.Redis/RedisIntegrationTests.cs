@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Processors;
 using redb.Route.Redis;
+using redb.Route.Transactions;
 using StackExchange.Redis;
 using Xunit.Abstractions;
 
@@ -35,6 +37,10 @@ public sealed class RedisIntegrationTests
         var conn = await ConnectionMultiplexer.ConnectAsync(ConnectionString);
         return conn.GetDatabase();
     }
+
+    /// <summary>Runs <paramref name="body"/> inside a transacted block, as <c>.Transacted()</c> on a route does.</summary>
+    private static Task InTransaction(IExchange exchange, Func<IExchange, CancellationToken, Task> body) =>
+        new TransactedProcessor(new DelegateProcessor(body), new TransactionPolicy()).Process(exchange);
 
     // ═══════════════════════════════════════════════════════════
     // Key/Value (SET, GET, DEL, EXISTS, INCR, DECR, SETNX)
@@ -375,7 +381,7 @@ public sealed class RedisIntegrationTests
 
         // Consume via XGROUP
         var epRead = CreateEndpoint($"XGROUP:{stream}",
-            $"consumerGroup={group}&streamStartPosition=0&streamAutoAck=true");
+            $"consumerGroup={group}&streamStartPosition=0");
 
         var received = new ConcurrentBag<object?>();
         var tcs = new TaskCompletionSource();
@@ -447,23 +453,17 @@ public sealed class RedisIntegrationTests
         var producer = (RedisProducer)ep.CreateProducer();
         await producer.Start();
 
-        var exchange = new Exchange(new Message("transacted-value"));
-        await producer.Process(exchange);
-
-        // Value should NOT be set yet
         var db = await GetDatabase();
-        (await db.KeyExistsAsync(key)).Should().BeFalse();
+        bool? existedInsideTheBlock = null;
 
-        // Commit
-        exchange.Properties.Should().ContainKey("TRANSACT_ACTION");
-        var actions = exchange.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        actions.Should().NotBeNull();
-        foreach (var action in actions!.Values)
-            await action.Commit();
-
+        await InTransaction(new Exchange(new Message("transacted-value")), async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            existedInsideTheBlock = await db.KeyExistsAsync(key);   // deferred: not written yet
+        });
         await producer.Stop();
 
-        // Now value should exist
+        existedInsideTheBlock.Should().BeFalse();
         (await db.StringGetAsync(key)).ToString().Should().Be("transacted-value");
     }
 
@@ -476,13 +476,13 @@ public sealed class RedisIntegrationTests
         var producer = (RedisProducer)ep.CreateProducer();
         await producer.Start();
 
-        var exchange = new Exchange(new Message("should-not-persist"));
-        await producer.Process(exchange);
+        var act = () => InTransaction(new Exchange(new Message("should-not-persist")), async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            throw new InvalidOperationException("the unit of work failed");
+        });
 
-        var actions = exchange.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        foreach (var action in actions!.Values)
-            await action.Rollback();
-
+        await act.Should().ThrowAsync<InvalidOperationException>();
         await producer.Stop();
 
         var db = await GetDatabase();
@@ -596,11 +596,11 @@ public sealed class RedisIntegrationTests
     }
 
     // ═══════════════════════════════════════════════════════════
-    // Streams — Manual Ack (StreamAutoAck=false with transacted)
+    // Streams — a group consumer acknowledges after its route
     // ═══════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task Stream_ManualAck_AcksOnCommit()
+    public async Task Stream_Group_AcksAfterTheRoute()
     {
         var stream = $"test-ack-{Guid.NewGuid():N}";
         var group = $"grp-{Guid.NewGuid():N}";
@@ -612,9 +612,9 @@ public sealed class RedisIntegrationTests
         await addProd.Process(new Exchange(new Message("ack-test")));
         await addProd.Stop();
 
-        // XGROUP consumer with autoAck=true (non-transacted) → should auto-ack
+        // A group consumer acknowledges the entry once its route succeeded
         var epRead = CreateEndpoint($"XGROUP:{stream}",
-            $"consumerGroup={group}&streamStartPosition=0&streamAutoAck=true");
+            $"consumerGroup={group}&streamStartPosition=0");
 
         var receivedExchange = default(IExchange);
         var tcs = new TaskCompletionSource();
@@ -1131,20 +1131,17 @@ public sealed class RedisIntegrationTests
         var producer = (RedisProducer)ep.CreateProducer();
         await producer.Start();
 
-        var exchange = new Exchange(new Message("tx-item"));
-        await producer.Process(exchange);
-
-        // Not committed yet
         var db = await GetDatabase();
-        (await db.KeyExistsAsync(key)).Should().BeFalse();
+        bool? existedInsideTheBlock = null;
 
-        // Commit
-        var actions = exchange.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        actions.Should().NotBeNull();
-        foreach (var action in actions!.Values)
-            await action.Commit();
+        await InTransaction(new Exchange(new Message("tx-item")), async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            existedInsideTheBlock = await db.KeyExistsAsync(key);
+        });
         await producer.Stop();
 
+        existedInsideTheBlock.Should().BeFalse();
         var items = await db.ListRangeAsync(key);
         items.Should().ContainSingle().Which.ToString().Should().Be("tx-item");
     }
@@ -1159,20 +1156,19 @@ public sealed class RedisIntegrationTests
         var ep1 = CreateEndpoint($"SADD:{key}", "transacted=true");
         var prod1 = (RedisProducer)ep1.CreateProducer();
         await prod1.Start();
-        var ex1 = new Exchange(new Message("item1"));
-        await prod1.Process(ex1);
-        var actions1 = ex1.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        foreach (var a in actions1!.Values) await a.Commit();
+        await InTransaction(new Exchange(new Message("item1")), (ex, ct) => prod1.Process(ex, ct));
         await prod1.Stop();
 
         // Second transacted SADD — rollback
         var ep2 = CreateEndpoint($"SADD:{key}", "transacted=true");
         var prod2 = (RedisProducer)ep2.CreateProducer();
         await prod2.Start();
-        var ex2 = new Exchange(new Message("item2"));
-        await prod2.Process(ex2);
-        var actions2 = ex2.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        foreach (var a in actions2!.Values) await a.Rollback();
+        var rollback = () => InTransaction(new Exchange(new Message("item2")), async (ex, ct) =>
+        {
+            await prod2.Process(ex, ct);
+            throw new InvalidOperationException("the unit of work failed");
+        });
+        await rollback.Should().ThrowAsync<InvalidOperationException>();
         await prod2.Stop();
 
         var members = await db.SetMembersAsync(key);
@@ -1187,15 +1183,17 @@ public sealed class RedisIntegrationTests
         var ep = CreateEndpoint($"ZADD:{key}", "transacted=true&score=42");
         var producer = (RedisProducer)ep.CreateProducer();
         await producer.Start();
-        var exchange = new Exchange(new Message("scored-item"));
-        await producer.Process(exchange);
-
         var db = await GetDatabase();
-        (await db.SortedSetLengthAsync(key)).Should().Be(0);
+        long? lengthInsideTheBlock = null;
 
-        var actions = exchange.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        foreach (var a in actions!.Values) await a.Commit();
+        await InTransaction(new Exchange(new Message("scored-item")), async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            lengthInsideTheBlock = await db.SortedSetLengthAsync(key);
+        });
         await producer.Stop();
+
+        lengthInsideTheBlock.Should().Be(0);
 
         (await db.SortedSetScoreAsync(key, "scored-item")).Should().Be(42);
     }
@@ -1208,15 +1206,17 @@ public sealed class RedisIntegrationTests
         var ep = CreateEndpoint($"HSET:{key}", "transacted=true&field=name");
         var producer = (RedisProducer)ep.CreateProducer();
         await producer.Start();
-        var exchange = new Exchange(new Message("Alice"));
-        await producer.Process(exchange);
-
         var db = await GetDatabase();
-        (await db.HashExistsAsync(key, "name")).Should().BeFalse();
+        bool? existedInsideTheBlock = null;
 
-        var actions = exchange.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        foreach (var a in actions!.Values) await a.Commit();
+        await InTransaction(new Exchange(new Message("Alice")), async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            existedInsideTheBlock = await db.HashExistsAsync(key, "name");
+        });
         await producer.Stop();
+
+        existedInsideTheBlock.Should().BeFalse();
 
         (await db.HashGetAsync(key, "name")).ToString().Should().Be("Alice");
     }
@@ -1231,20 +1231,20 @@ public sealed class RedisIntegrationTests
         var ep = CreateEndpoint($"EXPIRE:{key}", "transacted=true&ttl=5");
         var producer = (RedisProducer)ep.CreateProducer();
         await producer.Start();
-        var exchange = new Exchange(new Message());
-        await producer.Process(exchange);
+        TimeSpan? ttlInsideTheBlock = TimeSpan.MaxValue;
 
-        // Not committed yet — key should have no TTL
-        var ttlBefore = await db.KeyTimeToLiveAsync(key);
-        ttlBefore.Should().BeNull();
-
-        var actions = exchange.Properties["TRANSACT_ACTION"] as ConcurrentDictionary<string, ITransactedAction>;
-        foreach (var a in actions!.Values) await a.Commit();
+        await InTransaction(new Exchange(new Message()), async (ex, ct) =>
+        {
+            await producer.Process(ex, ct);
+            ttlInsideTheBlock = await db.KeyTimeToLiveAsync(key);   // not committed yet: no expiry
+        });
         await producer.Stop();
+
+        ttlInsideTheBlock.Should().BeNull();
 
         var ttlAfter = await db.KeyTimeToLiveAsync(key);
         ttlAfter.Should().NotBeNull();
-        ttlAfter!.Value.TotalSeconds.Should().BeGreaterThan(0);
+        ttlAfter!.Value.TotalSeconds.Should().BeInRange(1, 5, "the deferred EXPIRE uses ttl=5, the same as the immediate one");
     }
 
     // ═══════════════════════════════════════════════════════════

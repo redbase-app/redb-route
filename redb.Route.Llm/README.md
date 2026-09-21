@@ -87,7 +87,7 @@ Pieces:
   - **`AnthropicProvider`** — native Anthropic Messages API client. Selected
     via `Provider = "anthropic"` and ships in parallel to the OpenAI-compat
     path; reads true Messages-API SSE (`message_start` /
-    `content_block_delta` / `message_stop`) for `?stream=true`, and exists
+    `content_block_delta` / `message_stop`) for streaming, and exists
     so we can land features the OpenAI-compat surface flattens away
     (prompt caching, computer-use, fine-grained image blocks).
 - **`IAgentEngine`** — the tool-use loop. One inbound exchange = one agent run =
@@ -575,7 +575,7 @@ llm://<connectionFactoryName>
     &systemPromptRef=<literal | #registry-key>
     &initialBodyRef=<literal | #registry-key>     # consumer only
     &conversation=none|header|property
-    &stream=true                                   # producer only (HTTP→SSE, WS→per-frame)
+    &stream=calls|body                             # producer only (calls: engine streams each call; body: HTTP→SSE, WS→per-frame)
     &schedule=500ms|30s|5m|1h                      # consumer only
     &maxIterations=8
     &tools=*|name1,name2
@@ -588,10 +588,14 @@ llm://<connectionFactoryName>
 | `systemPromptRef` | yes (header beats it) | yes |
 | `initialBodyRef` | n/a | yes |
 | `conversation` | yes | yes (`header` resolves to none — consumer-born exchanges have no inbound header) |
-| `stream` | yes (`Out.Body = IAsyncEnumerable<string>`; `HttpConsumer` flushes as SSE, `WsConsumer` as one text frame per token) | n/a |
+| `stream` | yes. `calls`: every model call streamed inside the engine; tools, conversation, budget and the route transaction as without streaming; pieces to `IAgentObserver.OnDeltaAsync`; `Out.Body` is the final text. `body`: `Out.Body = IAsyncEnumerable<string>` and the agent run, tools included, happens when the body is read; `HttpConsumer` flushes as SSE, `WsConsumer` as one text frame per token; read once, released with the exchange, refused by `RequestBody` and inside `.Transacted()`. `stream=true` is refused | n/a |
 | `schedule` | n/a | required |
 | `maxIterations` | yes | yes |
 | `tools` | yes | yes |
+
+A parameter the endpoint does not know, or a value that does not convert to the option's type, fails the
+endpoint's creation and is named in the message, with the nearest option for a misspelt name. It used to be
+ignored, and the endpoint ran with the option's default.
 
 ### Sibling schemes
 
@@ -659,6 +663,24 @@ busy server.
 The rule covers chat and embeddings alike: `AnthropicProvider`, `OpenAiProvider` (both the buffered
 and the streaming call site) and `OpenAiEmbeddingProvider`.
 
+### Long silent calls
+
+A non-streaming call to a model is silent on the wire until the model has finished: tens of seconds, minutes for a
+thinking model or a long recording. VPN tunnels, NAT and proxies commonly drop a TLS connection that stays silent
+for about 50 seconds. The package's default clients (Anthropic, OpenAI-compatible, transcription, and the MCP
+HTTP+SSE transport) ask for HTTP/2 and send a keep-alive PING every 15 seconds while a request is in flight, which
+keeps the connection alive without touching the request. Where the server speaks only HTTP/1.1 no pings are sent,
+and a client you pass in yourself is used as it is. If such a server sits behind a VPN or a proxy, use `stream=calls`
+for long calls: tokens cross the wire as the model produces them, so the connection is never silent.
+
+The pings keep the connection alive; they do not extend the call's time limit. `LlmConnectionFactory.RequestTimeoutMs`
+limits the whole call, waiting for the answer and reading it, on every provider and whatever client sends it
+(default ten minutes). Running out throws `LlmTimeoutException`; a cancellation by the caller stays an
+`OperationCanceledException`. Set it to the longest answer you expect: a thinking model writing tens of thousands of
+tokens needs minutes. A streamed call is limited the same way, from the send to the last piece.
+`StreamIdleTimeoutMs` (off by default) limits a stream's silence: how long the provider may send nothing at all, not
+even a keep-alive. It counts only the waits on the provider, not the time your reader spends between pieces.
+
 ## Comparison with Apache Camel `langchain4j-*`
 
 Camel's LLM story lives in a family — `camel-langchain4j-chat`,
@@ -674,7 +696,7 @@ analogue to what `redb.Route.Llm` does, so the comparison is worth pinning down.
 | Tool dispatch into a route | `langchain4j-tools://name` (separate component) | `.AsLlmTool("name")` (DSL aspect on any `From(...)`) |
 | Agent loop (multi-turn tool use) | `langchain4j-agent://...` | built into `IAgentEngine` |
 | Scheduled invocation | only via `from("timer:...").to("langchain4j-chat:...")` — the LLM is producer-only | **`From("llm://factory?schedule=...")` is a first-class consumer** — the LLM endpoint *is* the scheduler |
-| Streaming responses | LangChain4j streaming chat model | `?stream=true` end-to-end: producer emits `IAsyncEnumerable<string>`; `redb.Route.Http` flushes per-chunk as SSE (`event: done` trailer carries final `llm.tokens.*` / `llm.cost.usd` / `llm.stop_reason`); `redb.Route.WebSocket` yields one `Text` frame per token |
+| Streaming responses | LangChain4j streaming chat model | `stream=body` end-to-end: producer emits `IAsyncEnumerable<string>`; `stream=calls` keeps the agent loop and streams each model call inside it; `redb.Route.Http` flushes per-chunk as SSE (`event: done` trailer carries final `llm.tokens.*` / `llm.cost.usd` / `llm.stop_reason`); `redb.Route.WebSocket` yields one `Text` frame per token |
 | Registry refs (`#name`) | yes — Camel-wide | yes — framework-wide; works for connection factories **and** prompts |
 | Conversation memory | LangChain4j `ChatMemoryStore` family | header / property conversation id; full persistence via `AddRedbLlmStorage()` |
 | Provider matrix | 25+ via LangChain4j (Anthropic, Bedrock, Vertex, Azure OpenAI, OpenAI, Mistral, Ollama, …) | 14 OpenAI-compatible behind one `OpenAiProvider` (incl. Anthropic Claude via the official OpenAI-compat endpoint, live-tested with Haiku 4.5 + Sonnet 4.6) + stub; native Anthropic Messages API on deck |

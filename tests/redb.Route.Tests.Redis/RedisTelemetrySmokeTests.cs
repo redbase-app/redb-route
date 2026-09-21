@@ -1,10 +1,9 @@
 using System.Diagnostics;
-using OpenTelemetry;
-using OpenTelemetry.Trace;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Redis;
 using redb.Route.Telemetry;
+using redb.Route.Tests.Shared;
 using Xunit.Abstractions;
 
 namespace redb.Route.Tests.Redis;
@@ -29,11 +28,7 @@ public sealed class RedisTelemetrySmokeTests
         var producer = (RedisProducer)endpoint.CreateProducer();
         await producer.Start();
 
-        var activities = new List<Activity>();
-        using var tracer = Sdk.CreateTracerProviderBuilder()
-            .AddSource(RouteActivitySource.SourceName)
-            .AddInMemoryExporter(activities)
-            .Build()!;
+        using var capture = new SpanCapture();   // this test's spans only
 
         try
         {
@@ -44,7 +39,7 @@ public sealed class RedisTelemetrySmokeTests
             await producer.Stop();
         }
 
-        tracer.ForceFlush(1000);
+        var activities = capture.Spans;
         activities.Should().NotBeEmpty();
         var activity = activities.First();
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);

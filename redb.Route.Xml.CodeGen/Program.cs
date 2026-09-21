@@ -5,7 +5,7 @@ using redb.Route.Xml;
 // Not part of the runtime package: it serves the developer, not the running service.
 //
 //   redb-route-xml csharp  <file.route.xml> --namespace My.Routes [--class Name] [--style readable|machine] [--out dir]
-//   redb-route-xml mermaid <file.route.xml> [--out dir]
+//   redb-route-xml mermaid <file.route.xml> [--bin buildOutputDir] [--direction TD|LR] [--out dir]
 //   redb-route-xml xsd     [--out dir]
 //
 // csharp:  prints (or writes) the fluent C# the file parses into.
@@ -65,7 +65,33 @@ try
             foreach (var scheme in CollectSchemes(file))
                 if (context.GetComponent<redb.Route.Abstractions.IComponent>(scheme) is null)
                     context.AddComponent(new SchemeStub(scheme));
-            context.AddXmlRoutesFromContent(diagramDoc.ToString(), Path.GetFullPath(file));
+            // file= references resolve where the package keeps them (resources/); with --bin the
+            // project's own types and the package elements of its build output are visible too,
+            // which a diagram of a real project needs (SerialNumbers.Xml, 2026-09-18).
+            context.AddService(typeof(redb.Route.Abstractions.IRouteResourceResolver),
+                new redb.Route.Core.RouteResourceResolver
+                {
+                    ResourceRoot = redb.Route.Xml.Packaging.RoutePackage.ResourceRootFor(file),
+                });
+            XmlRouteLoaderOptions? diagramOptions = null;
+            if (Option("--bin") is { } diagramBin)
+            {
+                var binPath = Path.GetFullPath(diagramBin);
+                context.AddService(typeof(redb.Route.Abstractions.IBeanTypeResolver),
+                    new BinTypeResolver(BuildBinResolver(binPath)));
+                diagramOptions = new XmlRouteLoaderOptions { Extensions = LoadContributions(binPath) };
+            }
+            try
+            {
+                context.AddXmlRoutesFromContent(diagramDoc.ToString(), Path.GetFullPath(file), diagramOptions);
+            }
+            catch (XmlRouteException ex) when (diagramOptions is null)
+            {
+                Console.Error.WriteLine(ex.Message);
+                Console.Error.WriteLine("hint: a route that names the project's own types or package elements " +
+                                        "needs its build output: --bin <path to bin/Debug/netX.Y>.");
+                return 1;
+            }
             var definitions = new List<redb.Route.Abstractions.IProcessorDefinition>();
             foreach (var builder in context.RouteBuilders)
             {
@@ -328,6 +354,16 @@ static List<redb.Route.Xml.IXmlElementContribution> LoadContributions(string bin
     return contributions;
 }
 
+/// <summary>The assembly of this name the tool itself already runs on, if it is one of them.</summary>
+static System.Reflection.Assembly? CarriedAssembly(string? simpleName)
+    => simpleName is null
+        ? null
+        : System.Runtime.Loader.AssemblyLoadContext.Default.Assemblies
+            .FirstOrDefault(a => string.Equals(a.GetName().Name, simpleName, StringComparison.Ordinal));
+
+/// <summary>Whether the tool already runs on an assembly of this name.</summary>
+static bool Carried(string? simpleName) => CarriedAssembly(simpleName) is not null;
+
 static IEnumerable<redb.Route.Abstractions.IComponent> LoadComponents(string binDir, string[]? probeDirs = null)
 {
     RequireSameRuntime(binDir, typeof(redb.Route.Abstractions.IComponent).Assembly);
@@ -335,6 +371,10 @@ static IEnumerable<redb.Route.Abstractions.IComponent> LoadComponents(string bin
     var context = new System.Runtime.Loader.AssemblyLoadContext($"catalog:{binDir}", isCollectible: false);
     context.Resolving += (loadContext, assemblyName) =>
     {
+        // What the tool itself carries (redb.Route, redb.Route.Xml) stays the Default copy:
+        // loaded a second time here, its IComponent would be a DIFFERENT type and every
+        // connector's cast would silently fail. Returning null hands the load to Default.
+        if (Carried(assemblyName.Name)) return null;
         foreach (var probe in probes)
         {
             var candidate = Path.Combine(probe, assemblyName.Name + ".dll");
@@ -343,7 +383,11 @@ static IEnumerable<redb.Route.Abstractions.IComponent> LoadComponents(string bin
         }
         return null;
     };
-    foreach (var dll in Directory.GetFiles(binDir, "redb.Route.*.dll"))
+    // «redb.Route*.dll», not «redb.Route.*.dll»: the engine's own components (timer, direct,
+    // seda, vm, log, mock, direct-vm) live in redb.Route.dll, which the dotted mask does not
+    // match — the catalog was missing the very schemes most routes start from (owner question
+    // before 4.1.0, 2026-09-20).
+    foreach (var dll in Directory.GetFiles(binDir, "redb.Route*.dll"))
     {
         System.Reflection.Assembly assembly;
         try
@@ -351,8 +395,11 @@ static IEnumerable<redb.Route.Abstractions.IComponent> LoadComponents(string bin
             // The Resolving hook may have already pulled this simple name from another probe
             // dir while satisfying a dependency; loading the local copy on top would throw
             // «assembly with same name is already loaded» — first copy wins, like the worker.
+            // An assembly the tool carries is read from the Default context for the same
+            // reason the hook refuses it: one identity for one name, engine included.
             var simpleName = System.Reflection.AssemblyName.GetAssemblyName(dll).Name;
-            assembly = context.Assemblies.FirstOrDefault(a => a.GetName().Name == simpleName)
+            assembly = CarriedAssembly(simpleName)
+                ?? context.Assemblies.FirstOrDefault(a => a.GetName().Name == simpleName)
                 ?? context.LoadFromAssemblyPath(dll);
         }
         catch (BadImageFormatException)
@@ -443,6 +490,12 @@ static IEnumerable<string> CollectSchemes(string file)
         foreach (var child in address.Elements())
             schemes.Add(child.Name.LocalName);
     return schemes;
+}
+
+/// <summary>The build output's types, handed to the loader the way a worker's own resolver would.</summary>
+file sealed class BinTypeResolver(Func<string, Type?> resolve) : redb.Route.Abstractions.IBeanTypeResolver
+{
+    public Type? Resolve(string typeName) => resolve(typeName);
 }
 
 file sealed class SchemeStub(string scheme) : redb.Route.Core.ComponentBase

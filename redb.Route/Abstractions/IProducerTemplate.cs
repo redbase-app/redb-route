@@ -115,6 +115,9 @@ public interface IProducerTemplate
     /// <summary>
     /// Sends a request and waits for the reply body asynchronously.
     /// Uses <see cref="ExchangePattern.InOut"/> to signal request/reply semantics.
+    /// The exchange ends before this method returns, so a reply that reads from resources of its exchange (a streamed
+    /// query result, <see cref="IExchangeBoundBody"/>) is refused with <see cref="InvalidOperationException"/>: read such a
+    /// reply through <see cref="RequestAsync(IEndpoint, IExchange, CancellationToken)"/> and dispose the exchange afterwards.
     /// </summary>
     /// <param name="endpoint">Target endpoint instance.</param>
     /// <param name="body">Request body.</param>
@@ -144,12 +147,14 @@ public interface IProducerTemplate
 
     /// <summary>
     /// Sends a request and returns the reply body cast to <typeparamref name="T"/>.
+    /// A nullable <typeparamref name="T"/> converts to its underlying type; a reply that does not convert throws
+    /// <see cref="InvalidCastException"/>.
     /// </summary>
     /// <typeparam name="T">Expected response type.</typeparam>
     /// <param name="endpoint">Target endpoint instance.</param>
     /// <param name="body">Request body.</param>
     /// <param name="cancellationToken">Token to cancel the in-flight request.</param>
-    /// <returns>The typed response body, or <c>default</c>.</returns>
+    /// <returns>The typed response body, or <c>default</c> when the reply has no body.</returns>
     Task<T?> RequestBody<T>(IEndpoint endpoint, object body, CancellationToken cancellationToken = default);
 
     /// <summary>

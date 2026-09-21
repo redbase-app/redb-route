@@ -333,7 +333,9 @@ public sealed class AgentEngine : IAgentEngine
                 var sw = Stopwatch.StartNew();
                 try
                 {
-                    last = await provider.CompleteAsync(llmRequest, ct).ConfigureAwait(false);
+                    last = request.StreamModelCalls
+                        ? await CallStreamingAsync(provider, llmRequest, runCtx, iter, request.OnDelta, ct).ConfigureAwait(false)
+                        : await provider.CompleteAsync(llmRequest, ct).ConfigureAwait(false);
                     LlmMetrics.Calls.Add(1, providerTag, modelTag, factoryTag);
                 }
                 catch
@@ -464,6 +466,49 @@ public sealed class AgentEngine : IAgentEngine
             Iterations = iter,
             StopReason = last?.StopReason ?? LlmStopReason.Other
         };
+    }
+
+    /// <summary>
+    /// One model call made as a stream (<see cref="AgentRequest.StreamModelCalls"/>). The pieces go to the observer as
+    /// they arrive; the loop goes on with the whole answer the stream assembled, the same answer a plain call returns,
+    /// so nothing after the call differs from a run without streaming.
+    /// </summary>
+    private async Task<LlmResponse> CallStreamingAsync(
+        ILlmProvider provider, LlmRequest llmRequest, AgentRunContext runCtx, int iteration,
+        Func<AgentDeltaContext, CancellationToken, Task>? onDelta, CancellationToken ct)
+    {
+        LlmResponse? answer = null;
+        await foreach (var chunk in provider.StreamAsync(llmRequest, ct).WithCancellation(ct).ConfigureAwait(false))
+        {
+            foreach (var piece in chunk.Content)
+            {
+                var (kind, text) = piece switch
+                {
+                    LlmTextBlock t => (AgentDeltaKind.Text, t.Text),
+                    LlmThinkingBlock th => (AgentDeltaKind.Thinking, th.Text),
+                    // Completed tool calls ride on the last chunk; they are part of the answer, not a piece of text.
+                    _ => (default(AgentDeltaKind), (string?)null)
+                };
+                if (string.IsNullOrEmpty(text)) continue;
+
+                var delta = new AgentDeltaContext
+                {
+                    Run = runCtx,
+                    Iteration = iteration,
+                    Kind = kind,
+                    Text = text
+                };
+                await _observer.OnDeltaAsync(delta, ct).ConfigureAwait(false);
+                if (onDelta is not null) await onDelta(delta, ct).ConfigureAwait(false);
+            }
+
+            if (chunk.Response is not null) answer = chunk.Response;
+        }
+
+        return answer ?? throw new InvalidOperationException(
+            $"Provider '{provider.ProviderId}' ended its stream without the assembled answer (LlmStreamChunk.Response). "
+            + "A provider that overrides StreamAsync must put the whole answer on its last chunk; one that does not "
+            + "stream can leave StreamAsync to the interface's default, which does.");
     }
 
     private async Task<LlmToolResultBlock> DispatchToolAsync(

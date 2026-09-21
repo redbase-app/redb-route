@@ -122,6 +122,20 @@ public class RedisBuilderTests
     }
 
     [Fact]
+    public void Transacted_false_is_written_out_to_publish_at_once_inside_a_block()
+    {
+        var uri = RedisDsl.Set("k").Transacted(false).Build();
+        uri.Should().Contain("transacted=false");
+    }
+
+    [Fact]
+    public void Transacted_left_unset_is_not_written_so_announcements_follow_the_block()
+    {
+        var uri = RedisDsl.Set("k").Build();
+        uri.Should().NotContain("transacted");
+    }
+
+    [Fact]
     public void PollDelay_SetsParam()
     {
         var uri = RedisDsl.XRead("s").PollDelay(2000).Build();

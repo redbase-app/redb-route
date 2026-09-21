@@ -41,6 +41,13 @@ public sealed class SnsEndpointOptions : AwsEndpointOptions
     /// </summary>
     public bool RawMessageDelivery { get; set; }
 
+    /// <summary>
+    /// Whether the publish joins the enclosing <c>.Transacted()</c> block. Unset, it follows the block: deferred until
+    /// the database commits inside one, published at once outside. <c>true</c> requires a block and fails outside one;
+    /// <c>false</c> publishes at once even inside one.
+    /// </summary>
+    public bool? Transacted { get; set; }
+
     /// <inheritdoc />
     public override void Validate()
     {

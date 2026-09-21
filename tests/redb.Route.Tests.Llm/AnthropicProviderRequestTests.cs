@@ -239,7 +239,8 @@ public sealed class AnthropicProviderRequestTests
 
         client.DefaultRequestVersion.Should().Be(System.Net.HttpVersion.Version20);
         client.DefaultVersionPolicy.Should().Be(HttpVersionPolicy.RequestVersionOrLower, "HTTP/1.1 must stay the fallback");
-        client.Timeout.Should().Be(TimeSpan.FromSeconds(90));
+        client.Timeout.Should().Be(Timeout.InfiniteTimeSpan,
+            "RequestTimeoutMs limits the whole call and is applied per call; the client's own Timeout would stop at the headers");
     }
 
     [Fact]

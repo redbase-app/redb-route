@@ -90,6 +90,12 @@
         "sensitive": false
       },
       {
+        "name": "LocalTransactions",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
         "name": "MessageDurable",
         "type": "bool",
         "default": "true",
@@ -190,7 +196,6 @@
       {
         "name": "Transacted",
         "type": "bool",
-        "default": "false",
         "sensitive": false
       },
       {
@@ -381,6 +386,12 @@
         "sensitive": false
       },
       {
+        "name": "BatchCommit",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
         "name": "BatchMaxMessages",
         "type": "int",
         "default": "100",
@@ -533,7 +544,20 @@
       {
         "name": "Transacted",
         "type": "bool",
-        "default": "false",
+        "sensitive": false
+      }
+    ]
+  },
+  {
+    "scheme": "bean",
+    "alternateSchemes": [],
+    "package": "redb.Route",
+    "optionsType": "redb.Route.Components.Bean.BeanEndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "Method",
+        "type": "string",
         "sensitive": false
       }
     ]
@@ -574,6 +598,74 @@
       },
       {
         "name": "Ttl",
+        "type": "string",
+        "sensitive": false
+      }
+    ]
+  },
+  {
+    "scheme": "controlbus",
+    "alternateSchemes": [],
+    "package": "redb.Route",
+    "optionsType": "redb.Route.ControlBus.ControlBusEndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "Action",
+        "type": "enum",
+        "sensitive": false,
+        "enumValues": [
+          "Start",
+          "Stop",
+          "Suspend",
+          "Resume",
+          "Restart",
+          "Status",
+          "Stats",
+          "Fail"
+        ]
+      },
+      {
+        "name": "Async",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Command",
+        "type": "enum",
+        "default": "Route",
+        "sensitive": false,
+        "enumValues": [
+          "Route",
+          "Language",
+          "Notify"
+        ]
+      },
+      {
+        "name": "Events",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "Language",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "LoggingLevel",
+        "type": "string",
+        "default": "Info",
+        "sensitive": false
+      },
+      {
+        "name": "RestartDelay",
+        "type": "int",
+        "default": "1000",
+        "sensitive": false
+      },
+      {
+        "name": "RouteId",
         "type": "string",
         "sensitive": false
       }
@@ -689,6 +781,22 @@
         "sensitive": false
       }
     ]
+  },
+  {
+    "scheme": "direct",
+    "alternateSchemes": [],
+    "package": "redb.Route",
+    "optionsType": "redb.Route.Components.DirectEndpointOptions",
+    "pathIsText": false,
+    "options": []
+  },
+  {
+    "scheme": "direct-vm",
+    "alternateSchemes": [],
+    "package": "redb.Route",
+    "optionsType": "redb.Route.Components.DirectVmEndpointOptions",
+    "pathIsText": false,
+    "options": []
   },
   {
     "scheme": "elasticsearch",
@@ -1268,6 +1376,24 @@
         "sensitive": false
       },
       {
+        "name": "AntExclude",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "AntFilterCaseSensitive",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "AntInclude",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
         "name": "AppendChars",
         "type": "string",
         "default": "",
@@ -1355,6 +1481,29 @@
       },
       {
         "name": "FileName",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "Filter",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FilterDirectory",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FilterFile",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FilterInstance",
         "type": "string",
         "sensitive": false
       },
@@ -1651,6 +1800,24 @@
         "sensitive": false
       },
       {
+        "name": "AntExclude",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "AntFilterCaseSensitive",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "AntInclude",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
         "name": "AppendChars",
         "type": "string",
         "default": "",
@@ -1755,6 +1922,29 @@
       },
       {
         "name": "FileName",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "Filter",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FilterDirectory",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FilterFile",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FilterInstance",
         "type": "string",
         "sensitive": false
       },
@@ -2462,7 +2652,7 @@
       {
         "name": "Acks",
         "type": "string",
-        "default": "Leader",
+        "default": "All",
         "sensitive": false
       },
       {
@@ -2507,6 +2697,11 @@
         "name": "EnableAutoCommit",
         "type": "bool",
         "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "EnableIdempotence",
+        "type": "bool",
         "sensitive": false
       },
       {
@@ -2648,7 +2843,11 @@
       {
         "name": "Transacted",
         "type": "bool",
-        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "TransactionalIdPrefix",
+        "type": "string",
         "sensitive": false
       }
     ]
@@ -2935,9 +3134,14 @@
       },
       {
         "name": "Stream",
-        "type": "bool",
-        "default": "false",
-        "sensitive": false
+        "type": "enum",
+        "default": "Off",
+        "sensitive": false,
+        "enumValues": [
+          "Off",
+          "Calls",
+          "Body"
+        ]
       },
       {
         "name": "SystemPromptRef",
@@ -2962,6 +3166,21 @@
       {
         "name": "User",
         "type": "string",
+        "sensitive": false
+      }
+    ]
+  },
+  {
+    "scheme": "mock",
+    "alternateSchemes": [],
+    "package": "redb.Route",
+    "optionsType": "redb.Route.Components.MockEndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "ExpectedMessageCount",
+        "type": "int",
+        "default": "0",
         "sensitive": false
       }
     ]
@@ -3483,7 +3702,6 @@
       {
         "name": "Transacted",
         "type": "bool",
-        "default": "false",
         "sensitive": false
       },
       {
@@ -3612,6 +3830,11 @@
         "sensitive": false
       },
       {
+        "name": "ProcessingList",
+        "type": "string",
+        "sensitive": false
+      },
+      {
         "name": "Score",
         "type": "double",
         "sensitive": false
@@ -3633,15 +3856,14 @@
         "sensitive": false
       },
       {
-        "name": "StreamAutoAck",
-        "type": "bool",
-        "default": "true",
-        "sensitive": false
-      },
-      {
         "name": "StreamBlockTimeMs",
         "type": "int",
         "default": "1000",
+        "sensitive": false
+      },
+      {
+        "name": "StreamClaimMinIdleMs",
+        "type": "int",
         "sensitive": false
       },
       {
@@ -3656,6 +3878,12 @@
         "sensitive": false
       },
       {
+        "name": "StreamNoAck",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
         "name": "StreamReadCount",
         "type": "int",
         "default": "10",
@@ -3664,13 +3892,11 @@
       {
         "name": "StreamStartPosition",
         "type": "string",
-        "default": "\u003E",
         "sensitive": false
       },
       {
         "name": "Transacted",
         "type": "bool",
-        "default": "false",
         "sensitive": false
       },
       {
@@ -4073,6 +4299,32 @@
     ]
   },
   {
+    "scheme": "seda",
+    "alternateSchemes": [],
+    "package": "redb.Route",
+    "optionsType": "redb.Route.Components.SedaEndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "ConcurrentConsumers",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "Size",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "Timeout",
+        "type": "int",
+        "default": "30000",
+        "sensitive": false
+      }
+    ]
+  },
+  {
     "scheme": "sftp",
     "alternateSchemes": [],
     "package": "redb.Route.Sftp",
@@ -4083,6 +4335,24 @@
         "name": "AllowNullBody",
         "type": "bool",
         "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "AntExclude",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "AntFilterCaseSensitive",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "AntInclude",
+        "type": "string",
+        "default": "",
         "sensitive": false
       },
       {
@@ -4220,6 +4490,29 @@
       },
       {
         "name": "FileName",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "Filter",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FilterDirectory",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FilterFile",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FilterInstance",
         "type": "string",
         "sensitive": false
       },
@@ -4815,6 +5108,11 @@
         "sensitive": false
       },
       {
+        "name": "Transacted",
+        "type": "bool",
+        "sensitive": false
+      },
+      {
         "name": "UseDefaultCredentialsProvider",
         "type": "bool",
         "default": "false",
@@ -5311,7 +5609,6 @@
       {
         "name": "Transacted",
         "type": "bool",
-        "default": "false",
         "sensitive": false
       },
       {
@@ -5613,6 +5910,84 @@
     ]
   },
   {
+    "scheme": "timer",
+    "alternateSchemes": [],
+    "package": "redb.Route",
+    "optionsType": "redb.Route.Components.TimerEndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "Delay",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "Period",
+        "type": "int",
+        "default": "1000",
+        "sensitive": false
+      },
+      {
+        "name": "RepeatCount",
+        "type": "int",
+        "default": "-1",
+        "sensitive": false
+      }
+    ]
+  },
+  {
+    "scheme": "validator",
+    "alternateSchemes": [],
+    "package": "redb.Route",
+    "optionsType": "redb.Route.Validation.ValidatorEndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "Format",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "SchemaPath",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "TargetNamespace",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "ThrowOnFailure",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      }
+    ]
+  },
+  {
+    "scheme": "vm",
+    "alternateSchemes": [],
+    "package": "redb.Route",
+    "optionsType": "redb.Route.Components.VmEndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "ConcurrentConsumers",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "Size",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      }
+    ]
+  },
+  {
     "scheme": "wmq",
     "alternateSchemes": [],
     "package": "redb.Route.IbmMq",
@@ -5855,7 +6230,6 @@
       {
         "name": "Transacted",
         "type": "bool",
-        "default": "false",
         "sensitive": false
       },
       {
@@ -6006,6 +6380,44 @@
         "name": "TrustAllCertificates",
         "type": "bool",
         "default": "false",
+        "sensitive": false
+      }
+    ]
+  },
+  {
+    "scheme": "xslt",
+    "alternateSchemes": [],
+    "package": "redb.Route",
+    "optionsType": "redb.Route.Xslt.XsltEndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "AllowTemplateFromHeader",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "FailOnNullBody",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "Output",
+        "type": "enum",
+        "default": "String",
+        "sensitive": false,
+        "enumValues": [
+          "String",
+          "Bytes",
+          "Dom"
+        ]
+      },
+      {
+        "name": "StylesheetPath",
+        "type": "string",
+        "default": "",
         "sensitive": false
       }
     ]

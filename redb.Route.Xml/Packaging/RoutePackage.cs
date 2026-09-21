@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Xml;
 using System.Xml.Linq;
 
 namespace redb.Route.Xml.Packaging;
@@ -62,6 +63,23 @@ public static class RoutePackage
     public const string ConfigDir = "config";
     /// <summary>The context-level document, loaded before the route artifacts.</summary>
     public const string ContextFile = "context.xml";
+
+    /// <summary>
+    /// The directory a route's <c>file=</c> references resolve against outside a package - the
+    /// tool's <c>csharp</c> and <c>mermaid</c>. A route under <c>{project}/routes/</c> reads
+    /// <c>{project}/resources/</c>, where the gate checks and the Tsak loader looks; any other
+    /// file reads its own directory.
+    /// </summary>
+    public static string ResourceRootFor(string routeFile)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(routeFile);
+        var directory = Path.GetDirectoryName(Path.GetFullPath(routeFile))!;
+        if (!string.Equals(Path.GetFileName(directory), RoutesDir, StringComparison.OrdinalIgnoreCase))
+            return directory;
+        var project = Path.GetDirectoryName(directory)!;
+        var resources = Path.Combine(project, ResourcesDir);
+        return Directory.Exists(resources) ? resources : project;
+    }
 
     /// <summary>
     /// Runs the packaging checks for a project directory without producing anything — the CI
@@ -299,8 +317,21 @@ public static class RoutePackage
                     $"'#{name}' is not declared by any <bean> of this package — either module code registers it at startup (fine), or it is a dangling reference."));
         }
 
+        foreach (var (file, document) in documents)
+        {
+            if (document.Root is not { } root)
+                continue;
+            CheckUnreachableSteps(file, root, registry, findings);
+            CheckConditionTemplates(file, root, registry.Find(root.Name.LocalName)?.Spec, registry, findings);
+        }
+
         if (typeResolver is not null)
+        {
             RunDeepBeanChecks(beanTypes, beanMethodCalls, typeResolver, findings);
+            foreach (var (file, document) in documents)
+                foreach (var element in document.Root?.Elements() ?? [])
+                    CheckTypeAttributes(file, element, registry.Find(element.Name.LocalName)?.Spec, registry, typeResolver, findings);
+        }
 
         return [.. requiredKeys];
     }
@@ -309,6 +340,120 @@ public static class RoutePackage
     /// The assembly-backed half of Ф5.4: bean types resolve and are public, declared properties
     /// are writable, and every <c>bean:#x?method=M</c> names an existing public method.
     /// </summary>
+    /// <summary>
+    /// A step written after a terminal one (<see cref="ElementSpec.Terminal"/>: stop, rollbackAll,
+    /// throwException) in the same list never runs. Not an error - the route loads and works - but
+    /// dead markup that reads as if it did something; the first such step is named with its
+    /// position. Generic over the specs, so a contribution that declares a terminal step is covered.
+    /// </summary>
+    private static void CheckUnreachableSteps(string file, XElement parent, ElementRegistry registry,
+        List<PackageFinding> findings)
+    {
+        XElement? terminal = null;
+        foreach (var child in parent.Elements())
+        {
+            var spec = registry.Find(child.Name.LocalName)?.Spec;
+            var isStep = spec?.Kind is XmlElementKind.Step or XmlElementKind.Scope or XmlElementKind.Branching;
+            if (terminal is not null && isStep)
+            {
+                var line = (IXmlLineInfo)child;
+                findings.Add(new PackageFinding(false, $"{file}({line.LineNumber},{line.LinePosition})",
+                    $"<{child.Name.LocalName}> never runs: it comes after <{terminal.Name.LocalName}/>, " +
+                    "which ends the route for the exchange."));
+                terminal = null;
+            }
+            if (isStep && spec!.Terminal)
+                terminal = child;
+            CheckUnreachableSteps(file, child, registry, findings);
+        }
+    }
+
+    /// <summary>
+    /// A condition written as a template is true whatever it renders: <c>${header.kind} == 'order'</c>
+    /// renders to the text «refund == 'order'», which is non-empty, so the branch always wins. The
+    /// comparison has to be written without the braces — <c>header.kind == 'order'</c> — or entirely
+    /// inside them. A WARNING, not an error: the gate names the line, the author decides. Driven by
+    /// <see cref="AttributeSpec.Condition"/>, so a package contribution's own condition is covered.
+    /// </summary>
+    private static void CheckConditionTemplates(string file, XElement element, ElementSpec? spec,
+        ElementRegistry registry, List<PackageFinding> findings)
+    {
+        foreach (var attribute in element.Attributes())
+        {
+            var attributeSpec = spec?.Attributes.FirstOrDefault(a =>
+                string.Equals(a.Name, attribute.Name.LocalName, StringComparison.Ordinal));
+            if (attributeSpec is not { Condition: true } || !LooksLikeTemplateComparison(attribute.Value))
+                continue;
+            var line = (IXmlLineInfo)attribute;
+            findings.Add(new PackageFinding(false, $"{file}({line.LineNumber},{line.LinePosition})",
+                $"{attribute.Name.LocalName}=\"{attribute.Value}\" compares OUTSIDE ${{…}}: a condition holding a " +
+                "placeholder is rendered to text first, and non-empty text is true whatever it says. Write the " +
+                "comparison without the braces (header.kind == 'order') or entirely inside them."));
+        }
+        foreach (var child in element.Elements())
+        {
+            var childSpec = spec?.Children.FirstOrDefault(c =>
+                                string.Equals(c.Name, child.Name.LocalName, StringComparison.Ordinal))
+                            ?? registry.Find(child.Name.LocalName)?.Spec;
+            CheckConditionTemplates(file, child, childSpec, registry, findings);
+        }
+    }
+
+    /// <summary>
+    /// The value carries a <c>${…}</c> placeholder AND an operator outside of it. Both halves matter:
+    /// a lone <c>${header.enabled}</c> renders to «true»/«false» and reads correctly, and a comparison
+    /// written entirely inside the braces is evaluated as an expression, not rendered.
+    /// </summary>
+    private static bool LooksLikeTemplateComparison(string value)
+    {
+        if (!value.Contains("${", StringComparison.Ordinal))
+            return false;
+        var outside = System.Text.RegularExpressions.Regex.Replace(value, @"\$\{[^}]*\}", " ");
+        return Operators.Any(op => outside.Contains(op, StringComparison.Ordinal));
+    }
+
+    /// <summary>What turns a rendered condition into a comparison the author expected to be evaluated.</summary>
+    private static readonly string[] Operators =
+        ["==", "!=", ">=", "<=", ">", "<", "&&", "||", " and ", " or ", " eq ", " ne "];
+
+    /// <summary>
+    /// Every attribute a spec declares as a type resolves against the built assemblies: the loader
+    /// would fail on it at the worker, so the build fails on it here. Generic over the specs - no
+    /// list of elements - so a package contribution's type attributes are checked the same way.
+    /// Values carrying placeholders or expressions are left to the load.
+    /// </summary>
+    private static void CheckTypeAttributes(string file, XElement element, ElementSpec? spec, ElementRegistry registry,
+        Func<string, Type?> typeResolver, List<PackageFinding> findings)
+    {
+        if (spec is not null)
+        {
+            foreach (var attributeSpec in spec.Attributes.Where(a => a.Type is AttributeType.TypeName or AttributeType.TypeNameList))
+            {
+                var value = element.Attribute(attributeSpec.Name)?.Value;
+                if (string.IsNullOrWhiteSpace(value) || value.Contains("{{", StringComparison.Ordinal)
+                    || value.Contains("${", StringComparison.Ordinal))
+                    continue;
+                var names = attributeSpec.Type == AttributeType.TypeNameList
+                    ? value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    : [value.Trim()];
+                foreach (var name in names)
+                {
+                    if (typeResolver(name) is not null)
+                        continue;
+                    var line = (IXmlLineInfo)element;
+                    findings.Add(new PackageFinding(true, $"{file}({line.LineNumber},{line.LinePosition})",
+                        $"<{element.Name.LocalName} {attributeSpec.Name}=...>: type '{name}' was not found in the built assemblies."));
+                }
+            }
+        }
+        foreach (var child in element.Elements())
+        {
+            var childSpec = spec?.Children.FirstOrDefault(c => c.Name == child.Name.LocalName)
+                            ?? registry.Find(child.Name.LocalName)?.Spec;
+            CheckTypeAttributes(file, child, childSpec, registry, typeResolver, findings);
+        }
+    }
+
     private static void RunDeepBeanChecks(
         Dictionary<string, (string File, XElement Element, string TypeName)> beanTypes,
         List<(string File, string Bean, string Method)> beanMethodCalls,

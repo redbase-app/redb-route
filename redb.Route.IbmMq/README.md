@@ -168,7 +168,11 @@ the same consumer semantics as the poll path:
 
 | Option | Default | Description |
 |---|---|---|
-| `transacted` | `false` | Local MQ transactions (MQCMIT/MQBACK) |
+| `transacted` | unset | Consumer: `true` gets under syncpoint (MQCMIT/MQBACK). Producer: unset follows an enclosing `.Transacted()` block (the put waits for the database commit), `false` puts at once, `true` requires a block. A request-reply producer always puts at once and refuses `true` |
+
+The deferred puts of one producer in a block are committed in one unit of work: every put under syncpoint, then one
+MQCMIT, so they arrive together, in order, or not at all (a failed put backs them all out). The producer's batches take
+turns on its connection, because a unit of work belongs to the connection.
 
 ### RPC
 

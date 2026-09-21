@@ -111,6 +111,21 @@ public sealed class AgentRequest
     /// the inbound transport's own headers never do. Null / empty = defaults only.
     /// </summary>
     public IReadOnlyList<string>? PropagateToolHeaders { get; init; }
+
+    /// <summary>
+    /// Make every model call of the run as a stream (<c>stream=calls</c>). The pieces go to
+    /// <see cref="Observability.IAgentObserver.OnDeltaAsync"/> as they arrive; the loop goes on with the whole answer
+    /// the stream assembled, the same answer a plain call returns, so tools, the conversation, the budget and the
+    /// route's transaction work as without streaming. The connection carries data while the model writes.
+    /// </summary>
+    public bool StreamModelCalls { get; init; }
+
+    /// <summary>
+    /// Receiver of this run's pieces, beside the observer: the observer is shared by every run of the engine, and this
+    /// one belongs to the run that set it. <c>stream=body</c> feeds <c>Out.Body</c> through it. Called only when
+    /// <see cref="StreamModelCalls"/> is on, in the order the pieces arrive.
+    /// </summary>
+    public Func<Observability.AgentDeltaContext, CancellationToken, Task>? OnDelta { get; init; }
 }
 
 /// <summary>Final agent response.</summary>

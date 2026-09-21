@@ -3,6 +3,7 @@ using System.Diagnostics;
 using IBM.WMQ;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Transactions;
 using redb.Route.Core;
 using redb.Route.Telemetry;
 using RouteMessage = redb.Route.Core.Message;
@@ -30,6 +31,9 @@ public sealed class IbmMqProducer : ConnectableProducer
     private readonly ConcurrentDictionary<string, TaskCompletionSource<IMessage>> _pendingResponses = new();
     private MQQueue? _replyQueue;
     private readonly SemaphoreSlim _rpcLock = new(1, 1);
+    // The deferred puts of a block go out as one batch per producer; its commits take turns on the shared connection.
+    private readonly string _batchKey = $"ibmmq-batch-{Guid.NewGuid():N}";
+    private readonly SemaphoreSlim _commitLock = new(1, 1);
     private volatile bool _rpcSetup;
     private CancellationTokenSource? _rpcCts;
     private Task? _rpcTask;
@@ -44,6 +48,13 @@ public sealed class IbmMqProducer : ConnectableProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+
+        // A request-reply send cannot wait for the commit: the reply it waits for would never come.
+        if (_options.ReplyTo && _options.Transacted == true)
+            throw new InvalidOperationException(
+                $"'{ProducerName}' is a request-reply producer (replyTo=true): the request has to leave at once for its " +
+                "reply to arrive, so it cannot be deferred to the commit of a transaction. Drop transacted=true: a " +
+                "request-reply send always goes out at once, outside the transaction.");
     }
 
     /// <inheritdoc />
@@ -160,7 +171,7 @@ public sealed class IbmMqProducer : ConnectableProducer
         {
             await ProcessRpcAsync(exchange, msg, ct).ConfigureAwait(false);
         }
-        else if (_options.Transacted)
+        else if (TransactedActions.Defers(exchange, _options.Transacted))
             ProcessTransactional(exchange, msg);
         else
             ProcessImmediate(msg);
@@ -183,13 +194,14 @@ public sealed class IbmMqProducer : ConnectableProducer
 
     private void ProcessTransactional(IExchange exchange, MQMessage msg)
     {
-        // Capture all data needed for deferred send — the action will MQPUT + MQCMIT on commit
+        // The message joins this producer's batch for the block: on commit all its puts go under syncpoint and one
+        // MQCMIT commits them together, or MQBACK drops them all.
         var qm = _qm ?? throw new InvalidOperationException("IBM MQ producer not connected");
-        var action = new IbmMqSendAction(
-            _outputQueue, _outputTopic, _options.DestinationType,
-            msg, _endpoint.Destination, qm, Logger);
-
-        RegisterTransactedAction(exchange, $"ibmmq-send-{Guid.NewGuid():N}", action);
+        var batch = TransactedActions.JoinBatch(exchange, _batchKey,
+            () => new IbmMqSendBatch(_outputQueue, _outputTopic, _options.DestinationType, _endpoint.Destination, qm,
+                _commitLock, Logger),
+            ProducerName);
+        batch.Add(msg);
     }
 
     // ── RPC (request/reply) ──
@@ -432,15 +444,4 @@ public sealed class IbmMqProducer : ConnectableProducer
 
     // ── Helpers ──
 
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (!exchange.Properties.TryGetValue("TRANSACT_ACTION", out var raw) ||
-            raw is not ConcurrentDictionary<string, ITransactedAction> dict)
-        {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties["TRANSACT_ACTION"] = dict;
-        }
-
-        dict[key] = action;
-    }
 }

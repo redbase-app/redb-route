@@ -289,6 +289,57 @@ public class ProducerTemplateTests : IDisposable
     }
 
     [Fact]
+    public async Task RequestBody_Typed_ReplyThatDoesNotConvert_Throws()
+    {
+        await SetupConsumer("direct:typed-bad", exchange => exchange.Out = new Message("not-a-number"));
+        _template.Start();
+
+        var act = () => _template.RequestBody<int>("direct:typed-bad", "request");
+
+        await act.Should().ThrowAsync<InvalidCastException>("a reply that is not the asked type is an error, not a zero")
+            .WithMessage("*String*Int32*");
+    }
+
+    [Fact]
+    public async Task RequestBody_Typed_NullableTarget_ConvertsTheReply()
+    {
+        await SetupConsumer("direct:typed-nullable", exchange => exchange.Out = new Message("42"));
+        _template.Start();
+
+        var result = await _template.RequestBody<int?>("direct:typed-nullable", "request");
+
+        result.Should().Be(42);
+    }
+
+    // ── A reply that reads from resources of its exchange ──
+
+    private sealed class ExchangeBoundStream : IExchangeBoundBody;
+
+    [Fact]
+    public async Task RequestBody_ExchangeBoundReply_IsRefusedAtTheCall()
+    {
+        await SetupConsumer("direct:bound", exchange => exchange.Out = new Message(new ExchangeBoundStream()));
+        _template.Start();
+
+        var act = () => _template.RequestBody("direct:bound", "request");
+
+        await act.Should().ThrowAsync<InvalidOperationException>(
+                "RequestBody ends the exchange before it returns, and the body could no longer be read")
+            .WithMessage("*RequestAsync*");
+    }
+
+    [Fact]
+    public async Task RequestAsync_ExchangeBoundReply_IsReturnedWithItsExchange()
+    {
+        await SetupConsumer("direct:bound-async", exchange => exchange.Out = new Message(new ExchangeBoundStream()));
+        _template.Start();
+
+        await using var exchange = await _template.RequestAsync("direct:bound-async", new Exchange(new Message("request")));
+
+        exchange.Out!.Body.Should().BeOfType<ExchangeBoundStream>("the caller reads it, then disposes the exchange");
+    }
+
+    [Fact]
     public async Task RequestBody_SetsInOutPattern()
     {
         await SetupConsumer("direct:pattern");

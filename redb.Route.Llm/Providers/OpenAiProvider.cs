@@ -51,19 +51,21 @@ public sealed class OpenAiProvider : ILlmProvider
         _providerId = string.IsNullOrWhiteSpace(factory.Provider) ? "openai" : factory.Provider!.ToLowerInvariant();
     }
 
-    /// <summary>Convenience constructor that builds an internal HttpClient with the factory timeout.</summary>
+    /// <summary>
+    /// Convenience constructor that builds the package's default client: the factory timeout, HTTP/2 with keep-alive
+    /// pings while a request is in flight (a thinking model's call is minutes of silence on the wire).
+    /// </summary>
     public static OpenAiProvider Create(LlmConnectionFactory factory)
     {
         ArgumentNullException.ThrowIfNull(factory);
-        var http = new HttpClient
-        {
-            Timeout = TimeSpan.FromMilliseconds(Math.Max(1000, factory.RequestTimeoutMs))
-        };
-        return new OpenAiProvider(factory, http);
+        return new OpenAiProvider(factory, LlmHttpTransport.BuildClient(factory));
     }
 
     /// <inheritdoc />
     public string ProviderId => _providerId;
+
+    /// <summary>The client this provider sends through (tests read its transport defaults).</summary>
+    internal HttpClient Http => _http;
 
     /// <inheritdoc />
     public string ModelId => _factory.ModelId;
@@ -92,15 +94,18 @@ public sealed class OpenAiProvider : ILlmProvider
     };
 
     /// <inheritdoc />
-    public async Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
+    /// <remarks>Limited as a whole by <see cref="LlmConnectionFactory.RequestTimeoutMs"/>.</remarks>
+    public Task<LlmResponse> CompleteAsync(LlmRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        return LlmHttpTransport.WithinCallLimitAsync(_factory, _providerId, t => CompleteCoreAsync(request, t), ct);
+    }
 
+    private async Task<LlmResponse> CompleteCoreAsync(LlmRequest request, CancellationToken ct)
+    {
         var body = BuildRequestBody(request, stream: false);
-        using var http = new HttpRequestMessage(HttpMethod.Post, _endpoint)
-        {
-            Content = JsonContent.Create(body, options: JsonOpts)
-        };
+        using var http = LlmHttpTransport.NewRequest(_http, HttpMethod.Post, _endpoint);
+        http.Content = JsonContent.Create(body, options: JsonOpts);
         ApplyAuthHeaders(http);
 
         using var resp = await _http.SendAsync(http, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
@@ -120,10 +125,10 @@ public sealed class OpenAiProvider : ILlmProvider
     }
 
     /// <summary>
-    /// True OpenAI SSE streaming: yields one chunk per <c>data:</c> frame.
-    /// Text deltas surface as <see cref="LlmTextBlock"/>; tool calls are accumulated
-    /// per-index and emitted as a single complete <see cref="LlmToolUseBlock"/>
-    /// in the final chunk together with <c>StopReason</c> and <c>Usage</c>.
+    /// True OpenAI SSE streaming. Pieces are yielded as they arrive: visible text as <see cref="LlmTextBlock"/>, the
+    /// model's reasoning (<c>reasoning_content</c>, <c>reasoning</c>) as <see cref="LlmThinkingBlock"/>. The last chunk
+    /// carries the completed tool calls and <see cref="LlmStreamChunk.Response"/>: the stream assembled into the JSON a
+    /// plain call returns and read by the same parser, so the streamed answer cannot differ from the plain one.
     /// </summary>
     public async IAsyncEnumerable<LlmStreamChunk> StreamAsync(
         LlmRequest request,
@@ -134,14 +139,14 @@ public sealed class OpenAiProvider : ILlmProvider
         var body = BuildRequestBody(request, stream: true);
         body["stream_options"] = new JsonObject { ["include_usage"] = true };
 
-        using var http = new HttpRequestMessage(HttpMethod.Post, _endpoint)
-        {
-            Content = JsonContent.Create(body, options: JsonOpts)
-        };
+        using var http = LlmHttpTransport.NewRequest(_http, HttpMethod.Post, _endpoint);
+        http.Content = JsonContent.Create(body, options: JsonOpts);
         http.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         ApplyAuthHeaders(http);
 
-        using var resp = await _http.SendAsync(http, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        // RequestTimeoutMs covers the whole call, the stream included; StreamIdleTimeoutMs the waits on the provider.
+        using var call = new LlmStreamCall(_factory, _providerId, ct);
+        using var resp = await call.SendAsync(_http, http).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
         {
             var raw = await SafeReadAsync(resp, ct).ConfigureAwait(false);
@@ -151,52 +156,62 @@ public sealed class OpenAiProvider : ILlmProvider
                 raw);
         }
 
-        using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var stream = await call.OpenAsync(resp).ConfigureAwait(false);
         using var reader = new StreamReader(stream);
 
+        var content = new System.Text.StringBuilder();
+        var reasoningContent = new System.Text.StringBuilder();
+        var reasoning = new System.Text.StringBuilder();
         var toolCalls = new SortedDictionary<int, ToolCallAccumulator>();
-        LlmStopReason? finalStop = null;
+        string? responseId = null;
+        string? fingerprint = null;
         string? rawStop = null;
-        LlmUsage? finalUsage = null;
+        JsonObject? usage = null;
 
-        while (!reader.EndOfStream)
+        while (await call.ReadLineAsync(reader).ConfigureAwait(false) is { } line)
         {
-            ct.ThrowIfCancellationRequested();
-            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
-            if (line is null) break;
-            if (line.Length == 0) continue;
+            // Blank lines end an event, ':' lines are comments (keep-alives), 'event:' / 'id:' carry nothing here.
             if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
 
-            var payload = line.AsSpan(5).TrimStart().ToString();
+            var payload = line.AsSpan(5).Trim().ToString();
             if (payload.Length == 0) continue;
             if (payload == "[DONE]") break;
 
-            JsonObject? frame;
-            try { frame = JsonNode.Parse(payload) as JsonObject; }
-            catch (JsonException) { continue; }
-            if (frame is null) continue;
+            var frame = LlmStreamFrames.Read(_providerId, payload);
+            if (frame["error"] is JsonObject error)
+                throw new HttpRequestException(
+                    $"{_providerId}: the stream reported an error: {LlmStreamFrames.Shown(error.ToJsonString())}");
 
-            // Some providers attach usage on a terminal usage-only frame (no choices).
-            if (frame["usage"] is JsonObject uObj)
-            {
-                var inT = uObj["prompt_tokens"]?.GetValue<int>() ?? 0;
-                var outT = uObj["completion_tokens"]?.GetValue<int>() ?? 0;
-                finalUsage = new LlmUsage(inT, outT);
-            }
+            responseId ??= LlmStreamFrames.Text(frame["id"]);
+            fingerprint ??= LlmStreamFrames.Text(frame["system_fingerprint"]);
 
-            if (frame["choices"] is not JsonArray choices || choices.Count == 0) continue;
-            var choice = choices[0]?.AsObject();
-            if (choice is null) continue;
+            // Usage comes on a terminal usage-only frame (no choices); kept whole, so the plain parser reads it.
+            if (frame["usage"] is JsonObject frameUsage)
+                usage = (JsonObject)frameUsage.DeepClone();
 
-            var delta = choice["delta"]?.AsObject();
+            if (frame["choices"] is not JsonArray { Count: > 0 } choices || choices[0] is not JsonObject choice) continue;
+
+            var delta = choice["delta"] as JsonObject;
             var emitted = new List<LlmContentBlock>();
 
             if (delta is not null)
             {
-                if (delta["content"] is JsonValue cv
-                    && cv.TryGetValue<string>(out var deltaText)
-                    && !string.IsNullOrEmpty(deltaText))
+                // Reasoning before text, the order a plain answer lists them in.
+                if (LlmStreamFrames.Text(delta["reasoning_content"]) is { Length: > 0 } reasoningPiece)
                 {
+                    reasoningContent.Append(reasoningPiece);
+                    emitted.Add(new LlmThinkingBlock(reasoningPiece));
+                }
+
+                if (LlmStreamFrames.Text(delta["reasoning"]) is { Length: > 0 } otherReasoningPiece)
+                {
+                    reasoning.Append(otherReasoningPiece);
+                    emitted.Add(new LlmThinkingBlock(otherReasoningPiece));
+                }
+
+                if (LlmStreamFrames.Text(delta["content"]) is { Length: > 0 } deltaText)
+                {
+                    content.Append(deltaText);
                     emitted.Add(new LlmTextBlock(deltaText));
                 }
 
@@ -220,38 +235,73 @@ public sealed class OpenAiProvider : ILlmProvider
                 }
             }
 
-            if (choice["finish_reason"] is JsonValue fv
-                && fv.TryGetValue<string>(out var rs)
-                && !string.IsNullOrEmpty(rs))
-            {
-                rawStop = rs;
-                finalStop = rs switch
-                {
-                    "stop" => LlmStopReason.EndTurn,
-                    "tool_calls" => LlmStopReason.ToolUse,
-                    "length" => LlmStopReason.MaxTokens,
-                    _ => LlmStopReason.Other
-                };
-            }
+            if (LlmStreamFrames.Text(choice["finish_reason"]) is { Length: > 0 } finishReason)
+                rawStop = finishReason;
 
             if (emitted.Count > 0)
                 yield return new LlmStreamChunk(emitted, StopReason: null, Usage: null);
         }
 
-        // Terminal chunk: completed tool calls + stop reason + usage.
-        var finalBlocks = new List<LlmContentBlock>();
-        foreach (var kv in toolCalls)
-        {
-            finalBlocks.Add(new LlmToolUseBlock(
-                kv.Value.Id ?? Guid.NewGuid().ToString("N"),
-                kv.Value.Name ?? string.Empty,
-                kv.Value.ArgsBuffer.Length == 0 ? "{}" : kv.Value.ArgsBuffer.ToString()));
-        }
+        // Without a finish_reason the model never said it was done: the connection ended mid-answer, and handing the
+        // pieces on as a finished answer would store a cut one.
+        if (rawStop is null)
+            throw new InvalidOperationException(
+                $"{_providerId}: the stream ended before the model said why it stopped (no finish_reason); the answer is cut.");
+
+        var response = ParseResponse(AssemblePlainJson(
+            responseId, fingerprint, content, reasoningContent, reasoning, toolCalls, rawStop, usage));
 
         yield return new LlmStreamChunk(
-            finalBlocks,
-            finalStop ?? LlmStopReason.EndTurn,
-            finalUsage ?? LlmUsage.Empty);
+            [.. response.Content.OfType<LlmToolUseBlock>()],
+            response.StopReason,
+            response.Usage)
+        {
+            Response = response
+        };
+    }
+
+    /// <summary>The JSON a plain call returns for the answer a stream delivered in pieces.</summary>
+    private static JsonObject AssemblePlainJson(
+        string? responseId, string? fingerprint,
+        System.Text.StringBuilder content, System.Text.StringBuilder reasoningContent, System.Text.StringBuilder reasoning,
+        SortedDictionary<int, ToolCallAccumulator> toolCalls, string rawStop, JsonObject? usage)
+    {
+        var message = new JsonObject { ["role"] = "assistant" };
+        if (content.Length > 0) message["content"] = content.ToString();
+        if (reasoningContent.Length > 0) message["reasoning_content"] = reasoningContent.ToString();
+        if (reasoning.Length > 0) message["reasoning"] = reasoning.ToString();
+
+        if (toolCalls.Count > 0)
+        {
+            var calls = new JsonArray();
+            foreach (var call in toolCalls.Values)
+            {
+                calls.Add(new JsonObject
+                {
+                    ["id"] = call.Id,
+                    ["type"] = "function",
+                    ["function"] = new JsonObject
+                    {
+                        ["name"] = call.Name,
+                        ["arguments"] = call.ArgsBuffer.Length == 0 ? "{}" : call.ArgsBuffer.ToString()
+                    }
+                });
+            }
+            message["tool_calls"] = calls;
+        }
+
+        return new JsonObject
+        {
+            ["id"] = responseId,
+            ["system_fingerprint"] = fingerprint,
+            ["choices"] = new JsonArray(new JsonObject
+            {
+                ["index"] = 0,
+                ["message"] = message,
+                ["finish_reason"] = rawStop
+            }),
+            ["usage"] = usage
+        };
     }
 
     private sealed class ToolCallAccumulator

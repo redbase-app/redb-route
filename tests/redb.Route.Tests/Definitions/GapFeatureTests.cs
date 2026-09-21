@@ -238,16 +238,17 @@ public class GapFeatureTests : IAsyncDisposable
 
         var producer = _context.GetEndpoint("direct://rb-in").CreateProducer();
         await producer.Start();
-        await producer.Process(new Exchange(new Message("data")));
+        var exchange = new Exchange(new Message("data"));
+        await producer.Process(exchange);
 
         action1.RolledBack.Should().BeTrue();
         action2.RolledBack.Should().BeTrue();
         action1.Committed.Should().BeFalse();
         action2.Committed.Should().BeFalse();
 
-        received.Should().NotBeNull();
-        received!.Properties.Should().ContainKey("RollbackOnly");
-        received.Properties["RollbackOnly"].Should().Be(true);
+        // Camel's markRollbackOnly(): the exchange is marked and the route stops there.
+        exchange.IsRollbackOnly().Should().BeTrue();
+        received.Should().BeNull("the route stops at .RollbackAll()");
     }
 
     [Fact]
@@ -271,10 +272,11 @@ public class GapFeatureTests : IAsyncDisposable
 
         var producer = _context.GetEndpoint("direct://rb-empty-in").CreateProducer();
         await producer.Start();
-        await producer.Process(new Exchange(new Message("data")));
+        var exchange = new Exchange(new Message("data"));
+        await producer.Process(exchange);   // no error
 
-        received.Should().NotBeNull();
-        received!.Properties.Should().ContainKey("RollbackOnly");
+        exchange.IsRollbackOnly().Should().BeTrue();
+        received.Should().BeNull("the route stops at .RollbackAll()");
     }
 
     [Fact]

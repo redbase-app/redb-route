@@ -1,3 +1,4 @@
+using System.Reflection;
 using Confluent.Kafka;
 using redb.Route.Core;
 
@@ -62,11 +63,10 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     /// <summary>
     /// Framework-level auto-commit: when <c>true</c> (default), the consumer commits the offset
     /// inline right after a successful <c>Process</c> — at-least-once settle, mirroring the
-    /// RabbitMQ consumer's post-process ack. When a transactional route
-    /// (<c>.Transacted()</c> / <c>.CommitTransaction()</c>) already committed the offset via the
-    /// deferred <c>ITransactedAction</c>, the inline commit is skipped and the transaction owns
-    /// the commit — i.e. this flag is effectively ignored inside a transactional route.
-    /// Set <c>false</c> to never commit inline (commit only at a transaction boundary).
+    /// RabbitMQ consumer's post-process ack. When a Kafka-transactional producer of the same cluster
+    /// (<see cref="TransactionalIdPrefix"/>) in the route's <c>.Transacted()</c> block committed the
+    /// offset in its transaction, the inline commit is skipped: exactly-once within Kafka.
+    /// Set <c>false</c> to never commit inline, nor let a transaction commit the offset.
     /// <para>Note: this is NOT librdkafka's <c>enable.auto.commit</c> (a background timer that can
     /// commit un-processed offsets); the underlying client stays at manual commit always.</para>
     /// </summary>
@@ -103,19 +103,29 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     public string? PartitionAssignmentStrategy { get; set; }
 
     /// <summary>
-    /// Isolation level: ReadUncommitted, ReadCommitted. ReadCommitted hides records of aborted
-    /// transactions written by EOS producers elsewhere; this connector itself is at-least-once
-    /// (see <see cref="Transacted"/>).
+    /// Isolation level: ReadUncommitted, ReadCommitted. Unset, librdkafka's default ReadCommitted: records of
+    /// aborted Kafka transactions (<see cref="TransactionalIdPrefix"/> producers) are not delivered, and records of
+    /// open ones wait for their commit.
     /// </summary>
     public string? IsolationLevel { get; set; }
 
     // ── Producer ──
 
-    /// <summary>Acknowledgment level: None, Leader, All.</summary>
-    public string Acks { get; set; } = "Leader";
+    /// <summary>
+    /// Acknowledgment level: None, Leader, All. Default All, as in the Kafka 3 client and Camel 4: a send is confirmed
+    /// once every in-sync replica has it, which also allows the idempotent producer.
+    /// </summary>
+    public string Acks { get; set; } = "All";
 
     /// <summary>Number of retries for failed sends.</summary>
     public int Retries { get; set; } = 3;
+
+    /// <summary>
+    /// Idempotent producer (<c>enable.idempotence</c>): the broker does not write a retried send twice. Unset, it follows
+    /// the effective <c>acks</c>: on with <c>all</c>, off otherwise. <c>true</c> requires <c>acks=all</c>;
+    /// <c>transacted=true</c> turns it on.
+    /// </summary>
+    public bool? EnableIdempotence { get; set; }
 
     /// <summary>Write delivery metadata to exchange headers after send.</summary>
     public bool RecordMetadata { get; set; }
@@ -127,12 +137,24 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     public int? PartitionNumber { get; set; }
 
     /// <summary>
-    /// Idempotent producer whose send is deferred to the route's transaction boundary
-    /// (<c>.Transacted()</c> / <c>.CommitTransaction()</c>) — at-least-once, <b>not</b> Kafka
-    /// exactly-once. No <c>transactional.id</c> is configured and no <c>InitTransactions</c> is
-    /// called; the why and the path to real EOS live in <c>docs/KAFKA_TRANSACTIONS_TODO.md</c>.
+    /// Whether the send joins the enclosing transaction block (<c>.Transacted()</c> /
+    /// <c>.BeginTransaction()</c> ... <c>.CommitTransaction()</c>). Unset, it follows the block: deferred until the
+    /// database commits inside one, sent at once outside. <c>true</c> requires a block, fails outside one and also
+    /// makes the producer idempotent; <c>false</c> sends at once even inside a block. On its own this is at-least-once:
+    /// the deferred sends go out one after the other. Kafka transactions are <see cref="TransactionalIdPrefix"/>.
     /// </summary>
-    public bool Transacted { get; set; }
+    public bool? Transacted { get; set; }
+
+    /// <summary>
+    /// Switches the producer to Kafka transactions (<c>transactional.id</c> + <c>InitTransactions</c>). The sends it
+    /// defers in a <c>.Transacted()</c> block commit as one Kafka transaction when the block commits — all of them or none
+    /// — and when the route started from a Kafka consumer of the same cluster, the consumed offset commits in that same
+    /// transaction (<c>SendOffsetsToTransaction</c>): exactly-once within Kafka. A send outside a block is a transaction
+    /// of its own. The value is a prefix: the connector appends the machine name, the process id and the producer's
+    /// number, so every producer gets an id of its own and nodes deploying the same configuration never fence each
+    /// other. Requires <c>acks=all</c> and idempotence (both turned on); unset, the producer is not transactional.
+    /// </summary>
+    public string? TransactionalIdPrefix { get; set; }
 
     // ── Producer tuning ──
 
@@ -175,7 +197,32 @@ public sealed class KafkaEndpointOptions : EndpointOptions
         }
 
         KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.AutoOffsetReset>(AutoOffsetReset, "autoOffsetReset");
-        KafkaOptionParsers.ParseAcks(Acks);
+        var acks = KafkaOptionParsers.ParseAcks(Acks);
+        if (EnableIdempotence == true && acks != Confluent.Kafka.Acks.All)
+            throw new ArgumentException(
+                $"'enableIdempotence=true' requires 'acks=all', and acks is '{Acks}': the broker cannot drop a " +
+                "duplicate it has not confirmed on every replica. Set acks=all, or leave enableIdempotence unset.");
+        if (Transacted == true && acks != Confluent.Kafka.Acks.All)
+            throw new ArgumentException(
+                $"'transacted=true' makes the producer idempotent, which requires 'acks=all', and acks is '{Acks}'. " +
+                "Set acks=all, or drop transacted=true.");
+        if (TransactionalIdPrefix is not null)
+        {
+            if (string.IsNullOrWhiteSpace(TransactionalIdPrefix))
+                throw new ArgumentException("'transactionalIdPrefix' is empty: give the producer a name, or leave it unset.");
+            if (acks != Confluent.Kafka.Acks.All)
+                throw new ArgumentException(
+                    $"'transactionalIdPrefix' makes the producer transactional, which requires 'acks=all', and acks is " +
+                    $"'{Acks}'. Set acks=all, or drop transactionalIdPrefix.");
+            if (EnableIdempotence == false)
+                throw new ArgumentException(
+                    "'transactionalIdPrefix' makes the producer transactional, and a transactional producer is " +
+                    "idempotent: 'enableIdempotence=false' contradicts it.");
+        }
+        if (AdditionalProperties.ContainsKey("transactional.id"))
+            throw new ArgumentException(
+                "'transactional.id' in additionalProperties puts librdkafka into transactional mode without the " +
+                "connector opening transactions, and every send fails with 'Erroneous state'. Use transactionalIdPrefix.");
         if (!string.IsNullOrEmpty(IsolationLevel))
             KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.IsolationLevel>(IsolationLevel, "isolationLevel");
         if (!string.IsNullOrEmpty(PartitionAssignmentStrategy))
@@ -200,6 +247,25 @@ public sealed class KafkaEndpointOptions : EndpointOptions
 
         if (Retries < 0)
             throw new ArgumentOutOfRangeException(nameof(Retries), Retries, "Retries cannot be negative.");
+
+        // The core binder leaves a parameter it cannot place — a name no option has, or a value that does not convert to
+        // the option's type — among the unmapped parameters, where nothing reads it: a typo would drop the option without
+        // a word (a misspelt transactionalIdPrefix leaves the producer without transactions). Each one is refused, by name
+        // only: the value may be a secret.
+        if (UnmappedParameters.Count > 0)
+            throw new ArgumentException(
+                string.Join(" ", UnmappedParameters.Keys.Select(DescribeUnmapped)), UnmappedParameters.Keys.First());
+    }
+
+    private static string DescribeUnmapped(string name)
+    {
+        var option = Array.Find(typeof(KafkaEndpointOptions).GetProperties(BindingFlags.Public | BindingFlags.Instance),
+            p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (option is null)
+            return $"'{name}' is not an option of the Kafka endpoint, so it would be dropped without a word.";
+
+        var type = Nullable.GetUnderlyingType(option.PropertyType) ?? option.PropertyType;
+        return $"'{name}': the value is not a {type.Name}, so the option would be dropped without a word.";
     }
 
     // ── Config builders (internal) ──
@@ -269,16 +335,17 @@ public sealed class KafkaEndpointOptions : EndpointOptions
             ApplySsl(config);
         }
 
+        // Idempotence follows the effective acks unless the endpoint says otherwise (acks=all, the default, turns it on,
+        // as in the Kafka 3 client). Set before the tuning, so additionalProperties still has the last word.
+        config.EnableIdempotence = EnableIdempotence ?? config.Acks == Confluent.Kafka.Acks.All;
+
         ApplyProducerTuning(config);
 
-        if (Transacted)
+        if (Transacted == true || TransactionalIdPrefix is not null)
         {
-            // Deliberately NOT setting TransactionalId here. With a transactional.id configured,
-            // librdkafka enters transactional mode and requires BeginTransaction before every
-            // Produce (closed by CommitTransaction / SendOffsetsToTransaction) — which this
-            // connector does not implement, so a deferred Produce throws `Local: Erroneous state`.
-            // `transacted=true` therefore means: an idempotent producer whose send is deferred to
-            // the route's transaction boundary — NOT Kafka EOS. See docs/KAFKA_TRANSACTIONS_TODO.md.
+            // `transacted=true` is an idempotent producer whose send is deferred to the route's transaction boundary.
+            // The transactional.id of a Kafka-transactional producer is set by the producer itself (KafkaProducer),
+            // which appends its own identity to TransactionalIdPrefix: every producer instance needs an id of its own.
             config.EnableIdempotence = true;
             config.Acks = Confluent.Kafka.Acks.All; // required for the idempotent producer
         }

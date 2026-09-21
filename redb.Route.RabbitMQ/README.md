@@ -71,6 +71,23 @@ From("direct://outbound")
   (**at-least-once**: ack after a successful turn, nack-requeue on failure). Cannot be combined
   with `.Transacted()`.
 
+## Transactions
+
+- **Consumer.** `.Transacted()` takes deliveries on a transacted channel. Inside a route's
+  `.Transacted()` block the ack comes last, after the database and the deferred sends have committed.
+- **Producer.** Inside a route's `.Transacted()` block a publish **joins the transaction**: it goes
+  out once the database has committed and is dropped if the block rolls back. `.Transacted(false)`
+  publishes at once, outside the transaction; `.Transacted()` requires an enclosing block and fails
+  the step outside one. A request-reply producer (`.ReplyTo()`) always publishes at once and refuses
+  `.Transacted()`: a request held back until the commit would wait for a reply that cannot come.
+- **Several publishes in one block.** The deferred publishes of one producer in a block are committed
+  in one channel transaction, on a channel of the producer's own (a channel with publisher confirms
+  cannot run transactions): they arrive together, in order, or not at all. The producer's batches
+  take turns on that channel, and a channel transaction is markedly slower than publisher confirms.
+
+See the framework-wide **Transactions** guide (`TRANSACTIONS.md` in the
+[redb.Route repository](https://github.com/redbase-app/redb)).
+
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET

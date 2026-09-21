@@ -24,6 +24,53 @@ public abstract class GenericFileEndpointOptions : EndpointOptions
     /// <summary>Glob pattern to exclude files (e.g. "*.tmp,.*"). Empty = exclude nothing.</summary>
     public string Exclude { get; set; } = "";
 
+    /// <summary>
+    /// Ant-style patterns over the path relative to the polled directory, several separated by
+    /// commas: <c>TYPE_A/outbox/*.csv,TYPE_B/outbox/*.csv</c>. Unlike <see cref="Include"/>, which
+    /// only ever sees a file name, this is how a recursive poll names the directories it wants.
+    /// Empty = every path. Requires <see cref="Recursive"/> to reach anything below the top level.
+    /// </summary>
+    public string AntInclude { get; set; } = "";
+
+    /// <summary>
+    /// Ant-style patterns over the relative path that drop a file: <c>archive/**,**/*.tmp</c>.
+    /// Applied after <see cref="AntInclude"/>. Empty = drop nothing.
+    /// </summary>
+    public string AntExclude { get; set; } = "";
+
+    /// <summary>
+    /// Whether <see cref="AntInclude"/> and <see cref="AntExclude"/> respect case. (default: true,
+    /// as in Apache Camel — a remote path is case-sensitive even when the local file system is not)
+    /// </summary>
+    public bool AntFilterCaseSensitive { get; set; } = true;
+
+    /// <summary>
+    /// Condition deciding whether a subdirectory is walked into, evaluated against the directory's
+    /// own headers while the listing runs — a directory turned down here is never listed, which is
+    /// what makes a poll over a partner tree of two hundred directories affordable. Empty = walk
+    /// into every subdirectory. Only consulted when <see cref="Recursive"/> is on.
+    /// </summary>
+    public string FilterDirectory { get; set; } = "";
+
+    /// <summary>
+    /// Condition deciding whether a polled file is taken, evaluated against the file's headers
+    /// before anything reads or moves it (e.g. <c>header.redbFile.Length &gt; 1024</c>).
+    /// Empty = take every file the other filters left.
+    /// </summary>
+    public string FilterFile { get; set; } = "";
+
+    /// <summary>
+    /// Name of an <see cref="IGenericFileFilter"/> in the route registry (<c>filter=#myFilter</c>),
+    /// for a decision that needs code rather than a condition string. Resolved by the component.
+    /// </summary>
+    public string Filter { get; set; } = "";
+
+    /// <summary>
+    /// The filter bean itself, put here by the component once it resolved <see cref="Filter"/> from
+    /// the registry. Set it directly when the route is built in code and has no registry entry.
+    /// </summary>
+    public IGenericFileFilter? FilterInstance { get; set; }
+
     /// <summary>Whether to recurse into subdirectories. (default: false)</summary>
     public bool Recursive { get; set; }
 

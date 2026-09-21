@@ -9,5 +9,9 @@
     <PackageReference Include="AWSSDK.S3" Version="4.0.103.3" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- One span capture for the smoke tests: the test root trace keeps parallel test classes out. -->
+    <Compile Include="../Shared/SpanCapture.cs" Link="Shared/SpanCapture.cs" />
+  </ItemGroup>
 </Project>
 

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -18,6 +19,24 @@ public sealed class HttpSseMcpClient : McpClientBase
 
     private CancellationTokenSource? _sseCts;
     private Task? _ssePump;
+
+    /// <summary>The client this transport sends through (tests read its transport defaults).</summary>
+    internal HttpClient Http => _http;
+
+    /// <summary>
+    /// Transport of the client this class creates itself: HTTP/2 keep-alive pings every 15 seconds while a request
+    /// is in flight. The SSE stream stays open and can be silent between events for minutes, and VPN tunnels, NAT
+    /// and proxies drop a connection that is silent for about 50 seconds. A copy of
+    /// <c>redb.Route.Llm.Providers.LlmHttpTransport.BuildHandler</c> (this package does not reference
+    /// redb.Route.Llm): change both together. A client the host passes in is used as it is.
+    /// </summary>
+    private static SocketsHttpHandler BuildKeepAliveHandler() => new()
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        KeepAlivePingDelay = TimeSpan.FromSeconds(15),
+        KeepAlivePingTimeout = TimeSpan.FromSeconds(20),
+        KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
+    };
 
     /// <summary>Creates a new HTTP+SSE MCP client.</summary>
     /// <param name="serverName">Logical server name.</param>
@@ -41,7 +60,13 @@ public sealed class HttpSseMcpClient : McpClientBase
         }
         else
         {
-            _http = new HttpClient { BaseAddress = new Uri(transport.BaseUrl, UriKind.Absolute) };
+            _http = new HttpClient(BuildKeepAliveHandler())
+            {
+                BaseAddress = new Uri(transport.BaseUrl, UriKind.Absolute),
+                // HTTP/2 when the server offers it, so the keep-alive pings have a frame to ride on.
+                DefaultRequestVersion = HttpVersion.Version20,
+                DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+            };
             _ownsHttpClient = true;
         }
 
@@ -89,7 +114,13 @@ public sealed class HttpSseMcpClient : McpClientBase
     {
         try
         {
-            using var req = new HttpRequestMessage(HttpMethod.Get, _transport.BaseUrl);
+            // A hand-built request starts at HTTP/1.1 whatever the client asks for; carry the client's version over,
+            // or the keep-alive pings never run on the stream.
+            using var req = new HttpRequestMessage(HttpMethod.Get, _transport.BaseUrl)
+            {
+                Version = _http.DefaultRequestVersion,
+                VersionPolicy = _http.DefaultVersionPolicy,
+            };
             req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
             using var response = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);

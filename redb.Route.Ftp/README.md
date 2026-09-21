@@ -188,6 +188,7 @@ Uses `FtpEncryptionMode.Explicit`. Certificate validation is enabled by default.
 | **TLS** | `.UseFtps()`, `.ValidateCertificate()` |
 | **Reconnect** | `.MaximumReconnectAttempts()`, `.ReconnectDelay()`, `.Disconnect()` |
 | **Consumer** | `.Delay()`, `.InitialDelay()`, `.Include()`, `.Exclude()`, `.Recursive()`, `.MaxDepth()`, `.MinDepth()`, `.SortBy()`, `.MaxMessagesPerPoll()`, `.MinAge()`, `.MaxAge()` |
+| **Path filters** | `.AntInclude()`, `.AntExclude()`, `.AntFilterCaseSensitive()`, `.FilterDirectory()`, `.FilterFile()`, `.Filter()` — see [the base package](../redb.Route.GenericFile/README.md#path-filters) |
 | **Poll backoff** | `.BackoffMultiplier()`, `.BackoffIdleThreshold()`, `.BackoffErrorThreshold()`, `.BackoffOnFailedExchanges()` |
 | **Post-process** | `.Noop()`, `.Delete()`, `.MoveTo()`, `.MoveExisting()`, `.PreMove()`, `.MoveFailed()` |
 | **Idempotency** | `.Idempotent()`, `.DoneFileName()` |
@@ -229,6 +230,12 @@ Most builder methods accept both constant values and `IExpression` for runtime r
 | `initialDelay` | `1000` | Delay before first poll (ms) |
 | `include` | — | Glob include pattern (e.g. `*.csv,*.xml`) |
 | `exclude` | — | Glob exclude pattern |
+| `antInclude` | — | Ant patterns over the path relative to the polled directory (`TYPE_A/outbox/*.csv`): `*` stops at a separator, `**` spans levels. This is what picks directories out of a recursive poll |
+| `antExclude` | — | Ant patterns over the relative path that drop a file (`archive/**`) |
+| `antFilterCaseSensitive` | `true` | Whether the Ant patterns respect case |
+| `filterDirectory` | — | Condition over a subdirectory, evaluated before it is listed; false leaves it and everything below unread |
+| `filterFile` | — | Condition over a polled file, evaluated before it is read, moved or deleted |
+| `filter` | — | Name of an `IGenericFileFilter` in the registry (`#myFilter`) deciding for files and directories |
 | `recursive` | `false` | Recurse into subdirectories |
 | `maxDepth` | `0` | Max recursion depth (0 = unlimited) |
 | `minDepth` | `0` | Min depth for file selection |

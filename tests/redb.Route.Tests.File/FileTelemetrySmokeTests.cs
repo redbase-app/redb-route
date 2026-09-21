@@ -1,10 +1,9 @@
 using System.Diagnostics;
-using OpenTelemetry;
-using OpenTelemetry.Trace;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.File;
 using redb.Route.Telemetry;
+using redb.Route.Tests.Shared;
 
 namespace redb.Route.Tests.File;
 
@@ -33,17 +32,13 @@ public sealed class FileTelemetrySmokeTests : IDisposable
         var endpoint = (FileEndpoint)component.CreateEndpoint(uri);
         var producer = (FileProducer)endpoint.CreateProducer();
 
-        var activities = new List<Activity>();
-        using var tracer = Sdk.CreateTracerProviderBuilder()
-            .AddSource(RouteActivitySource.SourceName)
-            .AddInMemoryExporter(activities)
-            .Build()!;
+        using var capture = new SpanCapture();   // this test's spans only
 
         var message = new Message { Body = System.Text.Encoding.UTF8.GetBytes("hi") };
         message.Headers[FileHeaders.FileName] = "smoke.txt";
         await producer.Process(new Exchange(message) { Pattern = ExchangePattern.InOnly });
 
-        tracer.ForceFlush(1000);
+        var activities = capture.Spans;
         activities.Should().NotBeEmpty();
         var activity = activities.First();
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);

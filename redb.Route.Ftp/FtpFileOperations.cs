@@ -95,11 +95,12 @@ internal sealed class FtpFileOperations : IRemoteFileOperations
     /// <inheritdoc />
     public async Task<List<GenericFileInfo>> ListFilesAsync(
         string directory, bool recursive, int maxDepth, int minDepth,
+        Func<string, string, bool>? directoryFilter = null,
         CancellationToken ct = default)
     {
         var client = RequireClient();
         var result = new List<GenericFileInfo>();
-        await EnumerateFilesAsync(client, directory, directory, 0, recursive, maxDepth, minDepth, result, ct)
+        await EnumerateFilesAsync(client, directory, directory, 0, recursive, maxDepth, minDepth, directoryFilter, result, ct)
             .ConfigureAwait(false);
         return result;
     }
@@ -107,6 +108,7 @@ internal sealed class FtpFileOperations : IRemoteFileOperations
     private async Task EnumerateFilesAsync(
         AsyncFtpClient client, string dirPath, string basePath,
         int depth, bool recursive, int maxDepth, int minDepth,
+        Func<string, string, bool>? directoryFilter,
         List<GenericFileInfo> result, CancellationToken ct)
     {
         FtpListItem[] items;
@@ -126,7 +128,12 @@ internal sealed class FtpFileOperations : IRemoteFileOperations
                 if (recursive && (maxDepth == 0 || depth < maxDepth))
                 {
                     var subPath = CombinePath(dirPath, item.Name);
-                    await EnumerateFilesAsync(client, subPath, basePath, depth + 1, recursive, maxDepth, minDepth, result, ct)
+
+                    // Asked before the descent: a directory turned down here costs no listing.
+                    if (directoryFilter != null && !directoryFilter(subPath, GetRelativePath(basePath, subPath)))
+                        continue;
+
+                    await EnumerateFilesAsync(client, subPath, basePath, depth + 1, recursive, maxDepth, minDepth, directoryFilter, result, ct)
                         .ConfigureAwait(false);
                 }
             }

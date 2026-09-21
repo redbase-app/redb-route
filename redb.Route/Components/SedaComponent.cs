@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Transactions;
 
 namespace redb.Route.Components;
 
@@ -119,6 +120,9 @@ public class SedaProducer : IProducer
         // Clone to ensure thread-safety: the pipeline thread and the SEDA worker
         // must not share a mutable exchange. Clone also creates a new DI scope.
         var copy = exchange.Clone();
+        // The copy runs later on the SEDA worker, a unit of work of its own: it must not see the sending
+        // .Transacted() block as its own.
+        TransactedActions.DetachFromBlock(copy);
         try
         {
             await _endpoint.Queue.Writer.WriteAsync(copy, ct).ConfigureAwait(false);

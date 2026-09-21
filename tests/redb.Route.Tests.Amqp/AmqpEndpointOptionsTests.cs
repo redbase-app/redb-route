@@ -34,7 +34,7 @@ public sealed class AmqpEndpointOptionsTests
         opts.GroupId.Should().BeNull();
         opts.ReplyTo.Should().BeFalse();
         opts.Timeout.Should().Be(30);
-        opts.Transacted.Should().BeFalse();
+        opts.Transacted.Should().BeNull("unset, a producer follows the enclosing .Transacted() block");
         opts.Declare.Should().BeFalse();
         opts.RoutingType.Should().Be("ANYCAST");
     }

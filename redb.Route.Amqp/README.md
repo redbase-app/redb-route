@@ -51,7 +51,33 @@ From(Amqp.Address("orders")
 | **Connection** | `.Host()`, `.Port()`, `.User()`, `.Password()`, `.ContainerId()`, `.VirtualHost()`, `.Ssl()`, `.ConnectionFactory()` |
 | **Link** | `.Durable()`, `.ExpiryPolicy()`, `.TerminusTimeout()`, `.DistributionMode()`, `.Dynamic()`, `.FilterSelector()`, `.Capabilities()`, `.SenderSettleMode()`, `.ReceiverSettleMode()` |
 | **Consumer** | `.Credit()`, `.AutoAccept()`, `.ConcurrentConsumers()`, `.ReceiveTimeout()` |
-| **Producer** | `.MessageDurable()`, `.MessagePriority()`, `.MessageTtl()`, `.ContentType()`, `.Subject()`, `.GroupId()`, `.ReplyTo()`, `.Timeout()`, `.Transacted()`, `.Declare()`, `.RoutingType()` |
+| **Producer** | `.MessageDurable()`, `.MessagePriority()`, `.MessageTtl()`, `.ContentType()`, `.Subject()`, `.GroupId()`, `.ReplyTo()`, `.Timeout()`, `.Transacted()`, `.LocalTransactions()`, `.Declare()`, `.RoutingType()` |
+
+## Transactions
+
+Inside a route's `.Transacted()` block a send **joins the transaction**: it goes out once the database has committed
+and is dropped if the block rolls back. `.Transacted(false)` sends at once, outside the transaction; `.Transacted()`
+requires an enclosing block and fails the step outside one. A request-reply producer (`.ReplyTo()`) always sends at
+once and refuses `.Transacted()`.
+
+The AMQP client would enlist a send in the ambient `System.Transactions` transaction by itself. The connector never
+lets it: a send that leaves at once runs with the ambient transaction suppressed and a deferred one after the
+transaction closed, so the broker never becomes a second resource next to the database. See the framework-wide
+**Transactions** guide (`TRANSACTIONS.md` in the [redb.Route repository](https://github.com/redbase-app/redb)).
+
+### Several sends in one block: `localTransactions`
+
+By default the sends a producer deferred in a block go out one after the other: a failure part-way leaves the earlier
+ones sent. With `localTransactions=true` (`.LocalTransactions()`) they commit in one **AMQP local transaction**: the
+connector opens a link to the broker's transaction coordinator, declares a transaction, sends every message carrying
+it and discharges it once — all of them arrive, or none. A send that cannot complete (the broker refuses it, or does
+not settle it within `timeout` seconds — Artemis withholds credit on a full address) discharges the transaction as
+failed, and the block's commit fails. The producer's transactions take turns on its link.
+
+The broker must support AMQP local transactions: ActiveMQ Artemis, Apache Qpid, Azure Service Bus do; RabbitMQ's AMQP
+1.0 plugin does not, and a broker that refuses the coordinator fails the commit with that said. The client's own
+`System.Transactions` support is not used: its discharge never got an answer from Artemis, while the same transaction
+driven through the protocol's own frames is answered at once.
 
 ## Part of
 

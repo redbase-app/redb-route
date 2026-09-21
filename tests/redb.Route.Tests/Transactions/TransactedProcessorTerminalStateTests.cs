@@ -3,6 +3,7 @@ using FluentAssertions;
 using NSubstitute;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Processors;
 using redb.Route.Transactions;
 using Xunit;
 
@@ -23,14 +24,12 @@ public class TransactedProcessorTerminalStateTests
         public Task Rollback(CancellationToken ct = default) { RolledBack = true; return Task.CompletedTask; }
     }
 
-    private static TrackingAction Register(IExchange exchange)
+    /// <summary>A transport step that defers <paramref name="action"/> inside the block, then the rest of the route.</summary>
+    private static IProcessor Sending(ITransactedAction action, IProcessor rest) => new DelegateProcessor(async (ex, ct) =>
     {
-        var dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-        var action = new TrackingAction();
-        dict["send-1"] = action;
-        exchange.Properties[TransactedProcessor.TransactActionPropertyKey] = dict;
-        return action;
-    }
+        TransactedActions.Register(ex, "send-1", action, "test-transport");
+        await rest.Process(ex, ct);
+    });
 
     [Fact]
     public async Task UnhandledExceptionLeftOnExchange_RollsBack_DoesNotCommit()
@@ -38,9 +37,9 @@ public class TransactedProcessorTerminalStateTests
         var inner = Substitute.For<IProcessor>();
         inner.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
             .Returns(ci => { ci.Arg<IExchange>().Exception = new InvalidOperationException("boom"); return Task.CompletedTask; });
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        var action = new TrackingAction();
+        var processor = new TransactedProcessor(Sending(action, inner), TransactionPolicy.Default);
         var exchange = new Exchange(new Message { Body = "x" });
-        var action = Register(exchange);
 
         await processor.Process(exchange);
 
@@ -61,9 +60,9 @@ public class TransactedProcessorTerminalStateTests
                 ex.ExceptionHandled = true;
                 return Task.CompletedTask;
             });
-        var processor = new TransactedProcessor(inner, TransactionPolicy.Default);
+        var action = new TrackingAction();
+        var processor = new TransactedProcessor(Sending(action, inner), TransactionPolicy.Default);
         var exchange = new Exchange(new Message { Body = "x" });
-        var action = Register(exchange);
 
         await processor.Process(exchange);
 

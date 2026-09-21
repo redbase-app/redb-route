@@ -26,7 +26,7 @@
 12. [URI parameter reference](#uri-parameter-reference)
 13. [Headers reference](#headers-reference)
 14. [Observability — headers, OTel, tsak.web](#observability--headers-otel-tsakweb)
-15. [Streaming responses (`?stream=true`)](#streaming-responses-streamtrue)
+15. [Streaming (`stream=calls` / `stream=body`)](#streaming-streamcalls--streambody)
 16. [Storage & Persistence](#storage--persistence)
 17. [Testing strategy](#testing-strategy)
 18. [Apache Camel comparison](#apache-camel-comparison)
@@ -518,7 +518,7 @@ Anthropic publishes an OpenAI-compatible endpoint that speaks the same `chat/com
 
 — and our universal `OpenAiProvider` handles requests, responses, tool calls, streaming and finish reasons identically. No new provider class, no Anthropic SDK, no separate retry logic.
 
-A native `AnthropicProvider` (Messages API) **also ships** alongside the OpenAI-compat path — `f.Provider = "anthropic"` resolves to it. It exists to consume features the OpenAI-compat surface flattens away — notably the **true Messages-API SSE stream** (`message_start` / `content_block_delta` / `message_stop`), which is what `?stream=true` against `provider=anthropic` delivers end-to-end via `HttpConsumer` / `WsConsumer`. **For non-streaming chat / tool-use, either path is fine.** Pick OpenAI-compat for vendor portability, pick native Anthropic for the streaming and Messages-API-only features (prompt caching, computer-use, fine-grained image blocks) as they land.
+A native `AnthropicProvider` (Messages API) **also ships** alongside the OpenAI-compat path — `f.Provider = "anthropic"` resolves to it. It exists to consume features the OpenAI-compat surface flattens away — notably the **true Messages-API SSE stream** (`message_start` / `content_block_delta` / `message_stop`), which is what `stream=body` against `provider=anthropic` delivers end-to-end via `HttpConsumer` / `WsConsumer`. **For non-streaming chat / tool-use, either path is fine.** Pick OpenAI-compat for vendor portability, pick native Anthropic for the streaming and Messages-API-only features (prompt caching, computer-use, fine-grained image blocks) as they land.
 
 ### Models
 
@@ -631,7 +631,7 @@ llm://<connectionFactoryName>
     &systemPromptRef=<literal | #registry-key>
     &initialBodyRef=<literal | #registry-key>     # consumer only
     &conversation=none|header|property
-    &stream=true                                   # producer only — HTTP→SSE, WS→per-frame
+    &stream=calls|body                             # producer only — calls: engine streams each call; body: HTTP→SSE, WS→per-frame
     &schedule=500ms|30s|5m|1h                      # consumer only
     &maxIterations=8
     &tools=*|name1,name2
@@ -672,7 +672,7 @@ llm://<connectionFactoryName>
 | `llm.tool.iterations` | How many loop steps the agent took. |
 | `llm.stop_reason` | `EndTurn`, `ToolUse`, `MaxTokens`, `Other`. |
 | `llm.raw_stop_reason` | Vendor-native value (`"stop"`, `"tool_calls"`, `"length"`, `"content_filter"`). |
-| `llm.streaming` | `true` when the response body is an `IAsyncEnumerable<string>` of token deltas. Set by `LlmProducer` when `?stream=true` is in effect; downstream transports branch on it (or on `Out.Body` shape) to pick a streaming wire frame. |
+| `llm.streaming` | `true` when the response body is an `IAsyncEnumerable<string>` of token deltas. Set by `LlmProducer` for `stream=body`; downstream transports branch on it (or on `Out.Body` shape) to pick a streaming wire frame. |
 | `llm.cost.usd` | Estimated cost of the call in USD (when the model has a known price). Carried into the SSE `event: done` trailer alongside the token / stop-reason fields. |
 
 These flow downstream like any other headers — `WireTap` them to your metrics pipeline, branch on them, log them, persist them.
@@ -693,17 +693,29 @@ The connector hooks into redb.Route's existing observability stack. Nothing extr
 
 ---
 
-## Streaming responses (`?stream=true`)
+## Streaming (`stream=calls` / `stream=body`)
 
-For user-facing chat surfaces a 4-second "please wait" before the assistant replies feels broken even when the total wall-clock is identical. The connector therefore ships a true token-by-token streaming path that runs **end-to-end** — from provider HTTP SSE through `LlmProducer` to the public HTTP or WebSocket consumer that fronts the route.
+Two modes, chosen with `stream=` on the URI (`.Stream(LlmStreamMode.Calls)` / `.Stream(LlmStreamMode.Body)` in the DSL):
 
-No new types, no new DSL shape: just `?stream=true` on the URI (or the `llm.streaming` header on the inbound exchange).
+- **`stream=calls`** — the agent engine makes every model call as a stream, **inside the route**. Tools, the conversation, the budget, approvals, the audit and the route's `.Transacted()` work exactly as without streaming. The pieces go to `IAgentObserver.OnDeltaAsync` as the model writes them, visible text and thinking marked apart; `Out.Body` is the final text. The connection carries data the whole time, so a long answer survives tunnels and proxies that cut a silent connection, over HTTP/1.1 too.
+- **`stream=body`** — `Out.Body` is an `IAsyncEnumerable<string>`, and the agent run — tools, conversation, budget, approvals, audit — happens **when the body is read**, after the route, the way a streamed SQL result is read. The visible text of every model call streams as the model writes it, for HTTP (SSE), WebSocket and gRPC consumers to forward; thinking stays out of the body.
+- Without `stream=` nothing is streamed. Any other value, `stream=true` included, is refused when the endpoint is created.
 
-### The wire contract
+Both modes are limited by `RequestTimeoutMs` as a whole call, and by `StreamIdleTimeoutMs` (off by default) for silence.
 
-When streaming is in effect, `LlmProducer.ProcessStreamingAsync` writes an `IAsyncEnumerable<string>` of provider token deltas into `exchange.Out.Body`, sets `Out.ContentType ??= "text/event-stream"` and `Out.Headers["llm.streaming"] = true`. Late-bound summary headers — `llm.tokens.in`, `llm.tokens.out`, `llm.stop_reason`, `llm.tool.iterations` — are populated **after** the enumerable completes (`llm.provider.id` and `llm.model.id` are populated up-front). Transports read these post-enumeration and surface them in a transport-appropriate way.
+### The wire contract (`stream=body`)
 
-> **Trade-off you should know.** The streaming producer path **does not run the agent tool-loop**. It calls `ILlmProvider.StreamAsync` directly and bypasses `AgentEngine` — which means tools are not dispatched, `AddRedbLlmStorage()` stores (`RedbConversationStore`, `RedbAuditObserver`, `RedbApprovalStore`, `RedbToolIdempotencyStore`, `RedbCostBudgetStore`) are not invoked, and governance hooks do not fire. Use `?stream=true` for user-facing rendering of a chat reply; use the non-streaming path when you need tools, persistence, approvals or budgets. Restoring full agent semantics over the streaming wire is on the Phase-2 list.
+For user-facing chat surfaces a 4-second "please wait" before the assistant replies feels broken even when the total wall-clock is identical. `stream=body` runs token by token **end-to-end** — from provider HTTP SSE through the agent engine to the public HTTP or WebSocket consumer that fronts the route.
+
+`LlmProducer` puts the lazy body into `exchange.Out.Body`, sets `Out.ContentType = "text/event-stream"` (whatever type the request carried) and `Out.Headers["llm.streaming"] = true`. Late-bound summary headers — `llm.tokens.in`, `llm.tokens.out`, `llm.stop_reason`, `llm.tool.iterations` — are populated **after** the run completes (`llm.provider.id` and `llm.model.id` are populated up-front). Transports read these post-enumeration and surface them in a transport-appropriate way.
+
+> **The body belongs to its exchange.** The run reads the exchange's resources — the conversation store, the redb scope — so:
+> - it is read **once**: one read is one agent run, tools included, and a second read fails;
+> - it is released with the exchange (`ExchangeResources`): a read after the exchange ended fails, and a run still going when it ends is stopped;
+> - `ProducerTemplate.RequestBody` refuses it, because it ends the exchange before it returns: call `RequestAsync(endpoint, exchange)`, read the body, then dispose the exchange. The HTTP, WebSocket and gRPC consumers read it before they end the exchange;
+> - it is refused inside `.Transacted()`: the run happens after the block, so the block would commit before the answer exists and the tools would not join it. Use `stream=calls` inside a transaction.
+>
+> A failure of the run reaches the reader and is counted on the endpoint; the route's `OnException` does not see it, because the route has finished by then.
 
 Downstream transports inspect `Out.Body`:
 
@@ -715,7 +727,7 @@ Downstream transports inspect `Out.Body`:
 
 ```csharp
 From("http://+:8080/chat")
-    .To("llm://claude?stream=true");
+    .To("llm://claude?stream=body");
 ```
 
 The browser receives:
@@ -755,7 +767,7 @@ If the response Content-Type is something other than `text/event-stream`, the tr
 
 ```csharp
 From("ws://+:9001/chat")
-    .To("llm://claude?stream=true");
+    .To("llm://claude?stream=body");
 ```
 
 Each provider token delta becomes one `WebSocketMessageType.Text` frame with `endOfMessage=true`. Order is preserved (the per-connection receive loop awaits each `SendAsync` before reading the next inbound frame, so writes are naturally serial per socket); empty chunks are skipped; the cancellation token is the consumer's drain-safe `_drain.ProcessingToken`, so a streaming response completes during a graceful shutdown rather than being torn mid-message.
@@ -868,7 +880,7 @@ Camel's LLM story lives in a family — `camel-langchain4j-chat`, `-embeddings`,
 | Tool dispatch into a route | `langchain4j-tools://name` (separate component) | `.AsLlmTool("name")` (DSL aspect on any `From(...)`) |
 | Agent loop | `langchain4j-agent://...` | built into `IAgentEngine` |
 | Scheduled invocation | only via `from("timer:...").to("langchain4j-chat:...")` — the LLM is producer-only | **`From("llm://factory?schedule=...")` is a first-class consumer** |
-| Streaming responses | LangChain4j streaming chat model | `?stream=true` end-to-end: `Out.Body = IAsyncEnumerable<string>`, `HttpConsumer` flushes as SSE with `event: done` summary trailer, `WsConsumer` as one text frame per token |
+| Streaming responses | LangChain4j streaming chat model | `stream=body` end-to-end: `Out.Body = IAsyncEnumerable<string>`, `HttpConsumer` flushes as SSE with `event: done` summary trailer, `WsConsumer` as one text frame per token |
 | Registry refs (`#name`) | yes — Camel-wide | yes — framework-wide; works for connection factories *and* prompts |
 | Provider matrix | 25+ via LangChain4j (Anthropic, Bedrock, Vertex, Azure OpenAI, OpenAI, Mistral, Ollama, …) | 14 OpenAI-compatible behind one `OpenAiProvider` (incl. Anthropic Claude live-tested) |
 | Embeddings / vector store | yes — `langchain4j-embeddings` + LangChain4j vector stores | Phase 2 (`embed://`, `vector://` schemes planned) |
@@ -918,7 +930,7 @@ Camel's LLM story lives in a family — `camel-langchain4j-chat`, `-embeddings`,
 - ✅ `IPromptTemplateRegistry` + `InMemoryPromptTemplateRegistry`.
 - ✅ OTel + tsak.web statistics.
 - ✅ DSL showcase test suite (BasicChat, InlineLlm, ToolRoute, ChainedLlm, HttpFetchTool, RegistryDrivenPrompt, ClaudeChat).
-- ✅ **Streaming end-to-end** (`?stream=true`): `LlmProducer` emits `IAsyncEnumerable<string>`; `redb.Route.Http` flushes per-chunk as SSE (`event: done` JSON trailer with final usage / stop reason / cost); `redb.Route.WebSocket` yields one text frame per token. Live-tested against Anthropic Claude (native SSE), Groq, Cerebras, Gemini, Mistral, OpenRouter.
+- ✅ **Streaming end-to-end** (`stream=body`; `stream=calls` keeps the agent loop and streams each model call inside it): `LlmProducer` emits `IAsyncEnumerable<string>`; `redb.Route.Http` flushes per-chunk as SSE (`event: done` JSON trailer with final usage / stop reason / cost); `redb.Route.WebSocket` yields one text frame per token. Live-tested against Anthropic Claude (native SSE), Groq, Cerebras, Gemini, Mistral, OpenRouter.
 
 ### Phase 1.5 (next session — confirmed scope)
 

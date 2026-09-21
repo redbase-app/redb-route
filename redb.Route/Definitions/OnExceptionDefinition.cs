@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Predicates;
 using redb.Route.Processors;
 
 namespace redb.Route.Definitions;
@@ -79,7 +80,13 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
         return this;
     }
 
-    /// <summary>Continues exchange processing after the exception handler runs.</summary>
+    /// <summary>
+    /// Suppresses the failure and picks the route up at the step after the one that failed (Apache Camel's
+    /// <c>continued(true)</c>), where <see cref="Handled"/> ends the route where it failed. A step inside a scope
+    /// resumes that scope first and then the steps after it; work a transaction rolled back is not replayed, and routing
+    /// picks up after the block. A failure among the resumed steps is matched against the handlers anew, but not
+    /// redelivered: a redelivery re-runs the route from its first step.
+    /// </summary>
     public OnExceptionDefinition Continued(bool value = true)
     {
         _continued = value;
@@ -129,6 +136,17 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
         _onWhen = predicate ?? throw new ArgumentNullException(nameof(predicate));
         return this;
     }
+    /// <summary>
+    /// Conditional predicate written as a route expression, the spelling a declarative route
+    /// needs (<c>${header.retryable} == 'true'</c>) — the string form
+    /// <see cref="InterceptDefinition.When(string)"/> already takes.
+    /// </summary>
+    public OnExceptionDefinition OnWhen(string condition)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(condition);
+        var predicate = PredicateFactory.FromString(condition);
+        return OnWhen(predicate.Matches);
+    }
     private Func<IExchange, bool>? _onWhen;
     /// <summary>Optional predicate gating handler activation.</summary>
     public Func<IExchange, bool>? OnWhenPredicate => _onWhen;
@@ -138,6 +156,14 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
     {
         _retryWhile = predicate ?? throw new ArgumentNullException(nameof(predicate));
         return this;
+    }
+
+    /// <summary>Retry while the route expression holds — the string form of <see cref="RetryWhile(Func{IExchange, bool})"/>.</summary>
+    public OnExceptionDefinition RetryWhile(string condition)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(condition);
+        var predicate = PredicateFactory.FromString(condition);
+        return RetryWhile(predicate.Matches);
     }
     private Func<IExchange, bool>? _retryWhile;
     /// <summary>Optional predicate controlling retry continuation.</summary>
@@ -153,6 +179,20 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
     /// <summary>Optional pre-failure callback.</summary>
     public Action<IExchange>? OnPrepareFailureAction => _onPrepareFailure;
 
+    /// <summary>
+    /// Processor invoked before the handler runs, once the redeliveries are exhausted (Apache Camel's
+    /// <c>onPrepareFailure</c>, which takes a Processor too). The markup form of a route can only name a processor —
+    /// a bean from the registry — so the callbacks take one beside the delegate.
+    /// </summary>
+    public OnExceptionDefinition OnPrepareFailure(IProcessor processor)
+    {
+        _onPrepareFailureProcessor = processor ?? throw new ArgumentNullException(nameof(processor));
+        return this;
+    }
+    private IProcessor? _onPrepareFailureProcessor;
+    /// <summary>Optional pre-failure processor.</summary>
+    public IProcessor? OnPrepareFailureProcessor => _onPrepareFailureProcessor;
+
     /// <summary>Callback invoked on each redelivery attempt.</summary>
     public OnExceptionDefinition OnRedelivery(Action<IExchange> action)
     {
@@ -163,6 +203,16 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
     /// <summary>Optional redelivery callback.</summary>
     public Action<IExchange>? OnRedeliveryAction => _onRedelivery;
 
+    /// <summary>Processor invoked before each redelivery attempt (Apache Camel's <c>onRedelivery</c>).</summary>
+    public OnExceptionDefinition OnRedelivery(IProcessor processor)
+    {
+        _onRedeliveryProcessor = processor ?? throw new ArgumentNullException(nameof(processor));
+        return this;
+    }
+    private IProcessor? _onRedeliveryProcessor;
+    /// <summary>Optional redelivery processor.</summary>
+    public IProcessor? OnRedeliveryProcessor => _onRedeliveryProcessor;
+
     /// <summary>Callback invoked when the exception occurs (before any retry).</summary>
     public OnExceptionDefinition OnExceptionOccurred(Action<IExchange> action)
     {
@@ -172,6 +222,18 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
     private Action<IExchange>? _onExceptionOccurred;
     /// <summary>Optional exception-occurred callback.</summary>
     public Action<IExchange>? OnExceptionOccurredAction => _onExceptionOccurred;
+
+    /// <summary>
+    /// Processor invoked every time the exception occurs, before any retry (Apache Camel's <c>onExceptionOccurred</c>).
+    /// </summary>
+    public OnExceptionDefinition OnExceptionOccurred(IProcessor processor)
+    {
+        _onExceptionOccurredProcessor = processor ?? throw new ArgumentNullException(nameof(processor));
+        return this;
+    }
+    private IProcessor? _onExceptionOccurredProcessor;
+    /// <summary>Optional exception-occurred processor.</summary>
+    public IProcessor? OnExceptionOccurredProcessor => _onExceptionOccurredProcessor;
 
     /// <summary>Log level used for retry-attempt log entries.</summary>
     public OnExceptionDefinition RetryAttemptedLogLevel(LogLevel level)
@@ -291,7 +353,10 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
                 onPrepareFailure: _onPrepareFailure,
                 useOriginalBody: _useOriginalBody,
                 logStackTrace: _logStackTrace,
-                logExhausted: _logExhausted);
+                logExhausted: _logExhausted,
+                onExceptionOccurredProcessor: _onExceptionOccurredProcessor,
+                onRedeliveryProcessor: _onRedeliveryProcessor,
+                onPrepareFailureProcessor: _onPrepareFailureProcessor);
         }
         return oeProc;
     }

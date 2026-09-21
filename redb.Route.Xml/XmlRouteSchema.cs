@@ -295,10 +295,16 @@ public static class XmlRouteSchema
                 new XElement(Xs + "any",
                     new XAttribute("namespace", "##targetNamespace"),
                     new XAttribute("processContents", "lax"))));
+        // One declaration per attribute name, or the schema does not compile at all ("the
+        // attribute 'queue' already exists"): a component whose path synonym is ALSO an option
+        // — seda's queue, amqp's path — would declare it twice. The option wins, it carries the
+        // type and the enum values; the synonym only names the path.
+        var declared = new HashSet<string>(component.Options.Select(o => CamelCase(o.Name)), StringComparer.Ordinal);
         if (!component.PathIsText)
         {
-            type.Add(Attribute(new AttributeSpec("path", AttributeType.String)));
-            if (component.PathSynonym is { Length: > 0 } synonym)
+            if (declared.Add("path"))
+                type.Add(Attribute(new AttributeSpec("path", AttributeType.String)));
+            if (component.PathSynonym is { Length: > 0 } synonym && declared.Add(synonym))
                 type.Add(Attribute(new AttributeSpec(synonym, AttributeType.String)));
         }
         foreach (var option in component.Options)

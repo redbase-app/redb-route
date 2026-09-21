@@ -164,6 +164,28 @@ public class KafkaBuilderTests
         uri.Should().Contain("transacted=true");
     }
 
+    [Fact]
+    public void Transacted_false_is_written_out_to_send_at_once_inside_a_block()
+    {
+        var uri = KafkaDsl.Topic("t").Transacted(false).Build();
+        uri.Should().Contain("transacted=false");
+    }
+
+    [Fact]
+    public void EnableIdempotence_IsWrittenOutBothWays()
+    {
+        KafkaDsl.Topic("t").EnableIdempotence().Build().Should().Contain("enableIdempotence=true");
+        KafkaDsl.Topic("t").EnableIdempotence(false).Build().Should().Contain("enableIdempotence=false");
+        KafkaDsl.Topic("t").Build().Should().NotContain("enableIdempotence", "unset, it follows acks");
+    }
+
+    [Fact]
+    public void Transacted_left_unset_is_not_written_so_the_producer_follows_the_block()
+    {
+        var uri = KafkaDsl.Topic("t").Build();
+        uri.Should().NotContain("transacted");
+    }
+
     // ── Conversion ──────────────────────────────────────────────────
 
     [Fact]

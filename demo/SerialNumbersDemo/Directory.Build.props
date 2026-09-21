@@ -10,7 +10,7 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
 
     <!-- One place for the redb package version. -->
-    <RedbVersion>4.0.1</RedbVersion>
+    <RedbVersion>4.1.0</RedbVersion>
 
     <!-- EF Core for the part of the model that stays in an EF Core DbContext. Its SQL Server provider
          must accept the Microsoft.Data.SqlClient version redb.MSSql and the Tsak worker ship (7.0.3):

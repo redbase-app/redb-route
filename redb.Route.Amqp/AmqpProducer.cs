@@ -1,10 +1,13 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
+using System.Transactions;
 using Amqp;
 using Amqp.Framing;
+using Amqp.Transactions;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Transactions;
 using redb.Route.Core;
 using redb.Route.Telemetry;
 using AmqpMessage = global::Amqp.Message;
@@ -35,6 +38,15 @@ public sealed class AmqpProducer : ConnectableProducer
 
     private SenderLink? _sender;
 
+    // ── Local transactions (localTransactions=true) ──
+    // The client's own transaction support goes through System.Transactions, and its discharge never got an answer from
+    // the broker (docs/TRANSACTED_BATCH_COMMIT_2026_09_19.md); driven by hand on the public protocol types — a coordinator
+    // link, Declare, sends carrying TransactionalState, Discharge — the same broker answers at once. One transaction at a
+    // time per producer: they take turns.
+    private readonly SemaphoreSlim _transactionTurn = new(1, 1);
+    private readonly string _batchKey = $"amqp-tx-{Guid.NewGuid():N}";
+    private SenderLink? _controller;
+
     // ── RPC infrastructure ──
     private readonly ConcurrentDictionary<string, TaskCompletionSource<IMessage>> _pendingResponses = new();
     private ReceiverLink? _replyReceiver;
@@ -49,6 +61,13 @@ public sealed class AmqpProducer : ConnectableProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+
+        // A request-reply send cannot wait for the commit: the reply it waits for would never come.
+        if (_options.ReplyTo && _options.Transacted == true)
+            throw new InvalidOperationException(
+                $"'{ProducerName}' is a request-reply producer (replyTo=true): the request has to leave at once for its " +
+                "reply to arrive, so it cannot be deferred to the commit of a transaction. Drop transacted=true: a " +
+                "request-reply send always goes out at once, outside the transaction.");
     }
 
     /// <inheritdoc />
@@ -108,6 +127,13 @@ public sealed class AmqpProducer : ConnectableProducer
         _replyAddress = null;
         _rpcSetup = false;
 
+        if (_controller is { IsClosed: false })
+        {
+            try { await _controller.CloseAsync().ConfigureAwait(false); }
+            catch (Exception ex) { Logger?.LogDebug(ex, "AMQP: error closing the transaction controller during stop"); }
+        }
+        _controller = null;
+
         if (_sender is { IsClosed: false })
         {
             try { await _sender.CloseAsync().ConfigureAwait(false); }
@@ -139,12 +165,22 @@ public sealed class AmqpProducer : ConnectableProducer
             activity.SetTag("messaging.amqp.subject", subject);
         InjectTraceContext(activity, msg);
 
-        if (_options.ReplyTo)
-            await ProcessRpcAsync(exchange, msg, ct).ConfigureAwait(false);
-        else if (_options.Transacted)
+        if (!_options.ReplyTo && TransactedActions.Defers(exchange, _options.Transacted))
+        {
             ProcessTransactional(exchange, msg);
-        else
-            await ProcessImmediateAsync(msg, ct).ConfigureAwait(false);
+            return;
+        }
+
+        // The AMQP client enlists a send in the ambient System.Transactions transaction on its own. A send that goes out
+        // at once (transacted=false, request-reply, or no enclosing block) must not: it would wait for the block's commit,
+        // and next to a database in the same block it would escalate the transaction to a distributed one.
+        using (new TransactionScope(TransactionScopeOption.Suppress, TransactionScopeAsyncFlowOption.Enabled))
+        {
+            if (_options.ReplyTo)
+                await ProcessRpcAsync(exchange, msg, ct).ConfigureAwait(false);
+            else
+                await ProcessImmediateAsync(msg, ct).ConfigureAwait(false);
+        }
     }
 
     // ── Immediate send ──
@@ -182,9 +218,147 @@ public sealed class AmqpProducer : ConnectableProducer
     private void ProcessTransactional(IExchange exchange, AmqpMessage msg)
     {
         var cloned = CloneMessage(msg);
+        if (_options.LocalTransactions)
+        {
+            // The block's sends through this producer commit in one AMQP local transaction when the block commits.
+            TransactedActions.JoinBatch(exchange, _batchKey, () => new AmqpTransactionBatch(this), ProducerName).Add(cloned);
+            return;
+        }
+
         var action = new AmqpSendAction(_sender!, cloned, _endpoint.Address, Logger);
-        RegisterTransactedAction(exchange, $"amqp-send-{Guid.NewGuid():N}", action);
+        TransactedActions.Register(exchange, $"amqp-send-{Guid.NewGuid():N}", action, ProducerName);
     }
+
+    // ── Local transaction ──
+
+    /// <summary>
+    /// Sends <paramref name="messages"/> in one AMQP local transaction: declare, send each carrying the transaction id,
+    /// discharge. A send the broker does not accept, or any failure before the discharge, discharges the transaction as
+    /// failed, so none of them is delivered, and propagates.
+    /// </summary>
+    internal async Task CommitTransactionAsync(IReadOnlyList<AmqpMessage> messages, CancellationToken ct)
+    {
+        await _transactionTurn.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var sender = _sender is { IsClosed: false } live
+                ? live
+                : throw new InvalidOperationException(
+                    $"'{ProducerName}' is stopped or its link is closed: the transaction cannot be committed.");
+            var controller = Controller(sender);
+            var txnId = await DeclareAsync(controller).ConfigureAwait(false);
+
+            try
+            {
+                foreach (var message in messages)
+                {
+                    var outcome = await SendAsync(sender, message, new TransactionalState { TxnId = txnId }).ConfigureAwait(false);
+                    if (!IsAccepted(outcome))
+                        throw new InvalidOperationException(
+                            $"AMQP broker did not accept a send to '{_endpoint.Address}' in the transaction: {Describe(outcome)}.");
+                }
+
+                var committed = await SendAsync(controller, Control(new Discharge { TxnId = txnId, Fail = false }), null)
+                    .ConfigureAwait(false);
+                if (!IsAccepted(committed))
+                    throw new InvalidOperationException(
+                        $"AMQP broker did not commit the transaction on '{_endpoint.Address}': {Describe(committed)}.");
+            }
+            catch (Exception failure)
+            {
+                await DischargeAsFailedAsync(controller, txnId, failure).ConfigureAwait(false);
+                throw;
+            }
+
+            foreach (var message in messages)
+            {
+                var payload = PayloadSize(message);
+                if (payload > 0)
+                    _endpoint.RecordBytesOut(payload);
+            }
+            Logger?.LogDebug("AMQP local transaction committed: address={Address}, messages={Count}",
+                _endpoint.Address, messages.Count);
+        }
+        finally
+        {
+            _transactionTurn.Release();
+        }
+    }
+
+    /// <summary>The link to the broker's transaction coordinator, on the session the sends go through.</summary>
+    private SenderLink Controller(SenderLink sender)
+    {
+        if (_controller is { IsClosed: false } controller && ReferenceEquals(controller.Session, sender.Session))
+            return controller;
+
+        _controller = new SenderLink(sender.Session, $"txn-controller-{_endpoint.Address}-{Guid.NewGuid():N}", new Attach
+        {
+            Source = new Source(),
+            Target = new Coordinator
+            {
+                Capabilities = [TxnCapabilities.LocalTransactions],
+            },
+        }, null);
+        return _controller;
+    }
+
+    private async Task<byte[]> DeclareAsync(SenderLink controller)
+    {
+        Outcome declared;
+        try
+        {
+            declared = await SendAsync(controller, Control(new Declare()), null).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (controller.IsClosed)
+        {
+            throw new InvalidOperationException(
+                $"AMQP broker for '{_endpoint.Address}' refused the transaction coordinator ({controller.Error?.Description ?? ex.Message}): " +
+                "localTransactions needs a broker with AMQP local transactions (ActiveMQ Artemis, Qpid, Azure Service Bus).", ex);
+        }
+
+        return declared is Declared { TxnId: { } txnId }
+            ? txnId
+            : throw new InvalidOperationException(
+                $"AMQP broker for '{_endpoint.Address}' did not declare a transaction: {Describe(declared)}.");
+    }
+
+    private async Task DischargeAsFailedAsync(SenderLink controller, byte[] txnId, Exception failure)
+    {
+        try
+        {
+            await SendAsync(controller, Control(new Discharge { TxnId = txnId, Fail = true }), null).ConfigureAwait(false);
+        }
+        catch (Exception dischargeFailure)
+        {
+            // Nothing was committed either way: the broker drops an undischarged transaction with the link.
+            Logger?.LogWarning(dischargeFailure,
+                "AMQP: discharging the failed transaction on {Address} failed too (the original failure: {Failure})",
+                _endpoint.Address, failure.Message);
+        }
+    }
+
+    /// <summary>
+    /// One step of the transaction, bounded by <c>timeout</c>: a broker that withholds credit (Artemis on a full address)
+    /// or never settles fails the step instead of holding the block's commit.
+    /// </summary>
+    private Task<Outcome> SendAsync(SenderLink link, AmqpMessage message, DeliveryState? state)
+    {
+        var outcome = new TaskCompletionSource<Outcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        link.Send(message, state, (_, _, result, _) => outcome.TrySetResult(result), null);
+        return outcome.Task.WaitAsync(TimeSpan.FromSeconds(_options.Timeout));
+    }
+
+    private static AmqpMessage Control(object body) => new() { BodySection = new AmqpValue { Value = body } };
+
+    /// <summary>The client hands the outcome of a transactional send over unwrapped from its TransactionalState.</summary>
+    private static bool IsAccepted(Outcome? outcome) => outcome is Accepted;
+
+    private static string Describe(Outcome? outcome) => outcome switch
+    {
+        Rejected { Error: { } error } => $"rejected ({error.Condition}: {error.Description})",
+        null => "no outcome",
+        _ => outcome.ToString() ?? outcome.GetType().Name,
+    };
 
     // ── RPC (request/reply) ──
 
@@ -499,17 +673,6 @@ public sealed class AmqpProducer : ConnectableProducer
         return AmqpMessage.Decode(buffer);
     }
 
-    private static void RegisterTransactedAction(IExchange exchange, string key, ITransactedAction action)
-    {
-        if (!exchange.Properties.TryGetValue("TRANSACT_ACTION", out var raw) ||
-            raw is not ConcurrentDictionary<string, ITransactedAction> dict)
-        {
-            dict = new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
-            exchange.Properties["TRANSACT_ACTION"] = dict;
-        }
-
-        dict[key] = action;
-    }
 }
 
 /// <summary>Deferred AMQP send action.</summary>
@@ -541,4 +704,23 @@ internal sealed class AmqpSendAction : ITransactedAction
         _logger?.LogDebug("AMQP transactional send rolled back: address={Address}", _address);
         return Task.CompletedTask;
     }
+}
+
+/// <summary>
+/// The sends an AMQP producer with <c>localTransactions</c> deferred in one <c>.Transacted()</c> block, committed in one
+/// AMQP local transaction when the block commits.
+/// </summary>
+internal sealed class AmqpTransactionBatch : ITransactedAction
+{
+    private readonly AmqpProducer _producer;
+    private readonly ConcurrentQueue<AmqpMessage> _messages = new();
+
+    public AmqpTransactionBatch(AmqpProducer producer) => _producer = producer;
+
+    public void Add(AmqpMessage message) => _messages.Enqueue(message);
+
+    public Task Commit(CancellationToken ct = default) => _producer.CommitTransactionAsync(_messages.ToArray(), ct);
+
+    // The block rolled back before the transaction was declared: nothing was sent.
+    public Task Rollback(CancellationToken ct = default) => Task.CompletedTask;
 }

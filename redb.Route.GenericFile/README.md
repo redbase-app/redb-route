@@ -71,8 +71,14 @@ The `GenericFileProducer` writes files with atomic temp-then-rename:
 |----------|------|---------|-------------|
 | `Delay` | `int` | `500` | Poll interval (ms) |
 | `InitialDelay` | `int` | `0` | Delay before first poll (ms) |
-| `Include` | `string` | `""` | Glob include pattern (`*.csv,*.xml`) |
-| `Exclude` | `string` | `""` | Glob exclude pattern |
+| `Include` | `string` | `""` | Glob include pattern (`*.csv,*.xml`) — file name only |
+| `Exclude` | `string` | `""` | Glob exclude pattern — file name only |
+| `AntInclude` | `string` | `""` | Ant patterns over the path relative to the polled directory (`TYPE_A/outbox/*.csv`): `*` stops at a separator, `**` spans levels |
+| `AntExclude` | `string` | `""` | Ant patterns over the relative path that drop a file (`archive/**`) |
+| `AntFilterCaseSensitive` | `bool` | `true` | Whether the Ant patterns respect case |
+| `FilterDirectory` | `string` | `""` | Condition over a subdirectory, evaluated before it is listed |
+| `FilterFile` | `string` | `""` | Condition over a polled file, evaluated before it is read or moved |
+| `Filter` | `string` | `""` | Registry name of an `IGenericFileFilter` (`#myFilter`) |
 | `Recursive` | `bool` | `false` | Recurse subdirectories |
 | `MaxDepth` | `int` | `0` | Max recursion depth (0 = unlimited) |
 | `MinDepth` | `int` | `0` | Min depth for file selection |
@@ -217,6 +223,30 @@ Include/exclude patterns support comma-separated values and `*`/`?` wildcards:
 report_*       — files starting with "report_"
 data?.txt      — data1.txt, dataA.txt, etc.
 ```
+
+## Path Filters
+
+A glob sees only the file name, so it cannot say *which directory* a recursive poll should take.
+Four options decide by path, in the order the poll applies them (Apache Camel parity):
+
+```
+antInclude=TYPE_A/outbox/*.csv,TYPE_B/outbox/*.csv   — Ant patterns over the path relative to the
+antExclude=archive/**                                  polled directory; '*' stops at a separator,
+                                                       '**' spans levels, ',' separates patterns
+filterDirectory=header.redbSftp.Name != 'archive'    — asked per subdirectory BEFORE it is listed
+filterFile=header.redbSftp.Length > 1024             — asked per file before it is read or moved
+filter=#partnerFilter                                — an IGenericFileFilter from the registry,
+                                                       for both files and directories
+```
+
+`filterDirectory` and the bean's `AcceptDirectory` decide while the listing is still walking, so a
+directory they turn down costs nothing — no listing, no round trip. That is what makes one consumer
+over a partner tree of two hundred directories affordable, and it is the only way to keep one
+connection when the server allows only one.
+
+Everything these filters reject is left exactly as it was found: no exchange is created for it, so
+`delete`, `move` and `preMove` never touch it. Polling a parent recursively and sorting it out in
+the route does the opposite — the file is downloaded and post-processed first.
 
 ## Done File Substitutions
 

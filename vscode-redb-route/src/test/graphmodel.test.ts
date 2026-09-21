@@ -116,6 +116,23 @@ describe("the render tree (§3)", () => {
         assert.equal((filter.steps[0] as LeafView).category, "sendInternal");
     });
 
+    it("a long branch condition is capped in the label and whole in the tooltip", () => {
+        // The box caps the text so a stack of branches stays readable; the tooltip is what the
+        // reader opens to read the condition, so it must not repeat the cut (owner, 2026-09-20).
+        const condition = "header.serials.decision == 'Rejected' && header.serials.partner == 'globex'";
+        const long = graphOf(`
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="long-when">
+                <from uri="direct://in"/>
+                <choice><when expr="${condition}"><stop/></when></choice>
+              </route>
+            </routes>`).routes[0];
+        const branch = (long.steps[0] as BranchingView).branches[0];
+
+        assert.equal(branch.label.endsWith("…"), true, "the label is capped");
+        assert.equal(branch.tooltip, `when ${condition}`, "the tooltip carries the whole condition");
+    });
+
     it("choice branches carry when-conditions and otherwise (§3.4)", () => {
         const choice = route.steps[2] as BranchingView;
         assert.equal(choice.branches.length, 2);

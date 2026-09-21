@@ -300,6 +300,7 @@
             <xs:attribute name="filterSelector" type="xs:string" />
             <xs:attribute name="groupId" type="xs:string" />
             <xs:attribute name="host" type="xs:string" />
+            <xs:attribute name="localTransactions" type="xs:boolean" />
             <xs:attribute name="messageDurable" type="xs:boolean" />
             <xs:attribute name="messagePriority" type="xs:string" />
             <xs:attribute name="messagePriorityExpression" type="xs:string" />
@@ -379,6 +380,7 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="autoDeadLetter" type="xs:boolean" />
+            <xs:attribute name="batchCommit" type="xs:boolean" />
             <xs:attribute name="batchMaxMessages" type="xs:int" />
             <xs:attribute name="batchMaxSizeBytes" type="xs:long" />
             <xs:attribute name="connectionFactory" type="xs:string" />
@@ -410,6 +412,16 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="bean">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="method" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="cache">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -422,6 +434,44 @@
             <xs:attribute name="provider" type="xs:string" />
             <xs:attribute name="sliding" type="xs:string" />
             <xs:attribute name="ttl" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="controlbus">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="action">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Start" />
+                  <xs:enumeration value="Stop" />
+                  <xs:enumeration value="Suspend" />
+                  <xs:enumeration value="Resume" />
+                  <xs:enumeration value="Restart" />
+                  <xs:enumeration value="Status" />
+                  <xs:enumeration value="Stats" />
+                  <xs:enumeration value="Fail" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="async" type="xs:boolean" />
+            <xs:attribute name="command">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Route" />
+                  <xs:enumeration value="Language" />
+                  <xs:enumeration value="Notify" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="events" type="xs:string" />
+            <xs:attribute name="language" type="xs:string" />
+            <xs:attribute name="loggingLevel" type="xs:string" />
+            <xs:attribute name="restartDelay" type="xs:int" />
+            <xs:attribute name="routeId" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -460,6 +510,24 @@
             <xs:attribute name="threads" type="xs:int" />
             <xs:attribute name="timeZone" type="xs:string" />
             <xs:attribute name="triggerStartDelay" type="xs:long" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="direct">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="direct-vm">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -649,6 +717,9 @@
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="directory" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -674,6 +745,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
             <xs:attribute name="idempotentKey" type="xs:string" />
             <xs:attribute name="include" type="xs:string" />
@@ -778,6 +853,9 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -806,6 +884,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="flatten" type="xs:boolean" />
             <xs:attribute name="host" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
@@ -1047,6 +1129,7 @@
             <xs:attribute name="compressionType" type="xs:string" />
             <xs:attribute name="connectionFactory" type="xs:string" />
             <xs:attribute name="enableAutoCommit" type="xs:boolean" />
+            <xs:attribute name="enableIdempotence" type="xs:boolean" />
             <xs:attribute name="groupId" type="xs:string" />
             <xs:attribute name="groupInstanceId" type="xs:string" />
             <xs:attribute name="heartbeatIntervalMs" type="xs:int" />
@@ -1074,6 +1157,7 @@
             <xs:attribute name="sslKeyPassword" type="xs:string" />
             <xs:attribute name="topicIsPattern" type="xs:boolean" />
             <xs:attribute name="transacted" type="xs:boolean" />
+            <xs:attribute name="transactionalIdPrefix" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -1147,12 +1231,30 @@
             <xs:attribute name="propagateToolHeaders" type="xs:string" />
             <xs:attribute name="redb" type="xs:string" />
             <xs:attribute name="schedule" type="xs:string" />
-            <xs:attribute name="stream" type="xs:boolean" />
+            <xs:attribute name="stream">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Off" />
+                  <xs:enumeration value="Calls" />
+                  <xs:enumeration value="Body" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
             <xs:attribute name="systemPromptRef" type="xs:string" />
             <xs:attribute name="temperature" type="xs:double" />
             <xs:attribute name="tools" type="xs:string" />
             <xs:attribute name="topP" type="xs:double" />
             <xs:attribute name="user" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="mock">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="expectedMessageCount" type="xs:int" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -1246,7 +1348,6 @@
               <xs:any namespace="##targetNamespace" processContents="lax" />
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
-            <xs:attribute name="queue" type="xs:string" />
             <xs:attribute name="autoAck" type="xs:boolean" />
             <xs:attribute name="autoDelete" type="xs:boolean" />
             <xs:attribute name="automaticRecovery" type="xs:boolean" />
@@ -1324,14 +1425,16 @@
             <xs:attribute name="offset" type="xs:long" />
             <xs:attribute name="password" type="xs:string" />
             <xs:attribute name="pollDelayMs" type="xs:int" />
+            <xs:attribute name="processingList" type="xs:string" />
             <xs:attribute name="score" type="xs:double" />
             <xs:attribute name="start" type="xs:long" />
             <xs:attribute name="stop" type="xs:long" />
             <xs:attribute name="streamApproximate" type="xs:boolean" />
-            <xs:attribute name="streamAutoAck" type="xs:boolean" />
             <xs:attribute name="streamBlockTimeMs" type="xs:int" />
+            <xs:attribute name="streamClaimMinIdleMs" type="xs:int" />
             <xs:attribute name="streamMaxLength" type="xs:int" />
             <xs:attribute name="streamName" type="xs:string" />
+            <xs:attribute name="streamNoAck" type="xs:boolean" />
             <xs:attribute name="streamReadCount" type="xs:int" />
             <xs:attribute name="streamStartPosition" type="xs:string" />
             <xs:attribute name="transacted" type="xs:boolean" />
@@ -1440,6 +1543,18 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="seda">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="concurrentConsumers" type="xs:string" />
+            <xs:attribute name="size" type="xs:int" />
+            <xs:attribute name="timeout" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="sftp">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -1447,6 +1562,9 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -1480,6 +1598,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="flatten" type="xs:boolean" />
             <xs:attribute name="host" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
@@ -1658,6 +1780,7 @@
             <xs:attribute name="subscribeQueueArn" type="xs:string" />
             <xs:attribute name="subscribeSnsToSqs" type="xs:boolean" />
             <xs:attribute name="topicArn" type="xs:string" />
+            <xs:attribute name="transacted" type="xs:boolean" />
             <xs:attribute name="useDefaultCredentialsProvider" type="xs:boolean" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
@@ -1667,7 +1790,6 @@
             <xs:choice minOccurs="0" maxOccurs="unbounded">
               <xs:any namespace="##targetNamespace" processContents="lax" />
             </xs:choice>
-            <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="action" type="xs:string" />
             <xs:attribute name="allowedClientThumbprints" type="xs:string" />
             <xs:attribute name="clientCertificateMode">
@@ -1899,6 +2021,42 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="timer">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="delay" type="xs:int" />
+            <xs:attribute name="period" type="xs:int" />
+            <xs:attribute name="repeatCount" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="validator">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="format" type="xs:string" />
+            <xs:attribute name="schemaPath" type="xs:string" />
+            <xs:attribute name="targetNamespace" type="xs:string" />
+            <xs:attribute name="throwOnFailure" type="xs:boolean" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="vm">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="concurrentConsumers" type="xs:string" />
+            <xs:attribute name="size" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="wmq">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -2034,6 +2192,27 @@
             <xs:attribute name="sslCertPath" type="xs:string" />
             <xs:attribute name="subProtocol" type="xs:string" />
             <xs:attribute name="trustAllCertificates" type="xs:boolean" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="xslt">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="allowTemplateFromHeader" type="xs:boolean" />
+            <xs:attribute name="failOnNullBody" type="xs:boolean" />
+            <xs:attribute name="output">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="String" />
+                  <xs:enumeration value="Bytes" />
+                  <xs:enumeration value="Dom" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="stylesheetPath" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -2244,6 +2423,16 @@
   <xs:element name="metered">
     <xs:complexType>
       <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="tag">
+          <xs:complexType>
+            <xs:attribute name="name" use="required" type="xs:string" />
+            <xs:attribute name="fromHeader" type="xs:string" />
+            <xs:attribute name="expr" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:group ref="r:step" />
       </xs:choice>
       <xs:attribute name="name" use="required" type="xs:string" />
@@ -2335,14 +2524,61 @@
   <xs:element name="onException">
     <xs:complexType>
       <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="when">
+          <xs:complexType>
+            <xs:attribute name="expr" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="retryWhile">
+          <xs:complexType>
+            <xs:attribute name="expr" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:group ref="r:step" />
       </xs:choice>
       <xs:attribute name="exceptions" use="required" type="xs:string" />
       <xs:attribute name="handled" type="xs:boolean" />
+      <xs:attribute name="continued" type="xs:boolean" />
       <xs:attribute name="maximumRedeliveries" type="xs:int" />
       <xs:attribute name="redeliveryDelay" type="xs:string" />
       <xs:attribute name="exponentialBackOff" type="xs:boolean" />
       <xs:attribute name="backOffMultiplier" type="xs:double" />
+      <xs:attribute name="useOriginalBody" type="xs:boolean" />
+      <xs:attribute name="logStackTrace" type="xs:boolean" />
+      <xs:attribute name="logExhausted" type="xs:boolean" />
+      <xs:attribute name="retryAttemptedLogLevel">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Trace" />
+            <xs:enumeration value="Debug" />
+            <xs:enumeration value="Information" />
+            <xs:enumeration value="Warning" />
+            <xs:enumeration value="Error" />
+            <xs:enumeration value="Critical" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="retriesExhaustedLogLevel">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Trace" />
+            <xs:enumeration value="Debug" />
+            <xs:enumeration value="Information" />
+            <xs:enumeration value="Warning" />
+            <xs:enumeration value="Error" />
+            <xs:enumeration value="Critical" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="onExceptionOccurred" type="xs:string" />
+      <xs:attribute name="onRedelivery" type="xs:string" />
+      <xs:attribute name="onPrepareFailure" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -2402,6 +2638,7 @@
             <xs:attribute name="filterSelector" type="xs:string" />
             <xs:attribute name="groupId" type="xs:string" />
             <xs:attribute name="host" type="xs:string" />
+            <xs:attribute name="localTransactions" type="xs:boolean" />
             <xs:attribute name="messageDurable" type="xs:boolean" />
             <xs:attribute name="messagePriority" type="xs:string" />
             <xs:attribute name="messagePriorityExpression" type="xs:string" />
@@ -2481,6 +2718,7 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="autoDeadLetter" type="xs:boolean" />
+            <xs:attribute name="batchCommit" type="xs:boolean" />
             <xs:attribute name="batchMaxMessages" type="xs:int" />
             <xs:attribute name="batchMaxSizeBytes" type="xs:long" />
             <xs:attribute name="connectionFactory" type="xs:string" />
@@ -2512,6 +2750,16 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="bean">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="method" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="cache">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -2524,6 +2772,44 @@
             <xs:attribute name="provider" type="xs:string" />
             <xs:attribute name="sliding" type="xs:string" />
             <xs:attribute name="ttl" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="controlbus">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="action">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Start" />
+                  <xs:enumeration value="Stop" />
+                  <xs:enumeration value="Suspend" />
+                  <xs:enumeration value="Resume" />
+                  <xs:enumeration value="Restart" />
+                  <xs:enumeration value="Status" />
+                  <xs:enumeration value="Stats" />
+                  <xs:enumeration value="Fail" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="async" type="xs:boolean" />
+            <xs:attribute name="command">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Route" />
+                  <xs:enumeration value="Language" />
+                  <xs:enumeration value="Notify" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="events" type="xs:string" />
+            <xs:attribute name="language" type="xs:string" />
+            <xs:attribute name="loggingLevel" type="xs:string" />
+            <xs:attribute name="restartDelay" type="xs:int" />
+            <xs:attribute name="routeId" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -2562,6 +2848,24 @@
             <xs:attribute name="threads" type="xs:int" />
             <xs:attribute name="timeZone" type="xs:string" />
             <xs:attribute name="triggerStartDelay" type="xs:long" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="direct">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="direct-vm">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -2751,6 +3055,9 @@
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="directory" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -2776,6 +3083,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
             <xs:attribute name="idempotentKey" type="xs:string" />
             <xs:attribute name="include" type="xs:string" />
@@ -2880,6 +3191,9 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -2908,6 +3222,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="flatten" type="xs:boolean" />
             <xs:attribute name="host" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
@@ -3149,6 +3467,7 @@
             <xs:attribute name="compressionType" type="xs:string" />
             <xs:attribute name="connectionFactory" type="xs:string" />
             <xs:attribute name="enableAutoCommit" type="xs:boolean" />
+            <xs:attribute name="enableIdempotence" type="xs:boolean" />
             <xs:attribute name="groupId" type="xs:string" />
             <xs:attribute name="groupInstanceId" type="xs:string" />
             <xs:attribute name="heartbeatIntervalMs" type="xs:int" />
@@ -3176,6 +3495,7 @@
             <xs:attribute name="sslKeyPassword" type="xs:string" />
             <xs:attribute name="topicIsPattern" type="xs:boolean" />
             <xs:attribute name="transacted" type="xs:boolean" />
+            <xs:attribute name="transactionalIdPrefix" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -3249,12 +3569,30 @@
             <xs:attribute name="propagateToolHeaders" type="xs:string" />
             <xs:attribute name="redb" type="xs:string" />
             <xs:attribute name="schedule" type="xs:string" />
-            <xs:attribute name="stream" type="xs:boolean" />
+            <xs:attribute name="stream">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Off" />
+                  <xs:enumeration value="Calls" />
+                  <xs:enumeration value="Body" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
             <xs:attribute name="systemPromptRef" type="xs:string" />
             <xs:attribute name="temperature" type="xs:double" />
             <xs:attribute name="tools" type="xs:string" />
             <xs:attribute name="topP" type="xs:double" />
             <xs:attribute name="user" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="mock">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="expectedMessageCount" type="xs:int" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -3348,7 +3686,6 @@
               <xs:any namespace="##targetNamespace" processContents="lax" />
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
-            <xs:attribute name="queue" type="xs:string" />
             <xs:attribute name="autoAck" type="xs:boolean" />
             <xs:attribute name="autoDelete" type="xs:boolean" />
             <xs:attribute name="automaticRecovery" type="xs:boolean" />
@@ -3426,14 +3763,16 @@
             <xs:attribute name="offset" type="xs:long" />
             <xs:attribute name="password" type="xs:string" />
             <xs:attribute name="pollDelayMs" type="xs:int" />
+            <xs:attribute name="processingList" type="xs:string" />
             <xs:attribute name="score" type="xs:double" />
             <xs:attribute name="start" type="xs:long" />
             <xs:attribute name="stop" type="xs:long" />
             <xs:attribute name="streamApproximate" type="xs:boolean" />
-            <xs:attribute name="streamAutoAck" type="xs:boolean" />
             <xs:attribute name="streamBlockTimeMs" type="xs:int" />
+            <xs:attribute name="streamClaimMinIdleMs" type="xs:int" />
             <xs:attribute name="streamMaxLength" type="xs:int" />
             <xs:attribute name="streamName" type="xs:string" />
+            <xs:attribute name="streamNoAck" type="xs:boolean" />
             <xs:attribute name="streamReadCount" type="xs:int" />
             <xs:attribute name="streamStartPosition" type="xs:string" />
             <xs:attribute name="transacted" type="xs:boolean" />
@@ -3542,6 +3881,18 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="seda">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="concurrentConsumers" type="xs:string" />
+            <xs:attribute name="size" type="xs:int" />
+            <xs:attribute name="timeout" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="sftp">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -3549,6 +3900,9 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -3582,6 +3936,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="flatten" type="xs:boolean" />
             <xs:attribute name="host" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
@@ -3760,6 +4118,7 @@
             <xs:attribute name="subscribeQueueArn" type="xs:string" />
             <xs:attribute name="subscribeSnsToSqs" type="xs:boolean" />
             <xs:attribute name="topicArn" type="xs:string" />
+            <xs:attribute name="transacted" type="xs:boolean" />
             <xs:attribute name="useDefaultCredentialsProvider" type="xs:boolean" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
@@ -3769,7 +4128,6 @@
             <xs:choice minOccurs="0" maxOccurs="unbounded">
               <xs:any namespace="##targetNamespace" processContents="lax" />
             </xs:choice>
-            <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="action" type="xs:string" />
             <xs:attribute name="allowedClientThumbprints" type="xs:string" />
             <xs:attribute name="clientCertificateMode">
@@ -4001,6 +4359,42 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="timer">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="delay" type="xs:int" />
+            <xs:attribute name="period" type="xs:int" />
+            <xs:attribute name="repeatCount" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="validator">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="format" type="xs:string" />
+            <xs:attribute name="schemaPath" type="xs:string" />
+            <xs:attribute name="targetNamespace" type="xs:string" />
+            <xs:attribute name="throwOnFailure" type="xs:boolean" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="vm">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="concurrentConsumers" type="xs:string" />
+            <xs:attribute name="size" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="wmq">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -4136,6 +4530,27 @@
             <xs:attribute name="sslCertPath" type="xs:string" />
             <xs:attribute name="subProtocol" type="xs:string" />
             <xs:attribute name="trustAllCertificates" type="xs:boolean" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="xslt">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="allowTemplateFromHeader" type="xs:boolean" />
+            <xs:attribute name="failOnNullBody" type="xs:boolean" />
+            <xs:attribute name="output">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="String" />
+                  <xs:enumeration value="Bytes" />
+                  <xs:enumeration value="Dom" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="stylesheetPath" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -4668,6 +5083,8 @@
         <xs:group ref="r:step" />
       </xs:choice>
       <xs:attribute name="poolSize" use="required" type="xs:int" />
+      <xs:attribute name="maxQueueSize" type="xs:int" />
+      <xs:attribute name="enqueueTimeout" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -4720,6 +5137,7 @@
             <xs:attribute name="filterSelector" type="xs:string" />
             <xs:attribute name="groupId" type="xs:string" />
             <xs:attribute name="host" type="xs:string" />
+            <xs:attribute name="localTransactions" type="xs:boolean" />
             <xs:attribute name="messageDurable" type="xs:boolean" />
             <xs:attribute name="messagePriority" type="xs:string" />
             <xs:attribute name="messagePriorityExpression" type="xs:string" />
@@ -4799,6 +5217,7 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="autoDeadLetter" type="xs:boolean" />
+            <xs:attribute name="batchCommit" type="xs:boolean" />
             <xs:attribute name="batchMaxMessages" type="xs:int" />
             <xs:attribute name="batchMaxSizeBytes" type="xs:long" />
             <xs:attribute name="connectionFactory" type="xs:string" />
@@ -4830,6 +5249,16 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="bean">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="method" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="cache">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -4842,6 +5271,44 @@
             <xs:attribute name="provider" type="xs:string" />
             <xs:attribute name="sliding" type="xs:string" />
             <xs:attribute name="ttl" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="controlbus">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="action">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Start" />
+                  <xs:enumeration value="Stop" />
+                  <xs:enumeration value="Suspend" />
+                  <xs:enumeration value="Resume" />
+                  <xs:enumeration value="Restart" />
+                  <xs:enumeration value="Status" />
+                  <xs:enumeration value="Stats" />
+                  <xs:enumeration value="Fail" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="async" type="xs:boolean" />
+            <xs:attribute name="command">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Route" />
+                  <xs:enumeration value="Language" />
+                  <xs:enumeration value="Notify" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="events" type="xs:string" />
+            <xs:attribute name="language" type="xs:string" />
+            <xs:attribute name="loggingLevel" type="xs:string" />
+            <xs:attribute name="restartDelay" type="xs:int" />
+            <xs:attribute name="routeId" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -4880,6 +5347,24 @@
             <xs:attribute name="threads" type="xs:int" />
             <xs:attribute name="timeZone" type="xs:string" />
             <xs:attribute name="triggerStartDelay" type="xs:long" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="direct">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="direct-vm">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -5069,6 +5554,9 @@
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="directory" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -5094,6 +5582,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
             <xs:attribute name="idempotentKey" type="xs:string" />
             <xs:attribute name="include" type="xs:string" />
@@ -5198,6 +5690,9 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -5226,6 +5721,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="flatten" type="xs:boolean" />
             <xs:attribute name="host" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
@@ -5467,6 +5966,7 @@
             <xs:attribute name="compressionType" type="xs:string" />
             <xs:attribute name="connectionFactory" type="xs:string" />
             <xs:attribute name="enableAutoCommit" type="xs:boolean" />
+            <xs:attribute name="enableIdempotence" type="xs:boolean" />
             <xs:attribute name="groupId" type="xs:string" />
             <xs:attribute name="groupInstanceId" type="xs:string" />
             <xs:attribute name="heartbeatIntervalMs" type="xs:int" />
@@ -5494,6 +5994,7 @@
             <xs:attribute name="sslKeyPassword" type="xs:string" />
             <xs:attribute name="topicIsPattern" type="xs:boolean" />
             <xs:attribute name="transacted" type="xs:boolean" />
+            <xs:attribute name="transactionalIdPrefix" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -5567,12 +6068,30 @@
             <xs:attribute name="propagateToolHeaders" type="xs:string" />
             <xs:attribute name="redb" type="xs:string" />
             <xs:attribute name="schedule" type="xs:string" />
-            <xs:attribute name="stream" type="xs:boolean" />
+            <xs:attribute name="stream">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Off" />
+                  <xs:enumeration value="Calls" />
+                  <xs:enumeration value="Body" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
             <xs:attribute name="systemPromptRef" type="xs:string" />
             <xs:attribute name="temperature" type="xs:double" />
             <xs:attribute name="tools" type="xs:string" />
             <xs:attribute name="topP" type="xs:double" />
             <xs:attribute name="user" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="mock">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="expectedMessageCount" type="xs:int" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -5666,7 +6185,6 @@
               <xs:any namespace="##targetNamespace" processContents="lax" />
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
-            <xs:attribute name="queue" type="xs:string" />
             <xs:attribute name="autoAck" type="xs:boolean" />
             <xs:attribute name="autoDelete" type="xs:boolean" />
             <xs:attribute name="automaticRecovery" type="xs:boolean" />
@@ -5744,14 +6262,16 @@
             <xs:attribute name="offset" type="xs:long" />
             <xs:attribute name="password" type="xs:string" />
             <xs:attribute name="pollDelayMs" type="xs:int" />
+            <xs:attribute name="processingList" type="xs:string" />
             <xs:attribute name="score" type="xs:double" />
             <xs:attribute name="start" type="xs:long" />
             <xs:attribute name="stop" type="xs:long" />
             <xs:attribute name="streamApproximate" type="xs:boolean" />
-            <xs:attribute name="streamAutoAck" type="xs:boolean" />
             <xs:attribute name="streamBlockTimeMs" type="xs:int" />
+            <xs:attribute name="streamClaimMinIdleMs" type="xs:int" />
             <xs:attribute name="streamMaxLength" type="xs:int" />
             <xs:attribute name="streamName" type="xs:string" />
+            <xs:attribute name="streamNoAck" type="xs:boolean" />
             <xs:attribute name="streamReadCount" type="xs:int" />
             <xs:attribute name="streamStartPosition" type="xs:string" />
             <xs:attribute name="transacted" type="xs:boolean" />
@@ -5860,6 +6380,18 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="seda">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="concurrentConsumers" type="xs:string" />
+            <xs:attribute name="size" type="xs:int" />
+            <xs:attribute name="timeout" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="sftp">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -5867,6 +6399,9 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -5900,6 +6435,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="flatten" type="xs:boolean" />
             <xs:attribute name="host" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
@@ -6078,6 +6617,7 @@
             <xs:attribute name="subscribeQueueArn" type="xs:string" />
             <xs:attribute name="subscribeSnsToSqs" type="xs:boolean" />
             <xs:attribute name="topicArn" type="xs:string" />
+            <xs:attribute name="transacted" type="xs:boolean" />
             <xs:attribute name="useDefaultCredentialsProvider" type="xs:boolean" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
@@ -6087,7 +6627,6 @@
             <xs:choice minOccurs="0" maxOccurs="unbounded">
               <xs:any namespace="##targetNamespace" processContents="lax" />
             </xs:choice>
-            <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="action" type="xs:string" />
             <xs:attribute name="allowedClientThumbprints" type="xs:string" />
             <xs:attribute name="clientCertificateMode">
@@ -6319,6 +6858,42 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="timer">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="delay" type="xs:int" />
+            <xs:attribute name="period" type="xs:int" />
+            <xs:attribute name="repeatCount" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="validator">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="format" type="xs:string" />
+            <xs:attribute name="schemaPath" type="xs:string" />
+            <xs:attribute name="targetNamespace" type="xs:string" />
+            <xs:attribute name="throwOnFailure" type="xs:boolean" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="vm">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="concurrentConsumers" type="xs:string" />
+            <xs:attribute name="size" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="wmq">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -6454,6 +7029,27 @@
             <xs:attribute name="sslCertPath" type="xs:string" />
             <xs:attribute name="subProtocol" type="xs:string" />
             <xs:attribute name="trustAllCertificates" type="xs:boolean" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="xslt">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="allowTemplateFromHeader" type="xs:boolean" />
+            <xs:attribute name="failOnNullBody" type="xs:boolean" />
+            <xs:attribute name="output">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="String" />
+                  <xs:enumeration value="Bytes" />
+                  <xs:enumeration value="Dom" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="stylesheetPath" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -6488,6 +7084,7 @@
             <xs:attribute name="filterSelector" type="xs:string" />
             <xs:attribute name="groupId" type="xs:string" />
             <xs:attribute name="host" type="xs:string" />
+            <xs:attribute name="localTransactions" type="xs:boolean" />
             <xs:attribute name="messageDurable" type="xs:boolean" />
             <xs:attribute name="messagePriority" type="xs:string" />
             <xs:attribute name="messagePriorityExpression" type="xs:string" />
@@ -6567,6 +7164,7 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="autoDeadLetter" type="xs:boolean" />
+            <xs:attribute name="batchCommit" type="xs:boolean" />
             <xs:attribute name="batchMaxMessages" type="xs:int" />
             <xs:attribute name="batchMaxSizeBytes" type="xs:long" />
             <xs:attribute name="connectionFactory" type="xs:string" />
@@ -6598,6 +7196,16 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="bean">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="method" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="cache">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -6610,6 +7218,44 @@
             <xs:attribute name="provider" type="xs:string" />
             <xs:attribute name="sliding" type="xs:string" />
             <xs:attribute name="ttl" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="controlbus">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="action">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Start" />
+                  <xs:enumeration value="Stop" />
+                  <xs:enumeration value="Suspend" />
+                  <xs:enumeration value="Resume" />
+                  <xs:enumeration value="Restart" />
+                  <xs:enumeration value="Status" />
+                  <xs:enumeration value="Stats" />
+                  <xs:enumeration value="Fail" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="async" type="xs:boolean" />
+            <xs:attribute name="command">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Route" />
+                  <xs:enumeration value="Language" />
+                  <xs:enumeration value="Notify" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="events" type="xs:string" />
+            <xs:attribute name="language" type="xs:string" />
+            <xs:attribute name="loggingLevel" type="xs:string" />
+            <xs:attribute name="restartDelay" type="xs:int" />
+            <xs:attribute name="routeId" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -6648,6 +7294,24 @@
             <xs:attribute name="threads" type="xs:int" />
             <xs:attribute name="timeZone" type="xs:string" />
             <xs:attribute name="triggerStartDelay" type="xs:long" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="direct">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="direct-vm">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -6837,6 +7501,9 @@
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="directory" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -6862,6 +7529,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
             <xs:attribute name="idempotentKey" type="xs:string" />
             <xs:attribute name="include" type="xs:string" />
@@ -6966,6 +7637,9 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -6994,6 +7668,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="flatten" type="xs:boolean" />
             <xs:attribute name="host" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
@@ -7235,6 +7913,7 @@
             <xs:attribute name="compressionType" type="xs:string" />
             <xs:attribute name="connectionFactory" type="xs:string" />
             <xs:attribute name="enableAutoCommit" type="xs:boolean" />
+            <xs:attribute name="enableIdempotence" type="xs:boolean" />
             <xs:attribute name="groupId" type="xs:string" />
             <xs:attribute name="groupInstanceId" type="xs:string" />
             <xs:attribute name="heartbeatIntervalMs" type="xs:int" />
@@ -7262,6 +7941,7 @@
             <xs:attribute name="sslKeyPassword" type="xs:string" />
             <xs:attribute name="topicIsPattern" type="xs:boolean" />
             <xs:attribute name="transacted" type="xs:boolean" />
+            <xs:attribute name="transactionalIdPrefix" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -7335,12 +8015,30 @@
             <xs:attribute name="propagateToolHeaders" type="xs:string" />
             <xs:attribute name="redb" type="xs:string" />
             <xs:attribute name="schedule" type="xs:string" />
-            <xs:attribute name="stream" type="xs:boolean" />
+            <xs:attribute name="stream">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Off" />
+                  <xs:enumeration value="Calls" />
+                  <xs:enumeration value="Body" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
             <xs:attribute name="systemPromptRef" type="xs:string" />
             <xs:attribute name="temperature" type="xs:double" />
             <xs:attribute name="tools" type="xs:string" />
             <xs:attribute name="topP" type="xs:double" />
             <xs:attribute name="user" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="mock">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="expectedMessageCount" type="xs:int" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -7434,7 +8132,6 @@
               <xs:any namespace="##targetNamespace" processContents="lax" />
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
-            <xs:attribute name="queue" type="xs:string" />
             <xs:attribute name="autoAck" type="xs:boolean" />
             <xs:attribute name="autoDelete" type="xs:boolean" />
             <xs:attribute name="automaticRecovery" type="xs:boolean" />
@@ -7512,14 +8209,16 @@
             <xs:attribute name="offset" type="xs:long" />
             <xs:attribute name="password" type="xs:string" />
             <xs:attribute name="pollDelayMs" type="xs:int" />
+            <xs:attribute name="processingList" type="xs:string" />
             <xs:attribute name="score" type="xs:double" />
             <xs:attribute name="start" type="xs:long" />
             <xs:attribute name="stop" type="xs:long" />
             <xs:attribute name="streamApproximate" type="xs:boolean" />
-            <xs:attribute name="streamAutoAck" type="xs:boolean" />
             <xs:attribute name="streamBlockTimeMs" type="xs:int" />
+            <xs:attribute name="streamClaimMinIdleMs" type="xs:int" />
             <xs:attribute name="streamMaxLength" type="xs:int" />
             <xs:attribute name="streamName" type="xs:string" />
+            <xs:attribute name="streamNoAck" type="xs:boolean" />
             <xs:attribute name="streamReadCount" type="xs:int" />
             <xs:attribute name="streamStartPosition" type="xs:string" />
             <xs:attribute name="transacted" type="xs:boolean" />
@@ -7628,6 +8327,18 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="seda">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="concurrentConsumers" type="xs:string" />
+            <xs:attribute name="size" type="xs:int" />
+            <xs:attribute name="timeout" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="sftp">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -7635,6 +8346,9 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -7668,6 +8382,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="flatten" type="xs:boolean" />
             <xs:attribute name="host" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
@@ -7846,6 +8564,7 @@
             <xs:attribute name="subscribeQueueArn" type="xs:string" />
             <xs:attribute name="subscribeSnsToSqs" type="xs:boolean" />
             <xs:attribute name="topicArn" type="xs:string" />
+            <xs:attribute name="transacted" type="xs:boolean" />
             <xs:attribute name="useDefaultCredentialsProvider" type="xs:boolean" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
@@ -7855,7 +8574,6 @@
             <xs:choice minOccurs="0" maxOccurs="unbounded">
               <xs:any namespace="##targetNamespace" processContents="lax" />
             </xs:choice>
-            <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="action" type="xs:string" />
             <xs:attribute name="allowedClientThumbprints" type="xs:string" />
             <xs:attribute name="clientCertificateMode">
@@ -8087,6 +8805,42 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="timer">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="delay" type="xs:int" />
+            <xs:attribute name="period" type="xs:int" />
+            <xs:attribute name="repeatCount" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="validator">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="format" type="xs:string" />
+            <xs:attribute name="schemaPath" type="xs:string" />
+            <xs:attribute name="targetNamespace" type="xs:string" />
+            <xs:attribute name="throwOnFailure" type="xs:boolean" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="vm">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="concurrentConsumers" type="xs:string" />
+            <xs:attribute name="size" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="wmq">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -8222,6 +8976,27 @@
             <xs:attribute name="sslCertPath" type="xs:string" />
             <xs:attribute name="subProtocol" type="xs:string" />
             <xs:attribute name="trustAllCertificates" type="xs:boolean" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="xslt">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="allowTemplateFromHeader" type="xs:boolean" />
+            <xs:attribute name="failOnNullBody" type="xs:boolean" />
+            <xs:attribute name="output">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="String" />
+                  <xs:enumeration value="Bytes" />
+                  <xs:enumeration value="Dom" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="stylesheetPath" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -8258,6 +9033,9 @@
           </xs:restriction>
         </xs:simpleType>
       </xs:attribute>
+      <xs:attribute name="deadLetterChannel" type="xs:string" />
+      <xs:attribute name="retryAttempts" type="xs:int" />
+      <xs:attribute name="retryDelay" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -8390,6 +9168,7 @@
             <xs:attribute name="filterSelector" type="xs:string" />
             <xs:attribute name="groupId" type="xs:string" />
             <xs:attribute name="host" type="xs:string" />
+            <xs:attribute name="localTransactions" type="xs:boolean" />
             <xs:attribute name="messageDurable" type="xs:boolean" />
             <xs:attribute name="messagePriority" type="xs:string" />
             <xs:attribute name="messagePriorityExpression" type="xs:string" />
@@ -8469,6 +9248,7 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="autoDeadLetter" type="xs:boolean" />
+            <xs:attribute name="batchCommit" type="xs:boolean" />
             <xs:attribute name="batchMaxMessages" type="xs:int" />
             <xs:attribute name="batchMaxSizeBytes" type="xs:long" />
             <xs:attribute name="connectionFactory" type="xs:string" />
@@ -8500,6 +9280,16 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="bean">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="method" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="cache">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -8512,6 +9302,44 @@
             <xs:attribute name="provider" type="xs:string" />
             <xs:attribute name="sliding" type="xs:string" />
             <xs:attribute name="ttl" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="controlbus">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="action">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Start" />
+                  <xs:enumeration value="Stop" />
+                  <xs:enumeration value="Suspend" />
+                  <xs:enumeration value="Resume" />
+                  <xs:enumeration value="Restart" />
+                  <xs:enumeration value="Status" />
+                  <xs:enumeration value="Stats" />
+                  <xs:enumeration value="Fail" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="async" type="xs:boolean" />
+            <xs:attribute name="command">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Route" />
+                  <xs:enumeration value="Language" />
+                  <xs:enumeration value="Notify" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="events" type="xs:string" />
+            <xs:attribute name="language" type="xs:string" />
+            <xs:attribute name="loggingLevel" type="xs:string" />
+            <xs:attribute name="restartDelay" type="xs:int" />
+            <xs:attribute name="routeId" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -8550,6 +9378,24 @@
             <xs:attribute name="threads" type="xs:int" />
             <xs:attribute name="timeZone" type="xs:string" />
             <xs:attribute name="triggerStartDelay" type="xs:long" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="direct">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="direct-vm">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -8739,6 +9585,9 @@
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="directory" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -8764,6 +9613,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
             <xs:attribute name="idempotentKey" type="xs:string" />
             <xs:attribute name="include" type="xs:string" />
@@ -8868,6 +9721,9 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -8896,6 +9752,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="flatten" type="xs:boolean" />
             <xs:attribute name="host" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
@@ -9137,6 +9997,7 @@
             <xs:attribute name="compressionType" type="xs:string" />
             <xs:attribute name="connectionFactory" type="xs:string" />
             <xs:attribute name="enableAutoCommit" type="xs:boolean" />
+            <xs:attribute name="enableIdempotence" type="xs:boolean" />
             <xs:attribute name="groupId" type="xs:string" />
             <xs:attribute name="groupInstanceId" type="xs:string" />
             <xs:attribute name="heartbeatIntervalMs" type="xs:int" />
@@ -9164,6 +10025,7 @@
             <xs:attribute name="sslKeyPassword" type="xs:string" />
             <xs:attribute name="topicIsPattern" type="xs:boolean" />
             <xs:attribute name="transacted" type="xs:boolean" />
+            <xs:attribute name="transactionalIdPrefix" type="xs:string" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -9237,12 +10099,30 @@
             <xs:attribute name="propagateToolHeaders" type="xs:string" />
             <xs:attribute name="redb" type="xs:string" />
             <xs:attribute name="schedule" type="xs:string" />
-            <xs:attribute name="stream" type="xs:boolean" />
+            <xs:attribute name="stream">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="Off" />
+                  <xs:enumeration value="Calls" />
+                  <xs:enumeration value="Body" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
             <xs:attribute name="systemPromptRef" type="xs:string" />
             <xs:attribute name="temperature" type="xs:double" />
             <xs:attribute name="tools" type="xs:string" />
             <xs:attribute name="topP" type="xs:double" />
             <xs:attribute name="user" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="mock">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="expectedMessageCount" type="xs:int" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -9336,7 +10216,6 @@
               <xs:any namespace="##targetNamespace" processContents="lax" />
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
-            <xs:attribute name="queue" type="xs:string" />
             <xs:attribute name="autoAck" type="xs:boolean" />
             <xs:attribute name="autoDelete" type="xs:boolean" />
             <xs:attribute name="automaticRecovery" type="xs:boolean" />
@@ -9414,14 +10293,16 @@
             <xs:attribute name="offset" type="xs:long" />
             <xs:attribute name="password" type="xs:string" />
             <xs:attribute name="pollDelayMs" type="xs:int" />
+            <xs:attribute name="processingList" type="xs:string" />
             <xs:attribute name="score" type="xs:double" />
             <xs:attribute name="start" type="xs:long" />
             <xs:attribute name="stop" type="xs:long" />
             <xs:attribute name="streamApproximate" type="xs:boolean" />
-            <xs:attribute name="streamAutoAck" type="xs:boolean" />
             <xs:attribute name="streamBlockTimeMs" type="xs:int" />
+            <xs:attribute name="streamClaimMinIdleMs" type="xs:int" />
             <xs:attribute name="streamMaxLength" type="xs:int" />
             <xs:attribute name="streamName" type="xs:string" />
+            <xs:attribute name="streamNoAck" type="xs:boolean" />
             <xs:attribute name="streamReadCount" type="xs:int" />
             <xs:attribute name="streamStartPosition" type="xs:string" />
             <xs:attribute name="transacted" type="xs:boolean" />
@@ -9530,6 +10411,18 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="seda">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="concurrentConsumers" type="xs:string" />
+            <xs:attribute name="size" type="xs:int" />
+            <xs:attribute name="timeout" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="sftp">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -9537,6 +10430,9 @@
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="allowNullBody" type="xs:boolean" />
+            <xs:attribute name="antExclude" type="xs:string" />
+            <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+            <xs:attribute name="antInclude" type="xs:string" />
             <xs:attribute name="appendChars" type="xs:string" />
             <xs:attribute name="autoCreate" type="xs:boolean" />
             <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -9570,6 +10466,10 @@
               </xs:simpleType>
             </xs:attribute>
             <xs:attribute name="fileName" type="xs:string" />
+            <xs:attribute name="filter" type="xs:string" />
+            <xs:attribute name="filterDirectory" type="xs:string" />
+            <xs:attribute name="filterFile" type="xs:string" />
+            <xs:attribute name="filterInstance" type="xs:string" />
             <xs:attribute name="flatten" type="xs:boolean" />
             <xs:attribute name="host" type="xs:string" />
             <xs:attribute name="idempotent" type="xs:boolean" />
@@ -9748,6 +10648,7 @@
             <xs:attribute name="subscribeQueueArn" type="xs:string" />
             <xs:attribute name="subscribeSnsToSqs" type="xs:boolean" />
             <xs:attribute name="topicArn" type="xs:string" />
+            <xs:attribute name="transacted" type="xs:boolean" />
             <xs:attribute name="useDefaultCredentialsProvider" type="xs:boolean" />
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
@@ -9757,7 +10658,6 @@
             <xs:choice minOccurs="0" maxOccurs="unbounded">
               <xs:any namespace="##targetNamespace" processContents="lax" />
             </xs:choice>
-            <xs:attribute name="path" type="xs:string" />
             <xs:attribute name="action" type="xs:string" />
             <xs:attribute name="allowedClientThumbprints" type="xs:string" />
             <xs:attribute name="clientCertificateMode">
@@ -9989,6 +10889,42 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="timer">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="delay" type="xs:int" />
+            <xs:attribute name="period" type="xs:int" />
+            <xs:attribute name="repeatCount" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="validator">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="format" type="xs:string" />
+            <xs:attribute name="schemaPath" type="xs:string" />
+            <xs:attribute name="targetNamespace" type="xs:string" />
+            <xs:attribute name="throwOnFailure" type="xs:boolean" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="vm">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="concurrentConsumers" type="xs:string" />
+            <xs:attribute name="size" type="xs:int" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:element name="wmq">
           <xs:complexType mixed="true">
             <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -10127,6 +11063,27 @@
             <xs:anyAttribute namespace="##any" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element name="xslt">
+          <xs:complexType mixed="true">
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:any namespace="##targetNamespace" processContents="lax" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="allowTemplateFromHeader" type="xs:boolean" />
+            <xs:attribute name="failOnNullBody" type="xs:boolean" />
+            <xs:attribute name="output">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="String" />
+                  <xs:enumeration value="Bytes" />
+                  <xs:enumeration value="Dom" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="stylesheetPath" type="xs:string" />
+            <xs:anyAttribute namespace="##any" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
       </xs:choice>
       <xs:attribute name="uri" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
@@ -10209,6 +11166,7 @@
                   <xs:attribute name="filterSelector" type="xs:string" />
                   <xs:attribute name="groupId" type="xs:string" />
                   <xs:attribute name="host" type="xs:string" />
+                  <xs:attribute name="localTransactions" type="xs:boolean" />
                   <xs:attribute name="messageDurable" type="xs:boolean" />
                   <xs:attribute name="messagePriority" type="xs:string" />
                   <xs:attribute name="messagePriorityExpression" type="xs:string" />
@@ -10288,6 +11246,7 @@
                   </xs:choice>
                   <xs:attribute name="path" type="xs:string" />
                   <xs:attribute name="autoDeadLetter" type="xs:boolean" />
+                  <xs:attribute name="batchCommit" type="xs:boolean" />
                   <xs:attribute name="batchMaxMessages" type="xs:int" />
                   <xs:attribute name="batchMaxSizeBytes" type="xs:long" />
                   <xs:attribute name="connectionFactory" type="xs:string" />
@@ -10319,6 +11278,16 @@
                   <xs:anyAttribute namespace="##any" processContents="lax" />
                 </xs:complexType>
               </xs:element>
+              <xs:element name="bean">
+                <xs:complexType mixed="true">
+                  <xs:choice minOccurs="0" maxOccurs="unbounded">
+                    <xs:any namespace="##targetNamespace" processContents="lax" />
+                  </xs:choice>
+                  <xs:attribute name="path" type="xs:string" />
+                  <xs:attribute name="method" type="xs:string" />
+                  <xs:anyAttribute namespace="##any" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
               <xs:element name="cache">
                 <xs:complexType mixed="true">
                   <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -10331,6 +11300,44 @@
                   <xs:attribute name="provider" type="xs:string" />
                   <xs:attribute name="sliding" type="xs:string" />
                   <xs:attribute name="ttl" type="xs:string" />
+                  <xs:anyAttribute namespace="##any" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="controlbus">
+                <xs:complexType mixed="true">
+                  <xs:choice minOccurs="0" maxOccurs="unbounded">
+                    <xs:any namespace="##targetNamespace" processContents="lax" />
+                  </xs:choice>
+                  <xs:attribute name="path" type="xs:string" />
+                  <xs:attribute name="action">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="Start" />
+                        <xs:enumeration value="Stop" />
+                        <xs:enumeration value="Suspend" />
+                        <xs:enumeration value="Resume" />
+                        <xs:enumeration value="Restart" />
+                        <xs:enumeration value="Status" />
+                        <xs:enumeration value="Stats" />
+                        <xs:enumeration value="Fail" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="async" type="xs:boolean" />
+                  <xs:attribute name="command">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="Route" />
+                        <xs:enumeration value="Language" />
+                        <xs:enumeration value="Notify" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="events" type="xs:string" />
+                  <xs:attribute name="language" type="xs:string" />
+                  <xs:attribute name="loggingLevel" type="xs:string" />
+                  <xs:attribute name="restartDelay" type="xs:int" />
+                  <xs:attribute name="routeId" type="xs:string" />
                   <xs:anyAttribute namespace="##any" processContents="lax" />
                 </xs:complexType>
               </xs:element>
@@ -10369,6 +11376,24 @@
                   <xs:attribute name="threads" type="xs:int" />
                   <xs:attribute name="timeZone" type="xs:string" />
                   <xs:attribute name="triggerStartDelay" type="xs:long" />
+                  <xs:anyAttribute namespace="##any" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="direct">
+                <xs:complexType mixed="true">
+                  <xs:choice minOccurs="0" maxOccurs="unbounded">
+                    <xs:any namespace="##targetNamespace" processContents="lax" />
+                  </xs:choice>
+                  <xs:attribute name="path" type="xs:string" />
+                  <xs:anyAttribute namespace="##any" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="direct-vm">
+                <xs:complexType mixed="true">
+                  <xs:choice minOccurs="0" maxOccurs="unbounded">
+                    <xs:any namespace="##targetNamespace" processContents="lax" />
+                  </xs:choice>
+                  <xs:attribute name="path" type="xs:string" />
                   <xs:anyAttribute namespace="##any" processContents="lax" />
                 </xs:complexType>
               </xs:element>
@@ -10558,6 +11583,9 @@
                   <xs:attribute name="path" type="xs:string" />
                   <xs:attribute name="directory" type="xs:string" />
                   <xs:attribute name="allowNullBody" type="xs:boolean" />
+                  <xs:attribute name="antExclude" type="xs:string" />
+                  <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+                  <xs:attribute name="antInclude" type="xs:string" />
                   <xs:attribute name="appendChars" type="xs:string" />
                   <xs:attribute name="autoCreate" type="xs:boolean" />
                   <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -10583,6 +11611,10 @@
                     </xs:simpleType>
                   </xs:attribute>
                   <xs:attribute name="fileName" type="xs:string" />
+                  <xs:attribute name="filter" type="xs:string" />
+                  <xs:attribute name="filterDirectory" type="xs:string" />
+                  <xs:attribute name="filterFile" type="xs:string" />
+                  <xs:attribute name="filterInstance" type="xs:string" />
                   <xs:attribute name="idempotent" type="xs:boolean" />
                   <xs:attribute name="idempotentKey" type="xs:string" />
                   <xs:attribute name="include" type="xs:string" />
@@ -10687,6 +11719,9 @@
                   </xs:choice>
                   <xs:attribute name="path" type="xs:string" />
                   <xs:attribute name="allowNullBody" type="xs:boolean" />
+                  <xs:attribute name="antExclude" type="xs:string" />
+                  <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+                  <xs:attribute name="antInclude" type="xs:string" />
                   <xs:attribute name="appendChars" type="xs:string" />
                   <xs:attribute name="autoCreate" type="xs:boolean" />
                   <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -10715,6 +11750,10 @@
                     </xs:simpleType>
                   </xs:attribute>
                   <xs:attribute name="fileName" type="xs:string" />
+                  <xs:attribute name="filter" type="xs:string" />
+                  <xs:attribute name="filterDirectory" type="xs:string" />
+                  <xs:attribute name="filterFile" type="xs:string" />
+                  <xs:attribute name="filterInstance" type="xs:string" />
                   <xs:attribute name="flatten" type="xs:boolean" />
                   <xs:attribute name="host" type="xs:string" />
                   <xs:attribute name="idempotent" type="xs:boolean" />
@@ -10956,6 +11995,7 @@
                   <xs:attribute name="compressionType" type="xs:string" />
                   <xs:attribute name="connectionFactory" type="xs:string" />
                   <xs:attribute name="enableAutoCommit" type="xs:boolean" />
+                  <xs:attribute name="enableIdempotence" type="xs:boolean" />
                   <xs:attribute name="groupId" type="xs:string" />
                   <xs:attribute name="groupInstanceId" type="xs:string" />
                   <xs:attribute name="heartbeatIntervalMs" type="xs:int" />
@@ -10983,6 +12023,7 @@
                   <xs:attribute name="sslKeyPassword" type="xs:string" />
                   <xs:attribute name="topicIsPattern" type="xs:boolean" />
                   <xs:attribute name="transacted" type="xs:boolean" />
+                  <xs:attribute name="transactionalIdPrefix" type="xs:string" />
                   <xs:anyAttribute namespace="##any" processContents="lax" />
                 </xs:complexType>
               </xs:element>
@@ -11056,12 +12097,30 @@
                   <xs:attribute name="propagateToolHeaders" type="xs:string" />
                   <xs:attribute name="redb" type="xs:string" />
                   <xs:attribute name="schedule" type="xs:string" />
-                  <xs:attribute name="stream" type="xs:boolean" />
+                  <xs:attribute name="stream">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="Off" />
+                        <xs:enumeration value="Calls" />
+                        <xs:enumeration value="Body" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
                   <xs:attribute name="systemPromptRef" type="xs:string" />
                   <xs:attribute name="temperature" type="xs:double" />
                   <xs:attribute name="tools" type="xs:string" />
                   <xs:attribute name="topP" type="xs:double" />
                   <xs:attribute name="user" type="xs:string" />
+                  <xs:anyAttribute namespace="##any" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="mock">
+                <xs:complexType mixed="true">
+                  <xs:choice minOccurs="0" maxOccurs="unbounded">
+                    <xs:any namespace="##targetNamespace" processContents="lax" />
+                  </xs:choice>
+                  <xs:attribute name="path" type="xs:string" />
+                  <xs:attribute name="expectedMessageCount" type="xs:int" />
                   <xs:anyAttribute namespace="##any" processContents="lax" />
                 </xs:complexType>
               </xs:element>
@@ -11155,7 +12214,6 @@
                     <xs:any namespace="##targetNamespace" processContents="lax" />
                   </xs:choice>
                   <xs:attribute name="path" type="xs:string" />
-                  <xs:attribute name="queue" type="xs:string" />
                   <xs:attribute name="autoAck" type="xs:boolean" />
                   <xs:attribute name="autoDelete" type="xs:boolean" />
                   <xs:attribute name="automaticRecovery" type="xs:boolean" />
@@ -11233,14 +12291,16 @@
                   <xs:attribute name="offset" type="xs:long" />
                   <xs:attribute name="password" type="xs:string" />
                   <xs:attribute name="pollDelayMs" type="xs:int" />
+                  <xs:attribute name="processingList" type="xs:string" />
                   <xs:attribute name="score" type="xs:double" />
                   <xs:attribute name="start" type="xs:long" />
                   <xs:attribute name="stop" type="xs:long" />
                   <xs:attribute name="streamApproximate" type="xs:boolean" />
-                  <xs:attribute name="streamAutoAck" type="xs:boolean" />
                   <xs:attribute name="streamBlockTimeMs" type="xs:int" />
+                  <xs:attribute name="streamClaimMinIdleMs" type="xs:int" />
                   <xs:attribute name="streamMaxLength" type="xs:int" />
                   <xs:attribute name="streamName" type="xs:string" />
+                  <xs:attribute name="streamNoAck" type="xs:boolean" />
                   <xs:attribute name="streamReadCount" type="xs:int" />
                   <xs:attribute name="streamStartPosition" type="xs:string" />
                   <xs:attribute name="transacted" type="xs:boolean" />
@@ -11349,6 +12409,18 @@
                   <xs:anyAttribute namespace="##any" processContents="lax" />
                 </xs:complexType>
               </xs:element>
+              <xs:element name="seda">
+                <xs:complexType mixed="true">
+                  <xs:choice minOccurs="0" maxOccurs="unbounded">
+                    <xs:any namespace="##targetNamespace" processContents="lax" />
+                  </xs:choice>
+                  <xs:attribute name="path" type="xs:string" />
+                  <xs:attribute name="concurrentConsumers" type="xs:string" />
+                  <xs:attribute name="size" type="xs:int" />
+                  <xs:attribute name="timeout" type="xs:int" />
+                  <xs:anyAttribute namespace="##any" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
               <xs:element name="sftp">
                 <xs:complexType mixed="true">
                   <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -11356,6 +12428,9 @@
                   </xs:choice>
                   <xs:attribute name="path" type="xs:string" />
                   <xs:attribute name="allowNullBody" type="xs:boolean" />
+                  <xs:attribute name="antExclude" type="xs:string" />
+                  <xs:attribute name="antFilterCaseSensitive" type="xs:boolean" />
+                  <xs:attribute name="antInclude" type="xs:string" />
                   <xs:attribute name="appendChars" type="xs:string" />
                   <xs:attribute name="autoCreate" type="xs:boolean" />
                   <xs:attribute name="backoffErrorThreshold" type="xs:int" />
@@ -11389,6 +12464,10 @@
                     </xs:simpleType>
                   </xs:attribute>
                   <xs:attribute name="fileName" type="xs:string" />
+                  <xs:attribute name="filter" type="xs:string" />
+                  <xs:attribute name="filterDirectory" type="xs:string" />
+                  <xs:attribute name="filterFile" type="xs:string" />
+                  <xs:attribute name="filterInstance" type="xs:string" />
                   <xs:attribute name="flatten" type="xs:boolean" />
                   <xs:attribute name="host" type="xs:string" />
                   <xs:attribute name="idempotent" type="xs:boolean" />
@@ -11567,6 +12646,7 @@
                   <xs:attribute name="subscribeQueueArn" type="xs:string" />
                   <xs:attribute name="subscribeSnsToSqs" type="xs:boolean" />
                   <xs:attribute name="topicArn" type="xs:string" />
+                  <xs:attribute name="transacted" type="xs:boolean" />
                   <xs:attribute name="useDefaultCredentialsProvider" type="xs:boolean" />
                   <xs:anyAttribute namespace="##any" processContents="lax" />
                 </xs:complexType>
@@ -11576,7 +12656,6 @@
                   <xs:choice minOccurs="0" maxOccurs="unbounded">
                     <xs:any namespace="##targetNamespace" processContents="lax" />
                   </xs:choice>
-                  <xs:attribute name="path" type="xs:string" />
                   <xs:attribute name="action" type="xs:string" />
                   <xs:attribute name="allowedClientThumbprints" type="xs:string" />
                   <xs:attribute name="clientCertificateMode">
@@ -11808,6 +12887,42 @@
                   <xs:anyAttribute namespace="##any" processContents="lax" />
                 </xs:complexType>
               </xs:element>
+              <xs:element name="timer">
+                <xs:complexType mixed="true">
+                  <xs:choice minOccurs="0" maxOccurs="unbounded">
+                    <xs:any namespace="##targetNamespace" processContents="lax" />
+                  </xs:choice>
+                  <xs:attribute name="path" type="xs:string" />
+                  <xs:attribute name="delay" type="xs:int" />
+                  <xs:attribute name="period" type="xs:int" />
+                  <xs:attribute name="repeatCount" type="xs:int" />
+                  <xs:anyAttribute namespace="##any" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="validator">
+                <xs:complexType mixed="true">
+                  <xs:choice minOccurs="0" maxOccurs="unbounded">
+                    <xs:any namespace="##targetNamespace" processContents="lax" />
+                  </xs:choice>
+                  <xs:attribute name="path" type="xs:string" />
+                  <xs:attribute name="format" type="xs:string" />
+                  <xs:attribute name="schemaPath" type="xs:string" />
+                  <xs:attribute name="targetNamespace" type="xs:string" />
+                  <xs:attribute name="throwOnFailure" type="xs:boolean" />
+                  <xs:anyAttribute namespace="##any" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="vm">
+                <xs:complexType mixed="true">
+                  <xs:choice minOccurs="0" maxOccurs="unbounded">
+                    <xs:any namespace="##targetNamespace" processContents="lax" />
+                  </xs:choice>
+                  <xs:attribute name="path" type="xs:string" />
+                  <xs:attribute name="concurrentConsumers" type="xs:string" />
+                  <xs:attribute name="size" type="xs:int" />
+                  <xs:anyAttribute namespace="##any" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
               <xs:element name="wmq">
                 <xs:complexType mixed="true">
                   <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -11943,6 +13058,27 @@
                   <xs:attribute name="sslCertPath" type="xs:string" />
                   <xs:attribute name="subProtocol" type="xs:string" />
                   <xs:attribute name="trustAllCertificates" type="xs:boolean" />
+                  <xs:anyAttribute namespace="##any" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
+              <xs:element name="xslt">
+                <xs:complexType mixed="true">
+                  <xs:choice minOccurs="0" maxOccurs="unbounded">
+                    <xs:any namespace="##targetNamespace" processContents="lax" />
+                  </xs:choice>
+                  <xs:attribute name="path" type="xs:string" />
+                  <xs:attribute name="allowTemplateFromHeader" type="xs:boolean" />
+                  <xs:attribute name="failOnNullBody" type="xs:boolean" />
+                  <xs:attribute name="output">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="String" />
+                        <xs:enumeration value="Bytes" />
+                        <xs:enumeration value="Dom" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="stylesheetPath" type="xs:string" />
                   <xs:anyAttribute namespace="##any" processContents="lax" />
                 </xs:complexType>
               </xs:element>

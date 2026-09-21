@@ -11,9 +11,13 @@ internal static partial class CoreContributions
 
     private static AttributeSpec S(string name, bool required = false) => new(name, AttributeType.String, required);
     private static AttributeSpec E(string name, bool required = false) => new(name, AttributeType.Expression, required);
+    /// <summary>An expression read as a condition — a predicate, not a value.</summary>
+    private static AttributeSpec C(string name, bool required = false)
+        => new(name, AttributeType.Expression, required) { Condition = true };
     private static AttributeSpec U(string name, bool required = false) => new(name, AttributeType.Uri, required);
     private static AttributeSpec R(string name, bool required = false) => new(name, AttributeType.Reference, required);
     private static AttributeSpec T(string name, bool required = false) => new(name, AttributeType.TypeName, required);
+    private static AttributeSpec TL(string name, bool required = false) => new(name, AttributeType.TypeNameList, required);
     private static AttributeSpec B(string name) => new(name, AttributeType.Bool);
     private static AttributeSpec I(string name, bool required = false) => new(name, AttributeType.Int, required);
     private static AttributeSpec L(string name) => new(name, AttributeType.Long);
@@ -33,7 +37,7 @@ internal static partial class CoreContributions
         => new(name, XmlElementKind.Step, [U("uri"), .. extra], [], TakesEndpoint: true);
 
     private static readonly ElementSpec WhenCondition =
-        ElementSpec.Child("when", allowsSteps: false, E("expr", required: true));
+        ElementSpec.Child("when", allowsSteps: false, C("expr", required: true));
 
     /// <summary>The spec for a core element name; opaque for a name the table misses (test-guarded).</summary>
     internal static ElementSpec SpecFor(string name, XmlElementKind kind)
@@ -70,10 +74,10 @@ internal static partial class CoreContributions
                 ],
                 AllowsTextContent: true),
             ["delay"] = ElementSpec.Leaf("delay", D("duration"), E("expr")),
-            ["stop"] = ElementSpec.Leaf("stop"),
-            ["throwException"] = ElementSpec.Leaf("throwException", T("type", required: true), S("message")),
+            ["stop"] = ElementSpec.Leaf("stop") with { Terminal = true },
+            ["throwException"] = ElementSpec.Leaf("throwException", T("type", required: true), S("message")) with { Terminal = true },
             ["convertBody"] = ElementSpec.Leaf("convertBody", T("type", required: true)),
-            ["validate"] = ElementSpec.Leaf("validate", E("expr", required: true), S("message"), B("throwOnFailure")),
+            ["validate"] = ElementSpec.Leaf("validate", C("expr", required: true), S("message"), B("throwOnFailure")),
             ["sort"] = ElementSpec.Leaf("sort", E("expr", required: true), E("by"), B("descending")),
             ["sample"] = ElementSpec.Leaf("sample", L("messageFrequency"), D("period")),
             ["streamCaching"] = ElementSpec.Leaf("streamCaching", L("spoolThreshold")),
@@ -101,12 +105,13 @@ internal static partial class CoreContributions
             ["beginTransaction"] = ElementSpec.Leaf("beginTransaction", En("policy", TransactionPolicies)),
             ["commitTransaction"] = ElementSpec.Leaf("commitTransaction"),
             ["rollbackTransaction"] = ElementSpec.Leaf("rollbackTransaction"),
-            ["rollbackAll"] = ElementSpec.Leaf("rollbackAll"),
+            // Camel markRollbackOnly(): marks the exchange and stops the route (119e76d7).
+            ["rollbackAll"] = ElementSpec.Leaf("rollbackAll") with { Terminal = true },
             ["exceptionHandled"] = ElementSpec.Leaf("exceptionHandled"),
             ["routePolicy"] = ElementSpec.Leaf("routePolicy", R("ref", required: true)),
 
             // ── scopes ──────────────────────────────────────────────────────
-            ["filter"] = ElementSpec.Scope("filter", E("expr"), R("predicate")),
+            ["filter"] = ElementSpec.Scope("filter", C("expr"), R("predicate")),
             ["split"] = new("split", XmlElementKind.Scope,
                 [E("expr"), B("parallel"), I("maxParallelism"), B("stopOnException")],
                 [
@@ -119,18 +124,23 @@ internal static partial class CoreContributions
             ["aggregate"] = ElementSpec.Scope("aggregate",
                 E("correlation", required: true), S("strategy", required: true),
                 E("completion"), I("completionSize"), D("completionTimeout")),
-            ["loop"] = ElementSpec.Scope("loop", I("count"), E("expr"), E("while"), B("copy"), B("shareScope")),
+            ["loop"] = ElementSpec.Scope("loop", I("count"), E("expr"), C("while"), B("copy"), B("shareScope")),
             ["throttle"] = ElementSpec.Scope("throttle",
                 E("maxPerPeriod", required: true), D("period"), E("key"), B("rejectOnOverflow")),
             ["debounce"] = ElementSpec.Scope("debounce", E("key", required: true), D("quietPeriod", required: true)),
             ["idempotentConsumer"] = ElementSpec.Scope("idempotentConsumer",
                 E("key", required: true), R("repository", required: true), B("skipDuplicate")),
             ["resequence"] = ElementSpec.Scope("resequence", E("key", required: true), I("batchSize"), D("timeout")),
-            ["transaction"] = ElementSpec.Scope("transaction", En("policy", TransactionPolicies)),
+            ["transaction"] = ElementSpec.Scope("transaction", En("policy", TransactionPolicies),
+                U("deadLetterChannel"), I("retryAttempts"), D("retryDelay")),
             ["traced"] = ElementSpec.Scope("traced", S("name", required: true)),
-            ["metered"] = ElementSpec.Scope("metered", S("name", required: true)),
+            ["metered"] = new("metered", XmlElementKind.Scope, [S("name", required: true)],
+                [ElementSpec.Child("tag", allowsSteps: false,
+                    S("name", required: true), S("fromHeader"), E("expr"))],
+                AllowsSteps: true),
             ["replayable"] = ElementSpec.Scope("replayable", S("name", required: true), B("exposed")),
-            ["threads"] = ElementSpec.Scope("threads", I("poolSize", required: true)),
+            ["threads"] = ElementSpec.Scope("threads", I("poolSize", required: true),
+                I("maxQueueSize"), D("enqueueTimeout")),
             ["ofType"] = ElementSpec.Scope("ofType", T("type", required: true)),
             ["circuitBreaker"] = new("circuitBreaker", XmlElementKind.Scope,
                 [I("failureThreshold"), D("resetTimeout"), I("halfOpenMaxCalls")],
@@ -139,12 +149,20 @@ internal static partial class CoreContributions
             ["tryCatch"] = new("tryCatch", XmlElementKind.Scope, [],
                 [
                     ElementSpec.Child("try", allowsSteps: true),
-                    ElementSpec.Child("catch", allowsSteps: true, T("exceptions", required: true)),
+                    ElementSpec.Child("catch", allowsSteps: true, TL("exceptions", required: true)),
                     ElementSpec.Child("finally", allowsSteps: true),
                 ]),
-            ["onException"] = ElementSpec.Scope("onException",
-                T("exceptions", required: true), B("handled"), I("maximumRedeliveries"),
-                D("redeliveryDelay"), B("exponentialBackOff"), F("backOffMultiplier")),
+            ["onException"] = new("onException", XmlElementKind.Scope,
+                [
+                    TL("exceptions", required: true), B("handled"), B("continued"),
+                    I("maximumRedeliveries"), D("redeliveryDelay"), B("exponentialBackOff"),
+                    F("backOffMultiplier"), B("useOriginalBody"), B("logStackTrace"),
+                    B("logExhausted"), En("retryAttemptedLogLevel", LogLevels),
+                    En("retriesExhaustedLogLevel", LogLevels),
+                    R("onExceptionOccurred"), R("onRedelivery"), R("onPrepareFailure"),
+                ],
+                [WhenCondition, ElementSpec.Child("retryWhile", allowsSteps: false, C("expr", required: true))],
+                AllowsSteps: true),
             ["intercept"] = new("intercept", XmlElementKind.Scope, [], [WhenCondition], AllowsSteps: true),
             ["interceptFrom"] = new("interceptFrom", XmlElementKind.Scope, [U("uri")], [WhenCondition], AllowsSteps: true),
             ["interceptSendToEndpoint"] = new("interceptSendToEndpoint", XmlElementKind.Scope,
@@ -159,7 +177,7 @@ internal static partial class CoreContributions
                 [ElementSpec.Child("endpoint", false, U("uri", required: true), I("weight"))]),
             ["normalize"] = new("normalize", XmlElementKind.Step, [],
                 [
-                    ElementSpec.Child("when", false, E("expr", required: true), E("transform", required: true)),
+                    ElementSpec.Child("when", false, C("expr", required: true), E("transform", required: true)),
                     ElementSpec.Child("whenContentType", false, S("type", required: true), E("transform", required: true)),
                     ElementSpec.Child("otherwise", false, E("transform", required: true)),
                 ]),
@@ -171,7 +189,7 @@ internal static partial class CoreContributions
             // ── branching ───────────────────────────────────────────────────
             ["choice"] = new("choice", XmlElementKind.Branching, [],
                 [
-                    ElementSpec.Child("when", allowsSteps: true, E("expr"), R("predicate")),
+                    ElementSpec.Child("when", allowsSteps: true, C("expr"), R("predicate")),
                     ElementSpec.Child("otherwise", allowsSteps: true),
                 ]),
         };

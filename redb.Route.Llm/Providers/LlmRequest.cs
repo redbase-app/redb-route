@@ -183,10 +183,20 @@ public sealed class LlmResponse
 }
 
 /// <summary>
-/// Single chunk yielded by <see cref="ILlmProvider.StreamAsync"/>. Non-final chunks
-/// have <see cref="StopReason"/> = null and partial <see cref="Content"/>.
+/// Single chunk yielded by <see cref="ILlmProvider.StreamAsync"/>. Non-final chunks have <see cref="StopReason"/> =
+/// null and carry the pieces as they arrive: visible text as <see cref="LlmTextBlock"/>, the model's thinking as
+/// <see cref="LlmThinkingBlock"/> without a signature. A piece is partial; the assembled blocks are in
+/// <see cref="Response"/> of the last chunk, which also carries the completed tool calls in <see cref="Content"/>.
 /// </summary>
 public sealed record LlmStreamChunk(
     IReadOnlyList<LlmContentBlock> Content,
     LlmStopReason? StopReason,
-    LlmUsage? Usage);
+    LlmUsage? Usage)
+{
+    /// <summary>
+    /// The whole answer assembled from the stream, exactly what <see cref="ILlmProvider.CompleteAsync"/> returns for
+    /// the same answer: blocks in the order they arrived, thinking with its signature, tool calls, usage, the stop
+    /// reason and its raw value, the response id. Set on the last chunk only.
+    /// </summary>
+    public LlmResponse? Response { get; init; }
+}

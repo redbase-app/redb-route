@@ -1002,4 +1002,95 @@ public sealed class SftpIntegrationTests
 
         CleanupDir(rawClient, fullDir);
     }
+
+    // ───── Path filters (Camel parity) ─────
+
+    [Fact]
+    public async Task Consumer_AntInclude_TakesOnlyTheNamedDirectories()
+    {
+        var dir = UniqueDir();
+        var remotePath = $"{BaseDir}/{dir}";
+
+        using var rawClient = CreateRawClient();
+        var fullDir = $"/{remotePath}";
+        rawClient.CreateDirectory(fullDir);
+        foreach (var type in new[] { "TYPE_A", "TYPE_B", "TYPE_C" })
+        {
+            rawClient.CreateDirectory($"{fullDir}/{type}");
+            rawClient.CreateDirectory($"{fullDir}/{type}/outbox");
+            using var ms = new MemoryStream(Encoding.UTF8.GetBytes(type));
+            rawClient.UploadFile(ms, $"{fullDir}/{type}/outbox/data.csv");
+        }
+
+        // The partner allows one session: one consumer over the parent, the wanted directories
+        // named by path, and the rest is neither downloaded nor deleted.
+        var ep = CreateEndpoint(remotePath,
+            "recursive=true&delete=true&delay=5000&initialDelay=100&antInclude=TYPE_A/outbox/*.csv,TYPE_B/outbox/*.csv");
+        var received = new ConcurrentBag<IExchange>();
+        var counter = 0;
+        var done = new TaskCompletionSource();
+
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                received.Add(ci.ArgAt<IExchange>(0));
+                if (Interlocked.Increment(ref counter) >= 2) done.TrySetResult();
+                return Task.CompletedTask;
+            });
+
+        var consumer = (SftpConsumer)ep.CreateConsumer(processor);
+        await consumer.Start();
+        await Task.WhenAny(done.Task, Task.Delay(15_000));
+        await consumer.Stop();
+
+        received.Select(r => r.In.Headers[SftpHeaders.RelativePath]!.ToString()!)
+            .Should().BeEquivalentTo(["TYPE_A/outbox/data.csv", "TYPE_B/outbox/data.csv"]);
+        rawClient.Exists($"{fullDir}/TYPE_C/outbox/data.csv").Should().BeTrue("a file no filter took is left alone");
+        rawClient.Exists($"{fullDir}/TYPE_A/outbox/data.csv").Should().BeFalse();
+
+        CleanupDir(rawClient, fullDir);
+    }
+
+    [Fact]
+    public async Task Consumer_FilterDirectory_LeavesTheRejectedDirectoryAlone()
+    {
+        var dir = UniqueDir();
+        var remotePath = $"{BaseDir}/{dir}";
+
+        using var rawClient = CreateRawClient();
+        var fullDir = $"/{remotePath}";
+        rawClient.CreateDirectory(fullDir);
+        rawClient.CreateDirectory($"{fullDir}/wanted");
+        rawClient.CreateDirectory($"{fullDir}/skipped");
+        using (var ms = new MemoryStream(Encoding.UTF8.GetBytes("in")))
+            rawClient.UploadFile(ms, $"{fullDir}/wanted/a.csv");
+        using (var ms = new MemoryStream(Encoding.UTF8.GetBytes("out")))
+            rawClient.UploadFile(ms, $"{fullDir}/skipped/b.csv");
+
+        var ep = CreateEndpoint(remotePath,
+            "recursive=true&noop=true&delay=5000&initialDelay=100&filterDirectory=header.redbSftp.Name != 'skipped'");
+        var received = new ConcurrentBag<IExchange>();
+        var done = new TaskCompletionSource();
+
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                received.Add(ci.ArgAt<IExchange>(0));
+                done.TrySetResult();
+                return Task.CompletedTask;
+            });
+
+        var consumer = (SftpConsumer)ep.CreateConsumer(processor);
+        await consumer.Start();
+        await Task.WhenAny(done.Task, Task.Delay(15_000));
+        await Task.Delay(500);
+        await consumer.Stop();
+
+        received.Select(r => (string)r.In.Headers[SftpHeaders.FileName]!)
+            .Should().BeEquivalentTo(["a.csv"]);
+
+        CleanupDir(rawClient, fullDir);
+    }
 }

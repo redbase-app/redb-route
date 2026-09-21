@@ -1,5 +1,6 @@
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.GenericFile;
 
 namespace redb.Route.File;
 
@@ -24,6 +25,7 @@ public class FileComponent : ComponentBase
 
         var options = new FileEndpointOptions();
         options.BindFromUri(uri.RawParameters);
+        options.ResolveFilter(Context);
         options.Validate();
 
         return new FileEndpoint(uri, this, options);

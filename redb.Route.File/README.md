@@ -49,6 +49,7 @@ From("direct://logs")
 | Category | Methods |
 |----------|---------|
 | **Consumer** | `FileDsl.Read(dir)`, `.Delay()`, `.InitialDelay()`, `.Include()`, `.Exclude()`, `.Recursive()`, `.SortBy()`, `.MaxMessagesPerPoll()`, `.MinAge()` |
+| **Path filters** | `.AntInclude()`, `.AntExclude()`, `.AntFilterCaseSensitive()`, `.FilterDirectory()`, `.FilterFile()`, `.Filter()` — see [the base package](../redb.Route.GenericFile/README.md#path-filters) |
 | **Poll backoff** | `.BackoffMultiplier()`, `.BackoffIdleThreshold()`, `.BackoffErrorThreshold()`, `.BackoffOnFailedExchanges()` |
 | **Post-process** | `.Noop()`, `.Delete()`, `.MoveTo()`, `.MoveExisting()`, `.PreMove()` |
 | **Idempotency** | `.Idempotent()`, `.DoneFileName()` |

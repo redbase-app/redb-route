@@ -16,7 +16,56 @@ public class XmlRouteSchemaTests
     private static IReadOnlyList<(int Line, int Column, string Message)> Validate(string xml)
         => XmlRouteSchema.Validate(XDocument.Parse(xml, LoadOptions.SetLineInfo), Registry);
 
+    // ── the catalog-aware schema ─────────────────────────────────────────────
+
+    /// <summary>
+    /// The shipped catalog XSD must COMPILE, or the editor binds a schema it cannot use. A
+    /// component whose path synonym is also one of its options (seda's queue, amqp's path)
+    /// declared that attribute twice — «the attribute 'queue' already exists», twelve times
+    /// over the real catalog (found before 4.1.0, 2026-09-20).
+    /// </summary>
+    [Fact]
+    public void CatalogSchema_WithAPathSynonymThatIsAlsoAnOption_Compiles()
+    {
+        var component = new CatalogComponent(
+            "seda", [], "redb.Route", "redb.Route.Components.SedaEndpointOptions", "queue", false,
+            [
+                new CatalogOption("Queue", "string", null, false, null),
+                new CatalogOption("Size", "int", "1000", false, null),
+            ]);
+
+        var schema = XmlRouteSchema.Generate(Registry, [component]).ToString();
+
+        var errors = new List<string>();
+        var set = new System.Xml.Schema.XmlSchemaSet();
+        set.ValidationEventHandler += (_, e) => errors.Add(e.Message);
+        set.Add("urn:redb:route:1.0", System.Xml.XmlReader.Create(new StringReader(schema)));
+        set.Compile();
+
+        errors.Should().BeEmpty("a generated schema that does not compile is no schema at all");
+    }
+
     // ── the one-list guarantee ───────────────────────────────────────────────
+
+    [Fact]
+    public void AttributeType_KeepsItsNumericValues_AcrossReleases()
+    {
+        // Package contributions (Cache, Http, redb.Route.Core, ...) are compiled against this enum
+        // and store the NUMBERS. Inserting a member in the middle shifts them: a released package's
+        // Bool would read as whatever took its slot. New members go to the end, never between.
+        ((int)AttributeType.String).Should().Be(0);
+        ((int)AttributeType.Expression).Should().Be(1);
+        ((int)AttributeType.Uri).Should().Be(2);
+        ((int)AttributeType.Reference).Should().Be(3);
+        ((int)AttributeType.TypeName).Should().Be(4);
+        ((int)AttributeType.Bool).Should().Be(5);
+        ((int)AttributeType.Int).Should().Be(6);
+        ((int)AttributeType.Long).Should().Be(7);
+        ((int)AttributeType.Double).Should().Be(8);
+        ((int)AttributeType.Duration).Should().Be(9);
+        ((int)AttributeType.Enum).Should().Be(10);
+        ((int)AttributeType.TypeNameList).Should().Be(11);
+    }
 
     [Fact]
     public void EveryCoreContribution_HasAPinnedSpec_WithMatchingNameAndKind()

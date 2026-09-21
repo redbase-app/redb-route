@@ -343,6 +343,6 @@ public class TransactedRouteIntegrationTests : IAsyncDisposable
         await producer.Process(new Exchange(new Message { Body = "check-prop" }));
 
         propertyValue.Should().NotBeNull();
-        propertyValue.Should().BeOfType<ConcurrentDictionary<string, ITransactedAction>>();
+        propertyValue.Should().BeAssignableTo<ConcurrentDictionary<string, ITransactedAction>>();
     }
 }

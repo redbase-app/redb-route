@@ -1,12 +1,11 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using OpenTelemetry;
-using OpenTelemetry.Trace;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Tcp;
 using redb.Route.Telemetry;
+using redb.Route.Tests.Shared;
 
 namespace redb.Route.Tests.Tcp;
 
@@ -68,11 +67,7 @@ public sealed class TcpTelemetrySmokeTests : IAsyncLifetime
     [Fact]
     public async Task TcpProducer_EmitsTransportSpanWithNetworkTags()
     {
-        var activities = new List<Activity>();
-        using var tracer = Sdk.CreateTracerProviderBuilder()
-            .AddSource(RouteActivitySource.SourceName)
-            .AddInMemoryExporter(activities)
-            .Build()!;
+        using var capture = new SpanCapture();   // this test's spans only
 
         var component = new TcpComponent();
         var pars = new Dictionary<string, string> { ["framing"] = "TextLine" };
@@ -90,11 +85,9 @@ public sealed class TcpTelemetrySmokeTests : IAsyncLifetime
             await producer.Stop();
         }
 
-        tracer.ForceFlush(1000);
+        var activities = capture.Spans;
         activities.Should().NotBeEmpty();
-        // Filter to THIS producer's span by its unique destination port — the in-memory
-        // exporter listens on the process-global RouteActivitySource and can capture spans
-        // emitted by other test classes running in parallel.
+        // The capture keeps only this test's trace; the unique destination port picks the producer's span in it.
         var activity = activities.Single(a =>
             Equals(a.GetTagItem("messaging.destination.name"), $"127.0.0.1:{_port}"));
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);

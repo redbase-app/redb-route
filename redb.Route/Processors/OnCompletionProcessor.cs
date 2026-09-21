@@ -13,9 +13,10 @@ internal sealed record CompletionHandler(IProcessor Body, CompletionMode Mode, I
 /// <summary>
 /// Runs <c>OnCompletion</c> blocks after the route finished with an exchange — on a copy, outside the
 /// route's error handlers and transaction, never changing the route's outcome. Placement in the route
-/// wrapper stack is outside every error handler, so "failure" means the exception is escaping the
-/// route; a handled error is a completion. After-consumer blocks are fired and forgotten; a failing
-/// block is logged, never thrown.
+/// wrapper stack is outside every error handler, and "failure" is the consumer's verdict: an exception
+/// escaping the route, a failure left unhandled on the exchange, or a rollback-only mark; a handled
+/// error is a completion. After-consumer blocks are fired and forgotten; a failing block is logged,
+/// never thrown.
 /// </summary>
 internal sealed class OnCompletionProcessor : IProcessor
 {
@@ -43,7 +44,9 @@ internal sealed class OnCompletionProcessor : IProcessor
             await RunHandlers(exchange, ex, ct).ConfigureAwait(false);
             throw;
         }
-        await RunHandlers(exchange, null, ct).ConfigureAwait(false);
+        // A normal return is not always a completion: a failure left unhandled on the exchange (OnException without
+        // Handled) or a rollback-only mark (.RollbackAll()) is one the consumer does not acknowledge.
+        await RunHandlers(exchange, ExchangeFailureExtensions.FailureOf(exchange), ct).ConfigureAwait(false);
     }
 
     private async Task RunHandlers(IExchange exchange, Exception? failure, CancellationToken ct)

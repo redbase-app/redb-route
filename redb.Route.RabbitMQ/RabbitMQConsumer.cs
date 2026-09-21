@@ -106,7 +106,7 @@ public sealed class RabbitMQConsumer : IConsumer
                 cancellationToken: ct).ConfigureAwait(false);
 
             // Transacted channel
-            if (_options.Transacted)
+            if (_options.Transacted == true)
             {
                 await _channel.TxSelectAsync(ct).ConfigureAwait(false);
                 _logger?.LogDebug("RabbitMQ consumer: transacted channel enabled");
@@ -234,7 +234,7 @@ public sealed class RabbitMQConsumer : IConsumer
             // The acknowledgement belongs to this consumer, not to the route transaction: the transaction owns the
             // database and the outgoing sends, and only a unit of work that ended well is acknowledged below.
             if (!_options.AutoAck)
-                ackAction = new RabbitMQAckAction(channel, ea.DeliveryTag, _options.Transacted, _logger);
+                ackAction = new RabbitMQAckAction(channel, ea.DeliveryTag, _options.Transacted == true, _logger);
 
             var pipelineFailed = false;
             try

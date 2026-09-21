@@ -166,6 +166,12 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
                     .ConfigureAwait(false);
             }
         }
+        else if (exchange.IsRollbackOnly())
+        {
+            // The route rolled the unit of work back (.RollbackAll()): not an error, the message is delivered again.
+            await args.AbandonMessageAsync(args.Message, cancellationToken: args.CancellationToken)
+                .ConfigureAwait(false);
+        }
         else
         {
             await args.CompleteMessageAsync(args.Message, cancellationToken: args.CancellationToken)

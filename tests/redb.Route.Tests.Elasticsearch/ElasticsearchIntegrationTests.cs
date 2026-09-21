@@ -35,16 +35,29 @@ public sealed class ElasticsearchIntegrationTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        // Delete all test-* indices
-        if (_rawClient is not null)
+        // Delete the indices this test created, by name: Elasticsearch 8 refuses a wildcard delete
+        // (action.destructive_requires_name), and the refusal used to go unnoticed, so every run leaked its indices
+        // until the cluster ran out of shards. A test that never wrote to its index has none to delete.
+        if (_rawClient is not null && _indices.Count > 0)
         {
-            await _rawClient.Indices.DeleteAsync("test-*");
+            var deleted = await _rawClient.Indices.DeleteAsync(
+                Elastic.Clients.Elasticsearch.Indices.Parse(string.Join(",", _indices)),
+                d => d.IgnoreUnavailable(true));
+            if (!deleted.IsValidResponse)
+                throw new InvalidOperationException($"The test's indices were not deleted: {deleted.DebugInformation}");
         }
     }
 
     // ───── Helpers ─────
 
-    private static string UniqueIndex() => $"test-{Guid.NewGuid():N}";
+    private readonly List<string> _indices = [];
+
+    private string UniqueIndex()
+    {
+        var index = $"test-{Guid.NewGuid():N}";
+        _indices.Add(index);
+        return index;
+    }
 
     private ElasticsearchEndpoint CreateEndpoint(string index, string? extraParams = null)
     {

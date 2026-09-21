@@ -58,7 +58,9 @@ public sealed class KafkaBuilder
     private bool _recordMetadata;
     private string? _key;
     private string? _partitionNumber;
-    private bool _transacted;
+    private bool? _transacted;
+    private bool? _enableIdempotence;
+    private string? _transactionalIdPrefix;
     private string? _lingerMs;
     private string? _batchSize;
     private string? _compressionType;
@@ -188,12 +190,32 @@ public sealed class KafkaBuilder
     public KafkaBuilder Partition(IExpression number) { _partitionNumber = number.ToTemplateString(); return this; }
 
     /// <summary>
-    /// Idempotent producer whose send is deferred to the route's transaction boundary —
-    /// at-least-once, NOT Kafka exactly-once (see docs/KAFKA_TRANSACTIONS_TODO.md). The former
-    /// idPrefix parameter is gone: it fed transactional.id, which this mode deliberately does not
-    /// configure, so the value was silently discarded (волна A3).
+    /// The send joins the enclosing <c>.Transacted()</c> block (deferred until the database commits) and refuses to run
+    /// outside one; the producer is idempotent. Kafka transactions are a separate switch,
+    /// <see cref="TransactionalIdPrefix"/>.
     /// </summary>
     public KafkaBuilder Transacted() { _transacted = true; return this; }
+
+    /// <summary>
+    /// Sets <c>transacted</c> explicitly. <c>false</c> sends at once even inside a <c>.Transacted()</c> block, outside its
+    /// transaction; left unset, a producer follows the block.
+    /// </summary>
+    public KafkaBuilder Transacted(bool value) { _transacted = value; return this; }
+
+    /// <summary>
+    /// Sets <c>enableIdempotence</c>: the broker does not write a retried send twice. Left unset, it follows acks: on
+    /// with <c>all</c> (the default), off otherwise.
+    /// </summary>
+    public KafkaBuilder EnableIdempotence(bool value = true) { _enableIdempotence = value; return this; }
+
+    /// <summary>
+    /// Sets <c>transactionalIdPrefix</c>: the producer uses Kafka transactions. The sends it defers in a
+    /// <c>.Transacted()</c> block commit as one Kafka transaction when the block commits, together with the offset of the
+    /// Kafka record the route consumed (exactly-once within Kafka); a send outside a block is a transaction of its own.
+    /// The prefix names the producer: the connector appends the machine, the process and the producer's number, so nodes
+    /// sharing the configuration never fence each other.
+    /// </summary>
+    public KafkaBuilder TransactionalIdPrefix(string prefix) { _transactionalIdPrefix = prefix; return this; }
 
     /// <summary>Linger time in milliseconds (batch delay).</summary>
     public KafkaBuilder Linger(int ms) { _lingerMs = ms.ToString(); return this; }
@@ -267,7 +289,9 @@ public sealed class KafkaBuilder
         AppendBool("recordMetadata", _recordMetadata);
         AppendIf("key", _key);
         AppendIf("partitionNumber", _partitionNumber);
-        AppendBool("transacted", _transacted);
+        if (_transacted is { } transacted) Append("transacted", transacted ? "true" : "false");
+        if (_enableIdempotence is { } idempotence) Append("enableIdempotence", idempotence ? "true" : "false");
+        AppendIf("transactionalIdPrefix", _transactionalIdPrefix);
         AppendIf("lingerMs", _lingerMs);
         AppendIf("batchSize", _batchSize);
         AppendIf("compressionType", _compressionType);

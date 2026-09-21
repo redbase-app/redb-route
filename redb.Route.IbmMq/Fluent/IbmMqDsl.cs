@@ -58,7 +58,7 @@ public sealed class IbmMqBuilder
     private string? _messageTypeExpr;
 
     // Transactions
-    private bool _transacted;
+    private bool? _transacted;
 
     // Dead Letter
 
@@ -189,6 +189,12 @@ public sealed class IbmMqBuilder
     /// <summary>Enable local MQ transactions.</summary>
     public IbmMqBuilder Transacted() { _transacted = true; return this; }
 
+    /// <summary>
+    /// Sets <c>transacted</c> explicitly. <c>false</c> sends at once even inside a <c>.Transacted()</c> block, outside its
+    /// transaction; left unset, a producer follows the block.
+    /// </summary>
+    public IbmMqBuilder Transacted(bool value) { _transacted = value; return this; }
+
     // DeadLetterQueue/MaxRedeliveries verbs removed (часть B of the options sweep): a second,
     // dead vocabulary for poison handling - the implemented one is IBM MQ's native
     // BackoutThreshold/BackoutQueue pair (BOTHRESH/BOQNAME), see .BackoutThreshold().
@@ -311,7 +317,7 @@ public sealed class IbmMqBuilder
             Append("messageTypeExpression", _messageTypeExpr);
 
         // Transactions
-        AppendBool("transacted", _transacted);
+        if (_transacted is { } transacted) Append("transacted", transacted ? "true" : "false");
 
         // Dead Letter
 

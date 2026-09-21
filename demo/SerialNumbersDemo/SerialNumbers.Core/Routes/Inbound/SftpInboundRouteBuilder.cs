@@ -17,6 +17,12 @@ public sealed class SftpInboundRouteBuilder : RouteBuilder
         {
             var code = partner.Code;
 
+            // One consumer per partner, because a partner is a separate host and account. Several
+            // directories of ONE partner are a different matter: do not add a route per directory, since
+            // each one holds its own connection and partners often allow a single concurrent session.
+            // Poll their common parent instead and let the path filters pick the directories out:
+            //   .Recursive().AntInclude("TYPE_A/outbox/*.xml,TYPE_B/outbox/*.xml")
+            // FilterDirectory decides per directory before it is listed, so the ones left out cost nothing.
             From(Sftp.Directory(partner.SftpInboundFolder!)
                     .ConnectionFactory(code)        // host and credentials live in the registry, not here
                     .Include("*.xml")

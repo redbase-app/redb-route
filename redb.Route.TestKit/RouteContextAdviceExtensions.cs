@@ -66,7 +66,7 @@ public static class RouteContextAdviceExtensions
                 var fromUri = definition.GetFromUri()
                     ?? throw new InvalidOperationException($"Route '{definition.GetRouteId() ?? "(unnamed)"}' has no From() endpoint.");
                 // Same fallback the context uses when compiling an unnamed route.
-                var id = definition.GetRouteId() ?? EndpointUri.Sanitize(EndpointUriParser.Parse(fromUri).NormalizedKey);
+                var id = definition.GetRouteId() ?? RouteIdFactory.ForEndpoint(EndpointUriParser.Parse(fromUri));
                 routes.Add((id, definition));
             }
         }

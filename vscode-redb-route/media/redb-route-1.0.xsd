@@ -3,6 +3,7 @@
     <xs:choice>
       <xs:element ref="r:aggregate" />
       <xs:element ref="r:beginTransaction" />
+      <xs:element ref="r:cache" />
       <xs:element ref="r:choice" />
       <xs:element ref="r:circuitBreaker" />
       <xs:element ref="r:claimCheck" />
@@ -30,8 +31,13 @@
       <xs:element ref="r:ofType" />
       <xs:element ref="r:onCompletion" />
       <xs:element ref="r:onException" />
+      <xs:element ref="r:payload" />
       <xs:element ref="r:pollEnrich" />
       <xs:element ref="r:recipientList" />
+      <xs:element ref="r:redbDelete" />
+      <xs:element ref="r:redbGet" />
+      <xs:element ref="r:redbQuery" />
+      <xs:element ref="r:redbSave" />
       <xs:element ref="r:removeBody" />
       <xs:element ref="r:removeHeader" />
       <xs:element ref="r:removeHeaders" />
@@ -62,6 +68,7 @@
       <xs:element ref="r:traced" />
       <xs:element ref="r:transaction" />
       <xs:element ref="r:transform" />
+      <xs:element ref="r:transformJson" />
       <xs:element ref="r:tryCatch" />
       <xs:element ref="r:unmarshal" />
       <xs:element ref="r:validate" />
@@ -95,6 +102,30 @@
             <xs:enumeration value="requiresNew" />
             <xs:enumeration value="suppress" />
             <xs:enumeration value="mandatory" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="cache">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:group ref="r:step" />
+      </xs:choice>
+      <xs:attribute name="key" type="xs:string" />
+      <xs:attribute name="keyFromBody" type="xs:boolean" />
+      <xs:attribute name="ttl" type="xs:string" />
+      <xs:attribute name="sliding" type="xs:string" />
+      <xs:attribute name="region" type="xs:string" />
+      <xs:attribute name="cacheHeaders" type="xs:boolean" />
+      <xs:attribute name="provider">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="memory" />
+            <xs:enumeration value="distributed" />
           </xs:restriction>
         </xs:simpleType>
       </xs:attribute>
@@ -456,6 +487,16 @@
   <xs:element name="metered">
     <xs:complexType>
       <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="tag">
+          <xs:complexType>
+            <xs:attribute name="name" use="required" type="xs:string" />
+            <xs:attribute name="fromHeader" type="xs:string" />
+            <xs:attribute name="expr" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:group ref="r:step" />
       </xs:choice>
       <xs:attribute name="name" use="required" type="xs:string" />
@@ -547,14 +588,91 @@
   <xs:element name="onException">
     <xs:complexType>
       <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="when">
+          <xs:complexType>
+            <xs:attribute name="expr" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="retryWhile">
+          <xs:complexType>
+            <xs:attribute name="expr" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
         <xs:group ref="r:step" />
       </xs:choice>
       <xs:attribute name="exceptions" use="required" type="xs:string" />
       <xs:attribute name="handled" type="xs:boolean" />
+      <xs:attribute name="continued" type="xs:boolean" />
       <xs:attribute name="maximumRedeliveries" type="xs:int" />
       <xs:attribute name="redeliveryDelay" type="xs:string" />
       <xs:attribute name="exponentialBackOff" type="xs:boolean" />
       <xs:attribute name="backOffMultiplier" type="xs:double" />
+      <xs:attribute name="useOriginalBody" type="xs:boolean" />
+      <xs:attribute name="logStackTrace" type="xs:boolean" />
+      <xs:attribute name="logExhausted" type="xs:boolean" />
+      <xs:attribute name="retryAttemptedLogLevel">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Trace" />
+            <xs:enumeration value="Debug" />
+            <xs:enumeration value="Information" />
+            <xs:enumeration value="Warning" />
+            <xs:enumeration value="Error" />
+            <xs:enumeration value="Critical" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="retriesExhaustedLogLevel">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Trace" />
+            <xs:enumeration value="Debug" />
+            <xs:enumeration value="Information" />
+            <xs:enumeration value="Warning" />
+            <xs:enumeration value="Error" />
+            <xs:enumeration value="Critical" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="onExceptionOccurred" type="xs:string" />
+      <xs:attribute name="onRedelivery" type="xs:string" />
+      <xs:attribute name="onPrepareFailure" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="payload">
+    <xs:complexType mixed="true">
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="arg">
+          <xs:complexType>
+            <xs:attribute name="name" use="required" type="xs:string" />
+            <xs:attribute name="value" type="xs:string" />
+            <xs:attribute name="expr" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="template" type="xs:string" />
+      <xs:attribute name="mediaType" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="json" />
+            <xs:enumeration value="xml" />
+            <xs:enumeration value="text" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="target" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -580,6 +698,79 @@
       <xs:attribute name="parallel" type="xs:boolean" />
       <xs:attribute name="stopOnException" type="xs:boolean" />
       <xs:attribute name="strategy" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="redb">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="syncScheme">
+          <xs:complexType>
+            <xs:attribute name="type" use="required" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="idempotentRepository">
+          <xs:complexType>
+            <xs:attribute name="name" use="required" type="xs:string" />
+            <xs:attribute name="ttl" type="xs:string" />
+            <xs:attribute name="processorName" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="storage" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="redbDelete">
+    <xs:complexType>
+      <xs:attribute name="id" use="required" type="xs:string" />
+      <xs:attribute name="storage" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="redbGet">
+    <xs:complexType>
+      <xs:attribute name="id" use="required" type="xs:string" />
+      <xs:attribute name="type" type="xs:string" />
+      <xs:attribute name="depth" type="xs:int" />
+      <xs:attribute name="storage" type="xs:string" />
+      <xs:attribute name="target" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="redbQuery">
+    <xs:complexType mixed="true">
+      <xs:attribute name="type" use="required" type="xs:string" />
+      <xs:attribute name="where" type="xs:string" />
+      <xs:attribute name="orderBy" type="xs:string" />
+      <xs:attribute name="descending" type="xs:boolean" />
+      <xs:attribute name="take" type="xs:int" />
+      <xs:attribute name="skip" type="xs:int" />
+      <xs:attribute name="filter" type="xs:string" />
+      <xs:attribute name="storage" type="xs:string" />
+      <xs:attribute name="target" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="redbSave">
+    <xs:complexType>
+      <xs:attribute name="type" type="xs:string" />
+      <xs:attribute name="byUnique" type="xs:boolean" />
+      <xs:attribute name="storage" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -646,6 +837,176 @@
       <xs:attribute name="key" use="required" type="xs:string" />
       <xs:attribute name="batchSize" type="xs:int" />
       <xs:attribute name="timeout" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="rest">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="get">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="post">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="put">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="delete">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="patch">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="head">
+          <xs:complexType>
+            <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:group ref="r:step" />
+            </xs:choice>
+            <xs:attribute name="path" type="xs:string" />
+            <xs:attribute name="to" type="xs:string" />
+            <xs:attribute name="consumes" type="xs:string" />
+            <xs:attribute name="produces" type="xs:string" />
+            <xs:attribute name="type" type="xs:string" />
+            <xs:attribute name="outType" type="xs:string" />
+            <xs:attribute name="bindingMode">
+              <xs:simpleType>
+                <xs:restriction base="xs:string">
+                  <xs:enumeration value="off" />
+                  <xs:enumeration value="json" />
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="path" use="required" type="xs:string" />
+      <xs:attribute name="host" type="xs:string" />
+      <xs:attribute name="port" type="xs:int" />
+      <xs:attribute name="bindingMode">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="off" />
+            <xs:enumeration value="json" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="consumes" type="xs:string" />
+      <xs:attribute name="produces" type="xs:string" />
+      <xs:attribute name="openApi" type="xs:boolean" />
+      <xs:attribute name="openApiPath" type="xs:string" />
+      <xs:attribute name="title" type="xs:string" />
+      <xs:attribute name="version" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -850,6 +1211,8 @@
         <xs:group ref="r:step" />
       </xs:choice>
       <xs:attribute name="poolSize" use="required" type="xs:int" />
+      <xs:attribute name="maxQueueSize" type="xs:int" />
+      <xs:attribute name="enqueueTimeout" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -926,6 +1289,9 @@
           </xs:restriction>
         </xs:simpleType>
       </xs:attribute>
+      <xs:attribute name="deadLetterChannel" type="xs:string" />
+      <xs:attribute name="retryAttempts" type="xs:int" />
+      <xs:attribute name="retryDelay" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -934,6 +1300,22 @@
   <xs:element name="transform">
     <xs:complexType>
       <xs:attribute name="expr" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="transformJson">
+    <xs:complexType mixed="true">
+      <xs:attribute name="spec" type="xs:string" />
+      <xs:attribute name="output">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="string" />
+            <xs:enumeration value="node" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -1112,6 +1494,7 @@
         <xs:element ref="r:interceptFrom" />
         <xs:element ref="r:interceptSendToEndpoint" />
         <xs:element ref="r:onCompletion" />
+        <xs:element ref="r:rest" />
       </xs:choice>
       <xs:attribute name="version" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -1139,6 +1522,7 @@
             <xs:anyAttribute namespace="##other" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element ref="r:redb" />
       </xs:choice>
     </xs:complexType>
   </xs:element>

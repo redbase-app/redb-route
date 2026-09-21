@@ -1,10 +1,9 @@
 using System.Diagnostics;
-using OpenTelemetry;
-using OpenTelemetry.Trace;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.S3;
 using redb.Route.Telemetry;
+using redb.Route.Tests.Shared;
 using Xunit.Abstractions;
 
 namespace redb.Route.Tests.S3;
@@ -30,11 +29,7 @@ public sealed class S3TelemetrySmokeTests
         var producer = endpoint.CreateProducer();
         await producer.Start();
 
-        var activities = new List<Activity>();
-        using var tracer = Sdk.CreateTracerProviderBuilder()
-            .AddSource(RouteActivitySource.SourceName)
-            .AddInMemoryExporter(activities)
-            .Build()!;
+        using var capture = new SpanCapture();   // this test's spans only
 
         var ex = new Exchange(new Message("hello"));
         ex.In.Headers[S3Headers.Key] = $"smoke-{Guid.NewGuid():N}.txt";
@@ -51,7 +46,7 @@ public sealed class S3TelemetrySmokeTests
             await producer.Stop();
         }
 
-        tracer.ForceFlush(1000);
+        var activities = capture.Spans;
         activities.Should().NotBeEmpty("S3Producer.Process must open a transport span even on failure");
         var activity = activities.First();
         activity.Source.Name.Should().Be(RouteActivitySource.SourceName);

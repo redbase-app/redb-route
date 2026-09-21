@@ -420,7 +420,7 @@ What to know per database:
 `Sql.Poll(...)` / `Sql.Execute(...)` compile to exactly the URI strings above and are equivalent:
 
 ```csharp
-using redb.Route.Sql.Fluent;
+using redb.Route.Sql;
 
 From(Sql.Poll("SELECT * FROM orders WHERE processed = 0")
         .DataSource("main")

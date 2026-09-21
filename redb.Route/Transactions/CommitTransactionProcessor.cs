@@ -1,13 +1,15 @@
 using System.Transactions;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Transactions;
 
 /// <summary>
 /// Imperative transaction processor that commits the <see cref="TransactionScope"/>
 /// previously opened by <see cref="BeginTransactionProcessor"/>.
-/// Commits all deferred <see cref="ITransactedAction"/> instances, then completes the scope.
+/// Commits the database first and the deferred <see cref="ITransactedAction"/> instances after it, in the order
+/// <c>.Transacted()</c> uses. Joined to an enclosing block, it leaves both to that block.
 /// </summary>
 public sealed class CommitTransactionProcessor : IProcessor
 {
@@ -30,21 +32,59 @@ public sealed class CommitTransactionProcessor : IProcessor
             return;
         }
 
-        // Commit all deferred transport actions (RabbitMQ, Kafka, etc.)
-        var actions = TransactedProcessor.GetActionsPublic(exchange);
-        if (actions is not null)
+        if (exchange.IsRollbackOnly())
         {
-            foreach (var kvp in actions)
-            {
-                await kvp.Value.Commit(ct).ConfigureAwait(false);
-            }
-            actions.Clear();
+            // The route marked the unit of work for rollback: committing it would undo the mark.
+            await new RollbackTransactionProcessor(_logger).Process(exchange, ct).ConfigureAwait(false);
+            return;
         }
 
-        scope.Complete();
-        scope.Dispose();
         exchange.Properties.Remove(BeginTransactionProcessor.ScopePropertyKey);
+        var ownsActions = BeginTransactionProcessor.TryTakeOwnActions(exchange, out var enclosing);
+        try
+        {
+            try
+            {
+                // The database first. Joined to an enclosing block, this only votes for the commit: the enclosing block
+                // commits the database and the sends.
+                try { scope.Complete(); }
+                finally { scope.Dispose(); }
+            }
+            catch (Exception ex) when (ownsActions)
+            {
+                // The database did not commit, so no broker hears about the work.
+                await TransactedActions.RollbackAll(exchange, _logger, ct).ConfigureAwait(false);
+                _logger?.LogError(ex, "Transaction rolled back: the database commit failed: {Message}", ex.Message);
+                throw;
+            }
 
-        _logger?.LogDebug("Transaction committed imperatively.");
+            if (!ownsActions)
+            {
+                _logger?.LogDebug("Joined transaction completed imperatively; the enclosing block commits it.");
+                return;
+            }
+
+            try
+            {
+                await TransactedActions.CommitAll(exchange, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // The work is in the database and cannot be taken back; what is left unsent is rolled back and the
+                // failure propagates, so the incoming message is not acknowledged and is redelivered.
+                await TransactedActions.RollbackAll(exchange, _logger, ct).ConfigureAwait(false);
+                _logger?.LogError(ex,
+                    "The database transaction committed, then a deferred transport action failed: {Message}. The work " +
+                    "is stored; the message is not acknowledged, so the broker will redeliver it.", ex.Message);
+                throw;
+            }
+
+            _logger?.LogDebug("Transaction committed imperatively.");
+        }
+        finally
+        {
+            if (ownsActions)
+                TransactedActions.Close(exchange, enclosing);
+        }
     }
 }

@@ -18,7 +18,7 @@ namespace redb.Route.Sqs;
 /// <c>concurrentConsumers</c> competing receive loops (the SQS-native concurrency model). A message is
 /// deleted (acknowledged) only after it processes successfully; on failure it is left for redelivery
 /// after the visibility timeout (or reset to 0 immediately when <c>resetVisibilityOnFailure=true</c>).
-/// When <c>transacted=true</c> the delete is deferred into the route transaction via <see cref="SqsAckAction"/>.
+/// Inside a <c>.Transacted()</c> route the delete comes last, after the database and the deferred sends have committed.
 /// </summary>
 internal sealed class SqsConsumer : DrainableConsumer
 {
@@ -139,7 +139,8 @@ internal sealed class SqsConsumer : DrainableConsumer
             heartbeat?.Dispose();
             heartbeat = null;
 
-            var failed = exchange.Exception is not null && !exchange.ExceptionHandled;
+            // A rollback-only exchange (.RollbackAll()) counts as failed: its work was rolled back.
+            var failed = exchange.EndedInFailure();
 
             // Settle here whether or not the route is transacted: the acknowledgement is the consumer's, and by now
             // the route transaction has committed the database and sent what it deferred.

@@ -18,6 +18,7 @@ public sealed class KafkaConsumer : DrainableConsumer
     private readonly KafkaEndpoint _endpoint;
     private readonly KafkaEndpointOptions _options;
     private IConsumer<string, byte[]>? _consumer;
+    private string _cluster = "";
 
     /// <inheritdoc />
     protected override IEndpoint ConsumerEndpoint => _endpoint;
@@ -42,6 +43,7 @@ public sealed class KafkaConsumer : DrainableConsumer
     protected override Task OnStarting(CancellationToken ct)
     {
         var config = _options.BuildConsumerConfig(_endpoint.ResolvedFactory, _endpoint.Uri.RawParameters);
+        _cluster = KafkaConsumedOffsets.ClusterOf(config.BootstrapServers);
 
         _consumer = new ConsumerBuilder<string, byte[]>(config)
             .SetValueDeserializer(Deserializers.ByteArray)
@@ -214,10 +216,18 @@ public sealed class KafkaConsumer : DrainableConsumer
             // The offset is advanced by this consumer after the unit of work ended well, not by the route
             // transaction: the transaction owns the database and the outgoing sends.
             var commitAction = new KafkaCommitAction(_consumer, result, Logger);
+            var offered = OfferOffsets(exchange, commitAction);
 
             try
             {
-                await Processor.Process(exchange, processingCt).ConfigureAwait(false);
+                try
+                {
+                    await Processor.Process(exchange, processingCt).ConfigureAwait(false);
+                }
+                finally
+                {
+                    offered?.Close();
+                }
                 exchange.ThrowIfUnhandledFailure();
             }
             catch (OperationCanceledException) when (processingCt.IsCancellationRequested)
@@ -247,6 +257,21 @@ public sealed class KafkaConsumer : DrainableConsumer
             await exchange.DisposeAsync().ConfigureAwait(false);
             DecrementInflight();
         }
+    }
+
+    /// <summary>
+    /// Offers the offsets this consumer is about to commit to a Kafka-transactional producer of the same cluster in the
+    /// route (<see cref="KafkaConsumedOffsets"/>): committed in its transaction, they leave with its sends. Only with
+    /// auto-commit on — with it off the application commits the offsets, and a transaction must not do it behind its back.
+    /// </summary>
+    private KafkaConsumedOffsets? OfferOffsets(IExchange exchange, KafkaCommitAction commitAction)
+    {
+        if (!_options.EnableAutoCommit)
+            return null;
+
+        var offered = new KafkaConsumedOffsets(_consumer!, commitAction, _cluster);
+        exchange.Properties[KafkaConsumedOffsets.PropertyKey] = offered;
+        return offered;
     }
 
     /// <summary>
@@ -336,10 +361,18 @@ public sealed class KafkaConsumer : DrainableConsumer
             var last = batch[^1];
             // As in the single-record path: the consumer advances the offset, the transaction does not.
             var commitAction = new KafkaCommitAction(_consumer!, batch, Logger);
+            var offered = OfferOffsets(exchange, commitAction);
 
             try
             {
-                await Processor.Process(exchange, processingCt).ConfigureAwait(false);
+                try
+                {
+                    await Processor.Process(exchange, processingCt).ConfigureAwait(false);
+                }
+                finally
+                {
+                    offered?.Close();
+                }
                 exchange.ThrowIfUnhandledFailure();
             }
             catch (OperationCanceledException) when (processingCt.IsCancellationRequested)
@@ -625,6 +658,13 @@ internal sealed class KafkaCommitAction : ITransactedAction
 
     /// <summary>True once the offset has been committed (by a transactional route or inline auto-commit).</summary>
     public bool Committed => Volatile.Read(ref _committed) == 1;
+
+    /// <summary>The positions this action commits: the next offset to read, per partition.</summary>
+    public IReadOnlyList<TopicPartitionOffset> NextOffsets =>
+        _batchOffsets ?? [new TopicPartitionOffset(_result.TopicPartition, _result.Offset.Value + 1)];
+
+    /// <summary>A Kafka transaction committed the offsets (<c>SendOffsetsToTransaction</c>): nothing is left to commit.</summary>
+    public void MarkCommitted() => Interlocked.Exchange(ref _committed, 1);
 
     public Task Commit(CancellationToken ct = default)
     {

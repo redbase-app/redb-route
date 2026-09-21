@@ -129,7 +129,9 @@ public interface IExchange : IAsyncDisposable
 
     /// <summary>
     /// Releases DI scopes (main scope + named __redb_scope:* entries) and the resources registered with
-    /// <see cref="ExchangeResources.ReleaseWithExchange"/>, without disposing the exchange body or headers.
+    /// <see cref="ExchangeResources.ReleaseWithExchange"/>, without disposing the exchange body or headers. For an exchange
+    /// no route owns (a Split or Multicast branch) it also ends the unit of work, running the completions registered with
+    /// <see cref="ExchangeResources.OnCompletion"/>.
     /// Call after processing to free DB connections early while keeping message data alive for aggregation.
     /// Idempotent — safe to call multiple times.
     /// </summary>

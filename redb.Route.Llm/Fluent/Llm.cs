@@ -8,7 +8,7 @@ namespace redb.Route.Llm.Fluent;
 /// Fluent API for LLM endpoints.
 /// <example><code>
 /// .To(Llm.Factory("claude").Temperature(0.2).MaxTokens(1024))
-/// .To(Llm.Factory("claude").Stream())
+/// .To(Llm.Factory("claude").Tools("*").Stream(LlmStreamMode.Calls))
 /// </code></example>
 /// </summary>
 public static class Llm
@@ -27,7 +27,7 @@ public sealed class LlmBuilder
     private string? _topP;
     private string? _systemPromptRef;
     private string? _conversation;
-    private bool _stream;
+    private LlmStreamMode _stream;
     private string? _schedule;
     private string? _initialBodyRef;
     private string? _maxIterations;
@@ -66,8 +66,12 @@ public sealed class LlmBuilder
     /// <summary>Tracks conversation using the route id as conversation key.</summary>
     public LlmBuilder ConversationFromRoute() { _conversation = "property"; return this; }
 
-    /// <summary>Enables streaming mode.</summary>
-    public LlmBuilder Stream() { _stream = true; return this; }
+    /// <summary>
+    /// Streams the step: <see cref="LlmStreamMode.Calls"/> — every model call streamed inside the route, tools and
+    /// the route's transaction as without streaming, the pieces to the observer; <see cref="LlmStreamMode.Body"/> —
+    /// the text streamed into <c>Out.Body</c> while the model writes it.
+    /// </summary>
+    public LlmBuilder Stream(LlmStreamMode mode) { _stream = mode; return this; }
 
     /// <summary>Schedule for consumer mode (cron or fixed interval).</summary>
     public LlmBuilder Schedule(string s) { _schedule = s; return this; }
@@ -196,7 +200,7 @@ public sealed class LlmBuilder
         Append(sb, ref first, "topP", _topP);
         Append(sb, ref first, "systemPromptRef", _systemPromptRef);
         Append(sb, ref first, "conversation", _conversation);
-        if (_stream) Append(sb, ref first, "stream", "true");
+        if (_stream != LlmStreamMode.Off) Append(sb, ref first, "stream", _stream.ToString().ToLowerInvariant());
         Append(sb, ref first, "schedule", _schedule);
         Append(sb, ref first, "initialBodyRef", _initialBodyRef);
         Append(sb, ref first, "maxIterations", _maxIterations);

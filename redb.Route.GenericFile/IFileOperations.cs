@@ -16,10 +16,17 @@ public interface IFileOperations
     /// <param name="recursive">Whether to recurse into subdirectories.</param>
     /// <param name="maxDepth">Maximum recursion depth (0 = unlimited).</param>
     /// <param name="minDepth">Minimum depth — files at shallower levels are skipped.</param>
+    /// <param name="directoryFilter">
+    /// Asked before walking into a subdirectory, with its full path and its path relative to
+    /// <paramref name="directory"/>; <c>false</c> skips that subdirectory and everything below it
+    /// without listing it. Null = walk into every subdirectory. The decision belongs here rather
+    /// than in the consumer because skipping the listing is the entire saving.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>List of file metadata.</returns>
     Task<List<GenericFileInfo>> ListFilesAsync(
         string directory, bool recursive, int maxDepth, int minDepth,
+        Func<string, string, bool>? directoryFilter = null,
         CancellationToken ct = default);
 
     // ── Read ────────────────────────────────────────────────────────

@@ -45,24 +45,24 @@ public sealed class OpenAiTranscriptionProvider : ITranscriptionProvider
     public static OpenAiTranscriptionProvider Create(LlmConnectionFactory factory)
     {
         ArgumentNullException.ThrowIfNull(factory);
-        var http = new HttpClient
-        {
-            // Recognition is slower than a chat completion on the same hardware — a minute of
-            // speech is minutes of compute on a modest local model — so the factory timeout is
-            // the ceiling that matters here, not a formality.
-            Timeout = TimeSpan.FromMilliseconds(Math.Max(1000, factory.RequestTimeoutMs))
-        };
-        return new OpenAiTranscriptionProvider(factory, http);
+        // Recognition is slower than a chat completion on the same hardware — a minute of
+        // speech is minutes of compute on a modest local model — so the factory timeout is
+        // the ceiling that matters here, not a formality, and those minutes are silent on the
+        // wire: the package's default client keeps the connection alive with HTTP/2 pings.
+        return new OpenAiTranscriptionProvider(factory, LlmHttpTransport.BuildClient(factory));
     }
 
     /// <inheritdoc />
     public string ProviderId => _providerId;
 
+    /// <summary>The client this provider sends through (tests read its transport defaults).</summary>
+    internal HttpClient Http => _http;
+
     /// <inheritdoc />
     public string ModelId => _factory.ModelId;
 
     /// <inheritdoc />
-    public async Task<TranscriptionResult> TranscribeAsync(
+    public Task<TranscriptionResult> TranscribeAsync(
         TranscriptionRequest request, CancellationToken ct = default)
     {
         if (request.Audio.IsEmpty)
@@ -71,6 +71,12 @@ public sealed class OpenAiTranscriptionProvider : ITranscriptionProvider
                 "silence is a recording that transcribes to an empty string.",
                 nameof(request));
 
+        // Limited as a whole by RequestTimeoutMs: a recording is minutes of compute before the answer.
+        return LlmHttpTransport.WithinCallLimitAsync(_factory, _providerId, t => TranscribeCoreAsync(request, t), ct);
+    }
+
+    private async Task<TranscriptionResult> TranscribeCoreAsync(TranscriptionRequest request, CancellationToken ct)
+    {
         var fileName = string.IsNullOrWhiteSpace(request.FileName) ? "audio.ogg" : request.FileName;
 
         using var form = new MultipartFormDataContent();
@@ -93,7 +99,8 @@ public sealed class OpenAiTranscriptionProvider : ITranscriptionProvider
         if (!string.IsNullOrWhiteSpace(request.Prompt))
             form.Add(new StringContent(request.Prompt!), "prompt");
 
-        using var http = new HttpRequestMessage(HttpMethod.Post, _endpoint) { Content = form };
+        using var http = LlmHttpTransport.NewRequest(_http, HttpMethod.Post, _endpoint);
+        http.Content = form;
         ApplyAuthHeaders(http);
 
         using var resp = await _http.SendAsync(http, HttpCompletionOption.ResponseHeadersRead, ct)

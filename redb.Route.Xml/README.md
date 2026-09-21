@@ -95,6 +95,9 @@ A few rules that keep documents unambiguous:
 - file-or-content elements (`xslt`, `validateXsd`, `validateJsonSchema`, `transformJson`,
   `payload`) take `file=`/locator **or** inline content (CDATA welcome) — not both;
 - `<aggregate>` requires an explicit `strategy` — there is no silent default;
+- a condition is written `header.kind == 'order'`, **not** `${header.kind} == 'order'`: with
+  `${…}` the line is a template, and a template in a condition position renders to a non-empty
+  string, which is true whatever the header holds;
 - a `${…}` placeholder in a **consumer** URI (`<from>`) is refused at load: there is no
   message to resolve it against.
 
@@ -197,6 +200,42 @@ Handlers declared at the container level apply to every route of the file:
   <log level="Error">[ERR] ${routeId}: ${exception.message}</log>
 </onException>
 ```
+
+### The retry policy of a handler
+
+`<onException>` spells everything its fluent counterpart does:
+
+```xml
+<onException exceptions="System.Net.Http.HttpRequestException"
+             handled="true" maximumRedeliveries="3" redeliveryDelay="00:00:02"
+             exponentialBackOff="true" backOffMultiplier="2.0"
+             useOriginalBody="true" logStackTrace="false" logExhausted="true"
+             retryAttemptedLogLevel="Debug" retriesExhaustedLogLevel="Critical"
+             onExceptionOccurred="#countFailure" onRedelivery="#stampAttempt"
+             onPrepareFailure="#stampDead">
+  <when expr="header.retryable == 'true'"/>
+  <retryWhile expr="property.attempt &lt; 5"/>
+  <to uri="direct://dead-letters"/>
+</onException>
+```
+
+`<when>` decides whether this handler takes the failure at all, `<retryWhile>` whether another
+attempt follows; both are conditions of the handler, not steps of it. The three references name
+`IProcessor` beans from the registry and run at their own moments: `onExceptionOccurred` on every
+occurrence, `onRedelivery` before each retry, `onPrepareFailure` once, before the handler takes
+over for good. A name the registry does not hold is refused at load, with its position.
+
+`handled="true"` ends the route after the handler; `continued="true"` resumes it at the step
+**after** the one that failed, as Camel's `continued(true)` does. What the resumption does not
+replay:
+
+- the failing step itself — it is skipped, the rest goes on;
+- a `.Transacted()` block whose step failed: the transaction rolled back, so the route picks up
+  after the block, not inside it;
+- the body of a `<tryCatch>` whose failure a `<catch>` already took.
+
+A failure in a resumed step is handled again, but not retried: a redelivery restarts the route
+from its first step, so `maximumRedeliveries` does not apply to what the resumption replays.
 
 The REST DSL is a container-level element from the `redb.Route.Http` package:
 
@@ -335,6 +374,14 @@ with `--bin`, bean types are verified against the real assemblies — a renamed 
 non-public type, a typo in a `<property>` or in `bean:…?method=` refuses the build. A literal
 secret in a URI is a warning that names the fix (supply it through configuration). Add
 `-p:PackRouteOnBuild=true` to a scaffolded project to pack on every `dotnet build`.
+
+What the gate **warns** about, leaving the decision to the author: a step that never runs
+(anything after `<stop/>`, `<rollbackAll/>` or `<throwException/>` in the same list), an
+undeclared `#name` (module code may register it at startup), a literal secret in a URI, and a
+condition that compares outside a placeholder — `expr="${header.kind} == 'order'"` renders to
+text before it is read, and non-empty text is true whatever it says, so the branch always wins.
+A lone `${header.enabled}` and a comparison written entirely inside the braces are both read
+correctly and stay silent.
 
 About the generated C#: it is what the XML says, pronounced in C# — not what a person would
 have written. There are no lambdas in it, because there are none in XML. For migration that is

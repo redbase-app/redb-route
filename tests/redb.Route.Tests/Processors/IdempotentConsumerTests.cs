@@ -292,6 +292,11 @@ public class IdempotentConsumerTests
         var act = async () => await processor.Process(exchange);
         await act.Should().ThrowAsync<InvalidOperationException>();
 
+        // Outside a route the exchange's unit of work ends when the exchange is released; the failure it carries
+        // decides the key's fate there.
+        exchange.Exception = new InvalidOperationException("fail");
+        await exchange.DisposeAsync();
+
         // The key should have been removed to allow retry
         (await repo.Contains("retry-key")).Should().BeFalse();
     }
@@ -309,15 +314,21 @@ public class IdempotentConsumerTests
             .Returns(Task.FromException(new Exception("remove failed")));
 
         var processor = new IdempotentConsumerProcessor(inner, repo, e => "k");
+        var exchange = new Exchange(new Message { Body = "x" });
 
         // The processing failure must survive — a Remove that itself fails must not replace it.
-        var ex = await processor.Invoking(p => p.Process(new Exchange(new Message { Body = "x" })))
+        var ex = await processor.Invoking(p => p.Process(exchange))
             .Should().ThrowAsync<InvalidOperationException>();
         ex.Which.Message.Should().Be("original");
+
+        // The removal runs when the unit of work ends; its failure is logged, not thrown at whoever releases the exchange.
+        exchange.Exception = ex.Which;
+        await exchange.Invoking(e => e.DisposeAsync().AsTask()).Should().NotThrowAsync();
+        await repo.Received(1).Remove("k", Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task Process_OnFailure_UnderAmbientTransaction_DoesNotRemoveKey()
+    public async Task Process_OnFailure_RepositoryInTheTransaction_DoesNotRemoveKey()
     {
         var inner = Substitute.For<IProcessor>();
         inner.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
@@ -325,20 +336,24 @@ public class IdempotentConsumerTests
 
         var repo = Substitute.For<IIdempotentRepository>();
         repo.Add(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(true);
+        repo.JoinsAmbientTransaction.Returns(true);
 
         var processor = new IdempotentConsumerProcessor(inner, repo, e => "k");
+        var exchange = new Exchange(new Message { Body = "x" });
 
         var act = async () =>
         {
             using var scope = new System.Transactions.TransactionScope(
                 System.Transactions.TransactionScopeAsyncFlowOption.Enabled);
-            await processor.Process(new Exchange(new Message { Body = "x" }));
+            await processor.Process(exchange);
             scope.Complete();
         };
         await act.Should().ThrowAsync<InvalidOperationException>();
+        exchange.Exception = new InvalidOperationException("fail");
+        await exchange.DisposeAsync();
 
-        // Under an ambient transaction the rollback removes the key; an explicit Remove would run in a
-        // doomed transaction and mask the failure, so it must NOT be called.
+        // The key is part of the transaction: the rollback removed it. An explicit Remove afterwards could delete the
+        // same key another node has claimed since, so it must NOT be called.
         await repo.DidNotReceive().Remove(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 

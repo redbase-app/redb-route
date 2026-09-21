@@ -52,8 +52,8 @@ measurements:
 .When("stats('current', 'cancelled') > 100")
 
 // Log your own counters, no lambda captures.
-.SetHeader("err", "stats('current', 'errors')")
-.SetHeader("avg", "stats('current', 'averageProcessingTimeMs')")
+.SetHeader("err", Expr("${stats('current', 'errors')}"))
+.SetHeader("avg", Expr("${stats('current', 'averageProcessingTimeMs')}"))
 .To("log:orders?showHeaders=true&showBody=false")
 ```
 
@@ -69,7 +69,7 @@ see them:
 
 ```csharp
 // The slowest run of one metered step of this route.
-.SetHeader("worst", "stats('otel:redb.route.step.duration/enrich', 'max')")
+.SetHeader("worst", Expr("${stats('otel:redb.route.step.duration/enrich', 'max')}"))
 
 // How often the throttle delayed another route.
 .When("stats('otel:redb.route.throttle.delayed@orders', 'sum') > 100")
@@ -120,7 +120,7 @@ The same trail is a value in the expression language, so a route can log it or b
 
 ```csharp
 .Log("${messageHistory()}")                                    // the table, as the failure dump prints it
-.SetHeader("trail", "${messageHistory('compact')}")             // log > choice > to(http)
+.SetHeader("trail", Expr("${messageHistory('compact')}"))       // log > choice > to(http)
 .When("messageHistory('slowestMs') > 500")                     // only the exchanges that cost something
 ```
 

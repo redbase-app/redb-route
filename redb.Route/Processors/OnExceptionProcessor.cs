@@ -97,7 +97,13 @@ public class OnExceptionProcessor : IProcessor
         bool useOriginalBody = false,
         bool allowRedeliveryWhileStopping = false,
         bool logStackTrace = true,
-        bool logExhausted = true)
+        bool logExhausted = true,
+        // The processor forms of the three callbacks: the markup can only name a bean, and a bean is an IProcessor.
+        // New parameters go last and optional, and land on init-only properties of the handler record: a new positional
+        // parameter would shift the ones after it and break every caller built against the old order.
+        IProcessor? onExceptionOccurredProcessor = null,
+        IProcessor? onRedeliveryProcessor = null,
+        IProcessor? onPrepareFailureProcessor = null)
     {
         ArgumentNullException.ThrowIfNull(exceptionType);
         ArgumentNullException.ThrowIfNull(handler);
@@ -120,7 +126,12 @@ public class OnExceptionProcessor : IProcessor
             handled, continued, onWhenPredicate, retryAttemptedLogLevel, retriesExhaustedLogLevel,
             onExceptionOccurred, retryWhile, onRedelivery, onPrepareFailure,
             useOriginalMessage, useOriginalBody, allowRedeliveryWhileStopping,
-            logStackTrace, logExhausted));
+            logStackTrace, logExhausted)
+        {
+            OnExceptionOccurredProcessor = onExceptionOccurredProcessor,
+            OnRedeliveryProcessor = onRedeliveryProcessor,
+            OnPrepareFailureProcessor = onPrepareFailureProcessor,
+        });
         return this;
     }
 
@@ -140,11 +151,22 @@ public class OnExceptionProcessor : IProcessor
         }
 
         var attempt = 0;
+        // Set by a Continued handler: the next turn replays the steps after the one that failed instead of the body.
+        Exception? continueAfter = null;
         while (true)
         {
+            var resuming = continueAfter is not null;
             try
             {
-                await _body.Process(exchange, ct).ConfigureAwait(false);
+                if (continueAfter is { } failure)
+                {
+                    continueAfter = null;
+                    await ResumePoints.ResumeAsync(exchange, failure, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    await _body.Process(exchange, ct).ConfigureAwait(false);
+                }
                 return; // Success — exit
             }
             catch (OperationCanceledException)
@@ -161,14 +183,21 @@ public class OnExceptionProcessor : IProcessor
 
                 // Invoke callback if registered
                 handler.OnExceptionOccurred?.Invoke(exchange);
+                if (handler.OnExceptionOccurredProcessor is { } occurred)
+                    await occurred.Process(exchange, ct).ConfigureAwait(false);
 
                 // B10: Set redelivery headers
                 exchange.In.Headers["CamelRedelivered"] = attempt > 0;
                 exchange.In.Headers["CamelRedeliveryCounter"] = attempt;
 
-                // Check if we should continue retrying
+                // Check if we should continue retrying. A failure in steps replayed after a continue is not retried:
+                // a redelivery re-runs the route from its first step, which would repeat what already succeeded.
                 var shouldRetry = false;
-                if (handler.RetryWhile != null)
+                if (resuming)
+                {
+                    shouldRetry = false;
+                }
+                else if (handler.RetryWhile != null)
                 {
                     // RetryWhile takes priority — retry as long as predicate returns true
                     shouldRetry = handler.RetryWhile(exchange);
@@ -215,6 +244,8 @@ public class OnExceptionProcessor : IProcessor
 
                     // B4: OnRedelivery callback before each retry
                     handler.OnRedelivery?.Invoke(exchange);
+                    if (handler.OnRedeliveryProcessor is { } redelivery)
+                        await redelivery.Process(exchange, ct).ConfigureAwait(false);
 
                     exchange.Exception = null;
                     exchange.ExceptionHandled = false;
@@ -252,12 +283,14 @@ public class OnExceptionProcessor : IProcessor
 
                 // B5: OnPrepareFailure callback before handler/DLQ
                 handler.OnPrepareFailure?.Invoke(exchange);
+                if (handler.OnPrepareFailureProcessor is { } prepareFailure)
+                    await prepareFailure.Process(exchange, ct).ConfigureAwait(false);
 
                 await handler.Processor.Process(exchange, ct).ConfigureAwait(false);
 
                 // Apply handled/continued flags.
                 // Handled or Continued suppress the failure — the exception is cleared and the consumer
-                // commits (Continued additionally means routing is meant to resume). Otherwise — the
+                // commits. Otherwise — the
                 // Camel handled(false) default — the failure is NOT suppressed: the onException route ran
                 // (logging / DLQ / etc.), but the exception stays on the exchange with ExceptionHandled=false
                 // so the consumer, which treats `Exception != null && !ExceptionHandled` as a failure, rolls
@@ -271,6 +304,15 @@ public class OnExceptionProcessor : IProcessor
                 else
                 {
                     exchange.ExceptionHandled = false;
+                }
+
+                // Continued: routing picks up at the step after the one that failed (Camel's continued(true)), where
+                // Handled ends the route here. The next turn of the loop replays the steps the pipelines recorded, and
+                // a failure among them is matched against the handlers anew.
+                if (handler.Continued && !exchange.IsStopped)
+                {
+                    continueAfter = ex;
+                    continue;
                 }
 
                 return;
@@ -355,5 +397,15 @@ public class OnExceptionProcessor : IProcessor
         bool UseOriginalBody = false,
         bool AllowRedeliveryWhileStopping = false,
         bool LogStackTrace = true,
-        bool LogExhausted = true);
+        bool LogExhausted = true)
+    {
+        /// <summary>Processor invoked every time the exception occurs, before any retry.</summary>
+        public IProcessor? OnExceptionOccurredProcessor { get; init; }
+
+        /// <summary>Processor invoked before each redelivery attempt.</summary>
+        public IProcessor? OnRedeliveryProcessor { get; init; }
+
+        /// <summary>Processor invoked before the handler runs, once the redeliveries are exhausted.</summary>
+        public IProcessor? OnPrepareFailureProcessor { get; init; }
+    }
 }

@@ -54,8 +54,13 @@ public sealed class SqsEndpointOptions : AwsEndpointOptions
     /// <summary>Comma-separated message-attribute names to request. Default <c>All</c>.</summary>
     public string MessageAttributeNames { get; set; } = "All";
 
-    /// <summary>Enrol the delete/visibility acknowledgement into the route transaction (<c>.Transacted()</c>). Default false.</summary>
-    public bool Transacted { get; set; }
+    /// <summary>
+    /// Producer: whether the send joins the enclosing <c>.Transacted()</c> block. Unset, it follows the block: deferred
+    /// until the database commits inside one, sent at once outside. <c>true</c> requires a block and fails outside one;
+    /// <c>false</c> sends at once even inside one. A consumer always deletes the message itself once the route has
+    /// finished successfully, so the option does not apply to it.
+    /// </summary>
+    public bool? Transacted { get; set; }
 
     /// <summary>Delay in milliseconds after an empty receive before polling again. Default 0.</summary>
     public int Delay { get; set; }

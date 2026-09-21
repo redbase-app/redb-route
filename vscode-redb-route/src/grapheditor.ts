@@ -153,11 +153,11 @@ export class RouteGraphEditorProvider implements vscode.CustomTextEditorProvider
         const collapseState = (): string[] =>
             this.context.workspaceState.get<string[]>(collapseKey) ?? [];
 
-        // The layout mode — the snake (LR, §2) or the vertical columns — is the viewer's
-        // choice per document, workspaceState like the collapse (Р5).
+        // The layout mode (the snake left to right, the columns top down) is the viewer's choice
+        // per document, workspaceState like the collapse (Р5).
         const layoutKey = `redbRoute.layout:${document.uri.toString()}`;
         const layoutState = (): string =>
-            this.context.workspaceState.get<string>(layoutKey) ?? "snake";
+            this.context.workspaceState.get<string>(layoutKey) ?? "snake-mermaid";
 
         // The zoom factor is the viewer's choice per document, same as the layout.
         const zoomKey = `redbRoute.zoom:${document.uri.toString()}`;

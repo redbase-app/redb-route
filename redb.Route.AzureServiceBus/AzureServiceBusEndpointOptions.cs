@@ -71,10 +71,24 @@ public sealed class AzureServiceBusEndpointOptions : EndpointOptions
     /// <summary>Dead-letter reason string when AutoDeadLetter is enabled.</summary>
     public string? DeadLetterReason { get; set; }
 
-    // ── Consumer: Transacted ──
+    // ── Producer: Transacted ──
 
-    /// <summary>Deferred complete/abandon via ITransactedAction (default false).</summary>
-    public bool Transacted { get; set; }
+    /// <summary>
+    /// Producer: whether the send joins the enclosing <c>.Transacted()</c> block. Unset, it follows the block: deferred
+    /// until the database commits inside one, sent at once outside. <c>true</c> requires a block and fails outside one;
+    /// <c>false</c> sends at once even inside one, outside the block's transaction. A consumer always settles the
+    /// delivery itself once the route has finished, so the option does not apply to it.
+    /// </summary>
+    public bool? Transacted { get; set; }
+
+    /// <summary>
+    /// Producer: the sends it defers in a <c>.Transacted()</c> block leave as one Service Bus batch when the block
+    /// commits — Service Bus takes a batch to one entity whole or not at all — so they arrive together or not at all.
+    /// The block's messages must fit in one batch (<see cref="BatchMaxSizeBytes"/>, and the entity's own limit); a block
+    /// whose messages do not fit fails its commit and sends nothing. On a partitioned or session entity the messages of
+    /// one batch must share the partition key or session id. Unset, the deferred sends go out one after the other.
+    /// </summary>
+    public bool BatchCommit { get; set; }
 
     // ── Producer: Send ──
 
@@ -98,10 +112,14 @@ public sealed class AzureServiceBusEndpointOptions : EndpointOptions
     /// <summary>Send body as a batch of messages (default false).</summary>
     public bool EnableBatch { get; set; }
 
-    /// <summary>Maximum messages per batch (default 100).</summary>
+    /// <summary>
+    /// Maximum messages per batch (default 100). A body with more items fails the send: nothing is dropped silently.
+    /// </summary>
     public int BatchMaxMessages { get; set; } = 100;
 
-    /// <summary>Maximum batch size in bytes (default 256 KB).</summary>
+    /// <summary>
+    /// Maximum batch size in bytes (default 256 KB). Items that do not fit fail the send: nothing is dropped silently.
+    /// </summary>
     public long BatchMaxSizeBytes { get; set; } = 256 * 1024;
 
     // ── Client retry settings ──
@@ -152,6 +170,11 @@ public sealed class AzureServiceBusEndpointOptions : EndpointOptions
 
         if (BatchMaxSizeBytes < 1)
             throw new ArgumentOutOfRangeException(nameof(BatchMaxSizeBytes), "Must be >= 1");
+
+        if (BatchCommit && Transacted == false)
+            throw new ArgumentException(
+                "'batchCommit' sends the messages deferred in a .Transacted() block as one batch, and 'transacted=false' " +
+                "sends at once, deferring none. Drop one of the two.");
 
         if (!RetryMode.Equals("Exponential", StringComparison.OrdinalIgnoreCase)
             && !RetryMode.Equals("Fixed", StringComparison.OrdinalIgnoreCase))

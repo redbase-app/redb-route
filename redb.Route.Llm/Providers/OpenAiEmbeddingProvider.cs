@@ -42,14 +42,14 @@ public sealed class OpenAiEmbeddingProvider : IEmbeddingProvider
         _providerId = string.IsNullOrWhiteSpace(factory.Provider) ? "openai" : factory.Provider!.ToLowerInvariant();
     }
 
-    /// <summary>Convenience constructor that builds an internal HttpClient with the factory timeout.</summary>
+    /// <summary>
+    /// Convenience constructor that builds an internal HttpClient. The factory's timeout is applied per call
+    /// (<see cref="LlmConnectionFactory.RequestTimeoutMs"/> covers the whole call), not by the client.
+    /// </summary>
     public static OpenAiEmbeddingProvider Create(LlmConnectionFactory factory)
     {
         ArgumentNullException.ThrowIfNull(factory);
-        var http = new HttpClient
-        {
-            Timeout = TimeSpan.FromMilliseconds(Math.Max(1000, factory.RequestTimeoutMs))
-        };
+        var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         return new OpenAiEmbeddingProvider(factory, http);
     }
 
@@ -60,11 +60,17 @@ public sealed class OpenAiEmbeddingProvider : IEmbeddingProvider
     public string ModelId => _factory.ModelId;
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default)
+    /// <remarks>Limited as a whole by <see cref="LlmConnectionFactory.RequestTimeoutMs"/>.</remarks>
+    public Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(inputs);
-        if (inputs.Count == 0) return Array.Empty<float[]>();
+        if (inputs.Count == 0) return Task.FromResult<IReadOnlyList<float[]>>(Array.Empty<float[]>());
 
+        return LlmHttpTransport.WithinCallLimitAsync(_factory, _providerId, t => EmbedCoreAsync(inputs, t), ct);
+    }
+
+    private async Task<IReadOnlyList<float[]>> EmbedCoreAsync(IReadOnlyList<string> inputs, CancellationToken ct)
+    {
         var inputArray = new JsonArray();
         foreach (var s in inputs)
             inputArray.Add(JsonValue.Create(s ?? string.Empty));

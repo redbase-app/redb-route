@@ -16,10 +16,11 @@ public sealed class KafkaEndpointOptionsTests
         opts.PollTimeoutMs.Should().Be(1000);
         opts.BreakOnFirstError.Should().BeFalse();
         opts.TopicIsPattern.Should().BeFalse();
-        opts.Acks.Should().Be("Leader");
+        opts.Acks.Should().Be("All", "as in the Kafka 3 client and Camel 4");
+        opts.EnableIdempotence.Should().BeNull("unset, idempotence follows acks");
         opts.Retries.Should().Be(3);
         opts.RecordMetadata.Should().BeFalse();
-        opts.Transacted.Should().BeFalse();
+        opts.Transacted.Should().BeNull("unset, a producer follows the enclosing .Transacted() block");
         // TransactionIdPrefix removed in волна A3: transactional.id is deliberately never set, the value was discarded
     }
 
@@ -98,6 +99,62 @@ public sealed class KafkaEndpointOptionsTests
 
         config.Acks.Should().Be(Confluent.Kafka.Acks.All);
         config.MessageSendMaxRetries.Should().Be(10);
+    }
+
+    // ── acks=all and an idempotent producer by default, as in the Kafka 3 client and Camel 4 ──
+
+    [Fact]
+    public void BuildProducerConfig_Default_IsAcksAllAndIdempotent()
+    {
+        var config = new KafkaEndpointOptions { Brokers = "x:9092" }.BuildProducerConfig();
+
+        config.Acks.Should().Be(Confluent.Kafka.Acks.All);
+        config.EnableIdempotence.Should().BeTrue();
+    }
+
+    [Fact]
+    public void BuildProducerConfig_AcksLeader_IsNotIdempotent()
+    {
+        var config = new KafkaEndpointOptions { Brokers = "x:9092", Acks = "leader" }.BuildProducerConfig();
+
+        config.Acks.Should().Be(Confluent.Kafka.Acks.Leader);
+        config.EnableIdempotence.Should().BeFalse("an idempotent producer needs acks=all");
+    }
+
+    [Fact]
+    public void BuildProducerConfig_IdempotenceOff_KeepsAcksAll()
+    {
+        var config = new KafkaEndpointOptions { Brokers = "x:9092", EnableIdempotence = false }.BuildProducerConfig();
+
+        config.Acks.Should().Be(Confluent.Kafka.Acks.All);
+        config.EnableIdempotence.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Validate_IdempotenceWithoutAcksAll_Throws()
+    {
+        var opts = new KafkaEndpointOptions { Brokers = "x:9092", Acks = "leader", EnableIdempotence = true };
+
+        var act = opts.Validate;
+
+        act.Should().Throw<ArgumentException>().WithMessage("*enableIdempotence*acks*all*");
+    }
+
+    [Fact]
+    public void Validate_TransactedWithAcksLeader_Throws()
+    {
+        var opts = new KafkaEndpointOptions { Brokers = "x:9092", Acks = "leader", Transacted = true };
+
+        var act = opts.Validate;
+
+        act.Should().Throw<ArgumentException>("the explicit acks would be overridden without a word")
+            .WithMessage("*transacted*acks*all*");
+    }
+
+    [Fact]
+    public void Factory_DefaultsToAcksAll()
+    {
+        new KafkaConnectionFactory().Acks.Should().Be("All");
     }
 
     [Fact]

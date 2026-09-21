@@ -117,7 +117,7 @@ public sealed class ReplayProvider : ILlmProvider
         // Streaming consumers receive it as a single terminal chunk — matches the
         // default fallback in ILlmProvider.StreamAsync.
         var response = await CompleteAsync(request, ct).ConfigureAwait(false);
-        yield return new LlmStreamChunk(response.Content, response.StopReason, response.Usage);
+        yield return new LlmStreamChunk(response.Content, response.StopReason, response.Usage) { Response = response };
     }
 
     /// <summary>Manually persists the in-memory fixture to disk. Called automatically on append.</summary>

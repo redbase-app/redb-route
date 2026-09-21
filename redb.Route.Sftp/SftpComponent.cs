@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Extensions;
 using redb.Route.Core;
+using redb.Route.GenericFile;
 
 namespace redb.Route.Sftp;
 
@@ -30,6 +31,7 @@ public sealed class SftpComponent : ComponentBase
 
         var options = new SftpEndpointOptions();
         options.BindFromUri(uri.RawParameters);
+        options.ResolveFilter(Context);
 
         // Named ConnectionFactory keeps the password / key passphrase / proxy password
         // out of the route URI.

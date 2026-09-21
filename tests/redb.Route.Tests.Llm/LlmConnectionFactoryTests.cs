@@ -8,7 +8,8 @@ public sealed class LlmConnectionFactoryTests
         var f = new LlmConnectionFactory();
         f.Provider.Should().Be("stub");
         f.ModelId.Should().Be("stub-model");
-        f.RequestTimeoutMs.Should().Be(120_000);
+        f.RequestTimeoutMs.Should().Be(600_000,
+            "ten minutes, like the official Anthropic and OpenAI SDKs: a thinking model's non-streaming answer takes minutes");
     }
 
     [Fact]

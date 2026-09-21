@@ -59,6 +59,22 @@ public sealed class RedisEndpoint : EndpointBase<RedisEndpointOptions>, IDisposa
         if (IsPubSubOperation(OperationType) && string.IsNullOrEmpty(Options.Channel))
             throw new InvalidOperationException("Channel is required for Pub/Sub consumers.");
 
+        var isStream = OperationType is RedisOperationType.XREAD or RedisOperationType.XGROUP;
+        var hasGroup = !string.IsNullOrEmpty(Options.ConsumerGroup);
+        if (isStream && !hasGroup && Options.StreamStartPosition == ">")
+            throw new ArgumentException(
+                "'streamStartPosition=>' means 'the entries not yet delivered to this consumer group', and this XREAD " +
+                "consumer has no consumer group. Leave the position unset to read the entries added from now on, or " +
+                "set 0 to read from the beginning.");
+        if (Options.StreamClaimMinIdleMs is not null && !(isStream && hasGroup))
+            throw new ArgumentException(
+                "'streamClaimMinIdleMs' claims pending entries of a consumer group; this consumer does not read a stream " +
+                "through a group.");
+        if (Options.ProcessingList is not null
+            && OperationType is not (RedisOperationType.BLPOP or RedisOperationType.BRPOP))
+            throw new ArgumentException(
+                $"'processingList' belongs to a BLPOP/BRPOP list consumer; this consumer is {OperationType}.");
+
         return new RedisConsumer(this, processor, Options);
     }
 

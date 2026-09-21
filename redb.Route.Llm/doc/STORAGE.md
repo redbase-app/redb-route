@@ -563,17 +563,12 @@ a conversation tree is usually small (tens of messages).
   without a predicate — you'll see other TFMs' rows.
 - **Postgres Pro free tier.** All 16 storage tests fit inside the 1024-query
   free-tier budget on a single run.
-- **Streaming (`?stream=true`) currently bypasses the agent loop.** The
-  streaming producer path (`LlmProducer.ProcessStreamingAsync`) calls
-  `ILlmProvider.StreamAsync` directly and **does not** invoke `AgentEngine`
-  — which means `RedbConversationStore`, `RedbApprovalStore`,
-  `RedbCostBudgetStore`, `RedbToolIdempotencyStore` and `RedbAuditObserver`
-  see nothing from a streamed turn. Tools (`?tools=`) are also intentionally
-  not dispatched in stream mode. If you need persistence + streaming on the
-  same route today, drive persistence with a parallel non-streaming `WireTap`
-  to a deterministic `llm://` step, or split the user-visible response from
-  the audit-visible one. Restoring full agent-loop semantics on top of the
-  streaming wire is on the Phase-2 list.
+- **Both streaming modes run the agent loop, stores included.** `stream=calls` makes every model call a
+  stream inside the route; `stream=body` makes the run when the body is read, after the route. Either way
+  `RedbConversationStore`, `RedbApprovalStore`, `RedbCostBudgetStore`, `RedbToolIdempotencyStore` and
+  `RedbAuditObserver` see a streamed turn as they see any other. The `stream=body` run reads the exchange's
+  redb scope after the route, so the body must be read before the exchange ends, and it is refused inside
+  `.Transacted()`.
 
 ---
 

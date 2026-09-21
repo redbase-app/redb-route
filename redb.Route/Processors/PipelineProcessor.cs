@@ -30,7 +30,14 @@ public class PipelineProcessor : IProcessor
     }
 
     /// <inheritdoc />
-    public async Task Process(IExchange exchange, CancellationToken ct = default)
+    public Task Process(IExchange exchange, CancellationToken ct = default) => ProcessFrom(exchange, 0, ct);
+
+    /// <summary>
+    /// Runs the pipeline from <paramref name="startIndex"/>. A failure records where the pipeline stopped
+    /// (<see cref="ResumePoints"/>), so an <c>OnException ... Continued()</c> handler can pick the route up at the next
+    /// step, as Apache Camel does.
+    /// </summary>
+    internal async Task ProcessFrom(IExchange exchange, int startIndex, CancellationToken ct)
     {
         // Pipeline EIP semantics:
         // - Intermediate steps that produce Out are merged (Out → In, Out := null) so the
@@ -39,12 +46,20 @@ public class PipelineProcessor : IProcessor
         //   replyTo, RPC) get the reply via exchange.Out.
         // - If the final step does NOT produce Out, we do not synthesize one from earlier
         //   steps: any subsequent step that modified In is the authoritative final result.
-        for (var i = 0; i < _processors.Count; i++)
+        for (var i = startIndex; i < _processors.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
             if (exchange.IsStopped) break;
 
-            await _processors[i].Process(exchange, ct).ConfigureAwait(false);
+            try
+            {
+                await _processors[i].Process(exchange, ct).ConfigureAwait(false);
+            }
+            catch (Exception failure) when (failure is not OperationCanceledException)
+            {
+                ResumePoints.Record(exchange, failure, this, i + 1);
+                throw;
+            }
 
             // Pipeline EIP: propagate Out body/headers → In so the next processor sees the result.
             if (exchange.HasOut && i < _processors.Count - 1)

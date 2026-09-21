@@ -6,6 +6,7 @@ using Amazon.SQS.Model;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Telemetry;
+using redb.Route.Transactions;
 
 namespace redb.Route.Sqs;
 
@@ -54,13 +55,19 @@ internal sealed class SqsProducer : ConnectableProducer
             operation: "send");
 
         // No RecordMessageOut: the core (ToProcessor / the template) owns it (ownership audit).
-        if (_options.EnableBatch && exchange.In.Body is IEnumerable and not string and not byte[])
-            await SendBatchAsync(exchange, ct).ConfigureAwait(false);
+        // The requests are built now, from the exchange as it is at this step; only the send itself waits for the
+        // commit when the producer joins the enclosing .Transacted() block.
+        var send = _options.EnableBatch && exchange.In.Body is IEnumerable and not string and not byte[]
+            ? PrepareBatch(exchange)
+            : PrepareSingle(exchange);
+
+        if (TransactedActions.Defers(exchange, _options.Transacted))
+            TransactedActions.RegisterSend(exchange, $"sqs-send-{Guid.NewGuid():N}", send, ProducerName);
         else
-            await SendSingleAsync(exchange, ct).ConfigureAwait(false);
+            await send(ct).ConfigureAwait(false);
     }
 
-    private async Task SendSingleAsync(IExchange exchange, CancellationToken ct)
+    private Func<CancellationToken, Task> PrepareSingle(IExchange exchange)
     {
         var request = new SendMessageRequest
         {
@@ -74,14 +81,18 @@ internal sealed class SqsProducer : ConnectableProducer
 
         ApplyFifo(request, exchange);
 
-        var response = await _client!.SendMessageAsync(request, ct).ConfigureAwait(false);
-        exchange.In.Headers[SqsHeaders.MessageId] = response.MessageId;
-        if (!string.IsNullOrEmpty(response.SequenceNumber))
-            exchange.In.Headers[SqsHeaders.SequenceNumber] = response.SequenceNumber;
+        return async ct =>
+        {
+            var response = await _client!.SendMessageAsync(request, ct).ConfigureAwait(false);
+            exchange.In.Headers[SqsHeaders.MessageId] = response.MessageId;
+            if (!string.IsNullOrEmpty(response.SequenceNumber))
+                exchange.In.Headers[SqsHeaders.SequenceNumber] = response.SequenceNumber;
+        };
     }
 
-    private async Task SendBatchAsync(IExchange exchange, CancellationToken ct)
+    private Func<CancellationToken, Task> PrepareBatch(IExchange exchange)
     {
+        var requests = new List<SendMessageBatchRequest>();
         var items = ((IEnumerable)exchange.In.Body!).Cast<object?>().ToList();
         var groupId = ResolveGroupId(exchange);
         var index = 0;
@@ -110,10 +121,15 @@ internal sealed class SqsProducer : ConnectableProducer
                 }
                 request.Entries.Add(entry);
             }
-            await _client!.SendMessageBatchAsync(request, ct).ConfigureAwait(false);
+            requests.Add(request);
         }
 
-        exchange.In.Headers[SqsHeaders.Queue] = _endpoint.QueueName;
+        return async ct =>
+        {
+            foreach (var request in requests)
+                await _client!.SendMessageBatchAsync(request, ct).ConfigureAwait(false);
+            exchange.In.Headers[SqsHeaders.Queue] = _endpoint.QueueName;
+        };
     }
 
     private void ApplyFifo(SendMessageRequest request, IExchange exchange)

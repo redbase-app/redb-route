@@ -195,8 +195,13 @@ public sealed class IbmMqEndpointOptions : EndpointOptions
 
     // ── Transactions ─────────────────────────────────────────────────
 
-    /// <summary>Enable local MQ transactions (MQCMIT/MQBACK). (default: false)</summary>
-    public bool Transacted { get; set; }
+    /// <summary>
+    /// Consumer: <c>true</c> gets under syncpoint and commits (MQCMIT/MQBACK) with the route. Producer: whether the put
+    /// joins the enclosing <c>.Transacted()</c> block. Unset, it follows the block: deferred until the database commits
+    /// inside one, put at once outside. <c>true</c> requires a block and fails outside one; <c>false</c> puts at once
+    /// even inside one. A request-reply producer (<see cref="ReplyTo"/>) always puts at once and refuses <c>true</c>.
+    /// </summary>
+    public bool? Transacted { get; set; }
 
     // DeadLetterQueue/MaxRedeliveries are gone (часть B of the options sweep): both were declared
     // and read by nothing - a second vocabulary for poison handling next to the IMPLEMENTED one,

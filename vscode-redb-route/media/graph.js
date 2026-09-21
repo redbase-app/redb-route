@@ -27,7 +27,13 @@
     let dragKey = null;       // the path being dragged (string key)
     let dragPath = null;
     let toggled = new Set();  // explicit collapse/expand toggles (workspaceState, Р5)
-    let layout = "snake";     // "snake" (LR, §2) | "vertical" (TD columns) — per doc
+    // Two layouts, one look: the snake left to right (§2) and the columns top down, both drawn
+    // the mermaid way. The plain snake with CSS elbows is gone (owner, 2026-09-20).
+    let layout = "snake-mermaid";
+    const LAYOUTS = ["snake-mermaid", "mermaid"];
+
+    /** Left to right: the wrapping snake. The other layout is top down. */
+    function lrMermaid() { return layout === "snake-mermaid"; }
     let zoom = 1;             // viewer zoom, workspaceState per doc like the layout
     let canvas = null;        // the zoomed drawing surface, rebuilt on every render
 
@@ -288,7 +294,9 @@
         const widths = atoms.map(function (a) { return a.getBoundingClientRect().width; });
         root.removeChild(measure);
 
-        const EDGE = 17, TURN = 34;
+        // The edge is an empty gap the curve runs through; the turn is the room the carriage
+        // return needs on the right of a row.
+        const EDGE = 32, TURN = 40;
 
         const snake = el("div", "snake");
         let row = null, used = 0, rowIndex = 0;
@@ -322,7 +330,6 @@
             tail.appendChild(slot(parentPath, 9999));
             row.appendChild(tail);
         }
-        if (rowIndex > 1) snake.classList.add("multi");
         return snake;
     }
 
@@ -359,8 +366,8 @@
         }
         const box = el("div", "scope cat-" + step.category);
         box.appendChild(scopeHead(step));
-        // the scope walls: border+padding+spine eat ~40px of the line
-        box.appendChild(snakeSequence(step.steps, step.path, (available || root.clientWidth - 44) - 40));
+        // the bracket walls and its head, which stands BESIDE the body, take their share of the line
+        box.appendChild(snakeSequence(step.steps, step.path, (available || root.clientWidth - 44) - 260));
         return box;
     }
 
@@ -368,17 +375,26 @@
         const box = el("div", "branching");
         box.dataset.path = keyOf(step.path);
         draggable(box, step.path);
-        box.appendChild(collapseToggle(step)).classList.add("branching-fold");
+        // The decision diamond the fan starts from, with the stack of branches to the right.
+        const head = el("div", "lbranch-head cat-" + step.category);
+        head.appendChild(collapseToggle(step));
+        head.appendChild(el("span", "icon", ICONS[step.category] || "◈"));
+        head.appendChild(el("span", "t", step.type));
+        selectable(head, step.path, step.span, "container");
+        box.appendChild(head);
+        const host = el("div", "lstack");
+        box.appendChild(host);
         step.branches.forEach(function (branch) {
             const row = el("div", "branch");
             const label = el("span", "branch-label" + (branch.warn ? " warn" : ""), branch.label);
-            label.title = branch.label;
+            label.title = branch.tooltip || branch.label;
             selectable(label, branch.path, branch.span, "branch");
             row.appendChild(label);
             row.appendChild(el("div", "edge"));
-            // the branch label (capped at 280) plus edges eats the lion share of the line
-            row.appendChild(snakeSequence(branch.steps, branch.path, (available || root.clientWidth - 44) - 200));
-            box.appendChild(row);
+            // the diamond, the branch label (capped at 280) and the gaps eat the lion share of the line
+            row.appendChild(snakeSequence(branch.steps, branch.path,
+                (available || root.clientWidth - 44) - 360));
+            host.appendChild(row);
         });
         return box;
     }
@@ -462,7 +478,7 @@
         step.branches.forEach(function (branch) {
             const column = el("div", "vbranch");
             const label = el("span", "branch-label" + (branch.warn ? " warn" : ""), branch.label);
-            label.title = branch.label;
+            label.title = branch.tooltip || branch.label;
             selectable(label, branch.path, branch.span, "branch");
             column.appendChild(label);
             column.appendChild(vedge());
@@ -485,68 +501,109 @@
         return box;
     }
 
-    // ── the mermaid look: SVG curves over the columnar layout ────────
+    // ── the mermaid look: SVG curves over the actual node positions ──
 
     /**
-     * Draws bezier edges between the ACTUAL node positions — the vedge stubs are hidden by
-     * CSS in this mode, the curves carry the flow instead (and the fan from a branching head
-     * to its branch labels, the way Mermaid draws a choice).
+     * The overlay both mermaid layouts draw into. It lives INSIDE the zoomed canvas, so every
+     * coordinate is local. Engines disagree on whether client rects include an ancestor's CSS
+     * zoom (the webview's engine: no — curves flew apart by 1/zoom), so the effective scale is
+     * MEASURED instead of assumed to equal the zoom factor.
      */
-    function drawCurvedEdges() {
+    function edgeOverlay() {
         const ns = "http://www.w3.org/2000/svg";
         const svg = document.createElementNS(ns, "svg");
         svg.setAttribute("class", "edge-overlay");
-        // The overlay lives INSIDE the zoomed canvas, so everything is computed in local
-        // units. Engines disagree on whether client rects include an ancestor's CSS zoom
-        // (standardized: yes; the webview's engine: no — curves flew apart by 1/zoom), so
-        // MEASURE the effective scale instead of assuming it equals the zoom factor.
         const canvasRect = canvas.getBoundingClientRect();
         const scale = canvas.offsetWidth > 0 ? canvasRect.width / canvas.offsetWidth : 1;
         svg.setAttribute("width", String(canvasRect.width / scale));
         svg.setAttribute("height", String(canvasRect.height / scale));
 
-        function anchor(node, side) {
+        function local(x, y) {
+            return { x: (x - canvasRect.left) / scale, y: (y - canvasRect.top) / scale };
+        }
+
+        /** The middle of one side of a node's box. */
+        function point(node, side) {
             const r = node.getBoundingClientRect();
-            return {
-                x: (r.left + r.width / 2 - canvasRect.left) / scale,
-                y: ((side === "bottom" ? r.bottom : r.top) - canvasRect.top) / scale,
-            };
+            if (side === "top") return local(r.left + r.width / 2, r.top);
+            if (side === "bottom") return local(r.left + r.width / 2, r.bottom);
+            if (side === "left") return local(r.left, r.top + r.height / 2);
+            return local(r.right, r.top + r.height / 2);
         }
 
-        function curve(fromNode, toNode) {
-            const a = anchor(fromNode, "bottom");
-            const b = anchor(toNode, "top");
-            // Dive DOWN first, spread second: with a wide horizontal offset a half-way bend
-            // ran the curve straight through the branch labels (owner finding 2026-09-09).
-            // A long sideways merge gets a deeper bend so the traverse reads as a curve,
-            // not a hairline floating in space.
-            const dy = b.y - a.y;
-            const dx = Math.abs(b.x - a.x);
-            const bend = Math.max(12, Math.min(56, dy * 0.6 + dx * 0.12));
+        function add(d, className) {
             const path = document.createElementNS(ns, "path");
-            path.setAttribute("d",
-                "M" + a.x + " " + a.y +
-                " C" + a.x + " " + (a.y + bend) + " " + b.x + " " + (b.y - bend) +
-                " " + b.x + " " + (b.y - 4));
-            path.setAttribute("fill", "none");
+            path.setAttribute("d", d);
+            if (className) path.setAttribute("class", className);
+            else path.setAttribute("fill", "none");
             svg.appendChild(path);
-            const arrow = document.createElementNS(ns, "path");
-            arrow.setAttribute("d",
-                "M" + (b.x - 3.5) + " " + (b.y - 5) + " L" + b.x + " " + b.y +
-                " L" + (b.x + 3.5) + " " + (b.y - 5) + " Z");
-            arrow.setAttribute("class", "head");
-            svg.appendChild(arrow);
         }
 
-        const stepSelector = ":scope > .node, :scope > .scope, :scope > .vbranching";
+        function arrowDown(b) {
+            add("M" + (b.x - 3.5) + " " + (b.y - 5) + " L" + b.x + " " + b.y +
+                " L" + (b.x + 3.5) + " " + (b.y - 5) + " Z", "head");
+        }
 
-        /** The visual EXITS of a step: a branching merges — one exit per branch tail. */
+        function arrowRight(b) {
+            add("M" + (b.x - 5) + " " + (b.y - 3.5) + " L" + b.x + " " + b.y +
+                " L" + (b.x - 5) + " " + (b.y + 3.5) + " Z", "head");
+        }
+
+        /** Top-down: dive DOWN first, spread second, so a wide fan does not cut the labels. */
+        function down(a, b) {
+            const bend = Math.max(12, Math.min(56, (b.y - a.y) * 0.6 + Math.abs(b.x - a.x) * 0.12));
+            add("M" + a.x + " " + a.y + " C" + a.x + " " + (a.y + bend) + " " + b.x + " " + (b.y - bend) +
+                " " + b.x + " " + (b.y - 4));
+            arrowDown(b);
+        }
+
+        /** Left to right: the horizontal twin of down(), leave RIGHT first, spread second. */
+        function right(a, b) {
+            const bend = Math.max(12, Math.min(56, (b.x - a.x) * 0.6 + Math.abs(b.y - a.y) * 0.12));
+            add("M" + a.x + " " + a.y + " C" + (a.x + bend) + " " + a.y + " " + (b.x - bend) + " " + b.y +
+                " " + (b.x - 4) + " " + b.y);
+            arrowRight(b);
+        }
+
+        /** An orthogonal route through the points with rounded corners, entering the last point rightward. */
+        function carriageReturn(points) {
+            const radius = 6;
+            let d = "M" + points[0].x + " " + points[0].y;
+            for (let i = 1; i < points.length - 1; i++) {
+                const p = points[i], prev = points[i - 1], next = points[i + 1];
+                const inX = Math.sign(p.x - prev.x), inY = Math.sign(p.y - prev.y);
+                const outX = Math.sign(next.x - p.x), outY = Math.sign(next.y - p.y);
+                d += " L" + (p.x - inX * radius) + " " + (p.y - inY * radius) +
+                     " Q" + p.x + " " + p.y + " " + (p.x + outX * radius) + " " + (p.y + outY * radius);
+            }
+            const end = points[points.length - 1];
+            add(d + " L" + (end.x - 4) + " " + end.y);
+            arrowRight(end);
+        }
+
+        return {
+            local: local, point: point, down: down, right: right, carriageReturn: carriageReturn,
+            done: function () { canvas.appendChild(svg); },
+        };
+    }
+
+    /**
+     * Top-down: bezier edges between the actual node positions. The vedge stubs are hidden by
+     * CSS in this mode, the curves carry the flow instead, including the fan from a branching
+     * head to its branch labels, the way Mermaid draws a choice.
+     */
+    function drawCurvedEdges() {
+        const o = edgeOverlay();
+        const stepSelector = ":scope > .node, :scope > .scope, :scope > .vbranching";
+        const innerSelector = ":scope > .vcol > .node, :scope > .vcol > .scope, :scope > .vcol > .vbranching";
+
+        /** The visual EXITS of a step: a branching merges, one exit per branch tail. */
         function exitsOf(step) {
             if (!step.classList.contains("vbranching"))
                 return [step];
             const exits = [];
             step.querySelectorAll(":scope > .vfan > .vbranch").forEach(function (branch) {
-                const steps = branch.querySelectorAll(":scope > .vcol > .node, :scope > .vcol > .scope, :scope > .vcol > .vbranching");
+                const steps = branch.querySelectorAll(innerSelector);
                 if (steps.length > 0) exits.push(...exitsOf(steps[steps.length - 1]));
                 else {
                     const label = branch.querySelector(":scope > .branch-label");
@@ -556,40 +613,155 @@
             return exits.length > 0 ? exits : [step];
         }
 
-        root.querySelectorAll(".vcol").forEach(function (col) {
+        canvas.querySelectorAll(".vcol").forEach(function (col) {
             const steps = col.querySelectorAll(stepSelector);
             for (let i = 1; i < steps.length; i++) {
-                // Fan-in: after a branching the flow continues from EVERY branch tail — an
+                // Fan-in: after a branching the flow continues from EVERY branch tail; an
                 // arrow born at an invisible box's bottom reads as «out of nowhere».
-                exitsOf(steps[i - 1]).forEach(function (from) { curve(from, steps[i]); });
+                exitsOf(steps[i - 1]).forEach(function (from) {
+                    o.down(o.point(from, "bottom"), o.point(steps[i], "top"));
+                });
             }
         });
-        // Into the bracket: the scope head hands the flow to its first inner step.
-        root.querySelectorAll(".scope").forEach(function (scope) {
+        canvas.querySelectorAll(".scope").forEach(function (scope) {
+            // Into the bracket: the head hands the flow to the first inner step.
             const head = scope.querySelector(":scope > .scope-head");
-            const first = scope.querySelector(":scope > .vcol > .node, :scope > .vcol > .scope, :scope > .vcol > .vbranching");
-            if (head && first) curve(head, first);
+            const inner = scope.querySelectorAll(innerSelector);
+            if (inner.length === 0) return;
+            if (head) o.down(o.point(head, "bottom"), o.point(inner[0], "top"));
+            // Out of the bracket through the bottom edge, from every tail of the last inner step:
+            // a branch ending inside the box would otherwise read as a dead end (2026-09-18).
+            const exit = o.point(scope, "bottom");
+            exitsOf(inner[inner.length - 1]).forEach(function (from) {
+                o.down(o.point(from, "bottom"), exit);
+            });
         });
-        root.querySelectorAll(".vbranching").forEach(function (box) {
+        canvas.querySelectorAll(".vbranching").forEach(function (box) {
             const head = box.querySelector(":scope > .vbranch-head");
             if (!head) return;
             box.querySelectorAll(":scope > .vfan > .vbranch").forEach(function (branch) {
                 const label = branch.querySelector(":scope > .branch-label");
                 if (!label) return;
-                curve(head, label);
-                const first = branch.querySelector(":scope > .vcol > .node, :scope > .vcol > .scope, :scope > .vcol > .vbranching");
-                if (first) curve(label, first);
+                o.down(o.point(head, "bottom"), o.point(label, "top"));
+                const first = branch.querySelector(innerSelector);
+                if (first) o.down(o.point(label, "bottom"), o.point(first, "top"));
             });
         });
+        o.done();
+    }
 
-        canvas.appendChild(svg);
+    /**
+     * Left to right over the snake: the same shapes; curves leave a step on its right and enter
+     * the next on its left, a branching fans out from its diamond, and a wrapped row returns
+     * along the lane between the rows. The CSS elbows and stubs of the plain snake step aside.
+     */
+    function drawCurvedEdgesLR() {
+        const o = edgeOverlay();
+        const stepSelector = ":scope > .atom > .node, :scope > .atom > .scope, :scope > .atom > .branching";
+
+        function rowsOf(snake) { return Array.from(snake.querySelectorAll(":scope > .snake-row")); }
+        function stepsOf(row) { return Array.from(row.querySelectorAll(stepSelector)); }
+
+        function firstStepOf(snake) {
+            for (const row of rowsOf(snake)) {
+                const steps = stepsOf(row);
+                if (steps.length > 0) return steps[0];
+            }
+            return null;
+        }
+
+        function lastStepOf(snake) {
+            const rows = rowsOf(snake);
+            for (let i = rows.length - 1; i >= 0; i--) {
+                const steps = stepsOf(rows[i]);
+                if (steps.length > 0) return steps[steps.length - 1];
+            }
+            return null;
+        }
+
+        /** Where the flow enters a step: a branching through its diamond. */
+        function entryOf(step) {
+            return step.classList.contains("branching")
+                ? step.querySelector(":scope > .lbranch-head") || step
+                : step;
+        }
+
+        /** The visual EXITS of a step: a branching merges from every branch tail. */
+        function exitsOf(step) {
+            if (!step.classList.contains("branching") || !step.querySelector(":scope > .lstack"))
+                return [step];
+            const exits = [];
+            step.querySelectorAll(":scope > .lstack > .branch").forEach(function (branch) {
+                const snake = branch.querySelector(":scope > .snake");
+                const last = snake ? lastStepOf(snake) : null;
+                if (last) exits.push(...exitsOf(last));
+                else {
+                    const label = branch.querySelector(":scope > .branch-label");
+                    if (label) exits.push(label);
+                }
+            });
+            return exits.length > 0 ? exits : [step];
+        }
+
+        canvas.querySelectorAll(".snake").forEach(function (snake) {
+            const rows = rowsOf(snake);
+            rows.forEach(function (row, r) {
+                const steps = stepsOf(row);
+                for (let i = 1; i < steps.length; i++) {
+                    exitsOf(steps[i - 1]).forEach(function (from) {
+                        o.right(o.point(from, "right"), o.point(entryOf(steps[i]), "left"));
+                    });
+                }
+                // The wrapped line: out on the right, back along the lane between the rows,
+                // down, and into the first step of the next row.
+                const next = rows[r + 1] ? stepsOf(rows[r + 1]) : [];
+                if (steps.length === 0 || next.length === 0) return;
+                const target = o.point(entryOf(next[0]), "left");
+                const rowBox = row.getBoundingClientRect();
+                const nextBox = rows[r + 1].getBoundingClientRect();
+                const rightX = o.local(rowBox.right, 0).x + 8;
+                const laneY = (o.local(0, rowBox.bottom).y + o.local(0, nextBox.top).y) / 2;
+                const leftX = Math.min(o.local(nextBox.left, 0).x, target.x - 16);
+                exitsOf(steps[steps.length - 1]).forEach(function (from) {
+                    const a = o.point(from, "right");
+                    o.carriageReturn([a, { x: rightX, y: a.y }, { x: rightX, y: laneY },
+                        { x: leftX, y: laneY }, { x: leftX, y: target.y }, target]);
+                });
+            });
+        });
+        canvas.querySelectorAll(".scope").forEach(function (scope) {
+            const head = scope.querySelector(":scope > .scope-head");
+            if (!head) return;
+            // A compact scope carries its single leaf inline, a full one its own snake body.
+            const body = scope.querySelector(":scope > .snake");
+            const first = body ? firstStepOf(body) : scope.querySelector(":scope > .node");
+            const last = body ? lastStepOf(body) : first;
+            if (!first) return;
+            o.right(o.point(head, "right"), o.point(entryOf(first), "left"));
+            // Out of the bracket through its right edge, from every tail of the last inner step.
+            const exit = o.point(scope, "right");
+            exitsOf(last).forEach(function (from) { o.right(o.point(from, "right"), exit); });
+        });
+        canvas.querySelectorAll(".branching").forEach(function (box) {
+            const head = box.querySelector(":scope > .lbranch-head");
+            if (!head) return;
+            box.querySelectorAll(":scope > .lstack > .branch").forEach(function (branch) {
+                const label = branch.querySelector(":scope > .branch-label");
+                if (!label) return;
+                o.right(o.point(head, "right"), o.point(label, "left"));
+                const snake = branch.querySelector(":scope > .snake");
+                const first = snake ? firstStepOf(snake) : null;
+                if (first) o.right(o.point(label, "right"), o.point(entryOf(first), "left"));
+            });
+        });
+        o.done();
     }
 
     // ── the layout toggle ────────────────────────────────────────────
 
     function toolbar() {
         const bar = el("div", "toolbar");
-        [["snake", "⇢ snake"], ["vertical", "⇣ columns"], ["mermaid", "◇ mermaid"]].forEach(function (pair) {
+        [["snake-mermaid", "⇢ mermaid"], ["mermaid", "⇣ mermaid"]].forEach(function (pair) {
             const button = el("button", layout === pair[0] ? "active" : "", pair[1]);
             button.addEventListener("click", function () {
                 if (layout === pair[0]) return;
@@ -632,9 +804,10 @@
 
     function render(graph) {
         root.textContent = "";
-        const columnar = layout === "vertical" || layout === "mermaid";
+        const columnar = layout === "mermaid";
         root.classList.toggle("vertical", columnar);
-        root.classList.toggle("mermaid-look", layout === "mermaid");
+        root.classList.toggle("mermaid-look", columnar || lrMermaid());
+        root.classList.toggle("lr", lrMermaid());
         root.appendChild(toolbar());
         // Everything drawable lives on the zoomed canvas; the toolbar and the panel stay 1:1.
         canvas = el("div", "canvas");
@@ -652,7 +825,7 @@
             });
             canvas.appendChild(grid);
             highlightSelection();
-            if (layout === "mermaid") drawCurvedEdges();
+            drawCurvedEdges();
             return;
         }
         if (graph.beans && graph.beans.length > 0) canvas.appendChild(beansRow(graph.beans));
@@ -664,6 +837,7 @@
         });
         highlightSelection();
         alignLanes();
+        if (lrMermaid()) drawCurvedEdgesLR();
     }
 
     // The return lanes were sized from ESTIMATED row widths; true up against the real
@@ -898,7 +1072,9 @@
         const message = event.data;
         if (message.type === "graph") {
             toggled = new Set(message.toggled || []);
-            if (message.layout) layout = message.layout;
+            // A layout remembered from a retired mode (the plain columns, the plain snake) opens
+            // as the default.
+            if (message.layout) layout = LAYOUTS.includes(message.layout) ? message.layout : "snake-mermaid";
             if (message.zoom) zoom = message.zoom;
             lastGraph = message.graph;
             render(message.graph);

@@ -401,6 +401,16 @@ internal static partial class CoreContributions
         Scope("transaction", (e, cur, ctx) =>
         {
             var scope = cur.Transaction(Policy(e, ctx));
+            if (ctx.Attr(e, "deadLetterChannel") is { } deadLetter) scope.DeadLetterChannel(deadLetter);
+            // Attempts and delay are one knob: half of it would retry after a pause nobody wrote.
+            var attempts = ctx.Convert<int>(e, "retryAttempts");
+            var retryDelay = ctx.Convert<TimeSpan>(e, "retryDelay");
+            if (attempts is not null && retryDelay is not null)
+                scope.Retry(attempts.Value, retryDelay.Value);
+            else if (attempts is not null)
+                ctx.AddError(e, "<transaction retryAttempts=…> needs retryDelay too — how long to wait between attempts.");
+            else if (ctx.Attr(e, "retryDelay") is not null)
+                ctx.AddError(e, "<transaction retryDelay=…> needs retryAttempts too — how many attempts to make.");
             ctx.ParseSteps(e, scope);
             return scope.EndTransaction();
         }),
@@ -417,7 +427,27 @@ internal static partial class CoreContributions
             var name = ctx.RequiredAttr(e, "name");
             if (name is null) return cur;
             var scope = cur.Metered(name);
-            ctx.ParseSteps(e, scope);
+            // <tag> splits the metric by a header or by an expression; the other children are steps.
+            foreach (var child in e.Elements())
+            {
+                if (child.Name.LocalName != "tag")
+                {
+                    ctx.ParseStep(child, scope);
+                    continue;
+                }
+                var tagName = ctx.RequiredAttr(child, "name");
+                var source = ctx.ExactlyOneOf(child, "fromHeader", "expr");
+                if (tagName is null || source is null) continue;
+                if (source.Value.Name == "fromHeader")
+                {
+                    scope.TagFromHeader(tagName, source.Value.Value);
+                }
+                else
+                {
+                    var expression = new StringExpression(source.Value.Value);
+                    scope.Tag(tagName, exchange => expression.Evaluate<object>(exchange));
+                }
+            }
             return scope.EndMetered();
         }),
         Scope("replayable", (e, cur, ctx) =>
@@ -437,6 +467,8 @@ internal static partial class CoreContributions
                 return cur;
             }
             var scope = cur.Threads(poolSize.Value);
+            if (ctx.Convert<int>(e, "maxQueueSize") is { } maxQueueSize) scope.MaxQueueSize(maxQueueSize);
+            if (ctx.Convert<TimeSpan>(e, "enqueueTimeout") is { } enqueueTimeout) scope.EnqueueTimeout(enqueueTimeout);
             ctx.ParseSteps(e, scope);
             return CloseScope(scope, e, ctx);
         }),
@@ -709,11 +741,65 @@ internal static partial class CoreContributions
     internal static void ConfigureOnException(OnExceptionDefinition scope, XElement e, XmlParseContext ctx)
     {
         if (ctx.Convert<bool>(e, "handled") is { } handled) scope.Handled(handled);
+        if (ctx.Convert<bool>(e, "continued") is { } continued) scope.Continued(continued);
         if (ctx.Convert<int>(e, "maximumRedeliveries") is { } redeliveries) scope.MaximumRedeliveries(redeliveries);
         if (ctx.Convert<TimeSpan>(e, "redeliveryDelay") is { } delay) scope.RedeliveryDelay(delay);
         if (ctx.Convert<bool>(e, "exponentialBackOff") is { } backOff) scope.UseExponentialBackOff(backOff);
         if (ctx.Convert<double>(e, "backOffMultiplier") is { } multiplier) scope.BackOffMultiplier(multiplier);
-        ctx.ParseSteps(e, scope);
+        if (ctx.Convert<bool>(e, "useOriginalBody") == true) scope.UseOriginalBody();
+        if (ctx.Convert<bool>(e, "logStackTrace") is { } stackTrace) scope.LogStackTrace(stackTrace);
+        if (ctx.Convert<bool>(e, "logExhausted") is { } exhausted) scope.LogExhausted(exhausted);
+        if (LogLevelOf(e, "retryAttemptedLogLevel", ctx) is { } attempted) scope.RetryAttemptedLogLevel(attempted);
+        if (LogLevelOf(e, "retriesExhaustedLogLevel", ctx) is { } exhaustedLevel) scope.RetriesExhaustedLogLevel(exhaustedLevel);
+        // The three moments a handler can step into, each a bean from the registry: on every
+        // occurrence, before every retry, once before the handler takes over for good.
+        if (ProcessorRef(e, "onExceptionOccurred", ctx) is { } occurred) scope.OnExceptionOccurred(occurred);
+        if (ProcessorRef(e, "onRedelivery", ctx) is { } redelivery) scope.OnRedelivery(redelivery);
+        if (ProcessorRef(e, "onPrepareFailure", ctx) is { } prepareFailure) scope.OnPrepareFailure(prepareFailure);
+        // <when> decides whether this handler takes the failure at all, <retryWhile> whether
+        // another attempt follows: conditions of the scope, like an intercept's. Everything
+        // else is the handler's own route.
+        foreach (var child in e.Elements())
+        {
+            if (IsConditionChild(child, ctx, out var condition))
+            {
+                if (condition is not null) scope.OnWhen(condition);
+            }
+            else if (child.Name.LocalName == "retryWhile")
+            {
+                if (child.Elements().Any())
+                    ctx.AddError(child, "<retryWhile> here is the scope's retry condition and takes no child steps — put the steps next to it.");
+                else if (ctx.RequiredAttr(child, "expr") is { } retryWhile)
+                    scope.RetryWhile(retryWhile);
+            }
+            else
+            {
+                ctx.ParseStep(child, scope);
+            }
+        }
+    }
+
+    /// <summary>
+    /// An optional reference to an <see cref="IProcessor"/> bean; a name the registry does not hold is a
+    /// positioned error, so a misspelt reference is named at load instead of going silently unused.
+    /// </summary>
+    private static IProcessor? ProcessorRef(XElement e, string attribute, XmlParseContext ctx)
+    {
+        if (ctx.Attr(e, attribute) is not { } reference) return null;
+        var processor = ctx.RouteContext.GetFromRegistry<IProcessor>(reference);
+        if (processor is null)
+            ctx.AddError(e, $"{attribute} '{reference}' is not in the context registry (expected an IProcessor).");
+        return processor;
+    }
+
+    /// <summary>An optional log-level attribute; an unknown name is a positioned error, not a silent default.</summary>
+    private static Microsoft.Extensions.Logging.LogLevel? LogLevelOf(XElement e, string attribute, XmlParseContext ctx)
+    {
+        if (ctx.Attr(e, attribute) is not { } name) return null;
+        if (Enum.TryParse<Microsoft.Extensions.Logging.LogLevel>(name, ignoreCase: true, out var level))
+            return level;
+        ctx.AddError(e, $"'{name}' is not a log level (Trace, Debug, Information, Warning, Error, Critical).");
+        return null;
     }
 
     /// <summary>Attributes, condition and child steps of an intercept — shared by both levels.</summary>

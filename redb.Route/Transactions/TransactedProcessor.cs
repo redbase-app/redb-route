@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Transactions;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Transactions;
 
@@ -9,12 +10,16 @@ namespace redb.Route.Transactions;
 /// Wraps an inner processor in a <see cref="TransactionScope"/> and manages
 /// deferred <see cref="ITransactedAction"/> commit/rollback.
 /// <para>
-/// Transports (Kafka, Redis, RabbitMQ, etc.) register <see cref="ITransactedAction"/> instances
-/// in <c>exchange.Properties["TRANSACT_ACTION"]</c> as a
-/// <see cref="ConcurrentDictionary{TKey,TValue}"/> keyed by a per-message-unique name
-/// (e.g. <c>kafka-send-{guid}</c>, <c>rabbitmq-ack-{deliveryTag}</c>, <c>asb-ack-{sequence}</c> —
-/// never the endpoint URI, so parallel fan-out branches to the same endpoint never collide).
-/// On success all actions are committed; on failure they are rolled back.
+/// The block owns a <see cref="ConcurrentDictionary{TKey,TValue}"/> of deferred actions in
+/// <c>exchange.Properties["TRANSACT_ACTION"]</c> for as long as it runs. Producers inside the block (Kafka, RabbitMQ,
+/// etc.) add their sends through <see cref="TransactedActions.Register"/>, keyed by a per-message-unique
+/// name (e.g. <c>kafka-send-{guid}</c>, never the endpoint URI, so parallel fan-out branches to the same endpoint
+/// never collide). After the database commits all actions are committed; on failure they are rolled back.
+/// </para>
+/// <para>
+/// Blocks nest as in Camel: a Required or Mandatory block inside a running transaction is part of that unit of work
+/// and leaves its sends to the enclosing block; a RequiresNew or Suppress block is a unit of work of its own and
+/// settles only its own sends.
 /// </para>
 /// </summary>
 public sealed class TransactedProcessor : IProcessor
@@ -42,13 +47,59 @@ public sealed class TransactedProcessor : IProcessor
     /// <inheritdoc />
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
-        // Ensure the exchange has a TRANSACT_ACTION dictionary so transports can register
-        if (!exchange.Properties.ContainsKey(TransactActionPropertyKey))
+        if (TransactedActions.JoinsEnclosingBlock(exchange, _policy))
         {
-            exchange.Properties[TransactActionPropertyKey] =
-                new ConcurrentDictionary<string, ITransactedAction>(StringComparer.OrdinalIgnoreCase);
+            await ProcessJoined(exchange, ct).ConfigureAwait(false);
+            return;
         }
 
+        // A unit of work of its own keeps its own set of deferred actions for as long as it runs and puts the enclosing
+        // block's set back when it ends. A transacted step after the block, or on a route with no block at all, then
+        // finds no set and fails (TransactedActions.Register) instead of deferring a write that nobody would commit.
+        var enclosing = TransactedActions.Open(exchange);
+        try
+        {
+            await ProcessUnitOfWork(exchange, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            TransactedActions.Close(exchange, enclosing);
+        }
+    }
+
+    /// <summary>
+    /// A Required or Mandatory block inside a running transaction: the database work joins the enclosing transaction
+    /// and the sends stay in the enclosing set, so both commit with the enclosing block and in its order.
+    /// </summary>
+    private async Task ProcessJoined(IExchange exchange, CancellationToken ct)
+    {
+        using var scope = _policy.CreateScope();
+
+        await _inner.Process(exchange, ct).ConfigureAwait(false);
+
+        if (exchange.IsRollbackOnly())
+        {
+            // .RollbackAll(): leaving without Complete marks the enclosing transaction for rollback, and the enclosing
+            // block, which sees the same mark, rolls everything back.
+            _logger?.LogDebug("Joined transaction marked for rollback: the route marked the exchange rollback-only.");
+            return;
+        }
+
+        if (exchange.Exception is { } failure && !exchange.ExceptionHandled)
+        {
+            // Leaving the scope without Complete marks the enclosing transaction for rollback: the enclosing block rolls
+            // back the database and every deferred send with it.
+            _logger?.LogError(failure,
+                "Joined transaction marked for rollback: the exchange completed with an unhandled exception: {Message}",
+                failure.Message);
+            return;
+        }
+
+        scope.Complete();
+    }
+
+    private async Task ProcessUnitOfWork(IExchange exchange, CancellationToken ct)
+    {
         _logger?.LogDebug(
             "Transaction started (ScopeOption={ScopeOption}, IsolationLevel={IsolationLevel}, Timeout={Timeout}).",
             _policy.ScopeOption, _policy.IsolationLevel, _policy.Timeout);
@@ -63,12 +114,21 @@ public sealed class TransactedProcessor : IProcessor
             {
                 await _inner.Process(exchange, ct).ConfigureAwait(false);
 
+                if (exchange.IsRollbackOnly())
+                {
+                    // .RollbackAll(), Camel's markRollbackOnly(): a rollback without an exception. The scope is disposed
+                    // without Complete; the consumer sees the mark and does not acknowledge the message.
+                    await TransactedActions.RollbackAll(exchange, _logger, ct).ConfigureAwait(false);
+                    _logger?.LogInformation("Transaction rolled back: the route marked the exchange rollback-only.");
+                    return;
+                }
+
                 if (exchange.Exception is { } failure && !exchange.ExceptionHandled)
                 {
                     // The route left an unhandled failure on the exchange (OnException without Handled(true)) and
                     // returned normally, e.g. from a sub-route: that is a failed unit of work, not a commit. The scope
                     // is disposed without Complete, so the database rolls back together with the brokers.
-                    await RollbackActions(exchange, ct).ConfigureAwait(false);
+                    await TransactedActions.RollbackAll(exchange, _logger, ct).ConfigureAwait(false);
                     _logger?.LogError(failure,
                         "Transaction rolled back: the exchange completed with an unhandled exception: {Message}",
                         failure.Message);
@@ -81,21 +141,24 @@ public sealed class TransactedProcessor : IProcessor
         catch (OperationCanceledException)
         {
             // Cancelled before the database committed: nothing was sent, roll the deferred actions back and re-throw.
-            await RollbackActions(exchange, ct).ConfigureAwait(false);
+            await TransactedActions.RollbackAll(exchange, _logger, ct).ConfigureAwait(false);
             _logger?.LogWarning("Transaction rolled back due to cancellation.");
             throw;
         }
         catch (Exception ex)
         {
             // The database did not commit, so no broker hears about the work: roll the deferred actions back.
-            await RollbackActions(exchange, ct).ConfigureAwait(false);
+            await TransactedActions.RollbackAll(exchange, _logger, ct).ConfigureAwait(false);
+            // The block's work is undone, so an OnException ... Continued() handler must not replay the steps left in
+            // it: routing picks up after the block, not inside it.
+            Processors.ResumePoints.Forget(exchange, ex);
             _logger?.LogError(ex, "Transaction rolled back due to exception: {Message}", ex.Message);
             throw;
         }
 
         try
         {
-            await CommitActions(exchange, ct).ConfigureAwait(false);
+            await TransactedActions.CommitAll(exchange, ct).ConfigureAwait(false);
             _logger?.LogDebug("Transaction committed successfully.");
         }
         catch (Exception ex)
@@ -103,78 +166,13 @@ public sealed class TransactedProcessor : IProcessor
             // The work is in the database and cannot be taken back. Whatever is left unsent is rolled back and the
             // failure propagates, so the consumer does not acknowledge the message: the broker redelivers it and the
             // idempotent consumer keeps the second pass from doing the work twice.
-            await RollbackActions(exchange, ct).ConfigureAwait(false);
+            await TransactedActions.RollbackAll(exchange, _logger, ct).ConfigureAwait(false);
             _logger?.LogError(ex,
                 "The database transaction committed, then a deferred transport action failed: {Message}. The work is " +
                 "stored; the message is not acknowledged, so the broker will redeliver it.", ex.Message);
             throw;
         }
     }
-
-    /// <summary>
-    /// Commits all <see cref="ITransactedAction"/> instances registered in exchange properties.
-    /// </summary>
-    private static async Task CommitActions(IExchange exchange, CancellationToken ct)
-    {
-        var actions = GetActions(exchange);
-        if (actions is null || actions.IsEmpty)
-            return;
-
-        foreach (var kvp in actions)
-        {
-            await kvp.Value.Commit(ct).ConfigureAwait(false);
-            // A committed action is done. Taking it out keeps a later attempt (Retry outside the transaction)
-            // from committing it a second time.
-            actions.TryRemove(kvp.Key, out _);
-        }
-    }
-
-    /// <summary>
-    /// Rolls back all <see cref="ITransactedAction"/> instances registered in exchange properties.
-    /// Rollback failures are logged but suppressed so the original exception propagates.
-    /// </summary>
-    private async Task RollbackActions(IExchange exchange, CancellationToken ct)
-    {
-        var actions = GetActions(exchange);
-        if (actions is null || actions.IsEmpty)
-            return;
-
-        foreach (var kvp in actions)
-        {
-            try
-            {
-                await kvp.Value.Rollback(ct).ConfigureAwait(false);
-            }
-            catch (Exception rollbackEx)
-            {
-                _logger?.LogWarning(rollbackEx,
-                    "Rollback failed for transacted action '{ActionKey}'. Suppressing to preserve original exception.",
-                    kvp.Key);
-            }
-            finally
-            {
-                // Rolled back or not, the action belongs to the attempt that registered it.
-                actions.TryRemove(kvp.Key, out _);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Retrieves the <see cref="ConcurrentDictionary{TKey,TValue}"/> of deferred actions from the exchange.
-    /// </summary>
-    private static ConcurrentDictionary<string, ITransactedAction>? GetActions(IExchange exchange)
-    {
-        return exchange.Properties.TryGetValue(TransactActionPropertyKey, out var raw) &&
-               raw is ConcurrentDictionary<string, ITransactedAction> dict
-            ? dict
-            : null;
-    }
-
-    /// <summary>
-    /// Retrieves deferred actions from the exchange. Used by imperative commit/rollback processors.
-    /// </summary>
-    internal static ConcurrentDictionary<string, ITransactedAction>? GetActionsPublic(IExchange exchange)
-        => GetActions(exchange);
 
     /// <summary>[Diag-TX-SCOPE] — best-effort RouteId lookup from the exchange.</summary>
     private static string GetRouteIdSafe(IExchange exchange)

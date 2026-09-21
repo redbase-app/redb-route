@@ -22,6 +22,40 @@ public interface IAgentObserver
 
     /// <summary>Called once when an agent run ends (whether normally or via cancellation/error).</summary>
     Task OnRunCompletedAsync(AgentRunCompletedContext context, CancellationToken ct = default);
+
+    /// <summary>
+    /// Called for each piece of a streamed model call (<c>stream=calls</c>) as it arrives: visible text or the
+    /// model's thinking. A piece is partial; the whole answer follows in <see cref="OnIterationCompletedAsync"/>
+    /// and in the stored conversation. Not called when the model call is not streamed. Pieces come at the rate the
+    /// model writes, so an observer must not do slow work here. Default: nothing.
+    /// </summary>
+    Task OnDeltaAsync(AgentDeltaContext context, CancellationToken ct = default) => Task.CompletedTask;
+}
+
+/// <summary>What a streamed piece is.</summary>
+public enum AgentDeltaKind
+{
+    /// <summary>Visible text of the answer.</summary>
+    Text,
+
+    /// <summary>The model's thinking: never part of the visible answer.</summary>
+    Thinking
+}
+
+/// <summary>One piece of a streamed model call.</summary>
+public sealed class AgentDeltaContext
+{
+    /// <summary>Identifiers shared with the rest of the run.</summary>
+    public required AgentRunContext Run { get; init; }
+
+    /// <summary>Iteration index, starting from 1: the model call this piece belongs to.</summary>
+    public required int Iteration { get; init; }
+
+    /// <summary>What the piece is.</summary>
+    public required AgentDeltaKind Kind { get; init; }
+
+    /// <summary>The piece, as the provider sent it.</summary>
+    public required string Text { get; init; }
 }
 
 /// <summary>Common identifiers passed to every observer call within one agent run.</summary>
@@ -161,6 +195,10 @@ public sealed class CompositeAgentObserver : IAgentObserver
     /// <inheritdoc />
     public Task OnRunCompletedAsync(AgentRunCompletedContext context, CancellationToken ct = default) =>
         Fan(o => o.OnRunCompletedAsync(context, ct));
+
+    /// <inheritdoc />
+    public Task OnDeltaAsync(AgentDeltaContext context, CancellationToken ct = default) =>
+        Fan(o => o.OnDeltaAsync(context, ct));
 
     private async Task Fan(Func<IAgentObserver, Task> dispatch)
     {

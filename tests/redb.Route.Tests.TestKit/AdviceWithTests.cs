@@ -216,7 +216,11 @@ public class AdviceWithTests
     {
         await using var ctx = new RouteContext().AddRoutes(b => b
             .From("direct://unnamed").To("kafka://u"));
-        ctx.AdviceRoute("direct://unnamed", a => a.MockEndpoints("kafka://*"));
+        // A route with no RouteId() is named after its endpoint, and that name is computable:
+        // the same call the context makes when it compiles the route.
+        var derivedId = RouteIdFactory.ForEndpoint(EndpointUriParser.Parse("direct://unnamed"));
+        derivedId.Should().StartWith("direct-unnamed-");
+        ctx.AdviceRoute(derivedId, a => a.MockEndpoints("kafka://*"));
         await ctx.Start();
 
         await ctx.SendBody("direct://unnamed", "x");

@@ -26,9 +26,9 @@ public sealed class RedisEndpointOptionsTests
         opts.StreamApproximate.Should().BeTrue();
         opts.StreamReadCount.Should().Be(10);
         opts.StreamBlockTimeMs.Should().Be(1000);
-        opts.StreamAutoAck.Should().BeTrue();
-        opts.StreamStartPosition.Should().Be(">");
-        opts.Transacted.Should().BeFalse();
+        opts.StreamNoAck.Should().BeFalse("a group consumer acknowledges after its route");
+        opts.StreamStartPosition.Should().BeNull("unset: the entries added from now on");
+        opts.Transacted.Should().BeNull("unset, PUBLISH and XADD follow the enclosing .Transacted() block");
         opts.PollDelayMs.Should().Be(1000);
     }
 

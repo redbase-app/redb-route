@@ -49,4 +49,7 @@ in a few seconds and the log shows the `REDBDEMO total=1` ticks.
 Regenerate C# or a diagram from the route:
 
     redb-route-xml csharp routes/main.route.xml --namespace XmlDemo.Routes
-    redb-route-xml mermaid routes/main.route.xml
+    redb-route-xml mermaid routes/main.route.xml --bin bin/Debug/net9.0
+
+`--bin` is there because the route uses package elements (`<redbSave>`, `<redbQuery>`): the
+diagram needs the same build output the pack gate reads.

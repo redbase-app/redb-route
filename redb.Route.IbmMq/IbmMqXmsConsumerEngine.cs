@@ -88,7 +88,7 @@ internal sealed class IbmMqXmsConsumerEngine
         _options = options;
         _logger = logger;
         _onProcessed = onProcessed;
-        _transacted = options.Transacted;
+        _transacted = options.Transacted == true;
     }
 
     public async Task StartAsync(CancellationToken ct)

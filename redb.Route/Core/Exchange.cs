@@ -299,6 +299,13 @@ public class Exchange : IExchange
         }
         catch { /* logger is best-effort; disposal proceeds regardless */ }
 
+        // An exchange that entered no route of its own (a Split or Multicast branch, the copy .Threads() continues on, one
+        // processed outside any route) ends its unit of work here, with the outcome it carries, while its scopes are still
+        // alive. A unit of work a route opened is that route's to end — a release in the middle of it leaves it alone.
+        if (_properties.TryGetValue(ExchangeUnitOfWork.PropertyKey, out var unitOfWorkValue)
+            && unitOfWorkValue is ExchangeUnitOfWork { OwnedByRoute: false } unitOfWork)
+            await unitOfWork.End(this, this.EndedInFailure(), logger).ConfigureAwait(false);
+
         // Release resources registered through ExchangeResources (a streamed query result holding its connection) first:
         // most recent first, while the DI scopes that may own their factories are still alive. Each release is isolated,
         // like the scopes below, so one failure cannot strand the others.

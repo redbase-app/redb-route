@@ -16,6 +16,9 @@ public sealed class TestFileComponent : ComponentBase
 {
     private readonly FakeFileOperations _ops;
 
+    /// <summary>Filter bean the component hands to the options, the way the real components resolve <c>filter=#name</c> from the registry.</summary>
+    public IGenericFileFilter? Filter { get; set; }
+
     public TestFileComponent(FakeFileOperations ops) => _ops = ops;
 
     /// <inheritdoc />
@@ -26,6 +29,7 @@ public sealed class TestFileComponent : ComponentBase
     {
         var options = new TestFileEndpointOptions();
         options.BindFromUri(uri.RawParameters);
+        options.FilterInstance = Filter;
         options.Validate();
         return new TestFileEndpoint(uri, this, options, _ops);
     }
@@ -110,9 +114,9 @@ public abstract class GenericFileTestBase
 
     protected GenericFileTestBase() => Ops.AddDirectory(BaseDir);
 
-    protected TestFileEndpoint Endpoint(Dictionary<string, string>? parameters = null, string? dir = null)
+    protected TestFileEndpoint Endpoint(Dictionary<string, string>? parameters = null, string? dir = null, IGenericFileFilter? filter = null)
     {
-        var component = new TestFileComponent(Ops);
+        var component = new TestFileComponent(Ops) { Filter = filter };
         var path = dir ?? BaseDir;
         var uri = new EndpointUri("testfile", path, "testfile://" + path, parameters ?? new Dictionary<string, string>());
         return (TestFileEndpoint)component.CreateEndpoint(uri);

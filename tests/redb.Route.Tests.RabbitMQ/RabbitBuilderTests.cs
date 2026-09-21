@@ -124,6 +124,20 @@ public class RabbitBuilderTests
     }
 
     [Fact]
+    public void Transacted_false_is_written_out_to_send_at_once_inside_a_block()
+    {
+        var uri = Rabbit.Queue("q").Transacted(false).Build();
+        uri.Should().Contain("transacted=false");
+    }
+
+    [Fact]
+    public void Transacted_left_unset_is_not_written_so_the_producer_follows_the_block()
+    {
+        var uri = Rabbit.Queue("q").Build();
+        uri.Should().NotContain("transacted");
+    }
+
+    [Fact]
     public void AutoAck_SetsParam()
     {
         var uri = Rabbit.Queue("q").AutoAck().Build();

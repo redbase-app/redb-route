@@ -277,23 +277,45 @@ internal static partial class CoreContributions
                 A(e, "batchSize") ?? (A(e, "timeout") is null ? null : "100"),
                 A(e, "timeout") is { } t ? XmlCodeWriter.Ts(ParseTs(t)) : null), "EndResequence"),
             ["transaction"] = (e, w) => w.Scope(e, "Transaction",
-                A(e, "policy") is { } p ? [PolicyRef(p)] : [], "EndTransaction"),
+                A(e, "policy") is { } p ? [PolicyRef(p)] : [], "EndTransaction", body: w2 =>
+                {
+                    if (A(e, "deadLetterChannel") is not null) w2.Config($"DeadLetterChannel({S6(e, "deadLetterChannel")})");
+                    if (A(e, "retryAttempts") is { } attempts && A(e, "retryDelay") is { } retryDelay)
+                        w2.Config($"Retry({attempts}, {XmlCodeWriter.Ts(ParseTs(retryDelay))})");
+                    w2.PrintSteps(e);
+                }),
             ["traced"] = (e, w) => w.Scope(e, "Traced", [S6(e, "name")], "EndTraced"),
-            ["metered"] = (e, w) => w.Scope(e, "Metered", [S6(e, "name")], "EndMetered"),
+            ["metered"] = (e, w) => w.Scope(e, "Metered", [S6(e, "name")], "EndMetered", body: w2 =>
+            {
+                foreach (var child in e.Elements())
+                {
+                    if (child.Name.LocalName != "tag")
+                    {
+                        w2.PrintStep(child);
+                        continue;
+                    }
+                    if (A(child, "fromHeader") is not null)
+                        w2.Config($"TagFromHeader({S6(child, "name")}, {S6(child, "fromHeader")})");
+                    else
+                        w2.Config($"Tag({S6(child, "name")}, ex => {XmlCodeWriter.Expr(A(child, "expr") ?? "")}.Evaluate<object>(ex))");
+                }
+            }),
             ["replayable"] = (e, w) => w.Scope(e, "Replayable", Trim(
                 S6(e, "name"), A(e, "exposed") is { } x ? XmlCodeWriter.Bool(bool.Parse(x)) : null), "EndReplayable"),
-            ["threads"] = (e, w) => w.Scope(e, "Threads", [A(e, "poolSize") ?? "1"], "EndThreads"),
+            ["threads"] = (e, w) => w.Scope(e, "Threads", [A(e, "poolSize") ?? "1"], "EndThreads", body: w2 =>
+            {
+                if (A(e, "maxQueueSize") is { } queue) w2.Config($"MaxQueueSize({queue})");
+                if (A(e, "enqueueTimeout") is { } enqueue) w2.Config($"EnqueueTimeout({XmlCodeWriter.Ts(ParseTs(enqueue))})");
+                w2.PrintSteps(e);
+            }),
             // A typed section: the children belong to it, the siblings stay on the parent
             // receiver — the statement model expresses that by simply not closing.
             ["ofType"] = (e, w) => w.Scope(e, "OfType", [XmlCodeWriter.TypeRef(A(e, "type") ?? "")], null),
             ["onException"] = (e, w) =>
             {
                 var types = (A(e, "exceptions") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                w.Scope(e, "OnException", [.. types.Select(XmlCodeWriter.TypeRef)], "EndOnException", body: w2 =>
-                {
-                    PrintOnExceptionConfig(e, w2);
-                    w2.PrintSteps(e);
-                });
+                w.Scope(e, "OnException", [.. types.Select(XmlCodeWriter.TypeRef)], "EndOnException",
+                    body: w2 => PrintOnException(e, w2));
             },
             ["intercept"] = (e, w) => PrintIntercept(e, w, "Intercept", []),
             ["interceptFrom"] = (e, w) => PrintIntercept(e, w, "InterceptFrom",
@@ -469,10 +491,48 @@ internal static partial class CoreContributions
     internal static void PrintOnExceptionConfig(XElement e, XmlCodeWriter w)
     {
         if (A(e, "handled") is { } h) w.Config($"Handled({XmlCodeWriter.Bool(bool.Parse(h))})");
+        if (A(e, "continued") is { } c) w.Config($"Continued({XmlCodeWriter.Bool(bool.Parse(c))})");
         if (A(e, "maximumRedeliveries") is { } m) w.Config($"MaximumRedeliveries({m})");
         if (A(e, "redeliveryDelay") is { } d) w.Config($"RedeliveryDelay({XmlCodeWriter.Ts(ParseTs(d))})");
         if (A(e, "exponentialBackOff") is { } b) w.Config($"UseExponentialBackOff({XmlCodeWriter.Bool(bool.Parse(b))})");
         if (A(e, "backOffMultiplier") is { } bm) w.Config($"BackOffMultiplier({bm})");
+        if (A(e, "useOriginalBody") == "true") w.Config("UseOriginalBody()");
+        if (A(e, "logStackTrace") is { } st) w.Config($"LogStackTrace({XmlCodeWriter.Bool(bool.Parse(st))})");
+        if (A(e, "logExhausted") is { } le) w.Config($"LogExhausted({XmlCodeWriter.Bool(bool.Parse(le))})");
+        if (A(e, "retryAttemptedLogLevel") is { } ra) w.Config($"RetryAttemptedLogLevel({LevelRef(ra)})");
+        if (A(e, "retriesExhaustedLogLevel") is { } re) w.Config($"RetriesExhaustedLogLevel({LevelRef(re)})");
+        foreach (var (attribute, verb) in OnExceptionProcessorRefs)
+            if (A(e, attribute) is { } reference)
+                w.Config($"{verb}(Context!.GetFromRegistry<IProcessor>({Reg(reference)})!)");
+    }
+
+    /// <summary>The handler's bean-reference attributes and the DSL verb each one calls.</summary>
+    private static readonly (string Attribute, string Verb)[] OnExceptionProcessorRefs =
+    [
+        ("onExceptionOccurred", "OnExceptionOccurred"),
+        ("onRedelivery", "OnRedelivery"),
+        ("onPrepareFailure", "OnPrepareFailure"),
+    ];
+
+    private static string LevelRef(string level)
+        => $"LogLevel.{Enum.Parse<Microsoft.Extensions.Logging.LogLevel>(level, true)}";
+
+    /// <summary>
+    /// The whole body of an onException: its settings, then its conditions and steps. The
+    /// conditions are children that are NOT steps, so the walk cannot be a plain PrintSteps.
+    /// </summary>
+    internal static void PrintOnException(XElement e, XmlCodeWriter w)
+    {
+        PrintOnExceptionConfig(e, w);
+        foreach (var child in e.Elements())
+        {
+            if (child.Name.LocalName == "when" && !child.Elements().Any())
+                w.Config($"OnWhen({S6(child, "expr")})");
+            else if (child.Name.LocalName == "retryWhile" && !child.Elements().Any())
+                w.Config($"RetryWhile({S6(child, "expr")})");
+            else
+                w.PrintStep(child);
+        }
     }
 
     private static void PrintIntercept(XElement e, XmlCodeWriter w, string verb, string[] args)
