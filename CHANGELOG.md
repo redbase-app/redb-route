@@ -61,8 +61,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
-## [Unreleased]
-
 ## [4.1.0] — 2026-09-21
 
 > **Why 4.1.0 and not a patch.** This release carries breaking changes, and every one of them is in an
