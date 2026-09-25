@@ -5,7 +5,7 @@ import { sniff } from "./sniff";
 import { parseXml, XmlParseError, XmlElement, childElements, textContent } from "./xmlmodel";
 import { buildFileGraph, buildIndex, ElementInfo, ElementIndex, redactUri } from "./graphmodel";
 import {
-    computeSetAttribute, computeSetTextContent, computeRemoveElement, computeInsertChild,
+    computeSetAttribute, computeSetTextContent, computeRemoveElement, computeInsertChild, computeRenameElement,
     computeInsertAt, computeMoveElement, computeRemoveBlock,
     resolveByPath, ElementPath,
 } from "./textedit";
@@ -53,6 +53,11 @@ interface ContentRow {
     text: string | null;
     /** The name attribute, when the child carries one (header/property) — editable. */
     name: string | null;
+    /**
+     * The assigned value of a setter row (`<property name= value=|expr=/>`): which attribute
+     * carries it — a constant or an expression — and its text. Null for other children.
+     */
+    value: { attr: "value" | "expr"; text: string } | null;
     /** Neither text nor name — shown as-is, edited in text. */
     opaque: string | null;
 }
@@ -164,6 +169,16 @@ export class RouteGraphEditorProvider implements vscode.CustomTextEditorProvider
         const zoomState = (): number =>
             this.context.workspaceState.get<number>(zoomKey) ?? 1;
 
+        // The tile look (glyph over or beside the caption) is one choice for all documents.
+        const tileStyleKey = "redbRoute.tileStyle";
+        const tileStyleState = (): string =>
+            this.context.globalState.get<string>(tileStyleKey) ?? "stacked";
+
+        // The properties panel width, dragged by its left edge — one choice for all documents.
+        const panelWidthKey = "redbRoute.panelWidth";
+        const panelWidthState = (): number =>
+            this.context.globalState.get<number>(panelWidthKey) ?? 380;
+
         // Config files change rarely; one read per couple of seconds, not per node.
         let cachedConfig: ConfigMap | null = null;
         let cachedAt = 0;
@@ -187,6 +202,7 @@ export class RouteGraphEditorProvider implements vscode.CustomTextEditorProvider
                 panel.webview.postMessage({
                     type: "graph", graph,
                     toggled: collapseState(), layout: layoutState(), zoom: zoomState(),
+                    tileStyle: tileStyleState(), panelWidth: panelWidthState(),
                 });
             } catch (error) {
                 if (error instanceof XmlParseError) {
@@ -233,6 +249,12 @@ export class RouteGraphEditorProvider implements vscode.CustomTextEditorProvider
                 await this.context.workspaceState.update(layoutKey, message.layout);
             if (message.type === "setZoom")
                 await this.context.workspaceState.update(zoomKey, message.zoom);
+            if (message.type === "setPanelWidth" && typeof message.width === "number")
+                await this.context.globalState.update(panelWidthKey, message.width);
+            if (message.type === "setTileStyle")
+                await this.context.globalState.update(tileStyleKey, message.tileStyle);
+            if (message.type === "setCollapsed" && Array.isArray(message.keys))
+                await this.context.workspaceState.update(collapseKey, message.keys.filter((k: unknown) => typeof k === "string"));
             if (message.type === "toggleCollapse") {
                 const current = new Set(collapseState());
                 if (current.has(message.key)) current.delete(message.key);
@@ -245,6 +267,17 @@ export class RouteGraphEditorProvider implements vscode.CustomTextEditorProvider
             }
             if (message.type === "removeStep")
                 await applyReplacementEdit(computeRemoveBlock(document.getText(), message.path));
+            if (message.type === "renameElement" && typeof message.name === "string") {
+                // A joined setter row switched between property and header: the element's tag.
+                await applyReplacementEdit(computeRenameElement(document.getText(), message.path, message.name));
+            }
+            if (message.type === "removeSteps" && Array.isArray(message.paths)) {
+                // A run of siblings (a joined `set ×N` tile): removed bottom up, so the paths of
+                // the rows still to remove keep pointing at their elements.
+                const paths = [...(message.paths as ElementPath[])].sort((a, b) => b[b.length - 1] - a[a.length - 1]);
+                for (const path of paths)
+                    await applyReplacementEdit(computeRemoveBlock(document.getText(), path));
+            }
             if (message.type === "moveStep") {
                 const edits = computeMoveElement(
                     document.getText(), message.fromPath, message.toParentPath, message.before);
@@ -315,7 +348,21 @@ export class RouteGraphEditorProvider implements vscode.CustomTextEditorProvider
                         replacement.newText);
                     await vscode.workspace.applyEdit(edit);
                 }
-                postProps(message.path); // refreshed values, same node
+                // A setter row switched constant <-> expression: the other attribute goes, in
+                // the same turn and on the text the first edit left.
+                if (typeof message.removeAttr === "string") {
+                    const removal = computeSetAttribute(document.getText(), message.path, message.removeAttr, null);
+                    if (removal) {
+                        const edit = new vscode.WorkspaceEdit();
+                        edit.replace(document.uri,
+                            new vscode.Range(document.positionAt(removal.start), document.positionAt(removal.end)),
+                            removal.newText);
+                        await vscode.workspace.applyEdit(edit);
+                    }
+                }
+                // refreshed values, same node — a content row edits a child but shows its parent;
+                // a joined run's panel is rebuilt by the webview itself (refresh: false)
+                if (message.refresh !== false) postProps(message.refresh ?? message.path);
             }
             if (message.type === "reveal") {
                 // Node click → the exact spot in the text, side by side.
@@ -386,23 +433,41 @@ export class RouteGraphEditorProvider implements vscode.CustomTextEditorProvider
             span: { start: element.span.start, end: element.span.end },
             fields,
             endpoint: this.buildEndpointFields(element, resolver),
-            content: childElements(element).map((child, i): ContentRow => {
-                const childSpec = info?.children?.find(c => c.name === child.local);
-                const childPath = [...path, i];
-                if (childSpec?.allowsText || (childSpec === undefined && child.attributes.length === 0)) {
-                    return { path: childPath, type: child.local, text: redactUri(textContent(child)), name: null, opaque: null };
-                }
-                if (child.attributes.some(a => a.name === "name")) {
-                    return {
-                        path: childPath, type: child.local, text: null,
-                        name: child.attributes.find(a => a.name === "name")!.value, opaque: null,
-                    };
-                }
-                const bits = child.attributes.map(a => `${a.name}="${redactUri(a.value)}"`).join(" ");
-                return { path: childPath, type: child.local, text: null, name: null, opaque: `<${child.name}${bits ? " " + bits : ""}>` };
+            // The element's own configuration children only (header/property rows, a log's
+            // message…). Steps nested in a branch or a container are steps of the graph, shown
+            // and edited as tiles — never as blank text rows here.
+            content: childElements(element).flatMap((child, i): ContentRow[] => {
+                const declared = info?.children?.some(c => c.name === child.local) ?? false;
+                const stepKind = this.index.get(child.local)?.kind;
+                if (!declared && child.prefix === null && (stepKind === "Step" || stepKind === "Scope" || stepKind === "Branching"))
+                    return [];
+                return [contentRowOf(child, i)];
             }),
             addable: (info?.children ?? []).map(c => c.name),
         };
+
+        function contentRowOf(child: XmlElement, i: number): ContentRow {
+                const childSpec = info?.children?.find(c => c.name === child.local);
+                const childPath = [...path, i];
+                if (childSpec?.allowsText || (childSpec === undefined && child.attributes.length === 0)) {
+                    return { path: childPath, type: child.local, text: redactUri(textContent(child)), name: null, value: null, opaque: null };
+                }
+                if (child.attributes.some(a => a.name === "name")) {
+                    const assigns = childSpec?.attributes.some(a => a.name === "value") && childSpec.attributes.some(a => a.name === "expr");
+                    const expr = child.attributes.find(a => a.name === "expr");
+                    return {
+                        path: childPath, type: child.local, text: null,
+                        name: child.attributes.find(a => a.name === "name")!.value,
+                        value: assigns
+                            ? expr ? { attr: "expr", text: expr.value }
+                                : { attr: "value", text: child.attributes.find(a => a.name === "value")?.value ?? "" }
+                            : null,
+                        opaque: null,
+                    };
+                }
+                const bits = child.attributes.map(a => `${a.name}="${redactUri(a.value)}"`).join(" ");
+                return { path: childPath, type: child.local, text: null, name: null, value: null, opaque: `<${child.name}${bits ? " " + bits : ""}>` };
+        }
     }
 
     /** The insertable fragment for one child kind: text-bearing gets a body, named gets name="". */

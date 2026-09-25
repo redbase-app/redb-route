@@ -6,8 +6,8 @@ request, issues serial numbers in **SQL Server** and sends the answer back over 
 transport. A product API lets a web page, or code in the same process, activate a product, and the
 requests that waited for it are answered without the partner sending anything again.
 
-Needs redb and redb.Route **4.0.1** or later: one transaction path with `.Transacted()`, file consumer
-backoff and an async `InitRoute.main` are used throughout.
+Needs redb and redb.Route **4.1.0** or later: one transaction path with `.Transacted()`, file consumer
+backoff, path filters on the file consumers and an async `InitRoute.main` are used throughout.
 
 It shows the pieces a real integration needs, each in the place it belongs:
 
@@ -378,9 +378,10 @@ module.
 
 ## Run it under Tsak
 
-Needs a Tsak worker 4.0.1 or later: earlier workers do not recognise an async `main` and skip the module
-without loading it. `SerialNumbers.deploy/docker-compose.tsak.yml` runs the whole thing locally with the Tsak
-stack image, the worker and its dashboard in one container. From the demo folder:
+Needs a Tsak worker 4.1.0, the version the module is built against; a 4.0.1 worker still recognises the
+async `main`, while anything earlier skips the module without loading it.
+`SerialNumbers.deploy/docker-compose.tsak.yml` runs the whole thing locally with the Tsak stack image, the
+worker and its dashboard in one container. From the demo folder:
 
 ```bash
 cp SerialNumbers.deploy/.env.example SerialNumbers.deploy/.env      # fill in the four Tsak values

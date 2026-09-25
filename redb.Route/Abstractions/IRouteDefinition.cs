@@ -58,6 +58,9 @@ public interface IRouteDefinition : IProcessorDefinition
     /// <summary>Sets several headers in one step; an <see cref="IExpression"/> or <c>Func&lt;IExchange, object?&gt;</c> value is evaluated per message, anything else is a constant.</summary>
     IRouteDefinition SetHeaders(params (string Name, object? Value)[] headers);
 
+    /// <summary>Sets several exchange properties in one step, in order; an <see cref="IExpression"/> or <c>Func&lt;IExchange, object?&gt;</c> value is evaluated per message, anything else is a constant.</summary>
+    IRouteDefinition SetProperties(params (string Name, object? Value)[] properties);
+
     /// <summary>Removes every header whose name matches the mask (exact, trailing <c>*</c>, or <c>regex:</c>), except those listed.</summary>
     IRouteDefinition RemoveHeaders(string pattern, params string[] except);
 

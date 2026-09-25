@@ -65,6 +65,8 @@ internal static partial class CoreContributions
             ["removeProperties"] = ElementSpec.Leaf("removeProperties", S("pattern", required: true), S("except")),
             ["setHeaders"] = new("setHeaders", XmlElementKind.Step, [],
                 [ElementSpec.Child("header", false, S("name", required: true), S("value"), E("expr"))]),
+            ["setProperties"] = new("setProperties", XmlElementKind.Step, [],
+                [ElementSpec.Child("property", false, S("name", required: true), S("value"), E("expr"))]),
             ["log"] = new("log", XmlElementKind.Step,
                 [En("level", LogLevels), B("showRouteId")],
                 [

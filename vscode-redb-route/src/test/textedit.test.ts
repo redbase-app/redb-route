@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import {
     computeSetAttribute, computeSetTextContent, computeRemoveElement, computeInsertChild,
-    computeInsertAt, computeMoveElement, blockSpan,
+    computeInsertAt, computeMoveElement, computeRenameElement, blockSpan,
     applyReplacement, escapeAttributeValue, resolveByPath, TextReplacement,
 } from "../textedit";
 import { parseXml } from "../xmlmodel";
@@ -245,5 +245,26 @@ describe("step operations (такт 3, слой A)", () => {
         assert.match(after, /from uri="direct:\/\/in"\/>\n    <setHeader name="k" expr="v"\/>\n    <!-- why/);
         parseXml(after);
         assert.equal(after.length, MOVABLE.length, "a pure reorder changes no byte count");
+    });
+});
+
+describe("computeRenameElement — a setter row switches property <-> header", () => {
+    it("renames a self-closing element and keeps its attributes byte for byte", () => {
+        const text = `<routes xmlns="urn:redb:route:1.0"><route id="r">
+    <setProperty name="a" expr="\${body}"/>
+  </route></routes>`;
+        const out = applyReplacement(text, computeRenameElement(text, [0, 0], "setHeader")!);
+        assert.equal(out, text.replace(`<setProperty name="a" expr="\${body}"/>`, `<setHeader name="a" expr="\${body}"/>`));
+    });
+
+    it("renames the open and the close tag of an element with content", () => {
+        const text = `<routes xmlns="urn:redb:route:1.0"><route id="r"><log>hi</log></route></routes>`;
+        const out = applyReplacement(text, computeRenameElement(text, [0, 0], "note")!);
+        assert.equal(out, `<routes xmlns="urn:redb:route:1.0"><route id="r"><note>hi</note></route></routes>`);
+    });
+
+    it("does nothing when the name is already that", () => {
+        const text = `<routes xmlns="urn:redb:route:1.0"><route id="r"><setHeader name="a" value="1"/></route></routes>`;
+        assert.equal(computeRenameElement(text, [0, 0], "setHeader"), null);
     });
 });

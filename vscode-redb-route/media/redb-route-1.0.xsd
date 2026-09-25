@@ -55,6 +55,7 @@
       <xs:element ref="r:setBody" />
       <xs:element ref="r:setHeader" />
       <xs:element ref="r:setHeaders" />
+      <xs:element ref="r:setProperties" />
       <xs:element ref="r:setProperty" />
       <xs:element ref="r:sort" />
       <xs:element ref="r:split" />
@@ -1116,6 +1117,25 @@
     <xs:complexType>
       <xs:choice minOccurs="0" maxOccurs="unbounded">
         <xs:element name="header">
+          <xs:complexType>
+            <xs:attribute name="name" use="required" type="xs:string" />
+            <xs:attribute name="value" type="xs:string" />
+            <xs:attribute name="expr" type="xs:string" />
+            <xs:attribute name="id" type="xs:string" />
+            <xs:attribute name="description" type="xs:string" />
+            <xs:anyAttribute namespace="##other" processContents="lax" />
+          </xs:complexType>
+        </xs:element>
+      </xs:choice>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="setProperties">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="property">
           <xs:complexType>
             <xs:attribute name="name" use="required" type="xs:string" />
             <xs:attribute name="value" type="xs:string" />

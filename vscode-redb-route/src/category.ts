@@ -29,7 +29,7 @@ const ERRORS = [
 ];
 
 const TRANSFORM = [
-    "setBody", "setHeader", "setHeaders", "setProperty", "removeBody", "removeHeader",
+    "setBody", "setHeader", "setHeaders", "setProperty", "setProperties", "removeBody", "removeHeader",
     "removeHeaders", "removeProperty", "removeProperties", "transform", "convertBody",
     "marshal", "unmarshal", "normalize", "xslt", "sort", "claimCheck",
     // neutral observability and infrastructure — the lightest weight on purpose

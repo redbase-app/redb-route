@@ -83,6 +83,7 @@ soap:/svc/orders?host=0.0.0.0&port=4090&connectionFactory=orders
 | `connectionFactory` | both | Name of the registered `SoapConnectionFactory`. |
 | `operation` | producer | Operation name / SOAPAction. |
 | `action` | producer | Explicit SOAPAction (overrides the factory default). |
+| `throwOnFault` | producer | Whether a `soap:Fault` reply fails the exchange (default `true`). |
 | `host` | consumer | Bind address (`0.0.0.0` for all interfaces). |
 | `port` | consumer | Listen port. |
 
@@ -183,7 +184,8 @@ Connector metadata carries the `redbSoap.` prefix and is **stripped before the e
 |---|---|---|
 | `redbSoap.action` | in/out | SOAPAction of the request/operation. |
 | `redbSoap.operation` | in | Local name of the Body payload's root element (route on it). |
-| `redbSoap.faultCode` / `redbSoap.faultString` | in | Fault code / reason of a `soap:Fault` response. |
+| `redbSoap.faultCode` / `redbSoap.faultString` | in/out | Fault code / reason. Inbound: a `soap:Fault` that arrived. Outbound on a consumer reply: send this fault instead of a normal response. |
+| `redbSoap.isFault` | in | Producer with `throwOnFault=false`: the reply is a fault. |
 | `redbSoap.username` / `redbSoap.password` | in | WS-Security UsernameToken, surfaced on the consumer. |
 | `redbSoap.signatureValid` | in | Whether an inbound Body signature verified (see WS-Security). |
 | `redbSoap.responseType` | out | Pojo mode: per-message response CLR `Type`. |
@@ -204,6 +206,38 @@ A fault response surfaces on `redbSoap.faultCode` / `redbSoap.faultString` and t
 from the producer. On the consumer, a route exception becomes a `soap:Fault` (HTTP 500 for 1.1, HTTP 200 for
 1.2, per convention). Both fault shapes are parsed regardless of prefix (the parser is namespace-driven, so
 WCF `s:` and CXF `soapenv:` envelopes read the same).
+
+### A fault that is an answer, not a failure
+
+"No such order" is what the service is *designed* to return, and it should not read as a broken route —
+counted as an error, copied into a dead-letter channel, shown as a failing route to whoever supervises it.
+Both directions have a way to say so, and both are explicit rather than inferred from the fault code: a
+Sender fault can be a bug in the route just as easily as a business answer, and only the author knows which.
+
+**Answering with a fault** — put the reason on the reply and return normally:
+
+```csharp
+.Process(e => e.In.Headers[SoapHeaders.FaultString] = "No order with that number")
+// optional: e.In.Headers[SoapHeaders.FaultCode] = "wst:FailedAuthentication";
+```
+
+The consumer sends a `soap:Fault` and the exchange stays successful. Without a code the fault is the
+sender's (`soap:Sender` / `soap:Client`): a refusal about the *content* of the request will refuse the same
+bytes again, while `Receiver` means "retry". Throwing `SoapFaultException` still works and still means a
+failure — an exception the route did not intend is exactly that.
+
+**Receiving a fault** — `throwOnFault=false` on the call:
+
+```csharp
+.To(Soap.Call(url).ConnectionFactory("svc").Operation("GetFares").ThrowOnFault(false))
+.Choice()
+    .When(Header(SoapHeaders.IsFault).isEqualTo(true)).To("direct://no-fares")
+    .Otherwise().To("direct://quote")
+```
+
+The fault comes back on `Out`, with `redbSoap.isFault`, `redbSoap.faultCode` and `redbSoap.faultString` to
+branch on. Default stays `true` — a fault fails the exchange, as before. Mirrors `throwOnError` on the HTTP
+producer.
 
 ---
 

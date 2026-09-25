@@ -185,8 +185,7 @@ public sealed class SoapConsumer : IConsumer
         {
             try
             {
-                var doc = new System.Xml.XmlDocument { PreserveWhitespace = true };
-                doc.Load(new MemoryStream(reqBytes));
+                var doc = SafeXml.LoadDocument(reqBytes);
                 if (SoapEncryption.HasEncryptedData(doc))
                 {
                     SoapEncryption.DecryptBody(doc, decKey);
@@ -256,8 +255,7 @@ public sealed class SoapConsumer : IConsumer
         // WS-Security Body signature (Ф4b): verify when present, using the cert embedded in the signature.
         try
         {
-            var doc = new System.Xml.XmlDocument { PreserveWhitespace = true };
-            doc.Load(new MemoryStream(reqBytes));
+            var doc = SafeXml.LoadDocument(reqBytes);
             // EncryptCert is the partner's known cert; when set, verification also authenticates the signer.
             if (SoapSignature.HasSignature(doc))
                 message.Headers[SoapHeaders.SignatureValid] = SoapSignature.VerifyBody(doc, factory?.EncryptCert, version);
@@ -267,7 +265,7 @@ public sealed class SoapConsumer : IConsumer
         // Operation = local name of the Body payload's root element (so routes can branch on it).
         if (!string.IsNullOrWhiteSpace(parsed.BodyXml))
         {
-            try { message.Headers[SoapHeaders.Operation] = System.Xml.Linq.XElement.Parse(parsed.BodyXml).Name.LocalName; }
+            try { message.Headers[SoapHeaders.Operation] = SafeXml.ParseElement(parsed.BodyXml).Name.LocalName; }
             catch { /* non-element body — no operation */ }
         }
 
@@ -338,6 +336,25 @@ public sealed class SoapConsumer : IConsumer
             }
 
             var outMsg = exchange.HasOut ? exchange.Out! : exchange.In;
+
+            // A fault the route MEANT to send: it put the reason on the reply and returned normally,
+            // so the exchange is a success and only the wire carries a fault. Throwing would have
+            // worked too, but then a business answer ("no such order") would count as a route error,
+            // fill a dead-letter channel and read as a broken route to whoever supervises it. Same
+            // shape the HTTP consumer uses for a status code — the reply says what to send.
+            if (outMsg.Headers.TryGetValue(SoapHeaders.FaultString, out var declared)
+                && declared?.ToString() is { Length: > 0 } declaredReason)
+            {
+                // No code named: a refusal about the CONTENT of the request is Sender / Client.
+                // Receiver would be a retry hint, and a deliberate refusal will refuse again.
+                var declaredCode = outMsg.Headers.TryGetValue(SoapHeaders.FaultCode, out var dc)
+                    ? dc?.ToString()
+                    : null;
+                await WriteFault(http, version, declaredReason, declaredCode ?? SoapEnvelope.SenderCode(version))
+                    .ConfigureAwait(false);
+                return;
+            }
+
             byte[] respEnvelope;
             var respContentType = SoapEnvelope.ContentType(version, null);
 
@@ -366,8 +383,7 @@ public sealed class SoapConsumer : IConsumer
                 // the caller's decrypt/verify has something to act on. Only in Payload/Pojo (Message is verbatim).
                 if (factory?.SigningCert is not null || factory?.EncryptCert is not null)
                 {
-                    var sdoc = new System.Xml.XmlDocument { PreserveWhitespace = true };
-                    sdoc.Load(new MemoryStream(respEnvelope));
+                    var sdoc = SafeXml.LoadDocument(respEnvelope);
                     if (factory.SigningCert is { } signCert) SoapSignature.SignBody(sdoc, signCert, version);
                     if (factory.EncryptCert is { } encCert) SoapEncryption.EncryptBody(sdoc, encCert, version);
                     using var sms = new MemoryStream();

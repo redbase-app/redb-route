@@ -40,7 +40,20 @@ public static class SoapHeaders
     /// <summary>Fault code (SOAP 1.1 <c>faultcode</c> / 1.2 <c>Code</c>).</summary>
     public const string FaultCode = "redbSoap.faultCode";
     /// <summary>Fault string (SOAP 1.1 <c>faultstring</c> / 1.2 <c>Reason</c>).</summary>
+    /// <remarks>
+    /// On a consumer reply this header is also the instruction: set it, return normally, and the
+    /// consumer answers with a <c>soap:Fault</c> carrying it, while the exchange stays successful —
+    /// a fault the service is designed to give ("no such order") is an answer, not a failure. Use
+    /// <see cref="FaultCode"/> to name the code; without it the fault is the sender's, because a
+    /// refusal about the content of the request is what SOAP calls Sender / Client.
+    /// </remarks>
     public const string FaultString = "redbSoap.faultString";
+
+    /// <summary>
+    /// Set by the producer on a reply that is a fault (bool), so a route with
+    /// <c>throwOnFault=false</c> can branch without catching.
+    /// </summary>
+    public const string IsFault = "redbSoap.isFault";
     /// <summary>WS-Security UsernameToken user (surfaced on the consumer).</summary>
     public const string Username = "redbSoap.username";
     /// <summary>WS-Security UsernameToken password (surfaced on the consumer).</summary>

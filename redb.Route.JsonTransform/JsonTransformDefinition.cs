@@ -32,7 +32,19 @@ public sealed class JsonTransformDefinition : ProcessorDefinition
         var options = context.GetService<JsonTransformOptions>()
             ?? context.GetServiceProvider()?.GetService(typeof(JsonTransformOptions)) as JsonTransformOptions
             ?? new JsonTransformOptions();
-        var compiled = JsonTransformEngine.Compile(Specification, options);
+        // Same lookup as the template step and the validator: context resolver, then base directory.
+        // A miss stays a specification failure, not an IO one — the step promises one exception type.
+        TextSource specification;
+        try
+        {
+            specification = ResourceResolution.Locate(context, Specification, options.BaseDirectory, "JSONata specification");
+        }
+        catch (FileNotFoundException ex)
+        {
+            throw new JsonTransformCompilationException(Specification.Name, ex.Message, ex);
+        }
+
+        var compiled = JsonTransformEngine.Compile(specification, options);
         return new JsonTransformProcessor(compiled, Output, options);
     }
 }

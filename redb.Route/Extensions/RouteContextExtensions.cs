@@ -9,6 +9,25 @@ namespace redb.Route.Extensions;
 public static class RouteContextExtensions
 {
     /// <summary>
+    /// Resolves a service the context was given, looking in both places it can live: the services
+    /// set on the context itself (<c>AddService</c>, or a constructor argument), then the DI
+    /// container behind <see cref="IRouteContext.GetServiceProvider"/>. Returns <c>null</c> when
+    /// neither holds one — the caller decides whether that is a default, its own instance, or a
+    /// refusal.
+    /// <para>
+    /// This is the shape a component needs when the host builds it by scanning: nothing can be
+    /// injected through its constructor, so the one shared instance is looked up instead. Having it
+    /// in one place keeps the two sources in one order everywhere — the metrics subscriber, the
+    /// template options and the shared HTTP host all resolve through it.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="T">Service type.</typeparam>
+    /// <param name="context">Route context; a null context resolves to null.</param>
+    public static T? Resolve<T>(this IRouteContext? context) where T : class
+        => context?.GetService<T>()
+           ?? context?.GetServiceProvider()?.GetService(typeof(T)) as T;
+
+    /// <summary>
     /// Resolves a named object from the context registry and FAILS LOUD when nothing is
     /// registered under the name. A typo in <c>connectionFactory=…</c> must never silently
     /// fall back to URI parameters or defaults — a working configuration and a

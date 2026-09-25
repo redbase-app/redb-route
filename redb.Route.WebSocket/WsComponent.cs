@@ -34,15 +34,16 @@ public class WsComponent : ComponentBase
     /// </summary>
     public SharedHttpServerManager? ServerManager { get; set; }
 
-    /// <summary>The manager actually used: the injected one, or a private one created on demand.</summary>
-    internal SharedHttpServerManager EffectiveServerManager
-    {
-        get
-        {
-            if (ServerManager is not null) return ServerManager;
-            return _ownedServerManager ??= new SharedHttpServerManager();
-        }
-    }
+    /// <summary>
+    /// The manager actually used. Resolution order: explicitly assigned → the context's DI singleton
+    /// → a private instance. The DI step matters for module hosts that add the component by scanning
+    /// rather than through the extension method, so nothing ever assigns <see cref="ServerManager"/>
+    /// while the one shared manager sits in the container (gRPC and AS2 resolve the same way).
+    /// </summary>
+    internal SharedHttpServerManager EffectiveServerManager =>
+        ServerManager
+        ?? Context.Resolve<SharedHttpServerManager>()
+        ?? (_ownedServerManager ??= new SharedHttpServerManager());
 
     /// <summary>
     /// Authenticates a handshake before the socket is upgraded. Supplied by the host through

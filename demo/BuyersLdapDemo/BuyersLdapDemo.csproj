@@ -14,12 +14,12 @@
       Using pre-built redb NuGet packages; sources are for reference only.
       Versions match the project: redb.Route = 4.0.0, redb.Core/redb.SQLite.Pro = 4.0.0.
     -->
-    <PackageReference Include="redb.Route" Version="4.1.0" />
-    <PackageReference Include="redb.Route.Core" Version="4.1.0" />
-    <PackageReference Include="redb.Route.Http" Version="4.1.0" />
-    <PackageReference Include="redb.Route.Ldap" Version="4.1.0" />
-    <PackageReference Include="redb.Core" Version="4.1.0" />
-    <PackageReference Include="redb.SQLite.Pro" Version="4.1.0" />
+    <PackageReference Include="redb.Route" Version="4.1.1" />
+    <PackageReference Include="redb.Route.Core" Version="4.1.1" />
+    <PackageReference Include="redb.Route.Http" Version="4.1.1" />
+    <PackageReference Include="redb.Route.Ldap" Version="4.1.1" />
+    <PackageReference Include="redb.Core" Version="4.1.1" />
+    <PackageReference Include="redb.SQLite.Pro" Version="4.1.1" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.3" />
   </ItemGroup>
 

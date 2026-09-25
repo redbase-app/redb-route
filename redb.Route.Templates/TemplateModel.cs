@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Xml.Linq;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Expressions;
 using Scriban.Runtime;
 
@@ -82,7 +83,7 @@ internal static class TemplateModel
         {
             try
             {
-                var root = XDocument.Parse(text).Root;
+                var root = SafeXml.Parse(text).Root;
                 return root is null ? text : new ScriptObject { [root.Name.LocalName] = FromXml(root) };
             }
             catch (System.Xml.XmlException) { return text; }

@@ -214,6 +214,30 @@ internal static partial class CoreContributions
             }
             return cur.SetHeaders([.. headers]);
         }),
+        Step("setProperties", (e, cur, ctx) =>
+        {
+            var properties = new List<(string Name, object? Value)>();
+            foreach (var child in e.Elements())
+            {
+                if (child.Name.LocalName != "property")
+                {
+                    ctx.AddError(child, $"<setProperties> accepts only <property> children, found <{child.Name.LocalName}>.");
+                    continue;
+                }
+                var name = ctx.RequiredAttr(child, "name");
+                var pick = ctx.ExactlyOneOf(child, "value", "expr");
+                if (name is null || pick is null) continue;
+                properties.Add((name, pick.Value.Name == "value"
+                    ? pick.Value.Value
+                    : new StringExpression(pick.Value.Value)));
+            }
+            if (properties.Count == 0)
+            {
+                ctx.AddError(e, "<setProperties> needs at least one <property name=… value=…/> or <property name=… expr=…/>.");
+                return cur;
+            }
+            return cur.SetProperties([.. properties]);
+        }),
 
         // ── scopes ──────────────────────────────────────────────────────────
         Scope("multicast", (e, cur, ctx) =>

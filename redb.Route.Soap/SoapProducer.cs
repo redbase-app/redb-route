@@ -83,8 +83,7 @@ public sealed class SoapProducer : ConnectableProducer
             // WS-Security (Ф4b): sign with our cert, then encrypt to the partner's cert (sign-then-encrypt).
             if (factory?.SigningCert is not null || factory?.EncryptCert is not null)
             {
-                var doc = new System.Xml.XmlDocument { PreserveWhitespace = true };
-                doc.Load(new MemoryStream(envelope));
+                var doc = SafeXml.LoadDocument(envelope);
                 if (factory.SigningCert is { } signingCert) SoapSignature.SignBody(doc, signingCert, version);
                 if (factory.EncryptCert is { } encryptCert) SoapEncryption.EncryptBody(doc, encryptCert, version);
                 using var protectedMs = new MemoryStream();
@@ -136,8 +135,7 @@ public sealed class SoapProducer : ConnectableProducer
         {
             try
             {
-                var rdoc = new System.Xml.XmlDocument { PreserveWhitespace = true };
-                rdoc.Load(new MemoryStream(respBytes));
+                var rdoc = SafeXml.LoadDocument(respBytes);
                 if (SoapEncryption.HasEncryptedData(rdoc))
                 {
                     SoapEncryption.DecryptBody(rdoc, decKey);
@@ -154,8 +152,16 @@ public sealed class SoapProducer : ConnectableProducer
         {
             exchange.In.Headers[SoapHeaders.FaultCode] = parsed.FaultCode;
             exchange.In.Headers[SoapHeaders.FaultString] = parsed.FaultString;
-            // The throw carries the fault into the core, which records the error once.
-            throw new SoapFaultException(parsed.FaultCode, parsed.FaultString);
+            exchange.In.Headers[SoapHeaders.IsFault] = true;
+
+            // throwOnFault=false: the fault is an answer the service is designed to give, and the
+            // route branches on the headers instead of catching. Explicit, never guessed from the
+            // code inside the fault — the same rule the HTTP producer's throwOnError follows.
+            if (_endpoint.SoapOptions.ThrowOnFault)
+            {
+                // The throw carries the fault into the core, which records the error once.
+                throw new SoapFaultException(parsed.FaultCode, parsed.FaultString);
+            }
         }
 
         exchange.Out = dataFormat switch
@@ -174,8 +180,7 @@ public sealed class SoapProducer : ConnectableProducer
         {
             try
             {
-                var rdoc = new System.Xml.XmlDocument { PreserveWhitespace = true };
-                rdoc.Load(new MemoryStream(respBytes));
+                var rdoc = SafeXml.LoadDocument(respBytes);
                 if (SoapSignature.HasSignature(rdoc))
                     exchange.Out!.Headers[SoapHeaders.SignatureValid] = SoapSignature.VerifyBody(rdoc, factory?.EncryptCert, version);
             }

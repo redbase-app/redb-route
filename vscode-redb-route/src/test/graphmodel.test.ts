@@ -222,3 +222,56 @@ describe("special renders", () => {
         assert.equal(to.label.includes("hunter2"), false);
     });
 });
+
+describe("endpoint scheme — what the tile shows instead of the element name", () => {
+    const graph = graphOf(`<routes xmlns="urn:redb:route:1.0"><route id="r">
+      <from uri="http:0.0.0.0:5090/api/x?inOut=true"/>
+      <to uri="bean:#omni-http?method=Fail"/>
+      <to>
+        <sql dataSource="#honest-pg" outputType="SelectOne"><![CDATA[
+          SELECT status FROM wait WHERE id = :#id
+        ]]></sql>
+      </to>
+      <setProperty name="a" value="1"/>
+    </route></routes>`);
+    const route = graph.routes[0];
+
+    it("a uri endpoint carries its scheme", () => {
+        assert.equal(route.from?.scheme, "http");
+        assert.equal((route.steps[0] as LeafView).scheme, "bean");
+    });
+
+    it("the structural <to><sql> carries the child as its scheme and the SQL in the tooltip", () => {
+        const sql = route.steps[1] as LeafView;
+        assert.equal(sql.scheme, "sql");
+        assert.equal(sql.label, "sql");
+        assert.equal(sql.category, "sendExternal");
+        assert.ok(sql.tooltip.includes("dataSource=#honest-pg"), sql.tooltip);
+        assert.ok(sql.tooltip.includes("SELECT status FROM wait WHERE id = :#id"), sql.tooltip);
+    });
+
+    it("a step that is not an endpoint has no scheme", () => {
+        assert.equal((route.steps[2] as LeafView).scheme, null);
+    });
+});
+
+describe("setter rows — one tile for several assignments", () => {
+    const graph = graphOf(`<routes xmlns="urn:redb:route:1.0"><route id="r">
+      <from uri="direct://in"/>
+      <setProperties>
+        <property name="omni.fail.status" value="409"/>
+        <property name="omni.fail.message" expr="\${property.omni.SelectionError}"/>
+      </setProperties>
+    </route></routes>`);
+    const step = graph.routes[0].steps[0] as LeafView;
+
+    it("counts the rows in the label", () => {
+        assert.equal(step.type, "setProperties");
+        assert.equal(step.label, "×2");
+    });
+
+    it("lists the rows in order, a constant quoted and an expression bare", () => {
+        assert.equal(step.tooltip,
+            'setProperties\nomni.fail.status = "409"\nomni.fail.message = ${property.omni.SelectionError}');
+    });
+});

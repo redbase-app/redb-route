@@ -6,6 +6,7 @@ using System.Xml;
 using System.Xml.Linq;
 using System.Xml.Serialization;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Predicates;
 
 namespace redb.Route.Expressions;
@@ -317,7 +318,7 @@ public class XPathExpression : Expression, IPredicateExpression
             s = s.Trim();
             if (s.Length == 0)
                 throw new InvalidOperationException("Exchange body is an empty string. Cannot evaluate XPath expression.");
-            return XDocument.Parse(s);
+            return SafeXml.Parse(s);
         }
 
         // POCO → serialize to XML via XmlSerializer
@@ -330,7 +331,7 @@ public class XPathExpression : Expression, IPredicateExpression
         using var sw = new StringWriter();
         using var xw = XmlWriter.Create(sw, new XmlWriterSettings { OmitXmlDeclaration = true, Indent = false });
         serializer.Serialize(xw, body);
-        return XDocument.Parse(sw.ToString());
+        return SafeXml.Parse(sw.ToString());
     }
 
     // ── Result conversion ──

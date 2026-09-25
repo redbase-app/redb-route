@@ -39,7 +39,7 @@ public class GrpcComponent : ComponentBase
     /// </summary>
     internal SharedHttpServerManager Server =>
         ServerManager
-        ?? Context?.GetServiceProvider()?.GetService<SharedHttpServerManager>()
+        ?? Context.Resolve<SharedHttpServerManager>()
         ?? _ownServer.Value;
 
     /// <inheritdoc />

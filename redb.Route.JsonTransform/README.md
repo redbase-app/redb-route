@@ -16,7 +16,8 @@ template for the whole document.
 
 | Rule | Why |
 |---|---|
-| A `string` argument is a **locator** (file relative to `JsonTransformOptions.BaseDirectory`, default `AppContext.BaseDirectory`, or `assembly:Name/Path/file.jsonata`); inline text is `TextSource.Inline("...")`. | A string never has to be guessed as "path or text" — the same rule as templates and the expression language. |
+| A `string` argument is a **locator** (a file path or `assembly:Name/Path/file.jsonata`); inline text is `TextSource.Inline("...")`. | A string never has to be guessed as "path or text" — the same rule as templates and the expression language. |
+| A relative path is looked up by the context's `IRouteResourceResolver` first, then by `JsonTransformOptions.BaseDirectory` (default `AppContext.BaseDirectory`). A miss names both places. | One lookup order for the whole framework; inside a `.tpkg` the specification lives in `resources/`, which only the package resolver knows about. |
 | Compiled at route build. | A missing file or a syntax error fails `Start()` with the specification name and the engine's message. |
 | Input: the body as JSON text, `byte[]`, `Stream`, a `System.Text.Json` tree, or a POCO (serialized camelCase). | The step sits naturally after `Unmarshal` or straight after an HTTP consumer. |
 | `$headers` and `$properties` are bound in the specification. | The same names the payload templates use. |

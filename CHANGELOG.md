@@ -61,6 +61,181 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [4.1.1] — 2026-09-25
+
+> **This release carries a security fix.** A document type declaration in somebody else's XML could
+> expand a tiny message into a huge one in memory, a denial of service against every route in the
+> process. Every reader of foreign XML now refuses a DTD. The entry marked *Security* below says what
+> was possible and what changed.
+
+### Security — XML from somebody else is read with a DTD refused, not expanded
+
+- A document type declaration can nest internal entities so that a tiny message expands into a huge one
+  in memory — the "billion laughs" shape of an XXE attack, and a denial of service against every route
+  in the process. Measured on .NET 10: 452 bytes became 300 000 characters, and the real thing does not
+  stop at five levels. Reported while preparing the AS4 connector, 2026-09-25.
+- The direct loaders all expand it: `XmlDocument.Load`, `XDocument.Load` and `XDocument.Parse` alike —
+  LINQ to XML is no safer than the old DOM here — and `XmlResolver = null` does not help, because the
+  expansion runs on internal entities rather than external ones. Only a reader built by
+  `XmlReader.Create` refuses a DTD, which it does by default.
+- New `SafeXml` in the core reads every document through such a reader, with an optional size bound, and
+  keeps the two properties call sites depend on: line info for positioned errors, and preserved
+  whitespace for signature canonicalization. Everything that reads somebody else's XML now goes through
+  it: the SOAP envelope parser, the SOAP consumer and producer (decryption, signature checks, body
+  fragments, WSDL rewriting), `xpath()` over a message body — which is any transport, not just SOAP —
+  the XML model of a payload template, and the markup loaders, whose files arrive inside a package.
+- A DTD is refused rather than budgeted: SOAP forbids one in an envelope outright, so for SOAP this is
+  conformance rather than strictness, and a payload that needs one should say so explicitly. On the SOAP
+  consumer the refusal comes back as a Sender fault, as any other unreadable request does.
+
+### Added — a SOAP fault can be an answer instead of a failure
+
+- Until now the only way to answer with `soap:Fault` was to throw, which left the exchange failed: the
+  route's metrics counted an error, a dead-letter channel took a copy, and a supervising host saw a broken
+  route — for a "no such order" the service is designed to return. Requested by the Tsak agent 2026-09-25,
+  whose DLQ filled with business faults.
+- **Consumer**: put `redbSoap.faultString` (and optionally `redbSoap.faultCode`) on the reply and return
+  normally — the consumer sends the fault and the exchange stays successful. Without a code the fault is
+  `soap:Sender` / `soap:Client`: a refusal about the content of the request will refuse the same bytes
+  again, while `Receiver` is a retry hint. Throwing `SoapFaultException` is unchanged and still a failure.
+- **Producer**: `throwOnFault=false` (default `true`) returns the fault as the reply, with `redbSoap.isFault`
+  beside the code and reason to branch on. Mirrors `throwOnError` on the HTTP producer.
+- Explicit on both sides rather than inferred from the fault code, which was the other option in the
+  request: a Sender fault can be a bug in the route just as easily as a business answer, and only the route
+  author knows which. Guessing would have made every mis-sent request look like a designed outcome.
+
+### Added — `SetProperties` / `<setProperties>`: several exchange properties in one step
+
+- The property twin of `SetHeaders`: `.SetProperties(("a", 1), ("b", Expr("property.a + 1")))` in C#,
+  `<setProperties><property name="a" value="1"/><property name="b" expr="property.a + 1"/></setProperties>`
+  in the markup. The rows run in order, so a later row reads an earlier one; one Message History entry
+  for the whole step. A route that prepared an error reply with three `setProperty` in a row now does it
+  in one step.
+- The VSCode graph draws it (and `setHeaders`) as one tile `set ×N`; the tooltip lists the rows
+  `name = value` in order, and the properties panel edits each row's name, its kind (`=` constant,
+  `ƒ` expression) and its value.
+
+### Changed — VSCode graph: a run of setters is one tile, conditional paths are drawn
+
+- Consecutive `setProperty` / `setHeader` steps, mixed, are joined on the graph into one tile
+  `set ×N` — the file keeps its elements, only the view joins them. The panel lists the rows in the
+  file's order (the order matters: a later row may read an earlier one); each row switches between
+  `property` and `header` (the element is renamed), edits its name, `=` constant / `ƒ` expression and
+  value, and is removed on its own; Delete removes the whole run.
+- Where a message goes when a condition does not hold is drawn, dashed and colored: orange — past the
+  step (`filter` not passed, a `choice` without `otherwise` with no match, `ofType` other type, a
+  duplicate at `idempotentConsumer`); grey with a cross — dropped (`sample`, `debounce`); red — the
+  step raises (`validate` unless `throwOnFailure="false"`, `throwException`, a `throttle` rejecting on
+  overflow), captioned where the error goes: `→ catch` of the enclosing try-catch, `→ onException`,
+  or `→ error`.
+- A folded container is drawn as a stack of cards with a shadow, a count chip of what it hides and a
+  highlighted `▸`; the fold button is a boxed control in the tile's corner. The toolbar folds or
+  unfolds every container at once (⊟ / ⊞), and every route folds to its title (▾ before its name:
+  the entry tile and the count of its steps stay). The properties panel is a property grid — a sticky
+  title with the step's glyph, label | value rows on hairlines, a sticky action bar — and its CONTENT
+  lists the element's own configuration rows only: the steps nested in a branch or a container are no
+  longer shown there as blank text fields. The properties panel is widened by dragging its left edge
+  (remembered for all documents); top down, the columns stand in the middle of the window and the
+  gaps between steps are halved. Lines follow the tiles when the layout shifts after drawing (a
+  scrollbar appearing, the window or the panel resized).
+
+### Fixed — HTTP, SignalR, WebSocket and SOAP find the shared Kestrel host in the context's container
+
+- A module host adds components by scanning, so `ServerManager` is never assigned, while the one
+  `SharedHttpServerManager` sits in the DI container the route context was given. gRPC and AS2 already
+  looked there; these four did not. `http:` refused to start a consumer at all ("SharedHttpServerManager
+  is not configured" with the manager right there in the container), and SignalR, WebSocket and SOAP
+  quietly started a private listener on their own port instead of multiplexing onto the shared one.
+  Requested by the Tsak agent 2026-09-24 after a module route stopped answering on the shared port.
+- All six now resolve the same way: explicitly assigned → the service the context was given → what the
+  component did last anyway. For SignalR, WebSocket, SOAP, gRPC and AS2 that last step is their own
+  server, so a hand-built component stays usable; for `http:` it stays a refusal, because an `http:`
+  consumer binds a port and which port it binds is the host's decision — the message now also names
+  the container as a way to supply it.
+- The middle step is one method, `IRouteContext.Resolve<T>()`: the services set on the context
+  (`AddService`) first, then the DI container. That order was already written by hand in three places
+  (the metrics subscriber, the template options, the JSONata options) and is now in one; a host with no
+  container — `AddService` and nothing else — reaches the connectors too, which it did not before.
+- Nothing is required of a host that already works: `AddRedbRouteHttp()`, `AddRedbRouteSignalR()` and
+  the rest keep assigning the manager, which still wins over everything else.
+- Deliberately not done: a component-customizer hook in the core, where the host would push the manager
+  in at `AddComponent` instead of the component looking it up. It would only work when the service
+  provider is set before components are added, which the engine does not require of a host, so it would
+  need the lazy lookup kept beside it as a fallback — two mechanisms for one result. The Tsak agent, the
+  only host that builds contexts by scanning, confirmed its own order guarantees this but asked not to
+  carry both paths.
+
+### Changed — VSCode extension 0.2.0: the route graph draws tiles and orthogonal edges
+
+- Every step is a tile of one size: a colored glyph in the Enterprise Integration Patterns notation
+  (Hohpe/Woolf, CC BY 4.0, redrawn as 24×24 line icons) and a short caption — `from`, `bean`, `sql`,
+  `http`, `set`, `choice`, `when`, `loop`, `log`, `try-catch`. An endpoint tile shows its transport
+  (`bean:#x` → `bean`, the structural `<to><sql>` → `sql`, with the SQL in the tooltip) instead of the
+  word `to`. The details of a step live in the tooltip and the properties panel. The toolbar switches
+  the glyph over the caption or beside it; the choice is remembered for all documents.
+- No container draws a box any more. A wrapper (`metered`, `loop`, `split`, a transaction…) puts its
+  steps into the route's own line between its tile and an `end …` tile, so they wrap together with
+  the route instead of forming a stair of nested blocks; a loop adds a `repeat` arrow from its end
+  back to its start and is kept on one row when it fits one. `choice` and `tryCatch` fan out into
+  branches as before, and a `filter` is drawn the same way: one branch plus a bypass for the message
+  it did not let in.
+- Edges run in straight segments only. The branches of a choice or a tryCatch merge on a shared bus
+  right before the next step. Before, the exit of a tall container and the merge of a choice were
+  drawn as diagonals across the whole drawing.
+- Left to right, the steps of a row hang from one top line, so the line through the tiles stays
+  straight next to a tall branching.
+
+### Fixed — a property whose name holds a dot reads the same bare as it does in `${...}`
+
+- `property.omni.PollInterval` written bare — in `delay`, in `setProperty expr`, anywhere a value is
+  expected without `${}` — read as empty, while the same name inside `${...}`, in a comparison, and any
+  dotted **header** resolved. A module that namespaces its settings (`omni.PollInterval`) is the ordinary
+  case, so the value silently became nothing. Reported 2026-09-24.
+- The bare value path went straight to nested access: it looked for a property called `omni` and a member
+  `PollInterval` on it. It now asks `ResolvePropertySmart`, as the header branch beside it and the template
+  pipeline already did — the literal name first, the nested path second. One rule for the whole language.
+- A nested member of a property (`property.omni.PollInterval` over an object in `omni`) keeps resolving; a
+  property carrying the literal dotted name wins over it, which is the rule dotted headers have always had.
+
+### Documentation — container-level handlers of a markup file apply to the whole context
+
+- The `redb.Route.Xml` README said that `onException`, `intercept*` and `onCompletion` declared under `<routes>`
+  apply to the routes of their own file. The engine registers the handlers of every builder for the whole
+  context, so they cover the routes of all the other files and the C# routes of the same context too. The README
+  now says so and advises declaring each handler once; the engine is unchanged.
+
+### Added — the pack gate checks the template and the JSONata spec a route names
+
+- `<payload template="…">` and `<transformJson spec="…">` are checked the way `file=` always was: a file
+  missing from `resources/` is a build error, named with the position of the attribute. The check only makes
+  sense now that the worker reads these files from the package (see the entry below); before, the gate would
+  have approved a file the runtime could not find anyway.
+- Driven by the specs, not by a list of elements: `AttributeSpec.Resource` marks an attribute that names a
+  package file, and the two package elements opt in (one flag each in `redb.Route.Templates` and
+  `redb.Route.JsonTransform`). The flag is an init property, so a released contribution compiled against the
+  record keeps working and simply goes unchecked until it opts in.
+- Two kinds of value cannot be checked at build time and are left alone: an `assembly:` locator (the text
+  ships inside an assembly) and a value that still holds a placeholder (known once configuration resolves it).
+  The same now holds for `file=`, whose error also gains the attribute's position.
+
+### Fixed — a template and a JSONata specification are found inside a package, like every other file
+
+- `<payload template="templates/order.json.sbn">` and `<transformJson spec="…">` in a `.tpkg` failed at
+  context start: both packages resolved a relative path against their own `BaseDirectory` only, which stays
+  the worker's directory, while the package keeps its files in `resources/` — known to the context's
+  `IRouteResourceResolver` and to nothing else. `validateXsd` and `xslt` in the very same package found
+  their files, because they ask that resolver. Reported by the Route-XML agent, 2026-09-24.
+- Both steps now use one lookup: the context resolver first, then `BaseDirectory`. An absolute path and
+  `assembly:` are untouched, and a file in neither place fails with both places named, the way the
+  validator reports its search. The failure stays a `TemplateCompilationException` /
+  `JsonTransformCompilationException` — the lookup changed, the contract did not.
+- The compile cache is keyed by the file that was found, not by the relative name, so two modules that
+  ship the same name do not share a compiled template, and a hot-reloaded module renders its own version.
+  The name in messages stays the locator the route author wrote, not the unpacked package's temp path.
+- `ResourceResolution` is public (`Locate` is new), and `TextSource.FilePath` tells a package that a
+  source names a file. A connector that reads a file by a relative path has no other way to follow the
+  framework's search order — the same reason `PredicateFactory` went public for the file filters.
+
 ## [4.1.0] — 2026-09-21
 
 > **Why 4.1.0 and not a patch.** This release carries breaking changes, and every one of them is in an

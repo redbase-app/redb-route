@@ -10,6 +10,27 @@ an HTTP route and an AS2 route in the same worker share one Kestrel and never fi
 
 Standalone hosting only — depends on the ASP.NET runtime, not on redb.Route core or any connector.
 
+## How a connector finds the manager
+
+Every HTTP-based connector — `http`, `signalr`, `ws`, `soap`, `grpc`, `as2` — resolves it in one order:
+
+1. the manager assigned to the component (`AddRedbRouteHttp()`, `AddRedbRouteSignalR()`, … do this);
+2. the `SharedHttpServerManager` the route context was given — `context.Resolve<T>()`, which reads the
+   context's own services (`AddService`) first and then its DI container;
+3. what the connector does on its own — a private manager for `signalr`, `ws`, `soap`, `grpc` and `as2`,
+   so a hand-built component stays usable; a refusal for `http`, because an `http:` consumer binds a port
+   and which port it binds is the host's decision.
+
+Step 2 is what a module host needs: it builds a context per module and adds components by scanning, so
+nothing assigns the manager, while the one shared instance is already in the container. It also works
+the other way round — a host with no container at all can leave the manager on the context itself:
+
+```csharp
+context.AddService(typeof(SharedHttpServerManager), manager);
+```
+
+The lookup is lazy, so the manager may be supplied before or after the components are added.
+
 ## TLS: asking for it selects the socket
 
 A listener registered with `ssl: true` resolves its server certificate from, in order:

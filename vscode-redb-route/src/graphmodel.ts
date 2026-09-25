@@ -36,6 +36,19 @@ export interface LeafView {
     label: string;
     /** Full text for the tooltip — secrets redacted the same way. */
     tooltip: string;
+    /**
+     * The transport of an endpoint step (`from`, `to`, `wireTap`, `enrich`…): the URI scheme
+     * (`bean`, `http`, `kafka`) or the structural child (`<to><sql>` → `sql`). The tile shows it
+     * instead of the element name. Null for every other step.
+     */
+    scheme: string | null;
+    /**
+     * A single assignment (`setProperty` / `setHeader`): its name and value, so the graph can
+     * show a run of them as one tile with rows. Null for every other step.
+     */
+    assign: { name: string; attr: "value" | "expr"; text: string } | null;
+    /** The attributes as written, secrets redacted — what a conditional path reads (throwOnFailure…). */
+    attrs: Record<string, string>;
     id: string | null;
     span: Span;
 }
@@ -51,6 +64,8 @@ export interface ScopeView {
     /** §3.5: split repeats its one body per element. */
     repeats: boolean;
     parallel: boolean;
+    /** The attributes as written, secrets redacted — what a conditional path reads (skipDuplicate…). */
+    attrs: Record<string, string>;
     id: string | null;
     steps: StepView[];
     span: Span;
@@ -182,6 +197,8 @@ function mainParameter(element: XmlElement, info: ElementInfo | undefined): stri
 
 const STRIP_ELEMENTS = new Set(["onException", "onCompletion", "intercept", "interceptFrom", "interceptSendToEndpoint"]);
 const ENDPOINT_LEAFS = new Set(["to", "toD", "wireTap", "enrich", "pollEnrich"]);
+/** Steps that carry several assignments as `<header|property name= value=|expr=/>` rows. */
+const ROW_SETTERS = new Set(["setHeaders", "setProperties"]);
 
 export type UriResolver = (uri: string) => { resolved: string; fromConfig: boolean };
 const IDENTITY_RESOLVER: UriResolver = uri => ({ resolved: uri, fromConfig: false });
@@ -222,6 +239,9 @@ export function buildRoute(route: XmlElement, index: ElementIndex, path: number[
                 category: "source",
                 label: trimLabel(endpointLabelResolved(attr(child, "uri")?.value ?? "", resolver)),
                 tooltip: endpointTooltip(attr(child, "uri")?.value ?? "", resolver),
+                scheme: schemeOf(resolver(attr(child, "uri")?.value ?? "").resolved),
+                assign: null,
+                attrs: attrsOf(child),
                 id: attr(child, "id")?.value ?? null,
                 span: child.span,
             };
@@ -262,12 +282,35 @@ function buildLeaf(element: XmlElement, info: ElementInfo, path: number[], resol
     let category = categoryOf(element.local) ?? "transform";
     let label: string;
     let tooltip: string;
+    let scheme: string | null = null;
 
     const uri = attr(element, "uri")?.value;
+    const structural = ENDPOINT_LEAFS.has(element.local) && !uri ? childElements(element)[0] ?? null : null;
     if (ENDPOINT_LEAFS.has(element.local) && uri) {
         category = endpointCategory(resolver(uri).resolved);
         label = description ?? endpointLabelResolved(uri, resolver);
         tooltip = endpointTooltip(uri, resolver);
+        scheme = schemeOf(resolver(uri).resolved);
+    } else if (structural) {
+        // The structural endpoint form (`<to><sql dataSource=…>SELECT …</sql></to>`): the
+        // child names the transport; its attributes and text are what the reader wants to see.
+        scheme = structural.local;
+        category = endpointCategory(structural.local + ":");
+        label = description ?? structural.local;
+        const options = structural.attributes.map(a => `${a.name}=${a.value}`).join(" ");
+        const body = textContent(structural).trim().replace(/\s+/g, " ");
+        tooltip = redactUri(`${element.local} ${structural.local}${options ? " " + options : ""}` +
+            (body ? "\n" + (body.length > 600 ? body.slice(0, 599) + "…" : body) : ""));
+    } else if (ROW_SETTERS.has(element.local)) {
+        // One tile for several assignments (the Talend way): the label counts the rows, the
+        // tooltip lists them `name = value` one per line.
+        const rows = childElements(element);
+        label = description ?? `×${rows.length}`;
+        tooltip = redactUri([element.local, ...rows.map(row => {
+            const name = attr(row, "name")?.value ?? "?";
+            const expr = attr(row, "expr")?.value;
+            return expr !== undefined ? `${name} = ${expr}` : `${name} = "${attr(row, "value")?.value ?? ""}"`;
+        })].join("\n"));
     } else if (element.local === "log" && childElements(element).length > 0) {
         // Rich log (§3.8): one node, the content summarized.
         const kids = childElements(element);
@@ -291,6 +334,9 @@ function buildLeaf(element: XmlElement, info: ElementInfo, path: number[], resol
         category,
         label: trimLabel(redactUri(label)),
         tooltip,
+        scheme,
+        assign: assignOf(element),
+        attrs: attrsOf(element),
         id: attr(element, "id")?.value ?? null,
         span: element.span,
     };
@@ -312,6 +358,7 @@ function buildScope(element: XmlElement, index: ElementIndex, path: number[], re
         tooltip: parameter ? `${element.local}  ${redactUri(parameter)}` : element.local,
         repeats: element.local === "split",
         parallel: (attr(element, "parallel")?.value ?? attr(element, "parallelProcessing")?.value) === "true",
+        attrs: attrsOf(element),
         id: attr(element, "id")?.value ?? null,
         steps,
         span: element.span,
@@ -398,6 +445,30 @@ function unknownView(element: XmlElement, path: number[]): UnknownView {
         tooltip: `<${element.name}> — kept verbatim`,
         span: element.span,
     };
+}
+
+/** Every attribute of the element, secrets redacted. */
+function attrsOf(element: XmlElement): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const a of element.attributes) out[a.name] = redactUri(a.value);
+    return out;
+}
+
+/** The assignment of a single `setProperty` / `setHeader`; secrets redacted like the tooltip. */
+function assignOf(element: XmlElement): LeafView["assign"] {
+    if (element.local !== "setProperty" && element.local !== "setHeader") return null;
+    const name = attr(element, "name")?.value;
+    if (name === undefined) return null;
+    const expr = attr(element, "expr")?.value;
+    return expr !== undefined
+        ? { name, attr: "expr", text: redactUri(expr) }
+        : { name, attr: "value", text: redactUri(attr(element, "value")?.value ?? "") };
+}
+
+/** `bean:#omni-http?method=Fail` → `bean`; a URI without a scheme → null. */
+function schemeOf(uri: string): string | null {
+    const match = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(uri.trim());
+    return match ? match[1].toLowerCase() : null;
 }
 
 function shortException(full: string | undefined): string {

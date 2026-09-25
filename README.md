@@ -351,6 +351,24 @@ the same on every start and every node — metric series, stored checkpoints and
 commands survive a restart — and any UUID library recomputes it from the URI. The name holds only
 `A-Z a-z 0-9 _ -`: a `/` or a `:` breaks dashboard labels and metric tags.
 
+### XML from somebody else
+
+Every document that arrives from outside — a SOAP envelope, a message body an `xpath()` reads, the XML
+model of a template, a markup file inside a package — is read through `SafeXml`, which refuses a
+document type declaration. A DTD can nest internal entities so that a small message expands into a huge
+one in memory: on .NET 10, 452 bytes become 300 000 characters, and that is the polite version. The
+direct loaders all do it — `XmlDocument.Load`, `XDocument.Load`, `XDocument.Parse` — and
+`XmlResolver = null` changes nothing, because the expansion runs on *internal* entities. Only a reader
+from `XmlReader.Create` refuses a DTD, which it does by default.
+
+Reading somebody else's XML in your own processor deserves the same treatment:
+
+```csharp
+var doc = SafeXml.Parse(text);                       // or Load(bytes) / LoadFile(path)
+var dom = SafeXml.LoadDocument(bytes);               // XmlDocument, whitespace preserved for signatures
+var capped = SafeXml.Parse(text, maxCharacters: 1_000_000);
+```
+
 ### Engine options
 
 ```csharp

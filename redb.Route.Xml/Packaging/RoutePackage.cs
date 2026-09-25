@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
+using redb.Route.Core;
 
 namespace redb.Route.Xml.Packaging;
 
@@ -295,14 +296,8 @@ public static class RoutePackage
                         findings.Add(new PackageFinding(false, file,
                             $"<{element.Name.LocalName} {attribute.Name.LocalName}=…> looks like a literal secret — " +
                             "supply secrets through the merged context configuration (L3/L5), never inside the package."));
-                    if (attribute.Name.LocalName == "file")
-                    {
-                        var resource = Path.Combine(projectDir, ResourcesDir, attribute.Value);
-                        var direct = Path.Combine(projectDir, attribute.Value);
-                        if (!File.Exists(resource) && !File.Exists(direct))
-                            findings.Add(new PackageFinding(true, file,
-                                $"resource '{attribute.Value}' referenced by <{element.Name.LocalName}> is not under '{ResourcesDir}/'."));
-                    }
+                    if (IsResourceLocator(element, attribute, registry))
+                        CheckResource(projectDir, file, element, attribute, findings);
                 }
             }
         }
@@ -365,6 +360,40 @@ public static class RoutePackage
             if (isStep && spec!.Terminal)
                 terminal = child;
             CheckUnreachableSteps(file, child, registry, findings);
+        }
+    }
+
+    /// <summary>
+    /// A file the runtime will read from the package: the format's own <c>file=</c> (every
+    /// element taking a file-or-content pair), or an attribute its spec marks
+    /// <see cref="AttributeSpec.Resource"/> — a package element that names its file otherwise.
+    /// </summary>
+    private static bool IsResourceLocator(XElement element, XAttribute attribute, ElementRegistry registry)
+        => attribute.Name.LocalName == "file"
+           || registry.Find(element.Name.LocalName)?.Spec.Attributes.Any(a =>
+                  a.Resource && string.Equals(a.Name, attribute.Name.LocalName, StringComparison.Ordinal)) == true;
+
+    /// <summary>
+    /// The file is under <c>resources/</c> (or at the project root), where the worker's resource
+    /// resolver will look. Two kinds of value cannot be checked here and are left alone: an
+    /// <c>assembly:</c> locator (the file ships inside an assembly) and a value that still holds
+    /// a placeholder (it is only known once configuration resolves it).
+    /// </summary>
+    private static void CheckResource(string projectDir, string file, XElement element, XAttribute attribute,
+        List<PackageFinding> findings)
+    {
+        var value = attribute.Value;
+        if (value.StartsWith("assembly:", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("{{", StringComparison.Ordinal)
+            || value.Contains("${", StringComparison.Ordinal))
+            return;
+        var resource = Path.Combine(projectDir, ResourcesDir, value);
+        var direct = Path.Combine(projectDir, value);
+        if (!File.Exists(resource) && !File.Exists(direct))
+        {
+            var line = (IXmlLineInfo)attribute;
+            findings.Add(new PackageFinding(true, $"{file}({line.LineNumber},{line.LinePosition})",
+                $"resource '{value}' referenced by <{element.Name.LocalName} {attribute.Name.LocalName}=…> is not under '{ResourcesDir}/'."));
         }
     }
 
@@ -500,7 +529,7 @@ public static class RoutePackage
     {
         try
         {
-            documents.Add((file, XDocument.Load(path, LoadOptions.SetLineInfo)));
+            documents.Add((file, SafeXml.LoadFile(path, LoadOptions.SetLineInfo)));
         }
         catch (System.Xml.XmlException ex)
         {

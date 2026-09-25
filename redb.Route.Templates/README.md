@@ -28,7 +28,8 @@ escaped correctly for JSON or XML.
 
 | Rule | Why |
 |---|---|
-| A `string` argument is a **locator**: a file path (relative to `RouteTemplateOptions.BaseDirectory`, default `AppContext.BaseDirectory`) or `assembly:Name/Path/file.sbn`. Inline text is `TextSource.Inline("...")`. | A string never has to be guessed as "path or text" — the same rule the route expression language follows. |
+| A `string` argument is a **locator**: a file path or `assembly:Name/Path/file.sbn`. Inline text is `TextSource.Inline("...")`. | A string never has to be guessed as "path or text" — the same rule the route expression language follows. |
+| A relative path is looked up by the context's `IRouteResourceResolver` first, then by `RouteTemplateOptions.BaseDirectory` (default `AppContext.BaseDirectory`). A miss names both places. | One lookup order for the whole framework: the same one `validateXsd`, `xslt` and the XML context files use. A route inside a `.tpkg` keeps its template in `resources/`, which only the package resolver knows about — the base directory stays the worker's. |
 | `MediaType` is mandatory: `Json`, `Xml`, `Text`. | It decides escaping of substituted values (`"`/`\`/control characters for JSON; `& < > " '` for XML) and the `ContentType` of the produced body. Template literals are never escaped — only values. `{{ x \| raw }}` writes a value verbatim. |
 | Numbers and dates render culture-invariant; dates as ISO 8601. | A payload must not depend on the server locale. |
 | Compiled at route build, cached by source. | A missing file or a syntax error fails `Start()` with the template name and `(line,column)`. |

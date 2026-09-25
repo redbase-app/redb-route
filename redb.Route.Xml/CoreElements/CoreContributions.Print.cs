@@ -111,6 +111,9 @@ internal static partial class CoreContributions
             ["setHeaders"] = (e, w) => w.Verb(e, "SetHeaders", [.. e.Elements()
                 .Where(c => c.Name.LocalName == "header")
                 .Select(c => $"({S6(c, "name")}, {(A(c, "expr") is { } x ? XmlCodeWriter.Expr(x) : S6(c, "value"))})")]),
+            ["setProperties"] = (e, w) => w.Verb(e, "SetProperties", [.. e.Elements()
+                .Where(c => c.Name.LocalName == "property")
+                .Select(c => $"({S6(c, "name")}, {(A(c, "expr") is { } x ? XmlCodeWriter.Expr(x) : S6(c, "value"))})")]),
             ["log"] = PrintRichOrPlainLog,
             ["delay"] = (e, w) => w.Verb(e, "Delay",
                 A(e, "expr") is { } x ? XmlCodeWriter.Str(x) : XmlCodeWriter.Ts(ParseTs(A(e, "duration") ?? "0:0:0"))),

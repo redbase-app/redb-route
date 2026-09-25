@@ -57,7 +57,20 @@ public sealed class PayloadTemplateDefinition : ProcessorDefinition
         var options = context.GetService<RouteTemplateOptions>()
             ?? context.GetServiceProvider()?.GetService(typeof(RouteTemplateOptions)) as RouteTemplateOptions
             ?? new RouteTemplateOptions();
-        var compiled = TemplateEngine.Compile(Source, options);
+        // A relative path is looked up as every other file reference is: the context resolver (a
+        // package keeps its templates where only that resolver knows), then the base directory.
+        // A miss stays a template failure, not an IO one — the step promises one exception type.
+        TextSource source;
+        try
+        {
+            source = ResourceResolution.Locate(context, Source, options.BaseDirectory, "Template");
+        }
+        catch (FileNotFoundException ex)
+        {
+            throw new TemplateCompilationException(Source.Name, null, null, ex.Message, ex);
+        }
+
+        var compiled = TemplateEngine.Compile(source, options);
         return new PayloadTemplateProcessor(compiled, MediaType, Target, TargetName, Args, options);
     }
 }

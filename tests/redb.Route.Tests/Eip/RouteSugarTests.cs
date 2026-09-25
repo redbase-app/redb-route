@@ -1,5 +1,6 @@
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Definitions;
 using redb.Route.Expressions;
 using redb.Route.TestKit;
 
@@ -25,6 +26,34 @@ public class RouteSugarTests
         await ctx.SendBody("direct://sh", "x");
 
         await ctx.Mock("mock://sh").ExpectHeader("a", 1).ExpectHeader("b", 2).ExpectHeader("c", "x!").AssertIsSatisfiedAsync(Wait);
+    }
+
+    [Fact]
+    public async Task SetProperties_Constant_Expression_And_Func_InOneStep_InOrder()
+    {
+        await using var ctx = new RouteContext().AddRoutes(b => b
+            .From("direct://sp")
+                .SetProperties(
+                    ("a", 1),
+                    ("b", new StringExpression("property.a + 1")),
+                    ("c", (Func<IExchange, object?>)(e => $"{e.In.Body}!")))
+                .To("mock://sp"));
+        await ctx.Start();
+
+        await ctx.SendBody("direct://sp", "x");
+
+        var properties = ctx.Mock("mock://sp").ReceivedExchanges[0].Properties;
+        properties["a"].Should().Be(1);
+        properties["b"].Should().Be(2, "a later property reads an earlier one of the same step");
+        properties["c"].Should().Be("x!");
+    }
+
+    [Fact]
+    public void SetProperties_WithoutProperties_IsRejected()
+    {
+        var act = () => new SetPropertiesDefinition([]);
+
+        act.Should().Throw<ArgumentException>();
     }
 
     [Fact]

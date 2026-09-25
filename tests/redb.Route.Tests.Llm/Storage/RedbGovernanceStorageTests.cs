@@ -59,7 +59,7 @@ public sealed class RedbGovernanceStorageTests
         => await _fx.Redb.Query<ToolAuditProps>()
             // One object-side predicate only: it narrows _objects and touches nothing else. A props-typed
             // predicate would resolve through the values table, and with the PVT prefilter off (the shipped
-            // default — Pro/PostgreSQL only) nothing cuts the set before that work. See the block comment.
+            // default; Pro only, on all three providers) nothing cuts the set before that work. See the block comment.
             .WhereRedb(o => o.Name != null && o.Name.Contains(toolName))
             .Select(a => a.Props)
             .ToListAsync();

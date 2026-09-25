@@ -1,5 +1,6 @@
 using System.Text;
 using System.Xml.Linq;
+using redb.Route.Core;
 
 namespace redb.Route.Soap;
 
@@ -50,7 +51,7 @@ internal static class SoapEnvelope
     /// <summary>Parses a response/request envelope into its body payload or a fault.</summary>
     public static SoapParseResult Parse(byte[] envelope, SoapVersion version)
     {
-        var doc = XDocument.Load(new MemoryStream(envelope));
+        var doc = SafeXml.Load(envelope);
         var soap = Ns(version);
         var body = doc.Root?.Element(soap + "Body")
             ?? throw new FormatException("SOAP envelope has no <Body>.");
@@ -77,7 +78,7 @@ internal static class SoapEnvelope
     /// <summary>Extracts the <c>&lt;soap:Header&gt;</c> child elements (the envelope header plane), or empty.</summary>
     public static IEnumerable<XElement> ReadHeaders(byte[] envelope, SoapVersion version)
     {
-        var doc = XDocument.Load(new MemoryStream(envelope));
+        var doc = SafeXml.Load(envelope);
         var soap = Ns(version);
         var header = doc.Root?.Element(soap + "Header");
         return header?.Elements() ?? Enumerable.Empty<XElement>();
@@ -170,7 +171,7 @@ internal static class SoapEnvelope
     private static object ParseBodyContent(string xml)
     {
         // The common case is a single Body child element; XElement.Parse also skips a leading XML prolog.
-        try { return XElement.Parse(xml, LoadOptions.PreserveWhitespace); }
+        try { return SafeXml.ParseElement(xml, LoadOptions.PreserveWhitespace); }
         // A document/literal body may legitimately carry several sibling elements — wrap-parse and add all.
         catch (System.Xml.XmlException) { return ParseFragments(xml).Cast<object>().ToArray(); }
     }
@@ -179,7 +180,7 @@ internal static class SoapEnvelope
     private static IEnumerable<XElement> ParseFragments(string xml)
     {
         // Wrap so multiple top-level elements parse; each element carries its own inline xmlns.
-        var wrapped = XElement.Parse($"<soapFragmentWrap>{xml}</soapFragmentWrap>", LoadOptions.PreserveWhitespace);
+        var wrapped = SafeXml.ParseElement($"<soapFragmentWrap>{xml}</soapFragmentWrap>", LoadOptions.PreserveWhitespace);
         return wrapped.Elements();
     }
 }

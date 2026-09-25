@@ -16,7 +16,7 @@ public static class RouteContextXmlExtensions
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(xml);
-        var document = XDocument.Parse(xml, LoadOptions.SetLineInfo);
+        var document = SafeXml.Parse(xml, LoadOptions.SetLineInfo);
         new XmlRouteLoader(context, options).Load(document, sourceName);
         return context;
     }
@@ -71,7 +71,7 @@ public static class RouteContextXmlExtensions
         // Ordinal order keeps the load deterministic across file systems.
         foreach (var path in Directory.GetFiles(found, mask).OrderBy(p => p, StringComparer.Ordinal))
         {
-            var document = XDocument.Load(path, LoadOptions.SetLineInfo);
+            var document = SafeXml.LoadFile(path, LoadOptions.SetLineInfo);
             loader.Load(document, path);
         }
         return context;
@@ -83,7 +83,7 @@ public static class RouteContextXmlExtensions
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(xml);
-        var document = XDocument.Parse(xml, LoadOptions.SetLineInfo);
+        var document = SafeXml.Parse(xml, LoadOptions.SetLineInfo);
         new XmlContextLoader(context, options).Load(document, sourceName);
         return context;
     }
@@ -95,7 +95,7 @@ public static class RouteContextXmlExtensions
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         var resolved = ResourceResolution.Resolve(context, filePath, "Context file");
-        var document = XDocument.Load(resolved, LoadOptions.SetLineInfo);
+        var document = SafeXml.LoadFile(resolved, LoadOptions.SetLineInfo);
         new XmlContextLoader(context, options).Load(document, filePath);
         return context;
     }
@@ -105,7 +105,7 @@ public static class RouteContextXmlExtensions
         // Through the route resource resolver: a relative path must not depend on the process
         // working directory (the AppContext base wins over cwd).
         var resolved = ResourceResolution.Resolve(context, path, "Route file");
-        var document = XDocument.Load(resolved, LoadOptions.SetLineInfo);
+        var document = SafeXml.LoadFile(resolved, LoadOptions.SetLineInfo);
         loader.Load(document, path);
     }
 

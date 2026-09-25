@@ -41,7 +41,7 @@ public sealed class RouteResourceResolver : IRouteResourceResolver
 }
 
 /// <summary>Shared resolve-or-throw used by the components that read files from endpoint URIs.</summary>
-internal static class ResourceResolution
+public static class ResourceResolution
 {
     /// <summary>
     /// Resolves <paramref name="reference"/> through the context's registered
@@ -57,5 +57,51 @@ internal static class ResourceResolution
             throw new FileNotFoundException(
                 $"{what} not found: '{reference}'. Searched: {resolver.DescribeSearch(reference)}.");
         return resolved;
+    }
+
+    /// <summary>
+    /// Pins a <see cref="TextSource"/> that names a file by a relative path to the file the context
+    /// can actually see: the registered <see cref="IRouteResourceResolver"/> first (a package keeps
+    /// its resources where only the resolver knows), then <paramref name="baseDirectory"/>, which is
+    /// what the consuming package was configured with. Inline text, an embedded resource and an
+    /// absolute path are returned untouched.
+    /// <para>
+    /// The returned source names the resolved file, so a compile cache keyed by it distinguishes two
+    /// packages that ship the same relative name — a hot-reloaded module must not render the previous
+    /// version's text.
+    /// </para>
+    /// </summary>
+    /// <param name="context">Route context whose resolver is consulted; null falls back to the default one.</param>
+    /// <param name="source">The source as the route author wrote it.</param>
+    /// <param name="baseDirectory">The package's own base directory, probed after the resolver.</param>
+    /// <param name="what">Noun for the error message, e.g. "Template".</param>
+    /// <exception cref="FileNotFoundException">Neither place holds the file; the message names both.</exception>
+    public static TextSource Locate(IRouteContext? context, TextSource source, string baseDirectory, string what)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        if (source.FilePath is not { } reference || Path.IsPathRooted(reference))
+            return source;
+
+        var resolver = context?.GetService<IRouteResourceResolver>() ?? RouteResourceResolver.Default;
+        if (resolver.Resolve(reference) is { } resolved)
+            return TextSource.Located(reference, resolved);
+
+        // Not known to the resolver: the package's own base directory is the second place, and the
+        // only one the pre-resolver behaviour ever used.
+        var fromBase = Path.GetFullPath(Path.Combine(baseDirectory, reference));
+        if (System.IO.File.Exists(fromBase))
+            return TextSource.Located(reference, fromBase);
+
+        // Both places in one line, each once: the default resolver already probes the process base
+        // directory, which for most packages is the base directory as well.
+        var searched = resolver.DescribeSearch(reference)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Append(fromBase)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        throw new FileNotFoundException(
+            $"{what} not found: '{reference}'. Searched: {string.Join(", ", searched)}.",
+            fromBase);
     }
 }

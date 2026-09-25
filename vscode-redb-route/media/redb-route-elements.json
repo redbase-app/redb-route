@@ -2030,6 +2030,41 @@
     "takesEndpoint": false
   },
   {
+    "name": "setProperties",
+    "kind": "Step",
+    "attributes": [],
+    "children": [
+      {
+        "name": "property",
+        "kind": "ConfigChild",
+        "attributes": [
+          {
+            "name": "name",
+            "type": "String",
+            "required": true
+          },
+          {
+            "name": "value",
+            "type": "String",
+            "required": false
+          },
+          {
+            "name": "expr",
+            "type": "Expression",
+            "required": false
+          }
+        ],
+        "children": [],
+        "allowsSteps": false,
+        "allowsText": false,
+        "takesEndpoint": false
+      }
+    ],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
     "name": "setProperty",
     "kind": "Step",
     "attributes": [

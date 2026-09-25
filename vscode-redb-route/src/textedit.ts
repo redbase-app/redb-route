@@ -72,6 +72,29 @@ export function computeSetAttribute(
     return { start: insertAt, end: insertAt, newText: ` ${name}="${escaped}"` };
 }
 
+/**
+ * Renames the element at the path (`<setProperty …/>` → `<setHeader …/>`): the open tag and,
+ * when there is one, the close tag; attributes and content stay byte-identical.
+ */
+export function computeRenameElement(text: string, path: ElementPath, newName: string): TextReplacement | null {
+    const element = resolveByPath(parseXml(text).root, path);
+    if (!element)
+        throw new Error(`no element at path [${path.join(",")}] — the document changed under the panel`);
+    if (element.name === newName) return null;
+    const body = text.slice(element.span.start, element.span.end);
+    const openName = "<" + element.name;
+    if (!body.startsWith(openName))
+        throw new Error(`the element at [${path.join(",")}] does not start with ${openName}`);
+    let renamed = "<" + newName + body.slice(openName.length);
+    if (!element.selfClosing) {
+        const closeTag = new RegExp("</" + element.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*>$");
+        if (!closeTag.test(renamed))
+            throw new Error(`the element at [${path.join(",")}] does not end with </${element.name}>`);
+        renamed = renamed.replace(closeTag, "</" + newName + ">");
+    }
+    return { start: element.span.start, end: element.span.end, newText: renamed };
+}
+
 /** Applies a replacement — test helper and the non-VSCode half of the apply path. */
 export function applyReplacement(text: string, replacement: TextReplacement): string {
     return text.slice(0, replacement.start) + replacement.newText + text.slice(replacement.end);

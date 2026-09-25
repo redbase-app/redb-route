@@ -82,6 +82,16 @@ public sealed record AttributeSpec(
     /// positional parameter: a released package contribution is compiled against this record.
     /// </summary>
     public bool Condition { get; init; }
+
+    /// <summary>
+    /// The attribute names a FILE the runtime reads from the package's <c>resources/</c> — a
+    /// template, a transformation spec. The pack gate checks the file is there, exactly as it
+    /// checks the format's own <c>file=</c>; a package element whose attribute is named
+    /// differently (<c>&lt;payload template&gt;</c>, <c>&lt;transformJson spec&gt;</c>) says so
+    /// here. An init property, never a positional parameter: a released contribution compiled
+    /// against this record keeps working, it only goes unchecked until it opts in.
+    /// </summary>
+    public bool Resource { get; init; }
 }
 
 /// <summary>

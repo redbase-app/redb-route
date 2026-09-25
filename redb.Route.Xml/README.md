@@ -66,7 +66,7 @@ element never passes just because its local name matches.
 Every element accepts `id=` and `description=`: they flow into step identity (message history
 node ids and labels, `WeaveById` targets, generated-code comments).
 
-**Leaf steps** — `to`, `toD`, `setHeader`, `setProperty`, `setBody`, `setHeaders`, `transform`,
+**Leaf steps** — `to`, `toD`, `setHeader`, `setProperty`, `setBody`, `setHeaders`, `setProperties`, `transform`,
 `removeHeader/Property/Body/Headers/Properties`, `log`, `delay`, `stop`, `throwException`,
 `convertBody`, `wireTap`, `validate`, `sort`, `sample`, `streamCaching`, `validateJsonSchema`,
 `validateXsd`, `xslt`, `marshal`, `unmarshal`, `controlBus`, `enrich`, `pollEnrich`,
@@ -84,7 +84,7 @@ node ids and labels, `WeaveById` targets, generated-code comments).
 **Branching** — `choice` with `when` (expression or `predicate="#name"` registry reference)
 and `otherwise`.
 
-**Container level** (directly under `<routes>`, applying to every route of the file) —
+**Container level** (directly under `<routes>`; the handlers apply to every route of the context, not only of this file) —
 `bean`, `onException`, `intercept`, `interceptFrom`, `interceptSendToEndpoint`,
 `onCompletion`, and package-contributed top-level elements such as `rest`.
 
@@ -192,7 +192,7 @@ built by a static creator rather than a constructor, `factoryMethod=` names it a
 </bean>
 ```
 
-Handlers declared at the container level apply to every route of the file:
+Handlers declared at the container level apply to every route of the **context**, not only to the routes of their own file: the engine registers `onException`, `intercept*` and `onCompletion` of every builder globally, so one file of handlers covers the routes of all the other files and the C# routes of the same context. Declare each of them once:
 
 ```xml
 <onException exceptions="System.Exception" handled="true"
@@ -369,7 +369,8 @@ of the runtime):
 | `xsd --out dir` | the generated schema for the core set |
 
 Packaging checks are **hard errors, not advice**: schema validation with positions, `]]>`
-inside CDATA, `file=` resources missing from `resources/`, undeclared `#name` references;
+inside CDATA, files missing from `resources/` (`file=`, and the files package elements name:
+`<payload template=>`, `<transformJson spec=>`), undeclared `#name` references;
 with `--bin`, bean types are verified against the real assemblies — a renamed type, a
 non-public type, a typo in a `<property>` or in `bean:…?method=` refuses the build. A literal
 secret in a URI is a warning that names the fix (supply it through configuration). Add

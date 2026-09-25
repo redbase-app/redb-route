@@ -54,15 +54,20 @@ public class SoapProducerTests
         public void Dispose() { try { _listener.Stop(); } catch { } _listener.Close(); }
     }
 
-    private static async Task<IExchange> CallAsync(string url, IExchange exchange, Action<SoapConnectionFactory>? tune = null)
+    private static async Task<IExchange> CallAsync(string url, IExchange exchange,
+        Action<SoapConnectionFactory>? tune = null, bool throwOnFault = true)
     {
         await using var ctx = new RouteContext();
         ctx.AddComponent(new SoapComponent());
         var factory = new SoapConnectionFactory { EndpointUrl = url, SoapVersion = SoapVersion.Soap11 };
         tune?.Invoke(factory);
         ctx.AddToRegistry("svc", factory);
-        ctx.AddRoutes(r => r.From("direct://call")
-            .To(SoapDsl.Call(url).ConnectionFactory("svc").Operation("GetFares")));
+        ctx.AddRoutes(r =>
+        {
+            var call = SoapDsl.Call(url).ConnectionFactory("svc").Operation("GetFares");
+            if (!throwOnFault) call = call.ThrowOnFault(false);
+            r.From("direct://call").To(call);
+        });
 
         await ctx.Start();
         var producer = ctx.GetEndpoint("direct://call").CreateProducer();
@@ -99,5 +104,33 @@ public class SoapProducerTests
 
         await act.Should().ThrowAsync<SoapFaultException>().Where(e => e.FaultString == "no such route");
         exchange.In.GetHeader<string>(SoapHeaders.FaultCode).Should().Be("soap:Client");
+    }
+
+    [Fact]
+    public async Task Producer_WithThrowOnFaultFalse_ReturnsTheFaultAsTheReply()
+    {
+        // A fault is an answer the service is designed to give ("no such route"), and a caller that
+        // expects it should branch on headers, not catch. Same rule as the HTTP producer's
+        // throwOnError: the option is explicit, never guessed from the code inside the fault.
+        using var stub = new SoapStub(_ => SoapEnvelope.BuildFault("no such route", SoapVersion.Soap11, "soap:Client"));
+
+        var exchange = new Exchange(new Message("<GetFares xmlns=\"urn:test\"/>"));
+        await CallAsync(stub.Url, exchange, tune: null, throwOnFault: false);
+
+        exchange.Exception.Should().BeNull();
+        exchange.In.GetHeader<bool>(SoapHeaders.IsFault).Should().BeTrue();
+        exchange.In.GetHeader<string>(SoapHeaders.FaultCode).Should().Be("soap:Client");
+        exchange.In.GetHeader<string>(SoapHeaders.FaultString).Should().Be("no such route");
+        exchange.Out!.Body!.ToString().Should().Contain("Fault", "the reply body is the fault envelope's payload");
+    }
+
+    [Fact]
+    public async Task Producer_ThrowsOnFaultByDefault()
+    {
+        using var stub = new SoapStub(_ => SoapEnvelope.BuildFault("no such route", SoapVersion.Soap11, "soap:Client"));
+
+        var act = async () => await CallAsync(stub.Url, new Exchange(new Message("<GetFares xmlns=\"urn:test\"/>")));
+
+        await act.Should().ThrowAsync<SoapFaultException>();
     }
 }

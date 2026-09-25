@@ -64,6 +64,46 @@ public class CatalogContributionsTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task SetProperties_MixesConstantsAndExpressions_InOrder()
+    {
+        Load("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="cat-setproperties">
+                <from uri="direct://cat-sp-in"/>
+                <setProperties>
+                  <property name="fixed" value="A"/>
+                  <property name="derived" expr="${body}-tail"/>
+                  <property name="chained" expr="${property.fixed}+"/>
+                </setProperties>
+              </route>
+            </routes>
+            """);
+        var producer = await StartAndProducer("direct://cat-sp-in");
+
+        var exchange = new Exchange(new Message("x"));
+        await producer.Process(exchange);
+
+        exchange.Properties["fixed"].Should().Be("A");
+        exchange.Properties["derived"].Should().Be("x-tail");
+        exchange.Properties["chained"].Should().Be("A+");
+    }
+
+    [Fact]
+    public void SetProperties_AcceptsOnlyPropertyChildren()
+    {
+        var foreignChild = () => Load("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="cat-sp-bad">
+                <from uri="direct://cat-sp-bad"/>
+                <setProperties><header name="a" value="1"/></setProperties>
+              </route>
+            </routes>
+            """);
+
+        foreignChild.Should().Throw<XmlRouteException>().WithMessage("*<setProperties> accepts only <property> children*");
+    }
+
+    [Fact]
     public async Task TryCatch_CatchHandles_FinallyAlwaysRuns()
     {
         Load("""
@@ -617,6 +657,7 @@ public class CatalogContributionsTests : IAsyncDisposable
                 <setProperty name="p" value="1"/>
                 <setBody expr="${body}"/>
                 <setHeaders><header name="b" value="2"/></setHeaders>
+                <setProperties><property name="q" value="2"/></setProperties>
                 <transform expr="${body}"/>
                 <sort expr="property.items" by="body" descending="true"/>
                 <sample messageFrequency="1"/>

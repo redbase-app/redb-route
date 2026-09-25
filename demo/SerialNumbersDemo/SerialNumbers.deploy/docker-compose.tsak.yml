@@ -31,7 +31,7 @@ services:
       - ../runtime/sftp:/home/testuser/upload
 
   tsak:
-    image: ghcr.io/redbase-app/redb-tsak-stack:${TSAK_VERSION:-4.1.0-net10}
+    image: ghcr.io/redbase-app/redb-tsak-stack:${TSAK_VERSION:-4.1.1-net10}
     restart: unless-stopped
     depends_on:
       - sqlserver

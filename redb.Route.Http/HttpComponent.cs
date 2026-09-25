@@ -34,9 +34,23 @@ public class HttpComponent : ComponentBase
 
     /// <summary>
     /// Shared HTTP server manager for pooling Kestrel instances by (host, port).
-    /// Must be set before creating consumers.
+    /// Assigned by <c>AddRedbRouteHttp()</c>; a module host that adds components by scanning leaves
+    /// it null and keeps the manager in the container instead — see <see cref="Server"/>.
     /// </summary>
     public SharedHttpServerManager? ServerManager { get; set; }
+
+    /// <summary>
+    /// The manager a consumer binds on. Resolution order: explicitly assigned → the context's DI
+    /// singleton → refusal. There is no private fallback on purpose: an <c>http:</c> consumer binds a
+    /// port, and which port it binds is the host's decision, so a missing manager stays loud (gRPC,
+    /// AS2, SignalR, WebSocket and SOAP resolve in the same order and end with their own server).
+    /// </summary>
+    internal SharedHttpServerManager Server =>
+        ServerManager
+        ?? Context.Resolve<SharedHttpServerManager>()
+        ?? throw new InvalidOperationException(
+            "SharedHttpServerManager is not configured. Register HTTP via AddRedbRouteHttp() in DI, " +
+            "assign HttpComponent.ServerManager, or give the route context a service provider that holds one.");
 
     /// <inheritdoc />
     public override IEndpoint CreateEndpoint(EndpointUri uri)
@@ -265,11 +279,6 @@ public class HttpEndpoint : EndpointBase<HttpEndpointOptions>
         ArgumentNullException.ThrowIfNull(processor);
 
         var component = (HttpComponent)Component;
-        var serverManager = component.ServerManager
-            ?? throw new InvalidOperationException(
-                "SharedHttpServerManager is not configured. " +
-                "Register HTTP via AddRedbRouteHttp() in DI.");
-
-        return new HttpConsumer(this, processor, Options, serverManager);
+        return new HttpConsumer(this, processor, Options, component.Server);
     }
 }

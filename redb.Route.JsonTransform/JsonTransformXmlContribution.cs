@@ -22,7 +22,7 @@ public sealed class JsonTransformXmlContribution : IXmlElementContribution
     /// <inheritdoc />
     public ElementSpec Spec => new(Name, Kind,
         [
-            new AttributeSpec("spec", AttributeType.String),
+            new AttributeSpec("spec", AttributeType.String) { Resource = true },
             // Ф0 §4.1 spells the values lowercase (string/node); parsing is case-insensitive.
             new AttributeSpec("output", AttributeType.Enum, EnumValues: ["string", "node"]),
         ],

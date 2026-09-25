@@ -681,14 +681,14 @@ body {
   outline-offset: 1px;
 }
 
-body.with-panel { padding-right: 292px; }
+body.with-panel { padding-right: calc(var(--panel-width, 380px) + 12px); }
 
 #panel {
   position: fixed;
   top: 0;
   right: 0;
   bottom: 0;
-  width: 280px;
+  width: var(--panel-width, 380px);
   overflow-y: auto;
   background: var(--vscode-sideBar-background, var(--vscode-editor-background));
   border-left: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
@@ -866,3 +866,427 @@ body.with-panel { padding-right: 292px; }
   white-space: nowrap;
   cursor: pointer;
 }
+
+/* ── tiles: one size for every step, a glyph and a short caption (owner, 2026-09-24) ──
+   The glyph carries the color of its group, the tile stays neutral; the details of a step
+   live in the tooltip and the properties panel. "stacked" puts the glyph over the caption,
+   "inline" (root.tiles-inline) beside it. */
+
+.tile {
+  --tone: var(--vscode-descriptionForeground);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  flex: none;
+  box-sizing: border-box;
+  width: 66px;
+  height: 52px;
+  padding: 4px 2px 3px;
+  position: relative;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: none;
+}
+
+.tile .glyph { display: block; width: 24px; height: 24px; flex: none; color: var(--tone); }
+.tile .glyph svg { display: block; width: 24px; height: 24px; }
+
+.tile .cap {
+  font-size: 10.5px;
+  line-height: 12px;
+  max-width: 62px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--vscode-foreground);
+  opacity: 0.9;
+}
+
+.tiles-inline .tile {
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 108px;
+  height: 30px;
+  padding: 0 8px;
+}
+.tiles-inline .tile .glyph,
+.tiles-inline .tile .glyph svg { width: 20px; height: 20px; }
+.tiles-inline .tile .cap { font-size: 11.5px; line-height: 14px; max-width: 70px; }
+
+/* the colors of the groups: where the message comes from and goes, how it is routed,
+   what is done to its data, what only watches, what handles failure */
+.tone-in    { --tone: var(--vscode-charts-green, #89d185); }
+.tone-out   { --tone: var(--vscode-charts-blue, #3794ff); }
+.tone-inner { --tone: var(--vscode-charts-blue, #3794ff); }
+.tone-code  { --tone: var(--vscode-charts-purple, #b180d7); }
+.tone-data  { --tone: var(--vscode-charts-orange, #d18616); }
+.tone-route { --tone: var(--vscode-terminal-ansiCyan, #29b8db); }
+.tone-watch { --tone: var(--vscode-descriptionForeground, #9d9d9d); }
+.tone-error { --tone: var(--vscode-charts-red, #f14c4c); }
+.tone-muted { --tone: var(--vscode-descriptionForeground, #9d9d9d); }
+
+/* one neutral box for every tile, the group color as a soft border — beats the old
+   category boxes (filled endpoints, diamonds, hexagons) in both looks */
+.tile,
+.mermaid-look .tile,
+.mermaid-look .tile.branch-label,
+.mermaid-look .tile.vbranch-head,
+.mermaid-look .tile.lbranch-head,
+.mermaid-look .scope > .tile.scope-head,
+.scope.compact > .tile.scope-head {
+  clip-path: none;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  color: var(--vscode-foreground);
+  border: 1px solid color-mix(in srgb, var(--tone) 55%, transparent);
+  border-radius: 7px;
+  font-weight: 400;
+  opacity: 1;
+  box-shadow: none;
+}
+.mermaid-look .tile { padding: 4px 2px 3px; }
+.mermaid-look.tiles-inline .tile,
+.tiles-inline .mermaid-look .tile { padding: 0 8px; }
+.tile.tone-inner { border-style: dashed; }
+.tile.cat-unknown { border-style: dashed; }
+.tile.branch-label { max-width: none; }
+.tile:hover { outline: 1px solid var(--vscode-focusBorder); }
+
+/* the fold toggle and the counter ride the corners of a container tile */
+.tile > .fold {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  font-size: 10px;
+  line-height: 12px;
+  padding: 0 2px;
+}
+.tile > .badge {
+  position: absolute;
+  bottom: 1px;
+  right: 4px;
+  font-size: 9.5px;
+  line-height: 11px;
+  opacity: 0.8;
+}
+.tiles-inline .tile > .fold { top: 50%; transform: translateY(-50%); right: 3px; }
+.tiles-inline .tile > .badge { bottom: 0; right: 16px; }
+
+/* ── left to right: one top line through every row ─────────────────────
+   Steps hang from the TOP of a row, so the line through the tiles stays straight however
+   tall a container beside them is. A container's head tile sits on that line: the box
+   starts 9px higher (its border and padding), every plain step drops 9px to meet it, and
+   the body pulls up 9px so its first row is on the same line as the head. */
+.mermaid-look.lr .snake-row,
+.mermaid-look.lr .atom { align-items: flex-start; }
+.mermaid-look.lr .atom > .node,
+.mermaid-look.lr .atom > .branching,
+.mermaid-look.lr .atom > .scope.compact { margin-top: 9px; }
+.mermaid-look.lr .atom > .slot { align-self: flex-start; margin-top: 27px; }
+.mermaid-look.lr .scope {
+  align-items: flex-start;
+  gap: 28px;
+  padding: 8px 18px 10px 10px;
+}
+.mermaid-look.lr .scope.compact { padding: 0; gap: 0; align-items: center; }
+.mermaid-look.lr .scope > .scope-head { align-self: flex-start; }
+.mermaid-look.lr .scope > .snake { margin-top: -9px; }
+/* a container opening a container's body must not share its parent's top border */
+.mermaid-look.lr .scope > .snake > .snake-row:first-child > .atom > .scope:not(.compact) { margin-top: 9px; }
+.mermaid-look.lr .branching { align-items: flex-start; gap: 30px; }
+.mermaid-look.lr .lstack { gap: 12px; }
+.mermaid-look.lr .branch { align-items: flex-start; }
+.mermaid-look.lr .branch > .snake { margin-top: -9px; }
+.mermaid-look.lr .snake-row { min-height: 70px; }
+.tiles-inline .mermaid-look.lr .snake-row,
+.mermaid-look.lr.tiles-inline .snake-row { min-height: 48px; }
+.mermaid-look.lr.tiles-inline .atom > .slot { margin-top: 16px; }
+
+/* ── top down: the tiles sit on the column spine ─────────────────────── */
+.mermaid-look .vbranch-head.tile { padding: 4px 2px 3px; }
+.mermaid-look.tiles-inline .vbranch-head.tile { padding: 0 8px; }
+
+/* the caption on an edge: the loop's «repeat» */
+.edge-overlay text.edge-label {
+  fill: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  font-family: var(--vscode-font-family);
+}
+
+/* the `end` tile of a wrapper: the same glyph, quieter — it closes, it does not act */
+.tile.wrapper-end { border-style: dashed; opacity: 0.75; }
+.tile.wrapper-end .cap { font-size: 10px; }
+
+/* a row that closes a loop keeps room under it for the `repeat` lane */
+.mermaid-look.lr .snake-row:has(> .atom > .wrapper-end[data-wrapper-type="loop"]) { padding-bottom: 28px; }
+
+/* a setter row in the panel: name, then `=` constant or `ƒ` expression, then the value */
+.content-assign { display: flex; align-items: center; gap: 4px; flex: 1.6; min-width: 0; }
+.content-row .content-assign .content-kind { flex: none; width: 38px; }
+
+/* ── conditional paths (owner, 2026-09-24): where a message goes when the condition fails ──
+   skip  — the condition did not hold, the message goes past (filter, choice without
+           otherwise, ofType, a duplicate at idempotentConsumer);
+   drop  — the message goes nowhere (sample, debounce);
+   error — the step raises, the message goes to the catch / onException. */
+.edge-overlay path.cond { fill: none; stroke-dasharray: 5 3; stroke-width: 1.5; }
+.edge-overlay path.cond.skip { stroke: var(--vscode-charts-orange, #d18616); }
+.edge-overlay path.cond.drop { stroke: var(--vscode-descriptionForeground, #9d9d9d); }
+.edge-overlay path.cond.error { stroke: var(--vscode-charts-red, #f14c4c); }
+.edge-overlay path.head.skip { fill: var(--vscode-charts-orange, #d18616); }
+.edge-overlay path.head.drop { fill: var(--vscode-descriptionForeground, #9d9d9d); }
+.edge-overlay path.head.error { fill: var(--vscode-charts-red, #f14c4c); }
+.edge-overlay text.edge-label.skip { fill: var(--vscode-charts-orange, #d18616); }
+.edge-overlay text.edge-label.error { fill: var(--vscode-charts-red, #f14c4c); }
+
+/* rows keep room under them for the lanes and stubs of conditional paths */
+.mermaid-look.lr .snake-row:has(> .atom > [data-cond]),
+.mermaid-look.lr .snake-row:has(> .atom > .wrapper-open[data-wrapper-type="ofType"]),
+.mermaid-look.lr .snake-row:has(> .atom > .wrapper-open[data-wrapper-type="idempotentConsumer"]),
+.mermaid-look.lr .snake-row:has(> .atom > .branching[data-type="filter"]),
+.mermaid-look.lr .snake-row:has(> .atom > .branching[data-type="choice"]) { padding-bottom: 28px; }
+.content-row .content-kind-target { flex: none; width: 82px; }
+
+/* the grip on the panel's left edge: drag to widen, the width is remembered for all documents */
+#panel-grip {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  right: var(--panel-width, 380px);
+  width: 6px;
+  margin-right: -3px;
+  cursor: ew-resize;
+  z-index: 5;
+  display: none;
+}
+body.with-panel #panel-grip { display: block; }
+#panel-grip:hover, body.resizing-panel #panel-grip { background: var(--vscode-focusBorder); opacity: 0.6; }
+body.resizing-panel { cursor: ew-resize; user-select: none; }
+
+/* top down: the columns stand in the middle of the window, not against its left edge */
+.vertical .routes-grid { justify-content: center; }
+
+/* ── top down, compact (owner, 2026-09-25: the gaps read as breaks) ─────────
+   The insert slot takes no height of its own: it sits in the gap between two tiles (its
+   negative margins cancel its height) and stays clickable there. One short gap per step
+   is left for the arrow; a branch column no longer ends with a tall empty tail. */
+.mermaid-look .vcol { row-gap: 12px; }
+.mermaid-look .vbranch > .vcol { margin-top: 6px; }
+.mermaid-look .vcol > .slot { height: 12px; margin: -6px 0; position: relative; z-index: 2; }
+.mermaid-look .vfan { margin-top: 22px; }
+
+/* ── folding, visible (owner, 2026-09-25: the tiny triangle did not tell folded from open) ──
+   The toggle is a small boxed button in the tile's corner; a folded container looks like a
+   stack of cards with the count of what it hides. */
+.tile > .fold {
+  top: 3px;
+  right: 3px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 4px;
+  opacity: 1;
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+}
+.tile > .fold:hover {
+  background: var(--vscode-focusBorder);
+  color: var(--vscode-button-foreground, #fff);
+}
+.tiles-inline .tile > .fold { top: 50%; transform: translateY(-50%); right: 4px; }
+
+/* a folded container: two cards peeking out behind it, and the count as a chip */
+.tile.collapsed {
+  box-shadow:
+    3px 3px 0 -1px var(--vscode-editorWidget-background, var(--vscode-editor-background)),
+    3px 3px 0 0 color-mix(in srgb, var(--tone) 55%, transparent),
+    6px 6px 0 -1px var(--vscode-editorWidget-background, var(--vscode-editor-background)),
+    6px 6px 0 0 color-mix(in srgb, var(--tone) 35%, transparent);
+}
+.tile.collapsed > .fold {
+  background: var(--vscode-focusBorder);
+  color: var(--vscode-button-foreground, #fff);
+}
+.tile.collapsed > .badge {
+  bottom: auto;
+  top: 3px;
+  left: 3px;
+  right: auto;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  opacity: 1;
+  color: var(--vscode-button-foreground, #fff);
+  background: var(--vscode-focusBorder);
+}
+.tiles-inline .tile.collapsed > .badge { top: 50%; transform: translateY(-50%); left: auto; right: 24px; }
+
+/* volume for a folded container: the stack of cards casts a soft shadow, it lifts off the graph */
+.tile.collapsed {
+  box-shadow:
+    3px 3px 0 -1px var(--vscode-editorWidget-background, var(--vscode-editor-background)),
+    3px 3px 0 0 color-mix(in srgb, var(--tone) 55%, transparent),
+    6px 6px 0 -1px var(--vscode-editorWidget-background, var(--vscode-editor-background)),
+    6px 6px 0 0 color-mix(in srgb, var(--tone) 35%, transparent),
+    4px 8px 14px 0 rgba(0, 0, 0, 0.45);
+}
+
+/* a whole route folds to its title line: the same boxed button as a container's fold */
+.route-header { display: flex; align-items: center; gap: 6px; }
+.route-fold {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 400;
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+}
+.route-fold:hover, .route-fold.folded {
+  background: var(--vscode-focusBorder);
+  color: var(--vscode-button-foreground, #fff);
+}
+.route-count {
+  font-weight: 400;
+  font-size: 10.5px;
+  padding: 0 7px;
+  border-radius: 8px;
+  line-height: 16px;
+  color: var(--vscode-button-foreground, #fff);
+  background: var(--vscode-focusBorder);
+}
+.route-folded { margin: 2px 0 8px; }
+
+/* ── the properties panel as a property grid (owner, 2026-09-25: "деловые стили") ──────
+   A sticky title with the step's glyph, then label | value rows on hairlines like the VS Code
+   settings editor, section captions in small caps, and a sticky action bar at the bottom. */
+#panel { padding: 0; display: flex; flex-direction: column; }
+#panel > * { flex: none; }
+
+.panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+}
+.panel-head .glyph { width: 22px; height: 22px; flex: none; }
+.panel-head .glyph svg { width: 22px; height: 22px; display: block; }
+.panel-type { flex: 1; font-size: 13px; letter-spacing: 0.01em; }
+.panel-close {
+  width: 22px; height: 22px; line-height: 22px; padding: 0; text-align: center;
+  border-radius: 4px;
+}
+.panel-close:hover { background: color-mix(in srgb, var(--vscode-foreground) 12%, transparent); }
+
+#panel .field {
+  display: grid;
+  grid-template-columns: minmax(84px, 34%) 1fr;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 5px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--vscode-editorWidget-border, #454545) 50%, transparent);
+}
+#panel .field:hover { background: color-mix(in srgb, var(--vscode-foreground) 4%, transparent); }
+#panel .field label {
+  font-size: 12px;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#panel .field .value,
+#panel .content-row .value {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-input-border, color-mix(in srgb, var(--vscode-foreground) 16%, transparent));
+  background: var(--vscode-input-background);
+  font-size: 12px;
+}
+#panel .field .value:focus,
+#panel .content-row .value:focus { outline: none; border-color: var(--vscode-focusBorder); }
+
+#panel .panel-section {
+  margin: 0;
+  padding: 12px 12px 5px;
+  border-top: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  opacity: 0.6;
+}
+
+#panel .content-row {
+  margin: 0;
+  padding: 4px 12px;
+  gap: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--vscode-editorWidget-border, #454545) 50%, transparent);
+}
+#panel .content-row:hover { background: color-mix(in srgb, var(--vscode-foreground) 4%, transparent); }
+#panel .content-add { padding: 8px 12px; margin: 0; }
+
+.panel-actions {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto !important;
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+.panel-actions button {
+  padding: 5px 12px;
+  border-radius: 3px;
+  font-size: 12px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+.panel-actions button:hover { filter: brightness(1.1); }
+.panel-actions button.danger {
+  margin-left: auto;
+  background: transparent;
+  color: var(--vscode-editorError-foreground, #f14c4c);
+  border: 1px solid color-mix(in srgb, var(--vscode-editorError-foreground, #f14c4c) 60%, transparent);
+}
+.panel-actions button.danger:hover {
+  background: color-mix(in srgb, var(--vscode-editorError-foreground, #f14c4c) 14%, transparent);
+  filter: none;
+}
+.panel-head .glyph { color: var(--tone); }
+
+/* a setter row shares its width: kind | name | = / ƒ | value | ✕ — never 100% each */
+#panel { overflow-x: hidden; }
+#panel .value { color: var(--vscode-input-foreground, var(--vscode-foreground)); }
+#panel select.value option { color: var(--vscode-foreground); background: var(--vscode-dropdown-background, var(--vscode-input-background)); }
+#panel .content-row { display: flex; align-items: center; }
+#panel .content-row > .value,
+#panel .content-row .content-assign .value { width: auto; min-width: 0; flex: 1 1 0; }
+#panel .content-row > .content-kind-target { flex: none; width: 84px; }
+#panel .content-row .content-assign { flex: 1.6 1 0; min-width: 0; display: flex; gap: 4px; }
+#panel .content-row .content-assign .content-kind { flex: none; width: 40px; }
+#panel .content-row > .content-type { flex: none; width: 64px; min-width: 0; }
+#panel .content-remove { flex: none; width: 16px; text-align: center; }
+#panel .content-row .content-assign .content-kind { width: 48px; padding: 2px 3px; }

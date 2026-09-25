@@ -32,6 +32,13 @@ public abstract class TextSource
     /// <summary>Reads the text. A relative file path is resolved against <paramref name="baseDirectory"/>.</summary>
     public abstract string Read(string baseDirectory);
 
+    /// <summary>
+    /// The file path this source was written with, or <c>null</c> when the text does not come from a
+    /// file. Lets a package look the path up the way the rest of the framework does (see
+    /// <see cref="ResourceResolution.Locate"/>) before falling back to its own base directory.
+    /// </summary>
+    public virtual string? FilePath => null;
+
     /// <summary>Inline text.</summary>
     public static TextSource Inline(string text)
     {
@@ -45,6 +52,13 @@ public abstract class TextSource
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         return new FileTextSource(path);
     }
+
+    /// <summary>
+    /// A file that has already been located (see <see cref="ResourceResolution.Locate"/>): read and
+    /// cached by <paramref name="fullPath"/>, but still named the way the route author wrote it, so
+    /// an error message says <c>templates/order.sbn</c> and not the unpacked package's temp path.
+    /// </summary>
+    internal static TextSource Located(string writtenAs, string fullPath) => new ResolvedFileTextSource(writtenAs, fullPath);
 
     /// <summary>An embedded resource of <paramref name="assembly"/>; <paramref name="resourcePath"/> may use <c>/</c> or <c>.</c> separators and may omit the assembly-name prefix.</summary>
     public static TextSource Embedded(Assembly assembly, string resourcePath)
@@ -88,6 +102,7 @@ internal sealed class FileTextSource(string path) : TextSource
 {
     public override string Name => path;
     public override string CacheKey => "file:" + path;
+    public override string? FilePath => path;
 
     public override string ResolveCacheKey(string baseDirectory)
     {
@@ -105,6 +120,26 @@ internal sealed class FileTextSource(string path) : TextSource
         if (!System.IO.File.Exists(full))
             throw new FileNotFoundException($"File '{path}' not found (resolved to '{full}'; base directory '{baseDirectory}').", full);
         return System.IO.File.ReadAllText(full);
+    }
+}
+
+internal sealed class ResolvedFileTextSource(string writtenAs, string fullPath) : TextSource
+{
+    public override string Name => writtenAs;
+    public override string CacheKey => "file:" + fullPath;
+    public override string? FilePath => fullPath;
+
+    public override string ResolveCacheKey(string baseDirectory)
+    {
+        var info = new FileInfo(fullPath);
+        return info.Exists ? $"file:{fullPath}|{info.Length}|{info.LastWriteTimeUtc.Ticks}" : "file:" + fullPath;
+    }
+
+    public override string Read(string baseDirectory)
+    {
+        if (!System.IO.File.Exists(fullPath))
+            throw new FileNotFoundException($"File '{writtenAs}' not found (resolved to '{fullPath}').", fullPath);
+        return System.IO.File.ReadAllText(fullPath);
     }
 }
 

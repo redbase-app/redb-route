@@ -3,12 +3,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
     <ProjectReference Include="..\..\redb.Route.Core\redb.Route.Core.csproj" />
-    <PackageReference Include="redb.Core" Version="4.1.0" />
-    <PackageReference Include="redb.Core.Pro" Version="4.1.0" />
-    <PackageReference Include="redb.Postgres" Version="4.1.0" />
-    <PackageReference Include="redb.Postgres.Pro" Version="4.1.0" />
-    <PackageReference Include="redb.MSSql" Version="4.1.0" />
-    <PackageReference Include="redb.MSSql.Pro" Version="4.1.0" />
+    <PackageReference Include="redb.Core" Version="4.1.1" />
+    <PackageReference Include="redb.Core.Pro" Version="4.1.1" />
+    <PackageReference Include="redb.Postgres" Version="4.1.1" />
+    <PackageReference Include="redb.Postgres.Pro" Version="4.1.1" />
+    <PackageReference Include="redb.MSSql" Version="4.1.1" />
+    <PackageReference Include="redb.MSSql.Pro" Version="4.1.1" />
   </ItemGroup>
 
   <ItemGroup>

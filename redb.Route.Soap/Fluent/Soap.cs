@@ -28,6 +28,7 @@ public sealed class SoapProducerBuilder
     private string? _connectionFactory;
     private string? _operation;
     private string? _action;
+    private bool? _throwOnFault;
 
     internal SoapProducerBuilder(string url) => _url = url ?? throw new ArgumentNullException(nameof(url));
 
@@ -39,6 +40,13 @@ public sealed class SoapProducerBuilder
 
     /// <summary>Explicit SOAPAction.</summary>
     public SoapProducerBuilder Action(string action) { _action = action; return this; }
+
+    /// <summary>
+    /// Whether a <c>soap:Fault</c> in the reply fails the exchange (default true). False returns the
+    /// fault as the reply, with <c>redbSoap.isFault</c>, <c>redbSoap.faultCode</c> and
+    /// <c>redbSoap.faultString</c> to branch on.
+    /// </summary>
+    public SoapProducerBuilder ThrowOnFault(bool value = true) { _throwOnFault = value; return this; }
 
     /// <summary>Builds the <c>soap://</c> / <c>soaps://</c> URI.</summary>
     public string Build()
@@ -58,6 +66,7 @@ public sealed class SoapProducerBuilder
         Append("connectionFactory", _connectionFactory);
         Append("operation", _operation);
         Append("action", _action);
+        if (_throwOnFault is { } tof) Append("throwOnFault", tof ? "true" : "false");
         return sb.ToString();
     }
 

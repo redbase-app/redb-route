@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using redb.Route.Core;
 
 namespace redb.Route.Soap;
 
@@ -30,7 +31,7 @@ internal static class SoapWsdl
     {
         try
         {
-            var doc = XDocument.Parse(wsdlXml);
+            var doc = SafeXml.Parse(wsdlXml);
             var addresses = doc.Descendants()
                 .Where(e => e.Name.LocalName == "address"
                             && e.Name.NamespaceName.Contains("wsdl/soap", StringComparison.OrdinalIgnoreCase))

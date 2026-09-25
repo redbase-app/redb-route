@@ -11,10 +11,10 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="redb.Route.Xml" Version="4.1.0" />
+    <PackageReference Include="redb.Route.Xml" Version="4.1.1" />
     <!-- The redb bridge: its <redbSave>/<redbQuery>/<redb> markup contributions must sit in the
          build output so the build-time pack gate (its bin option pointed at TargetDir) knows them. -->
-    <PackageReference Include="redb.Route.Core" Version="4.1.0" />
+    <PackageReference Include="redb.Route.Core" Version="4.1.1" />
   </ItemGroup>
   <ItemGroup>
     <None Include="routes/**/*.route.xml" />

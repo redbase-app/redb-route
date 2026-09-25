@@ -24,6 +24,7 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.Id(string id) => Id(id);
     IRouteDefinition IRouteDefinition.Description(string description) => Description(description);
     IRouteDefinition IRouteDefinition.SetHeaders(params (string Name, object? Value)[] headers) => SetHeaders(headers);
+    IRouteDefinition IRouteDefinition.SetProperties(params (string Name, object? Value)[] properties) => SetProperties(properties);
     IRouteDefinition IRouteDefinition.RemoveHeaders(string pattern, params string[] except) => RemoveHeaders(pattern, except);
     IRouteDefinition IRouteDefinition.RemoveProperties(string pattern, params string[] except) => RemoveProperties(pattern, except);
     IRouteDefinition IRouteDefinition.Sort(string collectionExpression, string? keyExpression, bool descending) => Sort(collectionExpression, keyExpression, descending);

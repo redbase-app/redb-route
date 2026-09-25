@@ -5219,6 +5219,12 @@
         "sensitive": false
       },
       {
+        "name": "ThrowOnFault",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
         "name": "UseTls",
         "type": "bool",
         "default": "false",

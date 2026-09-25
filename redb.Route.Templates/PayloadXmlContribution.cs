@@ -22,7 +22,7 @@ public sealed class PayloadXmlContribution : IXmlElementContribution
     /// <inheritdoc />
     public ElementSpec Spec => new(Name, Kind,
         [
-            new AttributeSpec("template", AttributeType.String),
+            new AttributeSpec("template", AttributeType.String) { Resource = true },
             // Ф0 §4.1 spells the values lowercase (json/xml/text); parsing is case-insensitive.
             new AttributeSpec("mediaType", AttributeType.Enum, Required: true, EnumValues: ["json", "xml", "text"]),
             new AttributeSpec("target", AttributeType.String),

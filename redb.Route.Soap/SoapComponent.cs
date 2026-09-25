@@ -1,5 +1,6 @@
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Extensions;
 using redb.Route.Http;
 
 namespace redb.Route.Soap;
@@ -25,8 +26,16 @@ public sealed class SoapComponent : ComponentBase
 
     private readonly Lazy<SharedHttpServerManager> _ownServer = new(() => new SharedHttpServerManager());
 
-    /// <summary>The receive server: the DI-shared one, or a lazily-created own instance (standalone/test).</summary>
-    internal SharedHttpServerManager Server => ServerManager ?? _ownServer.Value;
+    /// <summary>
+    /// The receive server. Resolution order: explicitly assigned → the context's DI singleton → a
+    /// lazily-created own instance (standalone/test). The DI step matters for module hosts that add
+    /// the component by scanning rather than through the extension method, so nothing ever assigns
+    /// <see cref="ServerManager"/> while the one shared manager sits in the container.
+    /// </summary>
+    internal SharedHttpServerManager Server =>
+        ServerManager
+        ?? Context.Resolve<SharedHttpServerManager>()
+        ?? _ownServer.Value;
 
     /// <inheritdoc />
     public override IEndpoint CreateEndpoint(EndpointUri uri)
@@ -79,6 +88,16 @@ public sealed class SoapEndpointOptions : EndpointOptions
 
     /// <summary>Operation name / SOAPAction override for a producer call.</summary>
     public string? Operation { get; set; }
+
+    /// <summary>
+    /// Whether a <c>soap:Fault</c> in the reply fails the exchange (default true). Set false when the
+    /// fault is an answer the service is designed to give: the reply comes back on <c>Out</c>, the
+    /// fault code and reason on <c>redbSoap.faultCode</c> / <c>redbSoap.faultString</c>, and
+    /// <c>redbSoap.isFault</c> says which kind of reply arrived. Explicit rather than inferred from
+    /// the fault code: a Sender fault can be a bug in the route just as easily as a business answer,
+    /// and only the author knows which. Mirrors <c>throwOnError</c> on the HTTP producer.
+    /// </summary>
+    public bool ThrowOnFault { get; set; } = true;
 
     /// <summary>Explicit SOAPAction (overrides the factory default).</summary>
     public string? Action { get; set; }

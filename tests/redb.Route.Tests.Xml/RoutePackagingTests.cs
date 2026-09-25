@@ -176,6 +176,81 @@ public class RoutePackagingTests : IDisposable
         result.Warnings.Should().NotContain(w => w.Message.Contains("compares OUTSIDE"));
     }
 
+    // ── package resources named by package elements ──────────────────────────
+
+    /// <summary>The two package elements that read a file from the package, as the worker's discovery sees them.</summary>
+    private static readonly IReadOnlyList<IXmlElementContribution> FileReadingContributions =
+    [
+        new redb.Route.Templates.PayloadXmlContribution(),
+        new redb.Route.JsonTransform.JsonTransformXmlContribution(),
+    ];
+
+    [Fact]
+    public void ATemplateMissingFromResources_IsAnError()
+    {
+        // The worker reads <payload template=> from the package's resources/ (a156cc49); a template
+        // left out of it fails the context at start. The gate says so at build time instead, with
+        // the position of the attribute, as it does for the format's own file=.
+        var dir = NewProject("Tpl", "tpl");
+        File.WriteAllText(Path.Combine(dir, "routes", "tpl.route.xml"), """
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="tpl-in">
+                <from uri="direct://tpl-in"/>
+                <payload template="templates/order.json.sbn" mediaType="json"/>
+                <transformJson spec="maps/order.jsonata"/>
+              </route>
+            </routes>
+            """);
+
+        var result = RoutePackage.Check(dir, "tpl", "1.0.0", extensions: FileReadingContributions);
+
+        result.Errors.Should().Contain(e => e.Message.Contains("'templates/order.json.sbn'") && e.Message.Contains("<payload template=")
+            && e.File.Contains("tpl.route.xml(4,"), "the missing template is named with its position");
+        result.Errors.Should().Contain(e => e.Message.Contains("'maps/order.jsonata'") && e.Message.Contains("<transformJson spec="),
+            "the JSONata spec is a package file too");
+    }
+
+    [Fact]
+    public void ATemplateUnderResources_Passes()
+    {
+        var dir = NewProject("TplOk", "tplok");
+        Directory.CreateDirectory(Path.Combine(dir, "resources", "templates"));
+        File.WriteAllText(Path.Combine(dir, "resources", "templates", "order.json.sbn"), "{ \"id\": {{ headers.orderId }} }");
+        File.WriteAllText(Path.Combine(dir, "routes", "tplok.route.xml"), """
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="tplok-in">
+                <from uri="direct://tplok-in"/>
+                <payload template="templates/order.json.sbn" mediaType="json"/>
+              </route>
+            </routes>
+            """);
+
+        var result = RoutePackage.Check(dir, "tplok", "1.0.0", extensions: FileReadingContributions);
+
+        result.Errors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AnAssemblyLocatorOrAPlaceholder_IsNotCheckedAsAPackageFile()
+    {
+        // assembly: ships the text inside an assembly, and {{…}} is only known once configuration
+        // resolves it: neither can be looked for under resources/ at build time.
+        var dir = NewProject("TplSkip", "tplskip");
+        File.WriteAllText(Path.Combine(dir, "routes", "tplskip.route.xml"), """
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="tplskip-in">
+                <from uri="direct://tplskip-in"/>
+                <payload template="assembly:Acme.Orders/Templates/order.json.sbn" mediaType="json"/>
+                <payload template="{{orders.template}}" mediaType="json"/>
+              </route>
+            </routes>
+            """);
+
+        var result = RoutePackage.Check(dir, "tplskip", "1.0.0", extensions: FileReadingContributions);
+
+        result.Errors.Should().NotContain(e => e.Message.Contains("is not under"));
+    }
+
     [Fact]
     public void RegistryReferences_AreValuesStartingWithHash_NotSqlParameters()
     {

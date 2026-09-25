@@ -2,7 +2,7 @@
   "name": "redb-route-xml",
   "displayName": "redb Route XML",
   "description": "XML routes for redb.Route: schema-driven completion and validation, a route tree, snippets and Mermaid preview. Text mode only - the format stays useful without any editor.",
-  "version": "0.1.0",
+  "version": "0.2.13",
   "publisher": "redb",
   "license": "Apache-2.0",
   "repository": {

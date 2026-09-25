@@ -154,6 +154,13 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     }
 
     /// <inheritdoc />
+    public TSelf SetProperties(params (string Name, object? Value)[] properties)
+    {
+        AddOutput(new SetPropertiesDefinition(properties));
+        return Self;
+    }
+
+    /// <inheritdoc />
     public TSelf RemoveHeaders(string pattern, params string[] except)
     {
         AddOutput(new RemoveByMaskDefinition(RemoveTarget.Headers, pattern, except ?? []));

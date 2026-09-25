@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Extensions;
 using redb.Route.Http;
 
 namespace redb.Route.As2;
@@ -44,7 +45,7 @@ public sealed class As2Component : ComponentBase
     /// </summary>
     internal SharedHttpServerManager Server =>
         ServerManager
-        ?? Context?.GetServiceProvider()?.GetService<SharedHttpServerManager>()
+        ?? Context.Resolve<SharedHttpServerManager>()
         ?? _ownServer.Value;
 
     /// <inheritdoc />

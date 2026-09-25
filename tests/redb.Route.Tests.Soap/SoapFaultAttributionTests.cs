@@ -113,6 +113,35 @@ public class SoapFaultAttributionTests
     [Theory]
     [InlineData(SoapVersion.Soap11, "soap:Client")]
     [InlineData(SoapVersion.Soap12, "soap:Sender")]
+    public async Task An_envelope_carrying_a_dtd_is_refused_before_its_entities_expand(SoapVersion version, string expected)
+    {
+        // SOAP forbids a document type declaration in an envelope, and for good reason: nested internal
+        // entities expand in memory long before anything validates the message. 452 bytes become 300 000
+        // characters at these settings, and the real attack does not stop at five levels. Reported while
+        // preparing the AS4 connector, 2026-09-25.
+        var port = FreePort();
+        await using var ctx = Listening(port);
+        await ctx.Start();
+
+        var sb = new System.Text.StringBuilder("<?xml version=\"1.0\"?><!DOCTYPE lolz [<!ENTITY lol \"lol\">");
+        for (var i = 1; i <= 5; i++)
+        {
+            sb.Append($"<!ENTITY lol{i} \"");
+            for (var j = 0; j < 10; j++) sb.Append(i == 1 ? "&lol;" : $"&lol{i - 1};");
+            sb.Append("\">");
+        }
+        var ns = version == SoapVersion.Soap12 ? "http://www.w3.org/2003/05/soap-envelope" : "http://schemas.xmlsoap.org/soap/envelope/";
+        sb.Append($"]><soap:Envelope xmlns:soap=\"{ns}\"><soap:Body><lolz>&lol5;</lolz></soap:Body></soap:Envelope>");
+
+        var (code, _) = await PostAndReadFault(
+            port, System.Text.Encoding.UTF8.GetBytes(sb.ToString()), SoapEnvelope.ContentType(version, "urn:t/Op"), version);
+
+        code.Should().Be(expected, "an envelope that SOAP does not allow is the sender's fault");
+    }
+
+    [Theory]
+    [InlineData(SoapVersion.Soap11, "soap:Client")]
+    [InlineData(SoapVersion.Soap12, "soap:Sender")]
     public async Task An_unparseable_envelope_is_the_callers_fault_not_ours(SoapVersion version, string expected)
     {
         var port = FreePort();

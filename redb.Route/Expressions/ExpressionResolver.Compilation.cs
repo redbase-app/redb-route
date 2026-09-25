@@ -378,38 +378,24 @@ public static partial class ExpressionResolver
             var propertyName = expression.Substring(PROPERTY_PREFIX.Length);
             DebugLog($"Processing property: '{propertyName}'");
             
-            // Check whether propertyName contains dots indicating nested properties
+            // A dot in the name is ambiguous: a property literally called "omni.PollInterval" or a
+            // member of a property called "omni". ResolvePropertySmart answers it the one way the
+            // whole language answers it — literal name first, nested path second — which is what the
+            // template form and every dotted header have always done. Going straight to nested
+            // access here made the bare form the only place a namespaced property read as empty.
             if (propertyName.Contains('.'))
             {
                 DebugLog($"Detected nested property: '{propertyName}'");
-                
-                // Use ResolvePropertyPathWithExchange for complex path resolution
-                var resolveMethodInfo = typeof(ExpressionResolver).GetMethod(
-                    nameof(ResolvePropertyPathWithExchange), 
+
+                var resolvePropertySmartMethod = typeof(ExpressionResolver).GetMethod(
+                    nameof(ResolvePropertySmart),
                     BindingFlags.NonPublic | BindingFlags.Static);
-                
-                // Find the first path segment (before the first dot)
-                var firstDotIndex = propertyName.IndexOf('.');
-                var firstProperty = propertyName.Substring(0, firstDotIndex);
-                var remainingPath = propertyName.Substring(firstDotIndex + 1);
-                
-                // Get the root object
-                var getPropertyMethodInfo = typeof(ExpressionResolver).GetMethod(
-                    nameof(GetExchangeProperty), 
-                    BindingFlags.NonPublic | BindingFlags.Static);
-                
-                var rootObj = SysExpression.Call(
-                    getPropertyMethodInfo,
-                    exchangeParam,
-                    SysExpression.Constant(firstProperty));
-                
-                // Resolve the remaining path
+
                 var propertyCall = SysExpression.Call(
-                    resolveMethodInfo,
-                    rootObj,
-                    SysExpression.Constant(remainingPath),
-                    exchangeParam);
-                
+                    resolvePropertySmartMethod,
+                    exchangeParam,
+                    SysExpression.Constant(propertyName));
+
                 return SysExpression.Convert(propertyCall, typeof(object));
             }
             else
