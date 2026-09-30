@@ -107,11 +107,31 @@ public interface IConsumerTemplate
     /// <returns>The typed body, or <c>default</c> if timed out or conversion failed.</returns>
     Task<T?> ReceiveBody<T>(string endpointUri, TimeSpan timeout, CancellationToken ct = default);
 
+    // ── Unit of work ──
+
+    /// <summary>
+    /// Completes the unit of work of an exchange handed out by a <c>Receive</c> call, Camel's
+    /// <c>doneUoW</c>: only now does the source commit it — a polled file is deleted or moved, a
+    /// broker message acknowledged. An exchange whose <see cref="IExchange.Exception"/> is set is
+    /// rolled back instead (the file stays, the message is redelivered). Read the body before this
+    /// call: the source releases the exchange's resources afterwards. <c>ReceiveBody</c> calls it
+    /// itself. Until it is called the source keeps the exchange uncommitted; a stopped template rolls
+    /// back every exchange still open.
+    /// </summary>
+    /// <param name="exchange">An exchange this template handed out and has not completed yet.</param>
+    /// <exception cref="InvalidOperationException">The exchange was not handed out by this template,
+    /// was already completed, or was rolled back when the template stopped.</exception>
+    Task DoneUoW(IExchange exchange);
+
     // ── Lifecycle ──
 
     /// <summary>Starts the consumer template. Must be called before any receive methods.</summary>
     void Start();
 
-    /// <summary>Stops the consumer template and releases cached resources.</summary>
+    /// <summary>
+    /// Stops the consumer template and its cached consumers. Exchanges received but not completed
+    /// with <see cref="DoneUoW"/>, and those the sources offered but no <c>Receive</c> took, are
+    /// rolled back.
+    /// </summary>
     void Stop();
 }

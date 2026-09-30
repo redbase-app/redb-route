@@ -61,13 +61,23 @@ internal sealed partial class S3Producer : ConnectableProducer
         }
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"s3 {operation}", ActivityKind.Client,
             "redb.system", "s3",
             _endpoint.Uri.NormalizedKey,
             destination: _endpoint.BucketName,
             operation: operation.ToString());
 
-        await DispatchOperationAsync(operation, exchange, ct).ConfigureAwait(false);
+        try
+        {
+            await DispatchOperationAsync(operation, exchange, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the call is a stop; a timeout or any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════

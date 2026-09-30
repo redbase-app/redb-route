@@ -12,14 +12,7 @@ namespace redb.Route.Tests.Soap;
 /// <summary>Producer tests against a loopback HTTP server that speaks SOAP by hand (in-box, no WCF).</summary>
 public class SoapProducerTests
 {
-    private static int FreePort()
-    {
-        var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int FreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     private sealed class SoapStub : IDisposable
     {

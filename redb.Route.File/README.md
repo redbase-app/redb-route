@@ -88,3 +88,15 @@ is intended.
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `redb.route.endpoint`. The same holds for every
+file-based connector built on `redb.Route.GenericFile` (`ftp`, `sftp`):
+
+- **Consumer.** One `Consumer` span, `file read {scheme}`, per routed file. A file carries no trace context, so the span
+  is a root, never a child of the activity the poll loop inherited from whoever started the routes. An empty poll opens
+  none. A failed route, a timeout inside it included, marks it an error; our own stop does not.
+- **Producer.** One `Producer` span per write, `file write {scheme}`; an error when the write fails, unless our own token
+  cancelled it.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.

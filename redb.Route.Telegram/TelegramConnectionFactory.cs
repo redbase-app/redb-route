@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Telegram;
 
@@ -23,6 +24,7 @@ namespace redb.Route.Telegram;
 public sealed class TelegramConnectionFactory
 {
     /// <summary>Bot token from @BotFather. Supports <c>${env:NAME}</c> expressions.</summary>
+    [Sensitive]
     public string Token { get; set; } = string.Empty;
 
     /// <summary>Per-send timeout in seconds for producer calls (default 120, range 1–600).</summary>

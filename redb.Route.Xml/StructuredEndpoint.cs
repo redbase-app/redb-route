@@ -53,7 +53,6 @@ internal static class StructuredEndpoint
     private static string? Build(XElement endpoint, XmlParseContext ctx)
     {
         var scheme = endpoint.Name.LocalName;
-        var options = new List<(string Key, string Value)>();
 
         // The path part: the universal path= attribute, the component's own one-line synonym
         // (kafka → topic; read from the component, never from a list here — Ф4), or the
@@ -84,49 +83,70 @@ internal static class StructuredEndpoint
             return null;
         }
 
-        // Every attribute is a query option verbatim — the same names, the same converter,
-        // the same UnmappedParameters rule the URI form has (typed validation happens where it
-        // always did: in BindFromUri at endpoint creation).
-        foreach (var attribute in endpoint.Attributes())
-        {
-            if (attribute.Name.LocalName is "path" || attribute.IsNamespaceDeclaration
-                || (synonym is not null && attribute.Name.LocalName == synonym))
-                continue;
-            options.Add((attribute.Name.LocalName, attribute.Value));
-        }
-
-        // Two generic child forms, both an orthography of URI options (Ф0 §7.2 п.6):
-        // a family entry <param name="login" value="…"/> → param.login=…;
-        // a long text option <onSuccess><![CDATA[…]]></onSuccess> → onSuccess=….
-        foreach (var child in endpoint.Elements())
-        {
-            var name = ctx.Attr(child, "name");
-            var value = ctx.Attr(child, "value");
-            var content = Text(child);
-            if (name is not null && value is not null && content is null && !child.Elements().Any())
-            {
-                options.Add(($"{child.Name.LocalName}.{name}", value));
-                continue;
-            }
-            if (name is null && content is not null && !child.HasAttributes && !child.Elements().Any())
-            {
-                options.Add((child.Name.LocalName, content));
-                continue;
-            }
-            ctx.AddError(child, $"<{child.Name.LocalName}> inside <{scheme}> must be a family entry " +
-                                $"(<{child.Name.LocalName} name=… value=…/>) or a text option " +
-                                $"(<{child.Name.LocalName}>content</{child.Name.LocalName}>).");
+        var options = Options(endpoint, synonym, ctx.AddError);
+        if (options is null)
             return null;
-        }
 
         var builder = new StringBuilder(scheme).Append("://").Append(path);
         var separator = '?';
-        foreach (var (key, value) in options)
+        foreach (var (key, value, _) in options)
         {
             builder.Append(separator).Append(key).Append('=').Append(EscapeValue(value));
             separator = '&';
         }
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// The query options one endpoint element writes, in document order, each with the element
+    /// that wrote it — what <see cref="Build"/> puts after '?', and what the package gate holds
+    /// against the connector's options. Null after reporting a malformed child.
+    /// <list type="bullet">
+    /// <item>Every unqualified attribute is an option verbatim — the same names, the same
+    /// converter, the same unknown-name rule the URI form has (typed validation happens where it
+    /// always did: in <c>BindFromUri</c> at endpoint creation). <c>path=</c> and the component's
+    /// path synonym are the path, not options.</item>
+    /// <item>An attribute in a foreign namespace is metadata for other tools (Р9: tolerated,
+    /// never read) — it is not an option, or a strict connector would refuse an editor's mark.</item>
+    /// <item>Two generic child forms, both an orthography of URI options (Ф0 §7.2 п.6): a family
+    /// entry <c>&lt;param name="login" value="…"/&gt;</c> → <c>param.login=…</c>; a long text
+    /// option <c>&lt;onSuccess&gt;&lt;![CDATA[…]]&gt;&lt;/onSuccess&gt;</c> → <c>onSuccess=…</c>.</item>
+    /// </list>
+    /// </summary>
+    internal static List<(string Key, string Value, XElement At)>? Options(
+        XElement endpoint, string? pathSynonym, Action<XElement, string> error)
+    {
+        var options = new List<(string Key, string Value, XElement At)>();
+        foreach (var attribute in endpoint.Attributes())
+        {
+            if (attribute.IsNamespaceDeclaration || attribute.Name.NamespaceName.Length > 0
+                || attribute.Name.LocalName == "path"
+                || (pathSynonym is not null && attribute.Name.LocalName == pathSynonym))
+                continue;
+            options.Add((attribute.Name.LocalName, attribute.Value, endpoint));
+        }
+
+        foreach (var child in endpoint.Elements())
+        {
+            var name = child.Attribute("name")?.Value;
+            var value = child.Attribute("value")?.Value;
+            var content = Text(child);
+            if (name is not null && value is not null && content is null && !child.Elements().Any())
+            {
+                options.Add(($"{child.Name.LocalName}.{name}", value, child));
+                continue;
+            }
+            if (name is null && content is not null && !child.HasAttributes && !child.Elements().Any())
+            {
+                options.Add((child.Name.LocalName, content, child));
+                continue;
+            }
+            error(child, $"<{child.Name.LocalName}> inside <{endpoint.Name.LocalName}> must be a family entry " +
+                         $"(<{child.Name.LocalName} name=… value=…/>) or a text option " +
+                         $"(<{child.Name.LocalName}>content</{child.Name.LocalName}>).");
+            return null;
+        }
+        return options;
     }
 
     /// <summary>
@@ -147,25 +167,11 @@ internal static class StructuredEndpoint
     {
         var scheme = endpoint.Name.LocalName;
         var path = endpoint.Attribute("path")?.Value ?? Text(endpoint) ?? string.Empty;
-        var options = new List<(string Key, string Value)>();
-        foreach (var attribute in endpoint.Attributes())
-        {
-            if (attribute.Name.LocalName is "path" || attribute.IsNamespaceDeclaration)
-                continue;
-            options.Add((attribute.Name.LocalName, attribute.Value));
-        }
-        foreach (var child in endpoint.Elements())
-        {
-            var name = child.Attribute("name")?.Value;
-            var value = child.Attribute("value")?.Value;
-            if (name is not null && value is not null)
-                options.Add(($"{child.Name.LocalName}.{name}", value));
-            else if (Text(child) is { } content)
-                options.Add((child.Name.LocalName, content));
-        }
+        var options = Options(endpoint, pathSynonym: null, (at, message) =>
+            throw new InvalidOperationException($"<{at.Name.LocalName}>: {message}"))!;
         var builder = new StringBuilder(scheme).Append("://").Append(path);
         var separator = '?';
-        foreach (var (key, value) in options)
+        foreach (var (key, value, _) in options)
         {
             builder.Append(separator).Append(key).Append('=').Append(EscapeValue(value));
             separator = '&';

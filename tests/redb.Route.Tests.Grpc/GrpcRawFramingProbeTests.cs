@@ -194,12 +194,5 @@ public sealed class GrpcRawFramingProbeTests : IAsyncLifetime
             http.Response.AppendTrailer("grpc-message", Uri.EscapeDataString(detail));
     }
 
-    private static int GetFreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 }

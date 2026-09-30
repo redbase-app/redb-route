@@ -54,6 +54,45 @@ public sealed class RestVerbDefinition
     /// <summary>Path parameter names in declaration order (<c>{id}</c> → <c>id</c>).</summary>
     public IReadOnlyList<string> PathParameters => RestDefinition.PathParameterNames(FullPath);
 
+    /// <summary>Parameters declared with <see cref="Param"/>, in declaration order.</summary>
+    public IReadOnlyList<RestParamDefinition> Parameters => _parameters;
+
+    /// <summary>Client request validation override for this verb; <c>null</c> = the declaration's option.</summary>
+    public bool? Validation { get; private set; }
+
+    private readonly List<RestParamDefinition> _parameters = [];
+
+    /// <summary>
+    /// Declares a parameter: described in OpenAPI, and when client request validation is on, a missing
+    /// required one or a value that does not convert to <paramref name="dataType"/> is answered with 400.
+    /// A path parameter must be a segment of the template and is always required, so
+    /// <paramref name="required"/> left <c>null</c> means required for a path parameter and optional
+    /// for the others.
+    /// </summary>
+    public RestVerbDefinition Param(string name, RestParamType type = RestParamType.Query, bool? required = null,
+        RestParamDataType dataType = RestParamDataType.String, string? description = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        if (type == RestParamType.Path)
+        {
+            if (!PathParameters.Contains(name, StringComparer.Ordinal))
+                throw new ArgumentException(
+                    $"Path parameter '{name}' is not a segment of '{FullPath}'.", nameof(name));
+            if (required == false)
+                throw new ArgumentException(
+                    $"Path parameter '{name}' cannot be optional: a path parameter is always required.", nameof(required));
+        }
+        var comparer = type == RestParamType.Header ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        if (_parameters.Any(p => p.Type == type && comparer.Equals(p.Name, name)))
+            throw new ArgumentException($"{type} parameter '{name}' is declared twice on {Method} {FullPath}.", nameof(name));
+
+        _parameters.Add(new RestParamDefinition(name, type, required ?? type == RestParamType.Path, dataType, description));
+        return this;
+    }
+
+    /// <summary>Switches client request validation on or off for this verb (see <see cref="RestOptions.ClientRequestValidation"/>).</summary>
+    public RestVerbDefinition ClientRequestValidation(bool enabled = true) { Validation = enabled; return this; }
+
     /// <summary>Request media type this operation accepts.</summary>
     public RestVerbDefinition Consumes(string contentType) { ConsumesType = Required(contentType); return this; }
 
@@ -89,6 +128,7 @@ public sealed class RestVerbDefinition
     internal RestBindingMode EffectiveBinding(RestOptions options) => Binding ?? options.BindingMode;
     internal string? EffectiveConsumes(RestOptions options) => ConsumesType ?? options.Consumes;
     internal string? EffectiveProduces(RestOptions options) => ProducesType ?? options.Produces;
+    internal bool EffectiveValidation(RestOptions options) => Validation ?? options.ClientRequestValidation;
 
     private static string Required(string value)
     {

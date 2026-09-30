@@ -381,6 +381,17 @@ The resolution contract, uniform across connectors:
 4. **Environment** — provider chains such as `GOOGLE_APPLICATION_CREDENTIALS` or the AWS
    default credentials chain.
 
+### When endpoints and producers are created
+
+A static target's endpoint — `To`, `WireTap`, `Enrich`, a load balancer's targets, a Scatter-Gather's fixed
+recipients — is created when its route starts, as Camel resolves a static `to(...)` at startup: an unknown scheme, an
+unknown URI parameter or a missing `{{key}}` stops the start (or skips the route, with
+`ThrowOnCompilationError = false`) instead of failing the first message. A dynamic target (`ToD`, a recipient list, a
+routing slip) is resolved per message. Producers are made when a message first needs one — unlike Camel, which starts
+them with the route — so starting a context opens no connection to a broker a route has not used yet. A static target
+matched by an intercept with `SkipSendToOriginalEndpoint()` is not created up front: the original may never be sent to
+(a dry run whose real component is absent).
+
 ## Telemetry
 
 Built-in OpenTelemetry — distributed tracing + metrics per route and step:

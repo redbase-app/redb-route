@@ -125,6 +125,7 @@ public class ExamplesEquivalenceTests
                 .To("bean:#demoStamps?method=SetBatchIdAndBody")
                 .Log("[AGG] Event: batchId=${header.batchId}, body=${body}")
                 .Aggregate("${header.batchId}", AggregationStrategies.ByName("concat: + "), completionSize: 3)
+                    .ForceCompletionOnStop()
                     .Log("[AGG] Aggregated 3 events: ${body}")
                 .EndAggregate();
 

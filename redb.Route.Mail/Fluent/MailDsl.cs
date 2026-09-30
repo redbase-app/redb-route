@@ -62,7 +62,7 @@ public sealed class MailBuilder
     private string? _connectionFactory;
     private string? _accessToken;
     private string? _authMechanism;
-    private bool _skipCertificateValidation;
+    private bool _trustAllCertificates;
     private string? _clientCertPath;
     private string? _clientCertPassword;
 
@@ -143,7 +143,7 @@ public sealed class MailBuilder
     public MailBuilder AuthMechanism(string mechanism) { _authMechanism = mechanism; return this; }
 
     /// <summary>Skip SSL certificate validation.</summary>
-    public MailBuilder SkipCertificateValidation() { _skipCertificateValidation = true; return this; }
+    public MailBuilder TrustAllCertificates() { _trustAllCertificates = true; return this; }
 
     /// <summary>Client certificate for mutual TLS.</summary>
     public MailBuilder ClientCert(string path, string? password = null)
@@ -305,7 +305,7 @@ public sealed class MailBuilder
         AppendIf("connectionFactory", _connectionFactory);
         AppendIf("accessToken", _accessToken);
         AppendIf("authMechanism", _authMechanism);
-        AppendBool("skipCertificateValidation", _skipCertificateValidation);
+        AppendBool("trustAllCertificates", _trustAllCertificates);
         AppendIf("clientCertPath", _clientCertPath);
         AppendIf("clientCertPassword", _clientCertPassword);
 

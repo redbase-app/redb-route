@@ -151,17 +151,46 @@ public class Parser
     {
         var node = AdditiveExpression();
 
-        while (_currentToken.Type == TokenType.Operator && 
-              (_currentToken.Value == "==" || _currentToken.Value == "!=" || 
-               _currentToken.Value == ">" || _currentToken.Value == "<" || 
-               _currentToken.Value == ">=" || _currentToken.Value == "<="))
+        while (_currentToken.Type == TokenType.Operator &&
+              (_currentToken.Value == "==" || _currentToken.Value == "!=" ||
+               _currentToken.Value == ">" || _currentToken.Value == "<" ||
+               _currentToken.Value == ">=" || _currentToken.Value == "<=" ||
+               _currentToken.Value == "IN" || _currentToken.Value == "NOT IN"))
         {
             var op = _currentToken.Value;
             Advance();
-            node = new BinaryOperationNode(node, op, AdditiveExpression());
+            node = op is "IN" or "NOT IN"
+                ? new InOperationNode(node, MembershipTarget(), negated: op == "NOT IN")
+                : new BinaryOperationNode(node, op, AdditiveExpression());
         }
 
         return node;
+    }
+
+    /// <summary>
+    /// The right-hand side of <c>in</c>: a list literal when a parenthesis follows — <c>('a','b')</c>,
+    /// <c>()</c> for none — and otherwise an ordinary operand that must evaluate to a collection
+    /// (<c>header.codes</c>). Parentheses after <c>in</c> always mean a literal, so a collection is
+    /// written without them.
+    /// </summary>
+    private AstNode MembershipTarget()
+    {
+        if (_currentToken.Type != TokenType.LeftParen)
+            return AdditiveExpression();
+
+        Advance();
+        var items = new List<AstNode>();
+        if (_currentToken.Type != TokenType.RightParen)
+        {
+            items.Add(Expression());
+            while (_currentToken.Type == TokenType.Comma)
+            {
+                Advance();
+                items.Add(Expression());
+            }
+        }
+        Eat(TokenType.RightParen);
+        return new ListLiteralNode(items);
     }
 
     /// <summary>

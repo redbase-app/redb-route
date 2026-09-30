@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.GenericFile;
 
@@ -244,14 +246,20 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
 
             exchange.Pattern = ExchangePattern.InOnly;
 
+            // A file carries no trace context: its span is a root, never a child of the activity the poll runs under.
+            using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+                (_endpoint.Component as ComponentBase)?.Context,
+                $"file read {_endpoint.Component.Scheme}", ActivityKind.Consumer,
+                "redb.system", _endpoint.Component.Scheme, _endpoint.Uri.NormalizedKey,
+                null, static (_, _) => null, operation: "read");
             IncrementInflight();
             try
             {
                 await Processor.Process(exchange, ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                throw; // shutdown — abort the poll, do not treat as a per-file failure
+                throw; // our own stop — abort the poll, do not treat as a per-file failure
             }
             catch (Exception ex)
             {
@@ -266,6 +274,10 @@ public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
                 DecrementInflight();
                 await exchange.DisposeAsync().ConfigureAwait(false);
             }
+
+            // A failed route marks the span; a rolled-back one (no exception) does not.
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled)
+                span.Activity.RecordFailure(failure);
 
             // A rollback-only exchange (.RollbackAll()) counts as failed too: its work was rolled back.
             if (exchange.EndedInFailure())

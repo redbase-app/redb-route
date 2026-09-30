@@ -60,12 +60,27 @@ public abstract class GenericFileProducer<TOptions> : IProducer
         var targetDir = Operations.GetParentPath(targetPath);
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (ProducerEndpoint.Component as ComponentBase)?.Context,
             $"file write {ProducerEndpoint.Component.Scheme}", ActivityKind.Producer,
             "redb.system", ProducerEndpoint.Component.Scheme,
             ProducerEndpoint.Uri.NormalizedKey,
             destination: targetPath,
             operation: "write");
 
+        try
+        {
+            await WriteAsync(exchange, body, targetPath, targetDir, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the write is a stop; any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
+        }
+    }
+
+    private async Task WriteAsync(IExchange exchange, object? body, string targetPath, string targetDir, CancellationToken ct)
+    {
         // Validate path (virtual — jail check for remote)
         ValidatePath(targetPath);
 

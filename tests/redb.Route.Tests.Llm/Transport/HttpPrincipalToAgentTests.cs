@@ -25,14 +25,7 @@ public sealed class HttpPrincipalToAgentTests
     private const string Claim = "orders:read";
     private const string TokenHeader = "X-Test-Token";
 
-    private static int FreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    private static int FreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     /// <summary>A resolver that knows one token, in the shape a real middleware would use.</summary>
     private static HttpHostingOptions Hosting(string claim, bool authenticated = true) => new()

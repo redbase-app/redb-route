@@ -25,6 +25,15 @@ internal interface IAs2CryptoEngine
     /// <summary>Decrypts an S/MIME enveloped-data entity with our private key.</summary>
     MimeEntity Decrypt(MimeEntity encrypted, X509Certificate2 ourCert);
 
+    /// <summary>
+    /// Decrypts an S/MIME enveloped-data entity with our private key, writing the decrypted MIME entity to
+    /// <paramref name="output"/> (a spool) instead of building it in memory.
+    /// </summary>
+    void DecryptTo(ApplicationPkcs7Mime encrypted, X509Certificate2 ourCert, Stream output);
+
+    /// <summary>Decompresses an RFC 3274 compressed-data entity into <paramref name="output"/> (a spool).</summary>
+    void DecompressTo(ApplicationPkcs7Mime compressed, Stream output);
+
     /// <summary>Verifies a <c>multipart/signed</c> against the partner's certificate.</summary>
     bool Verify(MultipartSigned signed, X509Certificate2 signerCert);
 
@@ -37,4 +46,10 @@ internal interface IAs2CryptoEngine
     /// are hashed together, CRLF-canonicalized; when false (plain messages) only the content is hashed.
     /// </summary>
     As2Mic ComputeMic(MimeEntity part, string micalg, bool includeHeaders);
+
+    /// <summary>
+    /// The MIC of a RECEIVED signed part (RFC 4130 §7.3.1): its MIME headers and content exactly as they arrived, with
+    /// no re-encoding. The sending side prepares a part before it signs it; the receiving side hashes what was signed.
+    /// </summary>
+    As2Mic ComputeReceivedMic(MimeEntity part, string micalg);
 }

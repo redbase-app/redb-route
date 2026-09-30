@@ -18,10 +18,23 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="MessagePack" Version="3.1.8" />
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.3" />
-    <!-- Ф14 волна 4: messagePack=true used to add the JSON protocol, so the option never worked.
-         Both protocols are registered now, JSON staying the base so existing clients keep working. -->
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.11" />
+  </ItemGroup>
+  <!-- Ф14 волна 4: messagePack=true used to add the JSON protocol, so the option never worked.
+       Both protocols are registered now, JSON staying the base so existing clients keep working.
+       These packages share Microsoft.AspNetCore.SignalR.Common with the shared framework the hub runs on,
+       so their major follows the target framework: a newer major puts its own Common next to the
+       framework's older hub, and on net9.0 that hub closed every connection. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.31" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="8.0.31" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0'">
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.20" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="9.0.20" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.12" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

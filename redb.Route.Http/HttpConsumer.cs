@@ -1,8 +1,11 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
+using Microsoft.Net.Http.Headers;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
+using System.Diagnostics;
 using System.Linq;
 
 namespace redb.Route.Http;
@@ -25,6 +28,12 @@ public class HttpConsumer : IConsumer
     private RouteRegistration? _registration;
     private long _processedCount;
 
+    // Unregistering the route only stops NEW requests from reaching it. When another route still
+    // holds the port, the listener stays up and nobody waits for the ones already in the pipeline,
+    // so a deploy that removes one route cuts its requests mid-flight. Same guard every broker
+    // consumer uses.
+    private readonly InflightDrainGuard _drain = new();
+
     /// <summary>Creates an HTTP consumer.</summary>
     public HttpConsumer(HttpEndpoint endpoint, IProcessor processor, HttpEndpointOptions options, SharedHttpServerManager serverManager)
     {
@@ -35,6 +44,13 @@ public class HttpConsumer : IConsumer
         _logger = (endpoint.Component as ComponentBase)?.Logger;
     }
 
+    /// <summary>The inbound check (<c>inboundAuth</c>); <c>null</c> when the endpoint accepts every caller.</summary>
+    internal HttpInboundAuthenticator? Authenticator { get; init; }
+
+    // Each request header exactly as received (the object put on the exchange), so the response can tell a value the
+    // client sent from one the route wrote under the same name.
+    private const string RequestHeaderValuesKey = "redbHttp.RequestHeaderValues";
+
     /// <summary>Number of requests successfully processed.</summary>
     public long ProcessedCount => Interlocked.Read(ref _processedCount);
 
@@ -44,6 +60,8 @@ public class HttpConsumer : IConsumer
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
+        _drain.Start(ct);
+
         var host = _options.Host;
         var port = _options.Port;
         var path = _endpoint.ConsumerPath;
@@ -93,6 +111,9 @@ public class HttpConsumer : IConsumer
             _serverManager.UnregisterRoute(_registration);
             _registration = null;
 
+            // New requests can no longer reach this route; the ones inside it still can finish.
+            await _drain.DrainAsync(ct, _logger, $"http://{host}:{port}{_endpoint.ConsumerPath}").ConfigureAwait(false);
+
             await _serverManager.StopIfEmpty(host, port, ct).ConfigureAwait(false);
         }
         _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
@@ -101,12 +122,65 @@ public class HttpConsumer : IConsumer
 
     private async Task HandleRequest(HttpContext httpContext)
     {
+        // The server span of the request, as every inbound transport opens one: the caller's trace goes on from
+        // traceparent, or from the host's own span when ASP.NET Core instrumentation opened it, and the route's spans
+        // sit under this one. It covers the whole request, the refused ones too.
+        using var span = RouteTelemetryExtensions.StartConsumerSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{httpContext.Request.Method} {_endpoint.ConsumerPath}", ActivityKind.Server,
+            "http.method", httpContext.Request.Method, _endpoint.Uri.NormalizedKey,
+            httpContext.Request.Headers, static (headers, name) => headers.TryGetValue(name, out var value) ? value.ToString() : null,
+            InboundParent.HostRequest);
+        try
+        {
+            await HandleTracedRequest(httpContext, span.Activity).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !httpContext.RequestAborted.IsCancellationRequested)
+        {
+            span.Activity.RecordFailure(ex);
+            throw;
+        }
+        finally
+        {
+            if (span.Activity is { } activity)
+            {
+                var status = httpContext.Response.StatusCode;
+                if (activity.IsAllDataRequested)
+                    activity.SetTag("http.response.status_code", status);
+                // A server span is an error for a 5xx only: a 4xx is the caller's mistake, answered correctly.
+                if (status >= 500 && activity.Status != ActivityStatusCode.Error)
+                    activity.SetStatus(ActivityStatusCode.Error);
+            }
+        }
+    }
+
+    private async Task HandleTracedRequest(HttpContext httpContext, Activity? span)
+    {
+        // The inbound check comes first: a refused request is answered with 401 and no exchange is built for it.
+        System.Security.Claims.ClaimsPrincipal? authenticated = null;
+        if (Authenticator is not null)
+        {
+            authenticated = await Authenticator.AuthenticateAsync(httpContext).ConfigureAwait(false);
+            if (authenticated is null)
+                return;
+        }
+
         // Build exchange from HTTP request
         var exchange = await BuildExchange(httpContext).ConfigureAwait(false);
+
+        if (authenticated is not null)
+        {
+            // The credentials stop at the check: a route that logs, forwards or echoes its headers must not carry them on.
+            exchange.In.Headers.Remove(HeaderNames.Authorization);
+            if (exchange.Properties.TryGetValue("redbHttp.RequestHeaderNames", out var names) && names is ISet<string> requestHeaders)
+                requestHeaders.Remove(HeaderNames.Authorization);
+            ExchangePrincipal.Set(exchange, authenticated);
+        }
 
         // Set exchange pattern
         exchange.Pattern = _options.InOut ? ExchangePattern.InOut : ExchangePattern.InOnly;
 
+        _drain.Increment();
         try
         {
             // Process through the route pipeline
@@ -114,7 +188,7 @@ public class HttpConsumer : IConsumer
             {
                 await _processor.Process(exchange, httpContext.RequestAborted).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException || !httpContext.RequestAborted.IsCancellationRequested)
             {
                 _logger?.LogError(ex, "HTTP request processing failed: {Method} {Path}",
                     httpContext.Request.Method, httpContext.Request.Path);
@@ -132,6 +206,7 @@ public class HttpConsumer : IConsumer
                     "Route failed for {Method} {Path} (exchange {ExchangeId})",
                     httpContext.Request.Method, httpContext.Request.Path, exchange.ExchangeId);
 
+                span.RecordFailure(exchange.Exception);
                 httpContext.Response.StatusCode = StatusCodes.Status500InternalServerError;
                 httpContext.Response.ContentType = "text/plain; charset=utf-8";
                 await httpContext.Response.WriteAsync(
@@ -158,6 +233,7 @@ public class HttpConsumer : IConsumer
         finally
         {
             await exchange.DisposeAsync().ConfigureAwait(false);
+            _drain.Decrement();
         }
     }
 
@@ -230,6 +306,7 @@ public class HttpConsumer : IConsumer
         // Copy all HTTP headers to exchange, and remember which ones came from
         // the request so they are not accidentally echoed in the response.
         var requestHeaderNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var requestHeaderValues = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         foreach (var header in request.Headers)
         {
             // Skip pseudo-headers
@@ -242,17 +319,24 @@ public class HttpConsumer : IConsumer
             // pick its own throttle bucket.
             if (HttpHeaders.IsRedbHeader(header.Key)) continue;
 
+            // A response field in a request is dropped here, at the transport: the route never sees a client's value
+            // under a name it may later write for the response (Set-Cookie, Location, WWW-Authenticate, ...).
+            if (HttpHeaders.ResponseOnlyHeaders.Contains(header.Key)) continue;
+
             requestHeaderNames.Add(header.Key);
-            message.Headers[header.Key] = header.Value.Count switch
+            var received = header.Value.Count switch
             {
                 0 => string.Empty,
                 1 => (object)header.Value[0]!,
                 _ => string.Join(", ", header.Value!)
             };
+            message.Headers[header.Key] = received;
+            requestHeaderValues[header.Key] = received;
         }
 
         var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         exchange.Properties["redbHttp.RequestHeaderNames"] = requestHeaderNames;
+        exchange.Properties[RequestHeaderValuesKey] = requestHeaderValues;
         ExchangePrincipal.Set(exchange, SharedHttpServerManager.GetResolvedPrincipal(httpContext));
         return exchange;
     }
@@ -295,18 +379,20 @@ public class HttpConsumer : IConsumer
             httpContext.Response.ContentType = responseContentType;
 
             // Copy response headers (always, regardless of body presence).
-            // When the response message is exchange.In, it still contains the
-            // original request headers. Never echo those back.
-            var requestHeaderNames =
-                exchange.Properties.TryGetValue("redbHttp.RequestHeaderNames", out var namesObj)
-                && namesObj is HashSet<string> names
-                    ? names
+            // When the response message is exchange.In, it still contains the original request headers. Never echo
+            // those back — but only a value that is still the one the client sent. Matching by name let a client
+            // suppress a header the route wrote: a request carrying Cache-Control removed the route's no-store.
+            var requestHeaderValues =
+                exchange.Properties.TryGetValue(RequestHeaderValuesKey, out var valuesObj)
+                && valuesObj is Dictionary<string, object> received
+                    ? received
                     : null;
 
             foreach (var (key, value) in responseMsg.Headers)
             {
                 if (value is null) continue;
-                if (requestHeaderNames?.Contains(key) == true) continue;
+                if (requestHeaderValues is not null && requestHeaderValues.TryGetValue(key, out var sent)
+                    && ReferenceEquals(sent, value)) continue;
                 if (HttpHeaders.NonBridgedHeaders.Contains(key)) continue;
                 if (HttpHeaders.IsRedbHeader(key)) continue;
                 if (IsInternalHeader(key)) continue;
@@ -363,7 +449,7 @@ public class HttpConsumer : IConsumer
                 // canonical signal carried end-to-end (HTTP Accept ↔ Content-Type), rather
                 // than a private header. Producers that opt-in to streaming should set
                 // ContentType="text/event-stream" on Out (LlmProducer does this for
-                // ?stream=true).
+                // stream=body; stream=calls streams inside the route and hands back plain text).
                 var useSse = responseContentType is not null
                     && responseContentType.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase);
 
@@ -475,7 +561,19 @@ public class HttpConsumer : IConsumer
         {
             if (!responseMsg.Headers.TryGetValue(k, out var v) || v is null) continue;
             payload ??= new Dictionary<string, object?>(StringComparer.Ordinal);
-            payload[k] = v is string ? v : v.ToString();
+
+            // Numbers and booleans go in as they are, so the serializer writes JSON numbers and
+            // literals; everything else as invariant text. ToString() would quote a count ("7") and,
+            // on a Russian-locale worker, write a decimal cost with a comma ("0,0123") — the Llm
+            // documentation promises plain numbers.
+            payload[k] = v switch
+            {
+                string => v,
+                bool or byte or sbyte or short or ushort or int or uint or long or ulong
+                    or float or double or decimal => v,
+                IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+                _ => v.ToString(),
+            };
         }
         return payload is null ? null : System.Text.Json.JsonSerializer.Serialize(payload);
     }

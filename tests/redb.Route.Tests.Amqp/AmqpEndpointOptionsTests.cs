@@ -1,3 +1,4 @@
+using redb.Route.Core;
 using redb.Route.Amqp;
 
 namespace redb.Route.Tests.Amqp;
@@ -23,7 +24,7 @@ public sealed class AmqpEndpointOptionsTests
         opts.SenderSettleMode.Should().Be(2);
         opts.ReceiverSettleMode.Should().Be(0);
         opts.Credit.Should().Be(100);
-        opts.AutoAccept.Should().BeTrue();
+        opts.AckMode.Should().Be(AckMode.Manual);
         opts.ResolvedConcurrentConsumers.Should().Be(1);
         opts.ReceiveTimeout.Should().Be(60);
         opts.MessageDurable.Should().BeTrue();

@@ -13,14 +13,7 @@ namespace redb.Route.Tests.Soap;
 /// <summary>Ф4a: WS-Security UsernameToken flows producer → wire → consumer.</summary>
 public class SoapSecurityTests
 {
-    private static int FreePort()
-    {
-        var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int FreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     [Fact]
     public async Task UsernameToken_ReachesConsumer()

@@ -191,12 +191,5 @@ public class TrustedProxyHostingTests : IAsyncLifetime
         RemoteAddress(ex).Should().NotBe("1.2.3.4");
     }
 
-    private static int GetFreePort()
-    {
-        var l = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 }

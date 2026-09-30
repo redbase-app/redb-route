@@ -6,6 +6,7 @@ namespace redb.Route.Http;
 /// Options for the HTTP endpoint. Shared by both producer and consumer.
 /// Use URI parameters to configure: http:host:port/path?method=POST&amp;timeout=30000
 /// </summary>
+[LenientProperties]
 public class HttpEndpointOptions : EndpointOptions
 {
     // ── Common ──────────────────────────────────────────
@@ -28,18 +29,50 @@ public class HttpEndpointOptions : EndpointOptions
     public bool BridgeHeaders { get; set; } = true;
 
     /// <summary>Authentication scheme. Default: None.</summary>
+    [EndpointRole(EndpointRole.Producer)]
     public HttpAuthScheme AuthScheme { get; set; } = HttpAuthScheme.None;
 
     /// <summary>Username for Basic auth.</summary>
+    [EndpointRole(EndpointRole.Producer)]
     public string? Username { get; set; }
 
     /// <summary>Password for Basic auth.</summary>
     [Sensitive]
+    [EndpointRole(EndpointRole.Producer)]
     public string? Password { get; set; }
 
     /// <summary>Bearer token value (or expression) for Bearer auth.</summary>
     [Sensitive]
+    [EndpointRole(EndpointRole.Producer)]
     public DynamicValue<string>? AuthToken { get; set; }
+
+    // ── Inbound authentication (consumer only) ──
+
+    /// <summary>
+    /// Consumer only: how an inbound request proves who it is. <c>Basic</c> checks the <c>Authorization</c> header
+    /// against <see cref="InboundUsername"/> / <see cref="InboundPassword"/>; <c>Bearer</c> hands the token to the
+    /// <see cref="IHttpTokenValidator"/> named by <see cref="TokenValidator"/>. A refused request gets 401 with
+    /// <c>WWW-Authenticate</c> and never reaches the route. Default <c>None</c>.
+    /// </summary>
+    [EndpointRole(EndpointRole.Consumer)]
+    public HttpAuthScheme InboundAuth { get; set; } = HttpAuthScheme.None;
+
+    /// <summary>Consumer only: the user name <c>inboundAuth=basic</c> accepts.</summary>
+    [EndpointRole(EndpointRole.Consumer)]
+    public string? InboundUsername { get; set; }
+
+    /// <summary>Consumer only: the password <c>inboundAuth=basic</c> accepts. Take it from configuration (<c>{{…}}</c>).</summary>
+    [Sensitive]
+    [EndpointRole(EndpointRole.Consumer)]
+    public string? InboundPassword { get; set; }
+
+    /// <summary>Consumer only: the realm named in <c>WWW-Authenticate</c>. Default <c>redb</c>.</summary>
+    [EndpointRole(EndpointRole.Consumer)]
+    public string InboundRealm { get; set; } = "redb";
+
+    /// <summary>Consumer only: registry name of the <see cref="IHttpTokenValidator"/> for <c>inboundAuth=bearer</c>, <c>#name</c> or <c>name</c>.</summary>
+    [EndpointRole(EndpointRole.Consumer)]
+    public string? TokenValidator { get; set; }
 
     /// <summary>
     /// Named <see cref="HttpConnectionFactory"/> from the route registry. Lets Basic/Bearer
@@ -198,6 +231,36 @@ public class HttpEndpointOptions : EndpointOptions
         return dict;
     }
 
+    /// <summary>Inbound authentication must be complete and unambiguous: a half-declared check would look closed and be open.</summary>
+    private void ValidateInboundAuth()
+    {
+        switch (InboundAuth)
+        {
+            case HttpAuthScheme.None:
+                if (InboundUsername is not null || InboundPassword is not null || TokenValidator is not null)
+                    throw new ArgumentException(
+                        "inboundUsername, inboundPassword and tokenValidator take effect only with inboundAuth=basic or " +
+                        "inboundAuth=bearer; without it the endpoint would accept every caller while looking protected.");
+                break;
+            case HttpAuthScheme.Basic:
+                if (string.IsNullOrEmpty(InboundUsername) || string.IsNullOrEmpty(InboundPassword))
+                    throw new ArgumentException("inboundAuth=basic needs inboundUsername and inboundPassword.");
+                if (TokenValidator is not null)
+                    throw new ArgumentException("tokenValidator checks bearer tokens; inboundAuth=basic does not use it.");
+                break;
+            case HttpAuthScheme.Bearer:
+                if (string.IsNullOrWhiteSpace(TokenValidator))
+                    throw new ArgumentException("inboundAuth=bearer needs tokenValidator=#name, a registered IHttpTokenValidator.");
+                if (InboundUsername is not null || InboundPassword is not null)
+                    throw new ArgumentException("inboundUsername and inboundPassword belong to inboundAuth=basic.");
+                break;
+        }
+
+        // The realm is written into a quoted-string of WWW-Authenticate.
+        if (string.IsNullOrEmpty(InboundRealm) || InboundRealm.Any(c => c is '"' or '\\' || char.IsControl(c)))
+            throw new ArgumentException("inboundRealm must be non-empty, without quotes, backslashes or control characters.");
+    }
+
     /// <inheritdoc />
     public override void Validate()
     {
@@ -220,6 +283,8 @@ public class HttpEndpointOptions : EndpointOptions
 
         if (AuthScheme == HttpAuthScheme.Basic && (string.IsNullOrEmpty(Username) || string.IsNullOrEmpty(Password)))
             throw new ArgumentException("Username and Password are required when AuthScheme=Basic.");
+
+        ValidateInboundAuth();
 
         // No SslCertPath check here on purpose. The certificate may legitimately come from a named
         // connection factory or from the host default (HttpHostingOptions.Tls), the way a Camel

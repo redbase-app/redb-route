@@ -28,6 +28,7 @@ public sealed class EnrichProcessor : IProcessor
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _resourceUri = resourceUri ?? throw new ArgumentNullException(nameof(resourceUri));
+        (context as RouteContext)?.NoteStaticEndpoint(resourceUri);
         _mergeStrategy = mergeStrategy ?? throw new ArgumentNullException(nameof(mergeStrategy));
     }
 
@@ -113,6 +114,7 @@ public sealed class PollEnrichProcessor : IProcessor
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _resourceUri = resourceUri ?? throw new ArgumentNullException(nameof(resourceUri));
+        (context as RouteContext)?.NoteStaticEndpoint(resourceUri);
         _mergeStrategy = mergeStrategy ?? throw new ArgumentNullException(nameof(mergeStrategy));
         _timeout = timeout ?? TimeSpan.FromSeconds(1);
     }

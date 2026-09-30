@@ -1,5 +1,6 @@
 using System.Text;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Expressions;
 
 namespace redb.Route.Redis;
@@ -146,7 +147,7 @@ public sealed class RedisBuilder
     private bool? _streamApproximate;
     private string? _streamReadCount;
     private string? _streamBlockTimeMs;
-    private bool _streamNoAck;
+    private AckMode? _ackMode;
     private string? _streamClaimMinIdleMs;
     private string? _processingList;
     private string? _streamStartPosition;
@@ -308,10 +309,10 @@ public sealed class RedisBuilder
     public RedisBuilder StreamBlockTime(IExpression ms) { _streamBlockTimeMs = ms.ToTemplateString(); return this; }
 
     /// <summary>
-    /// A group consumer reads with NOACK: an entry counts as delivered when it is read, and one whose route failed is not
-    /// read again (at-most-once). Without it the consumer acknowledges after the route succeeded (at-least-once).
+    /// When a group consumer settles a stream entry: after the route succeeded (<see cref="Core.AckMode.Manual"/>,
+    /// default, at-least-once) or on read with NOACK (<see cref="Core.AckMode.Auto"/>, at-most-once).
     /// </summary>
-    public RedisBuilder StreamNoAck() { _streamNoAck = true; return this; }
+    public RedisBuilder AckMode(AckMode mode) { _ackMode = mode; return this; }
 
     /// <summary>
     /// A group consumer claims entries of its group pending for at least <paramref name="ms"/> milliseconds (a failed
@@ -401,7 +402,7 @@ public sealed class RedisBuilder
         AppendBoolExplicit("streamApproximate", _streamApproximate);
         AppendIf("streamReadCount", _streamReadCount);
         AppendIf("streamBlockTimeMs", _streamBlockTimeMs);
-        AppendBool("streamNoAck", _streamNoAck);
+        AppendIf("ackMode", _ackMode?.ToString().ToLowerInvariant());
         AppendIf("streamClaimMinIdleMs", _streamClaimMinIdleMs);
         AppendIf("processingList", _processingList);
         AppendIf("streamStartPosition", _streamStartPosition);

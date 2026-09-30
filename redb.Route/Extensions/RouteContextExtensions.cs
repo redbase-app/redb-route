@@ -28,6 +28,18 @@ public static class RouteContextExtensions
            ?? context?.GetServiceProvider()?.GetService(typeof(T)) as T;
 
     /// <summary>
+    /// The stream cache options in force for <paramref name="context"/>: a registered
+    /// <see cref="Configuration.StreamCacheOptions"/> service, else the engine's
+    /// <see cref="Configuration.RouteEngineOptions.StreamCaching"/>, else the defaults. The <c>.StreamCaching()</c> step
+    /// resolves them the same way; a connector that spools through <see cref="Core.StreamCache"/> takes them from here.
+    /// </summary>
+    /// <param name="context">Route context; <c>null</c> gives the defaults.</param>
+    public static Configuration.StreamCacheOptions GetStreamCacheOptions(this IRouteContext? context)
+        => context?.GetService<Configuration.StreamCacheOptions>()
+           ?? (context as Core.RouteContext)?.StreamCacheOptions
+           ?? new Configuration.StreamCacheOptions();
+
+    /// <summary>
     /// Resolves a named object from the context registry and FAILS LOUD when nothing is
     /// registered under the name. A typo in <c>connectionFactory=…</c> must never silently
     /// fall back to URI parameters or defaults — a working configuration and a

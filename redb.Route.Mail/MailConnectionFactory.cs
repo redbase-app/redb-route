@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Extensions;
+using redb.Route.Core;
 
 namespace redb.Route.Mail;
 
@@ -51,9 +52,11 @@ public sealed class MailConnectionFactory
     public string Username { get; set; } = "";
 
     /// <summary>Mailbox password.</summary>
+    [Sensitive]
     public string Password { get; set; } = "";
 
     /// <summary>OAuth2 access token (used instead of the password when set).</summary>
+    [Sensitive]
     public string AccessToken { get; set; } = "";
 
     /// <summary>Authentication mechanism.</summary>
@@ -62,12 +65,13 @@ public sealed class MailConnectionFactory
     // ── TLS ──
 
     /// <summary>Skip server certificate validation (development only!).</summary>
-    public bool SkipCertificateValidation { get; set; }
+    public bool TrustAllCertificates { get; set; }
 
     /// <summary>Path to the client certificate for mutual TLS.</summary>
     public string ClientCertPath { get; set; } = "";
 
     /// <summary>Password for the client certificate.</summary>
+    [Sensitive]
     public string ClientCertPassword { get; set; } = "";
 
     /// <summary>
@@ -94,8 +98,8 @@ public sealed class MailConnectionFactory
         if (!supplied.ContainsKey(nameof(options.AccessToken))) options.AccessToken = AccessToken;
         if (!supplied.ContainsKey(nameof(options.AuthMechanism))) options.AuthMechanism = AuthMechanism;
 
-        if (!supplied.ContainsKey(nameof(options.SkipCertificateValidation)))
-            options.SkipCertificateValidation = SkipCertificateValidation;
+        if (!supplied.ContainsKey(nameof(options.TrustAllCertificates)))
+            options.TrustAllCertificates = TrustAllCertificates;
         if (!supplied.ContainsKey(nameof(options.ClientCertPath))) options.ClientCertPath = ClientCertPath;
         if (!supplied.ContainsKey(nameof(options.ClientCertPassword)))
             options.ClientCertPassword = ClientCertPassword;

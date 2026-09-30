@@ -1,3 +1,4 @@
+using redb.Route.Core;
 using redb.Route.RabbitMQ;
 
 namespace redb.Route.Tests.RabbitMQ;
@@ -76,23 +77,23 @@ public sealed class RabbitMQEndpointOptionsTests
     }
 
     [Fact]
-    public void Defaults_AutoAck_IsFalse()
+    public void Defaults_AckMode_IsManual()
     {
-        new RabbitMQEndpointOptions().AutoAck.Should().BeFalse();
+        new RabbitMQEndpointOptions().AckMode.Should().Be(AckMode.Manual);
     }
 
     [Fact]
-    public void Validate_AutoAckWithTransacted_Throws()
+    public void Validate_AckModeAutoWithTransacted_Throws()
     {
-        var opts = new RabbitMQEndpointOptions { AutoAck = true, Transacted = true };
+        var opts = new RabbitMQEndpointOptions { AckMode = AckMode.Auto, Transacted = true };
         var act = () => opts.Validate();
-        act.Should().Throw<ArgumentException>().WithMessage("*AutoAck*Transacted*");
+        act.Should().Throw<ArgumentException>().WithMessage("*ackMode=auto*Transacted*");
     }
 
     [Fact]
-    public void Validate_AutoAckWithoutTransacted_DoesNotThrow()
+    public void Validate_AckModeAutoWithoutTransacted_DoesNotThrow()
     {
-        var opts = new RabbitMQEndpointOptions { AutoAck = true };
+        var opts = new RabbitMQEndpointOptions { AckMode = AckMode.Auto };
         var act = () => opts.Validate();
         act.Should().NotThrow();
     }
@@ -146,5 +147,49 @@ public sealed class RabbitMQEndpointOptionsTests
         var opts = new RabbitMQEndpointOptions { MessageTtl = 10000, Expires = 50000 };
         var args = opts.BuildQueueArguments();
         args.Should().HaveCount(2);
+    }
+
+    [Theory]
+    [InlineData("exchangeType=derict", "exchangeType", "direct, topic, fanout, headers")]
+    [InlineData("queueType=clasic", "queueType", "classic, quorum, stream")]
+    [InlineData("overflow=drophEad", "overflow", "drop-head, reject-publish, reject-publish-dlx")]
+    public void Validate_unknown_broker_value_fails_naming_the_option_and_the_allowed_values(string query, string option, string allowed)
+    {
+        var act = () => Bind(query).Validate();
+
+        act.Should().Throw<ArgumentException>()
+            .Which.Message.Should().Contain($"'{option}'").And.Contain(allowed);
+    }
+
+    [Theory]
+    [InlineData("exchangeType=headers")]
+    [InlineData("exchangeType=x-delayed-message")]
+    [InlineData("exchangeType=x-consistent-hash")]
+    [InlineData("queueType=stream")]
+    [InlineData("queueType=quorum")]
+    [InlineData("overflow=reject-publish-dlx")]
+    public void Validate_accepts_every_broker_value_and_plugin_exchange_types(string query)
+    {
+        var act = () => Bind(query).Validate();
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Validate_writes_a_built_in_exchange_type_the_way_the_broker_names_it()
+    {
+        // The broker's exchange types are case-sensitive; the built-in names are unambiguous in any case.
+        var opts = Bind("exchangeType=Topic");
+
+        opts.Validate();
+
+        opts.ExchangeType.Should().Be("topic");
+    }
+
+    private static RabbitMQEndpointOptions Bind(string query)
+    {
+        var opts = new RabbitMQEndpointOptions();
+        opts.BindFromUri(EndpointUriParser.Parse($"rabbitmq://q?{query}").RawParameters);
+        return opts;
     }
 }

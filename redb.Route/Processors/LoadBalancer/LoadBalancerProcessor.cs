@@ -39,6 +39,8 @@ public sealed class LoadBalancerProcessor : IProcessor, IAsyncDisposable
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         _endpoints = endpoints ?? throw new ArgumentNullException(nameof(endpoints));
+        foreach (var endpoint in endpoints)
+            (context as RouteContext)?.NoteStaticEndpoint(endpoint);
         _strategy = strategy ?? throw new ArgumentNullException(nameof(strategy));
         _logger = logger;
 

@@ -8,10 +8,6 @@ client (`HubConnection` to remote hub) and server (`IHubContext` broadcast to co
 Supports JSON and MessagePack protocols, WebSocket / SSE / LongPolling transports, group management,
 InOut exchange pattern, lifecycle events, auto-reconnect, and TLS.
 
-> **Known issue: .NET 9.** In redb.Route 4.0.0 and 4.0.1 the hub the consumer hosts closes client connections with
-> "Connection closed with an error" when the application runs on `net9.0`, so the transport does not work there.
-> `net8.0` and `net10.0` are not affected. Until a release with the fix, run SignalR routes on .NET 8 or .NET 10.
-
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.SignalR?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.SignalR)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
 
@@ -468,3 +464,17 @@ SignalR concurrency is connections × invocations, so the levers differ from pla
 
 With the defaults one client's invocations are serial (SignalR's own default) and the number of
 clients is unbounded; `maxConnections` is the coarse lever, the per-client setting the fine one.
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `messaging.system` = `signalr` and
+`redb.route.endpoint`:
+
+- **Consumer.** One `Consumer` span, `signalr {hubPath} receive`, per exchange that reaches the route: each invocation
+  and the `Connected` / `Disconnected` events. A hub message carries no headers, so the span is a root; when the client
+  sent `traceparent` with its connection request, every span of that connection links that context. The connection
+  itself, which may live for hours, is never the parent. A failed route marks the span an error; the connection's own
+  abort cancelling the route does not.
+- **Producer.** One `Producer` span per send, `signalr {mode} {method}`; an error when the send fails, unless our own
+  token cancelled it. No trace context is written to the hub message.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.

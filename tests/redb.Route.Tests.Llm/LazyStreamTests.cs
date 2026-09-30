@@ -170,12 +170,7 @@ public sealed class LazyStreamTests
         thrown!.Message.Should().Contain("RequestAsync");
     }
 
-    private static int FreePort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
-    }
+    private static int FreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     [Fact]
     public async Task Body_OverHttp_IsServerSentEvents_WithTheSummaryLast()
@@ -199,8 +194,8 @@ public sealed class LazyStreamTests
             .Select(l => l["data: ".Length..]);
         string.Concat(data).Should().Be("The answer is 42.");
         text.Should().Contain("event: done", "the summary of the run comes last, after the text");
-        // The HTTP consumer writes the summary values as strings; the value is what this test is about.
-        text.Should().MatchRegex("\"llm\\.tool\\.iterations\":\"?2\"?", "two model calls: the tool call and the answer");
+        text.Should().Contain("\"llm.tool.iterations\":2",
+            "two model calls, the tool call and the answer, and the summary carries numbers as JSON numbers");
         tool.CapturedInputs.Should().ContainSingle();
     }
 }

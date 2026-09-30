@@ -52,8 +52,11 @@ public class VmEndpointOptions : EndpointOptions
     /// <summary>Resolved worker count (see <see cref="ConcurrencyOption"/>).</summary>
     public int ResolvedConcurrentConsumers => ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers");
 
-    /// <summary>Maximum queue size. 0 = unbounded (default: 0).</summary>
-    public int Size { get; set; }
+    /// <summary>
+    /// Maximum queue size (default: 1000, as Camel). A full queue makes the sender wait up to <c>timeout</c>. 0 = unbounded,
+    /// an explicit choice: a consumer slower than its senders then grows the queue without limit.
+    /// </summary>
+    public int Size { get; set; } = 1000;
 
     /// <inheritdoc />
     public override void Validate()

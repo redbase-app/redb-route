@@ -681,6 +681,19 @@ tokens needs minutes. A streamed call is limited the same way, from the send to 
 `StreamIdleTimeoutMs` (off by default) limits a stream's silence: how long the provider may send nothing at all, not
 even a keep-alive. It counts only the waits on the provider, not the time your reader spends between pieces.
 
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `messaging.system` = `llm` and
+`redb.route.endpoint`:
+
+- **Producer.** One `Client` span per agent run, `llm {provider}:{model}` (`… stream` for `stream=body`, opened when the
+  body is read), with `llm.provider`, `llm.model.id`, the token counts and the stop reason. An error when the run fails,
+  unless our own token cancelled it.
+- **Scheduled consumer** (`?schedule=`). One root `Consumer` span per tick, `llm {factory} receive`, with the model call
+  and the route under it; never a child of the activity that started the routes. A failed tick — the model call or the
+  route — marks it an error; our own stop does not.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.
+
 ## Comparison with Apache Camel `langchain4j-*`
 
 Camel's LLM story lives in a family — `camel-langchain4j-chat`,

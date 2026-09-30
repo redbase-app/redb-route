@@ -1,5 +1,6 @@
 using redb.Route.Abstractions;
 using redb.Route.GenericFile;
+using redb.Route.Core;
 
 namespace redb.Route.Sftp;
 
@@ -28,6 +29,7 @@ public sealed class SftpConnectionFactory : RemoteFileConnectionFactory
     public string PrivateKeyPath { get; set; } = "";
 
     /// <summary>Passphrase protecting the private key.</summary>
+    [Sensitive]
     public string PrivateKeyPassphrase { get; set; } = "";
 
     /// <summary>Preferred authentication methods, comma-separated.</summary>
@@ -52,6 +54,7 @@ public sealed class SftpConnectionFactory : RemoteFileConnectionFactory
     public string ProxyUsername { get; set; } = "";
 
     /// <summary>Proxy password.</summary>
+    [Sensitive]
     public string ProxyPassword { get; set; } = "";
 
     /// <inheritdoc />

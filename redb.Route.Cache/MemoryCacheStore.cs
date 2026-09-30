@@ -7,7 +7,12 @@ namespace redb.Route.Cache;
 internal sealed class MemoryCacheStore : ICacheStore
 {
     private readonly IMemoryCache _cache;
-    private readonly ConcurrentDictionary<string, byte> _keys = new(StringComparer.Ordinal);
+    // The keys this store wrote, each with the token of its latest write: IMemoryCache cannot enumerate,
+    // so a region-wide clear works from this list. An entry's eviction callback takes the key off the
+    // list only while the list still holds that entry's own token, and never for a replacement:
+    // MemoryCache fires the callback of the entry it replaces too (EvictionReason.Replaced), on the
+    // thread pool, after the new entry is in, and a plain remove there dropped the live key.
+    private readonly ConcurrentDictionary<string, object> _keys = new(StringComparer.Ordinal);
 
     public MemoryCacheStore(IMemoryCache cache)
     {
@@ -19,6 +24,11 @@ internal sealed class MemoryCacheStore : ICacheStore
 
     public ValueTask SetAsync(string key, CacheEntry entry, TimeSpan? ttl, TimeSpan? sliding, CancellationToken ct)
     {
+        // Registered before the entry is committed (the Dispose of the using): a cache that rejects the
+        // entry at once (SizeLimit) fires its callback then, and finds the token to take off.
+        var token = new object();
+        _keys[key] = token;
+
         using var cacheEntry = _cache.CreateEntry(key);
         cacheEntry.Value = entry;
         if (ttl is not null) cacheEntry.AbsoluteExpirationRelativeToNow = ttl;
@@ -26,8 +36,12 @@ internal sealed class MemoryCacheStore : ICacheStore
         // Always sized: a cache with a SizeLimit (ours via MaxEntries, or the host's own) rejects an
         // entry without a Size on every write; a cache without a limit ignores the value.
         cacheEntry.Size = 1;
-        cacheEntry.RegisterPostEvictionCallback(static (k, _, _, state) => ((ConcurrentDictionary<string, byte>)state!).TryRemove((string)k, out _), _keys);
-        _keys[key] = 0;
+        cacheEntry.RegisterPostEvictionCallback(static (k, _, reason, state) =>
+        {
+            if (reason == EvictionReason.Replaced) return;
+            var (keys, ownToken) = ((ConcurrentDictionary<string, object> Keys, object Token))state!;
+            keys.TryRemove(new KeyValuePair<string, object>((string)k, ownToken));
+        }, (_keys, token));
         return ValueTask.CompletedTask;
     }
 

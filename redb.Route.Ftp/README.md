@@ -316,3 +316,9 @@ context.AddToRegistry("prod", new FtpConnectionFactory
 });
 // ftp://inbox?connectionFactory=prod
 ```
+
+## Tracing
+
+As every connector built on `redb.Route.GenericFile` (see the `redb.Route.File` README): a root `Consumer` span,
+`file read ftp`, per routed file, none for an empty poll, an error when the route fails; a `Producer` span per upload,
+`file write ftp`, an error when it fails. `RouteEngineOptions.EnableTelemetry = false` opens neither.

@@ -113,7 +113,7 @@ public sealed class LdapBuilder
     private string? _maxConnections;
 
     // SSL
-    private bool _skipCertValidation;
+    private bool _trustAllCertificates;
     private string? _clientCertPath;
     private string? _clientCertPassword;
 
@@ -235,7 +235,7 @@ public sealed class LdapBuilder
     // ── SSL ──
 
     /// <summary>Skip server certificate validation (development only!).</summary>
-    public LdapBuilder SkipCertificateValidation() { _skipCertValidation = true; return this; }
+    public LdapBuilder TrustAllCertificates() { _trustAllCertificates = true; return this; }
 
     /// <summary>Set client certificate for mutual TLS.</summary>
     public LdapBuilder ClientCert(string path, string? password = null)
@@ -307,7 +307,7 @@ public sealed class LdapBuilder
         AppendIf("maxConnections", _maxConnections);
 
         // SSL
-        AppendBool("skipCertificateValidation", _skipCertValidation);
+        AppendBool("trustAllCertificates", _trustAllCertificates);
         AppendIf("clientCertPath", _clientCertPath);
         AppendIf("clientCertPassword", _clientCertPassword);
 

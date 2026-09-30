@@ -17,7 +17,7 @@ public sealed class MailConnectionFactoryTests
         Port = 993,
         Username = "svc-reports",
         Password = Secret,
-        SkipCertificateValidation = true
+        TrustAllCertificates = true
     };
 
     private static T Wire<T>(T component, string name, MailConnectionFactory factory)

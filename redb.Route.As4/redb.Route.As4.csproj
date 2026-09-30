@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.As4</PackageId>
+    <Description>AS4 (OASIS ebMS 3.0 AS4 profile, eDelivery AS4 1.16 common profile) B2B transport for the redb.Route ESB framework: signed and encrypted SOAP with attachments, non-repudiation receipts, duplicate detection.</Description>
+    <PackageTags>esb;messaging;as4;ebms;edelivery;b2b;soap;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.As4" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <!-- Shared Kestrel host (SharedHttpServerManager), not a connector: no connector-to-connector coupling. -->
+    <ProjectReference Include="..\redb.Route.Http.Hosting\redb.Route.Http.Hosting.csproj" />
+  </ItemGroup>
+  <!-- The receive side hosts Kestrel; FrameworkReference does not flow through the Hosting project reference. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <!-- WS-Security: XML Signature and Encryption. Same version as redb.Route.Soap, so the shared Tsak layer
+       carries one copy. -->
+  <!-- MIME: SOAP with Attachments on MimeKit, the same library redb.Route.As2 and redb.Route.Mail use
+       (docs/as4/09-OPEN-QUESTIONS.md, No. 7). -->
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="9.0.18" />
+    <PackageReference Include="MimeKit" Version="4.16.0" />
+    <!-- Streamed AES-GCM (GcmBlockCipher): .NET AesGcm needs whole buffers. The version MimeKit 4.16.0 brings,
+         declared because the connector calls it directly (docs/as4/09-OPEN-QUESTIONS.md). -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

@@ -54,6 +54,7 @@ internal sealed class SqlProcedureProducer : IProducer
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             "sql.procedure", ActivityKind.Client,
             "db.system", _endpoint.Component.Scheme,
             _endpoint.Uri.NormalizedKey,
@@ -69,6 +70,8 @@ internal sealed class SqlProcedureProducer : IProducer
         var sw = Stopwatch.StartNew();
 
         await using var connection = await factory.CreateConnectionAsync(readOnly: _options.ReadOnly, ct).ConfigureAwait(false);
+        if (SqlAmbientTransaction.Refusal(connection) is { } refusal)
+            throw refusal;
 
         var hasAmbientTx = Transaction.Current != null;
         DbTransaction? tx = null;
@@ -143,6 +146,8 @@ internal sealed class SqlProcedureProducer : IProducer
         }
         catch (Exception ex)
         {
+            if (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                activity.RecordFailure(ex);
             _logger?.LogError(ex, "SQL procedure execution failed: procedure={Procedure}, dataSource={DataSource}",
                 _options.ProcedureName, _options.DataSource);
             if (tx != null)

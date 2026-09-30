@@ -648,7 +648,7 @@ public class CatalogContributionsTests : IAsyncDisposable
     [Fact]
     public async Task TheWholeCatalog_LoadsAndStarts_InOneDocument()
     {
-        _context.AddToRegistry("idempotent:cat-repo", new Processors.InMemoryIdempotentRepository());
+        _context.AddToRegistry("cat-repo", new Processors.InMemoryIdempotentRepository());
         Load($$"""
             <routes xmlns="urn:redb:route:1.0">
               <route id="cat-all-leaves">

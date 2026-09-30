@@ -7,6 +7,7 @@
     <Project Path="redb.Route.Http/redb.Route.Http.csproj" />
     <Project Path="redb.Route.Http.Hosting/redb.Route.Http.Hosting.csproj" />
     <Project Path="redb.Route.As2/redb.Route.As2.csproj" />
+    <Project Path="redb.Route.As4/redb.Route.As4.csproj" />
     <Project Path="redb.Route.Kafka/redb.Route.Kafka.csproj" />
     <Project Path="redb.Route.Tcp/redb.Route.Tcp.csproj" />
     <Project Path="redb.Route.WebSocket/redb.Route.WebSocket.csproj" />
@@ -49,6 +50,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/redb.Route.Tests.As2/redb.Route.Tests.As2.csproj" />
+    <Project Path="tests/redb.Route.Tests.As4/redb.Route.Tests.As4.csproj" />
     <Project Path="tests/redb.Route.Tests.File/redb.Route.Tests.File.csproj" />
     <Project Path="tests/redb.Route.Tests.GenericFile/redb.Route.Tests.GenericFile.csproj" />
     <Project Path="tests/redb.Route.Tests.Ftp/redb.Route.Tests.Ftp.csproj" />

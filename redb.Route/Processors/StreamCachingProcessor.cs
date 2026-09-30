@@ -28,12 +28,7 @@ internal sealed class StreamCachingProcessor : IProcessor
     /// <inheritdoc />
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
-        if (exchange.In.Body is Stream stream and not StreamCache)
-        {
-            var cache = new StreamCache(_options.SpoolThreshold, _options.TempDirectory);
-            await cache.CacheFromSourceAsync(stream, ct).ConfigureAwait(false);
-            exchange.In.Body = cache;
-        }
+        await StreamCacheBody.CacheAsync(exchange, _options, ct).ConfigureAwait(false);
 
         await _next.Process(exchange, ct).ConfigureAwait(false);
     }
@@ -59,11 +54,35 @@ internal sealed class StreamCachingTransformer : IProcessor
     /// <inheritdoc />
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
-        if (exchange.In.Body is Stream stream and not StreamCache)
+        await StreamCacheBody.CacheAsync(exchange, _options, ct).ConfigureAwait(false);
+    }
+}
+
+/// <summary>The one place a stream body is replaced by its cache.</summary>
+internal static class StreamCacheBody
+{
+    /// <summary>
+    /// Replaces a forward-only stream body with a <see cref="StreamCache"/> and closes the source: the exchange owns its
+    /// body and disposes only what the body is, so a replaced stream nobody closes would hold its file or connection
+    /// until the garbage collector ran (a streamed file the consumer then fails to delete). Camel closes the source too.
+    /// </summary>
+    public static async Task CacheAsync(IExchange exchange, StreamCacheOptions options, CancellationToken ct)
+    {
+        if (exchange.In.Body is not Stream stream || stream is StreamCache)
+            return;
+
+        var cache = new StreamCache(options);
+        try
         {
-            var cache = new StreamCache(_options.SpoolThreshold, _options.TempDirectory);
             await cache.CacheFromSourceAsync(stream, ct).ConfigureAwait(false);
-            exchange.In.Body = cache;
         }
+        catch
+        {
+            // Not cached: the body stays the source, and the half-written cache goes.
+            await cache.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+        exchange.In.Body = cache;
+        await stream.DisposeAsync().ConfigureAwait(false);
     }
 }

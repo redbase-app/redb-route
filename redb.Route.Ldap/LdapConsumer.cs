@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Novell.Directory.Ldap;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 using NovellEntry = Novell.Directory.Ldap.LdapEntry;
 
 namespace redb.Route.Ldap;
@@ -61,7 +63,7 @@ internal sealed class LdapConsumer : DrainableConsumer
                 foreach (var entry in entries)
                 {
                     var exchange = CreateExchange(entry);
-                    await ProcessWithTracking(exchange, processingCt).ConfigureAwait(false);
+                    await ProcessTracedAsync(exchange, processingCt).ConfigureAwait(false);
                     ProcessedCount++;
                 }
 
@@ -94,6 +96,20 @@ internal sealed class LdapConsumer : DrainableConsumer
 
         Logger?.LogInformation("LDAP consumer stopped: baseDn={BaseDn}, processed={Count}",
             _endpoint.BaseDn, ProcessedCount);
+    }
+
+    /// <summary>
+    /// <see cref="DrainableConsumer.ProcessWithTracking"/> inside the span of the entry. A directory entry carries no
+    /// trace context, so the span is a root, never a child of the activity the poll loop holds. A failed route marks it,
+    /// whether the failure stays on the exchange or escapes the pipeline; our own stop does not.
+    /// </summary>
+    private async Task ProcessTracedAsync(IExchange exchange, CancellationToken ct)
+    {
+        using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"ldap {_endpoint.BaseDn} receive", ActivityKind.Consumer, "network.protocol.name", "ldap",
+            _endpoint.Uri.NormalizedKey, null, static (_, _) => null, operation: "receive");
+        await ProcessWithTracking(exchange, span, ct).ConfigureAwait(false);
     }
 
     private IExchange CreateExchange(LdapEntry entry)
@@ -210,7 +226,7 @@ internal sealed class LdapConsumer : DrainableConsumer
                     {
                         var deleted = new LdapEntry { Dn = dn, ChangeType = "deleted" };
                         var exchange = CreateExchange(deleted);
-                        await ProcessWithTracking(exchange, ct).ConfigureAwait(false);
+                        await ProcessTracedAsync(exchange, ct).ConfigureAwait(false);
                         ProcessedCount++;
 
                         Logger?.LogDebug("LDAP deletion detected: {Dn}", dn);

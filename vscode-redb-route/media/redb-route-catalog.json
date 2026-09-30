@@ -7,10 +7,14 @@
     "pathIsText": false,
     "options": [
       {
-        "name": "AutoAccept",
-        "type": "bool",
-        "default": "true",
-        "sensitive": false
+        "name": "AckMode",
+        "type": "enum",
+        "default": "Manual",
+        "sensitive": false,
+        "enumValues": [
+          "Manual",
+          "Auto"
+        ]
       },
       {
         "name": "Capabilities",
@@ -208,7 +212,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "as2",
@@ -220,6 +225,12 @@
     "pathIsText": false,
     "options": [
       {
+        "name": "AllowLegacyAlgorithms",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
         "name": "As2From",
         "type": "string",
         "sensitive": false
@@ -230,14 +241,14 @@
         "sensitive": false
       },
       {
-        "name": "AsyncMdnUrl",
+        "name": "AsyncMdnAllowedHosts",
         "type": "string",
         "sensitive": false
       },
       {
-        "name": "CertPassword",
+        "name": "AsyncMdnUrl",
         "type": "string",
-        "sensitive": true
+        "sensitive": false
       },
       {
         "name": "Compress",
@@ -269,9 +280,26 @@
         "sensitive": false
       },
       {
+        "name": "IdempotentRepository",
+        "type": "string",
+        "sensitive": false
+      },
+      {
         "name": "MaxConcurrentRequests",
         "type": "int",
         "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MaxRequestBodySize",
+        "type": "long",
+        "default": "104857600",
+        "sensitive": false
+      },
+      {
+        "name": "MaxResponseBodySize",
+        "type": "long",
+        "default": "4194304",
         "sensitive": false
       },
       {
@@ -359,6 +387,12 @@
         "sensitive": false
       },
       {
+        "name": "StreamBody",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
         "name": "Timeout",
         "type": "int",
         "default": "30000",
@@ -370,7 +404,179 @@
         "default": "false",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
+  },
+  {
+    "scheme": "as4",
+    "alternateSchemes": [
+      "as4s"
+    ],
+    "package": "redb.Route.As4",
+    "optionsType": "redb.Route.As4.As4EndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "Action",
+        "type": "string",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "AllowedClientThumbprints",
+        "type": "string",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "ClientCertificateMode",
+        "type": "enum",
+        "default": "NoCertificate",
+        "sensitive": false,
+        "enumValues": [
+          "NoCertificate",
+          "AllowCertificate",
+          "RequireCertificate"
+        ],
+        "role": "consumer"
+      },
+      {
+        "name": "ConnectionFactory",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "ConversationId",
+        "type": "string",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "Host",
+        "type": "string",
+        "default": "0.0.0.0",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "IdempotentRepository",
+        "type": "string",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "MaxConcurrentRequests",
+        "type": "int",
+        "default": "0",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "MaxEnvelopeCharacters",
+        "type": "long",
+        "default": "1048576",
+        "sensitive": false
+      },
+      {
+        "name": "MaxRequestBodySize",
+        "type": "long",
+        "default": "104857600",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "MaxResponseBodySize",
+        "type": "long",
+        "default": "4194304",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "Partner",
+        "type": "string",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "Port",
+        "type": "int",
+        "default": "4090",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "RefToMessageId",
+        "type": "string",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "RejectStatusCode",
+        "type": "int",
+        "default": "503",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "RequestQueueLimit",
+        "type": "int",
+        "default": "0",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "RetryAfterSeconds",
+        "type": "int",
+        "default": "1",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "Service",
+        "type": "string",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "SslCertPassword",
+        "type": "string",
+        "sensitive": true,
+        "role": "consumer"
+      },
+      {
+        "name": "SslCertPath",
+        "type": "string",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "StreamBody",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "Timeout",
+        "type": "int",
+        "default": "60000",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "Transacted",
+        "type": "bool",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "UseTls",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      }
+    ],
+    "lenient": false
   },
   {
     "scheme": "asb",
@@ -2410,7 +2616,7 @@
     ]
   },
   {
-    "scheme": "https",
+    "scheme": "http",
     "alternateSchemes": [],
     "package": "redb.Route.Http",
     "optionsType": "redb.Route.Http.HttpEndpointOptions",
@@ -2425,12 +2631,14 @@
           "None",
           "Basic",
           "Bearer"
-        ]
+        ],
+        "role": "producer"
       },
       {
         "name": "AuthToken",
         "type": "string",
-        "sensitive": true
+        "sensitive": true,
+        "role": "producer"
       },
       {
         "name": "BridgeHeaders",
@@ -2496,6 +2704,37 @@
         "sensitive": false
       },
       {
+        "name": "InboundAuth",
+        "type": "enum",
+        "default": "None",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "Basic",
+          "Bearer"
+        ],
+        "role": "consumer"
+      },
+      {
+        "name": "InboundPassword",
+        "type": "string",
+        "sensitive": true,
+        "role": "consumer"
+      },
+      {
+        "name": "InboundRealm",
+        "type": "string",
+        "default": "redb",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "InboundUsername",
+        "type": "string",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
         "name": "MaxConcurrentRequests",
         "type": "int",
         "default": "0",
@@ -2536,7 +2775,8 @@
       {
         "name": "Password",
         "type": "string",
-        "sensitive": true
+        "sensitive": true,
+        "role": "producer"
       },
       {
         "name": "Port",
@@ -2628,18 +2868,611 @@
         "sensitive": false
       },
       {
+        "name": "TokenValidator",
+        "type": "string",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
         "name": "Username",
         "type": "string",
-        "sensitive": false
+        "sensitive": false,
+        "role": "producer"
       }
-    ]
+    ],
+    "lenient": true
+  },
+  {
+    "scheme": "https",
+    "alternateSchemes": [],
+    "package": "redb.Route.Http",
+    "optionsType": "redb.Route.Http.HttpEndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "AuthScheme",
+        "type": "enum",
+        "default": "None",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "Basic",
+          "Bearer"
+        ],
+        "role": "producer"
+      },
+      {
+        "name": "AuthToken",
+        "type": "string",
+        "sensitive": true,
+        "role": "producer"
+      },
+      {
+        "name": "BridgeHeaders",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "ConnectionFactory",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "ContentType",
+        "type": "string",
+        "default": "application/json",
+        "sensitive": false
+      },
+      {
+        "name": "CopyResponseHeaders",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "Cors",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "CorsCredentials",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "CorsOrigins",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "CorsOriginsResolver",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "FollowRedirects",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "Host",
+        "type": "string",
+        "default": "0.0.0.0",
+        "sensitive": false
+      },
+      {
+        "name": "InOut",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "InboundAuth",
+        "type": "enum",
+        "default": "None",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "Basic",
+          "Bearer"
+        ],
+        "role": "consumer"
+      },
+      {
+        "name": "InboundPassword",
+        "type": "string",
+        "sensitive": true,
+        "role": "consumer"
+      },
+      {
+        "name": "InboundRealm",
+        "type": "string",
+        "default": "redb",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "InboundUsername",
+        "type": "string",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "MaxConcurrentRequests",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MaxRedirects",
+        "type": "int",
+        "default": "50",
+        "sensitive": false
+      },
+      {
+        "name": "MaxRequestBodySize",
+        "type": "long",
+        "default": "10485760",
+        "sensitive": false
+      },
+      {
+        "name": "Method",
+        "type": "enum",
+        "default": "GET",
+        "sensitive": false,
+        "enumValues": [
+          "GET",
+          "POST",
+          "PUT",
+          "DELETE",
+          "PATCH",
+          "HEAD",
+          "OPTIONS"
+        ]
+      },
+      {
+        "name": "Methods",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "Password",
+        "type": "string",
+        "sensitive": true,
+        "role": "producer"
+      },
+      {
+        "name": "Port",
+        "type": "int",
+        "default": "8080",
+        "sensitive": false
+      },
+      {
+        "name": "PreserveHostHeader",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Protocol",
+        "type": "enum",
+        "default": "Http1And2",
+        "sensitive": false,
+        "enumValues": [
+          "Http1",
+          "Http2",
+          "Http1And2",
+          "Http3",
+          "Http1And2And3"
+        ]
+      },
+      {
+        "name": "RejectStatusCode",
+        "type": "int",
+        "default": "429",
+        "sensitive": false
+      },
+      {
+        "name": "RequestQueueLimit",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "ResponseCode",
+        "type": "int",
+        "default": "200",
+        "sensitive": false
+      },
+      {
+        "name": "RetryAfterSeconds",
+        "type": "int",
+        "default": "1",
+        "sensitive": false
+      },
+      {
+        "name": "Ssl",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "SslCertPassword",
+        "type": "string",
+        "sensitive": true
+      },
+      {
+        "name": "SslCertPath",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "StreamRequest",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "StreamResponse",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "ThrowOnError",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "Timeout",
+        "type": "int",
+        "default": "30000",
+        "sensitive": false
+      },
+      {
+        "name": "TokenValidator",
+        "type": "string",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
+        "name": "Username",
+        "type": "string",
+        "sensitive": false,
+        "role": "producer"
+      }
+    ],
+    "lenient": true
   },
   {
     "scheme": "imap",
     "alternateSchemes": [],
     "package": "redb.Route.Mail",
+    "optionsType": "redb.Route.Mail.MailEndpointOptions",
     "pathIsText": false,
-    "options": []
+    "options": [
+      {
+        "name": "AccessToken",
+        "type": "string",
+        "default": "",
+        "sensitive": true
+      },
+      {
+        "name": "AdditionalFolders",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "AlternativeBody",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Attachments",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "AuthMechanism",
+        "type": "enum",
+        "default": "Auto",
+        "sensitive": false,
+        "enumValues": [
+          "Auto",
+          "Plain",
+          "Login",
+          "CramMd5",
+          "XOAuth2",
+          "OAuthBearer",
+          "Ntlm"
+        ]
+      },
+      {
+        "name": "Bcc",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Cc",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "ClientCertPassword",
+        "type": "string",
+        "default": "",
+        "sensitive": true
+      },
+      {
+        "name": "ClientCertPath",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "ConnectionFactory",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "ConnectionTimeout",
+        "type": "int",
+        "default": "30000",
+        "sensitive": false
+      },
+      {
+        "name": "ContentType",
+        "type": "string",
+        "default": "text/plain",
+        "sensitive": false
+      },
+      {
+        "name": "Delay",
+        "type": "int",
+        "default": "60000",
+        "sensitive": false
+      },
+      {
+        "name": "Disconnect",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "FetchAttachments",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "FetchBody",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "FetchFilter",
+        "type": "enum",
+        "default": "Unseen",
+        "sensitive": false,
+        "enumValues": [
+          "Unseen",
+          "All",
+          "Recent",
+          "Flagged",
+          "Answered",
+          "Unanswered"
+        ]
+      },
+      {
+        "name": "Folder",
+        "type": "string",
+        "default": "INBOX",
+        "sensitive": false
+      },
+      {
+        "name": "From",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FromFilter",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Host",
+        "type": "string",
+        "default": "localhost",
+        "sensitive": false
+      },
+      {
+        "name": "Idempotent",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Idle",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "IdleTimeout",
+        "type": "int",
+        "default": "1740000",
+        "sensitive": false
+      },
+      {
+        "name": "InitialDelay",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "KeepRawMessage",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "MapMimeHeaders",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "MaxAge",
+        "type": "long",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MaxAttachmentSize",
+        "type": "long",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MaxMessages",
+        "type": "int",
+        "default": "50",
+        "sensitive": false
+      },
+      {
+        "name": "MinAge",
+        "type": "long",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MoveTo",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Password",
+        "type": "string",
+        "default": "",
+        "sensitive": true
+      },
+      {
+        "name": "Peek",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Port",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "PostProcess",
+        "type": "enum",
+        "default": "MarkRead",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "MarkRead",
+          "Delete",
+          "Move",
+          "MarkReadAndMove",
+          "Flag"
+        ]
+      },
+      {
+        "name": "ReplyTo",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "SearchQuery",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Security",
+        "type": "enum",
+        "default": "Auto",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "Ssl",
+          "StartTls",
+          "Auto"
+        ]
+      },
+      {
+        "name": "SortBy",
+        "type": "enum",
+        "default": "None",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "DateAsc",
+          "DateDesc",
+          "SubjectAsc",
+          "FromAsc",
+          "SizeAsc",
+          "SizeDesc"
+        ]
+      },
+      {
+        "name": "Subject",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "SubjectFilter",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Timeout",
+        "type": "int",
+        "default": "60000",
+        "sensitive": false
+      },
+      {
+        "name": "To",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "TrustAllCertificates",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Username",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      }
+    ],
+    "lenient": false
   },
   {
     "scheme": "kafka",
@@ -2727,6 +3560,12 @@
       {
         "name": "Key",
         "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "KeyFromHeader",
+        "type": "bool",
+        "default": "true",
         "sensitive": false
       },
       {
@@ -3022,12 +3861,6 @@
         "sensitive": false
       },
       {
-        "name": "SkipCertificateValidation",
-        "type": "bool",
-        "default": "false",
-        "sensitive": false
-      },
-      {
         "name": "Ssl",
         "type": "bool",
         "default": "false",
@@ -3044,8 +3877,15 @@
         "type": "int",
         "default": "0",
         "sensitive": false
+      },
+      {
+        "name": "TrustAllCertificates",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "llm",
@@ -3169,6 +4009,34 @@
         "sensitive": false
       }
     ]
+  },
+  {
+    "scheme": "log",
+    "alternateSchemes": [],
+    "package": "redb.Route",
+    "optionsType": "redb.Route.Components.LogEndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "Level",
+        "type": "string",
+        "default": "Information",
+        "sensitive": false
+      },
+      {
+        "name": "ShowBody",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "ShowHeaders",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      }
+    ],
+    "lenient": false
   },
   {
     "scheme": "mock",
@@ -3310,8 +4178,326 @@
     "scheme": "pop3",
     "alternateSchemes": [],
     "package": "redb.Route.Mail",
+    "optionsType": "redb.Route.Mail.MailEndpointOptions",
     "pathIsText": false,
-    "options": []
+    "options": [
+      {
+        "name": "AccessToken",
+        "type": "string",
+        "default": "",
+        "sensitive": true
+      },
+      {
+        "name": "AdditionalFolders",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "AlternativeBody",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Attachments",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "AuthMechanism",
+        "type": "enum",
+        "default": "Auto",
+        "sensitive": false,
+        "enumValues": [
+          "Auto",
+          "Plain",
+          "Login",
+          "CramMd5",
+          "XOAuth2",
+          "OAuthBearer",
+          "Ntlm"
+        ]
+      },
+      {
+        "name": "Bcc",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Cc",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "ClientCertPassword",
+        "type": "string",
+        "default": "",
+        "sensitive": true
+      },
+      {
+        "name": "ClientCertPath",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "ConnectionFactory",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "ConnectionTimeout",
+        "type": "int",
+        "default": "30000",
+        "sensitive": false
+      },
+      {
+        "name": "ContentType",
+        "type": "string",
+        "default": "text/plain",
+        "sensitive": false
+      },
+      {
+        "name": "Delay",
+        "type": "int",
+        "default": "60000",
+        "sensitive": false
+      },
+      {
+        "name": "Disconnect",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "FetchAttachments",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "FetchBody",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "FetchFilter",
+        "type": "enum",
+        "default": "Unseen",
+        "sensitive": false,
+        "enumValues": [
+          "Unseen",
+          "All",
+          "Recent",
+          "Flagged",
+          "Answered",
+          "Unanswered"
+        ]
+      },
+      {
+        "name": "Folder",
+        "type": "string",
+        "default": "INBOX",
+        "sensitive": false
+      },
+      {
+        "name": "From",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FromFilter",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Host",
+        "type": "string",
+        "default": "localhost",
+        "sensitive": false
+      },
+      {
+        "name": "Idempotent",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Idle",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "IdleTimeout",
+        "type": "int",
+        "default": "1740000",
+        "sensitive": false
+      },
+      {
+        "name": "InitialDelay",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "KeepRawMessage",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "MapMimeHeaders",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "MaxAge",
+        "type": "long",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MaxAttachmentSize",
+        "type": "long",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MaxMessages",
+        "type": "int",
+        "default": "50",
+        "sensitive": false
+      },
+      {
+        "name": "MinAge",
+        "type": "long",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MoveTo",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Password",
+        "type": "string",
+        "default": "",
+        "sensitive": true
+      },
+      {
+        "name": "Peek",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Port",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "PostProcess",
+        "type": "enum",
+        "default": "MarkRead",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "MarkRead",
+          "Delete",
+          "Move",
+          "MarkReadAndMove",
+          "Flag"
+        ]
+      },
+      {
+        "name": "ReplyTo",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "SearchQuery",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Security",
+        "type": "enum",
+        "default": "Auto",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "Ssl",
+          "StartTls",
+          "Auto"
+        ]
+      },
+      {
+        "name": "SortBy",
+        "type": "enum",
+        "default": "None",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "DateAsc",
+          "DateDesc",
+          "SubjectAsc",
+          "FromAsc",
+          "SizeAsc",
+          "SizeDesc"
+        ]
+      },
+      {
+        "name": "Subject",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "SubjectFilter",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Timeout",
+        "type": "int",
+        "default": "60000",
+        "sensitive": false
+      },
+      {
+        "name": "To",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "TrustAllCertificates",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Username",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      }
+    ],
+    "lenient": false
   },
   {
     "scheme": "qtimer",
@@ -3440,10 +4626,25 @@
     "pathIsText": false,
     "options": [
       {
-        "name": "AutoAck",
-        "type": "bool",
-        "default": "false",
-        "sensitive": false
+        "name": "AckMode",
+        "type": "enum",
+        "default": "Manual",
+        "sensitive": false,
+        "enumValues": [
+          "Manual",
+          "Auto"
+        ]
+      },
+      {
+        "name": "AuthMechanism",
+        "type": "enum",
+        "default": "Plain",
+        "sensitive": false,
+        "enumValues": [
+          "Plain",
+          "External"
+        ],
+        "connectionParameter": true
       },
       {
         "name": "AutoDelete",
@@ -3455,13 +4656,15 @@
         "name": "AutomaticRecovery",
         "type": "bool",
         "default": "true",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "ClientName",
         "type": "string",
         "default": "redb.Route",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "ConcurrentConsumers",
@@ -3471,19 +4674,22 @@
       {
         "name": "ConnectionFactory",
         "type": "string",
-        "sensitive": false
+        "sensitive": false,
+        "connectionFactoryReference": true
       },
       {
         "name": "ConnectionTimeout",
         "type": "int",
         "default": "60",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "ConsumerDispatchConcurrency",
         "type": "string",
         "default": "1",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "ContentType",
@@ -3495,7 +4701,8 @@
         "name": "ContinuationTimeout",
         "type": "int",
         "default": "30",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "DeadLetterExchange",
@@ -3559,13 +4766,15 @@
         "name": "Heartbeat",
         "type": "int",
         "default": "60",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "Host",
         "type": "string",
         "default": "localhost",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "Mandatory",
@@ -3611,18 +4820,26 @@
         "name": "Password",
         "type": "string",
         "default": "guest",
-        "sensitive": true
+        "sensitive": true,
+        "connectionParameter": true
       },
       {
         "name": "Port",
         "type": "int",
         "default": "5672",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "PrefetchCount",
         "type": "string",
         "default": "10",
+        "sensitive": false
+      },
+      {
+        "name": "PublisherConnection",
+        "type": "bool",
+        "default": "false",
         "sensitive": false
       },
       {
@@ -3640,13 +4857,33 @@
         "name": "RecoveryInterval",
         "type": "int",
         "default": "5",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "ReplyTo",
         "type": "bool",
         "default": "false",
         "sensitive": false
+      },
+      {
+        "name": "RevocationMode",
+        "type": "enum",
+        "default": "NoCheck",
+        "sensitive": false,
+        "enumValues": [
+          "NoCheck",
+          "Online",
+          "Offline"
+        ],
+        "connectionParameter": true
+      },
+      {
+        "name": "RevocationSoftFail",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "RoutingKey",
@@ -3658,34 +4895,63 @@
         "name": "SocketReadTimeout",
         "type": "int",
         "default": "30",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "SocketWriteTimeout",
         "type": "int",
         "default": "30",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "Ssl",
         "type": "bool",
         "default": "false",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
-        "name": "SslCertPassphrase",
+        "name": "SslCaCertPath",
         "type": "string",
-        "sensitive": true
+        "sensitive": false,
+        "connectionParameter": true
+      },
+      {
+        "name": "SslCertPassword",
+        "type": "string",
+        "sensitive": true,
+        "connectionParameter": true
       },
       {
         "name": "SslCertPath",
         "type": "string",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
+      },
+      {
+        "name": "SslProtocols",
+        "type": "flags",
+        "default": "None",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "Ssl2",
+          "Ssl3",
+          "Tls",
+          "Default",
+          "Tls11",
+          "Tls12",
+          "Tls13"
+        ],
+        "connectionParameter": true
       },
       {
         "name": "SslServerName",
         "type": "string",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "Timeout",
@@ -3697,7 +4963,8 @@
         "name": "TopologyRecoveryEnabled",
         "type": "bool",
         "default": "true",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "Transacted",
@@ -3708,15 +4975,18 @@
         "name": "Username",
         "type": "string",
         "default": "guest",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       },
       {
         "name": "VirtualHost",
         "type": "string",
         "default": "/",
-        "sensitive": false
+        "sensitive": false,
+        "connectionParameter": true
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "redis",
@@ -4979,8 +6249,326 @@
     "scheme": "smtp",
     "alternateSchemes": [],
     "package": "redb.Route.Mail",
+    "optionsType": "redb.Route.Mail.MailEndpointOptions",
     "pathIsText": false,
-    "options": []
+    "options": [
+      {
+        "name": "AccessToken",
+        "type": "string",
+        "default": "",
+        "sensitive": true
+      },
+      {
+        "name": "AdditionalFolders",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "AlternativeBody",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Attachments",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "AuthMechanism",
+        "type": "enum",
+        "default": "Auto",
+        "sensitive": false,
+        "enumValues": [
+          "Auto",
+          "Plain",
+          "Login",
+          "CramMd5",
+          "XOAuth2",
+          "OAuthBearer",
+          "Ntlm"
+        ]
+      },
+      {
+        "name": "Bcc",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Cc",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "ClientCertPassword",
+        "type": "string",
+        "default": "",
+        "sensitive": true
+      },
+      {
+        "name": "ClientCertPath",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "ConnectionFactory",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "ConnectionTimeout",
+        "type": "int",
+        "default": "30000",
+        "sensitive": false
+      },
+      {
+        "name": "ContentType",
+        "type": "string",
+        "default": "text/plain",
+        "sensitive": false
+      },
+      {
+        "name": "Delay",
+        "type": "int",
+        "default": "60000",
+        "sensitive": false
+      },
+      {
+        "name": "Disconnect",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "FetchAttachments",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "FetchBody",
+        "type": "bool",
+        "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "FetchFilter",
+        "type": "enum",
+        "default": "Unseen",
+        "sensitive": false,
+        "enumValues": [
+          "Unseen",
+          "All",
+          "Recent",
+          "Flagged",
+          "Answered",
+          "Unanswered"
+        ]
+      },
+      {
+        "name": "Folder",
+        "type": "string",
+        "default": "INBOX",
+        "sensitive": false
+      },
+      {
+        "name": "From",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "FromFilter",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Host",
+        "type": "string",
+        "default": "localhost",
+        "sensitive": false
+      },
+      {
+        "name": "Idempotent",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Idle",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "IdleTimeout",
+        "type": "int",
+        "default": "1740000",
+        "sensitive": false
+      },
+      {
+        "name": "InitialDelay",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "KeepRawMessage",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "MapMimeHeaders",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "MaxAge",
+        "type": "long",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MaxAttachmentSize",
+        "type": "long",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MaxMessages",
+        "type": "int",
+        "default": "50",
+        "sensitive": false
+      },
+      {
+        "name": "MinAge",
+        "type": "long",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MoveTo",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Password",
+        "type": "string",
+        "default": "",
+        "sensitive": true
+      },
+      {
+        "name": "Peek",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Port",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "PostProcess",
+        "type": "enum",
+        "default": "MarkRead",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "MarkRead",
+          "Delete",
+          "Move",
+          "MarkReadAndMove",
+          "Flag"
+        ]
+      },
+      {
+        "name": "ReplyTo",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "SearchQuery",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Security",
+        "type": "enum",
+        "default": "Auto",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "Ssl",
+          "StartTls",
+          "Auto"
+        ]
+      },
+      {
+        "name": "SortBy",
+        "type": "enum",
+        "default": "None",
+        "sensitive": false,
+        "enumValues": [
+          "None",
+          "DateAsc",
+          "DateDesc",
+          "SubjectAsc",
+          "FromAsc",
+          "SizeAsc",
+          "SizeDesc"
+        ]
+      },
+      {
+        "name": "Subject",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "SubjectFilter",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "Timeout",
+        "type": "int",
+        "default": "60000",
+        "sensitive": false
+      },
+      {
+        "name": "To",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      },
+      {
+        "name": "TrustAllCertificates",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "Username",
+        "type": "string",
+        "default": "",
+        "sensitive": false
+      }
+    ],
+    "lenient": false
   },
   {
     "scheme": "sns",

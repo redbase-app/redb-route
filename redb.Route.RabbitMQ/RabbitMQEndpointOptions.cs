@@ -10,25 +10,32 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
     // ── Connection ──
 
     /// <summary>RabbitMQ host name (default: localhost).</summary>
+    [ConnectionParameter]
     public string Host { get; set; } = "localhost";
 
     /// <summary>RabbitMQ port (default: 5672).</summary>
+    [ConnectionParameter]
     public int Port { get; set; } = 5672;
 
     /// <summary>RabbitMQ username (default: guest).</summary>
+    [ConnectionParameter]
     public string Username { get; set; } = "guest";
 
     /// <summary>RabbitMQ password (default: guest).</summary>
     [Sensitive]
+    [ConnectionParameter]
     public string Password { get; set; } = "guest";
 
     /// <summary>Virtual host (default: /).</summary>
+    [ConnectionParameter]
     public string VirtualHost { get; set; } = "/";
 
     /// <summary>Name of <see cref="RabbitMQConnectionFactory"/> in the route registry.</summary>
+    [ConnectionFactoryReference]
     public string? ConnectionFactory { get; set; }
 
     /// <summary>Client-provided name for RabbitMQ connections.</summary>
+    [ConnectionParameter]
     public string ClientName { get; set; } = "redb.Route";
 
     // ── Exchange ──
@@ -36,7 +43,7 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
     /// <summary>Exchange name (empty = default exchange).</summary>
     public string Exchange { get; set; } = string.Empty;
 
-    /// <summary>Exchange type: direct, topic, fanout, headers (default: direct).</summary>
+    /// <summary>Exchange type: direct, topic, fanout, headers (default: direct), or an x-prefixed plugin type such as x-delayed-message.</summary>
     public string ExchangeType { get; set; } = "direct";
 
     /// <summary>Whether exchange survives broker restart.</summary>
@@ -90,13 +97,12 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
     public ushort PrefetchCount { get; set; } = 10;
 
     /// <summary>
-    /// Broker-side auto-acknowledge (default: false). When <c>true</c> the consumer subscribes with
-    /// <c>autoAck: true</c> — the broker settles every delivery on hand-off (at-most-once): there is no
-    /// manual ack/nack, and a failure in the processor does NOT requeue the message. When <c>false</c>
-    /// (default) the consumer acks after a successful turn and nack-requeues on failure (at-least-once).
-    /// Cannot be combined with <see cref="Transacted"/>.
+    /// When the delivery is settled (<see cref="Core.AckMode"/>). <c>Manual</c> (default): the consumer acks after a
+    /// turn that ended well and nack-requeues on failure (at-least-once). <c>Auto</c>: the consumer subscribes with
+    /// <c>autoAck: true</c> and the broker settles every delivery on hand-off (at-most-once); a failure in the route does
+    /// not requeue it. <c>Auto</c> cannot be combined with <see cref="Transacted"/>.
     /// </summary>
-    public bool AutoAck { get; set; }
+    public AckMode AckMode { get; set; } = AckMode.Manual;
 
     // ── Transactions ──
 
@@ -108,12 +114,27 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
     /// </summary>
     public bool? Transacted { get; set; }
 
+    /// <summary>
+    /// Publish over a connection of its own (default: false, one connection for everything with the same settings, as in
+    /// Spring AMQP). The broker's flow control and resource alarms block a publishing connection as a whole, so a
+    /// consumer on it can no longer ack. With <c>true</c>, the sends of this endpoint's producer and the RPC replies of
+    /// its consumer go over a second connection with the same settings (named "... (publisher)"), and the consumer keeps
+    /// the first one to itself. Two named connection factories separate the connections just as well; only a consumer's
+    /// replies need this option.
+    /// </summary>
+    public bool PublisherConnection { get; set; }
+
     /// <summary>Use mandatory flag. Null = auto-detect by exchange type.</summary>
     public bool? Mandatory { get; set; }
 
     // ── RPC ──
 
-    /// <summary>Enable request-reply (RPC) pattern.</summary>
+    /// <summary>
+    /// Request-reply (RPC): the producer publishes the request and waits for the reply on a reply queue of its own. The
+    /// request's AMQP <c>reply-to</c> is always that queue, overriding a <c>ReplyTo</c> header, since the producer is the
+    /// one waiting. To send a message that names another reply address without waiting, set the <c>ReplyTo</c> header on
+    /// an ordinary send.
+    /// </summary>
     public bool ReplyTo { get; set; }
 
     /// <summary>RPC timeout in seconds (default: 60).</summary>
@@ -154,7 +175,7 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
     /// <summary>Dead-letter routing key (x-dead-letter-routing-key).</summary>
     public string? DeadLetterRoutingKey { get; set; }
 
-    /// <summary>Queue type: classic, quorum (x-queue-type). Quorum queues are replicated across cluster nodes.</summary>
+    /// <summary>Queue type: classic, quorum, stream (x-queue-type). Quorum and stream queues are replicated across cluster nodes.</summary>
     public string? QueueType { get; set; }
 
     /// <summary>Maximum priority level for priority queues (x-max-priority). 0 = disabled.</summary>
@@ -163,46 +184,114 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
     // ── Connection resilience ──
 
     /// <summary>Enable automatic recovery (default: true).</summary>
+    [ConnectionParameter]
     public bool AutomaticRecovery { get; set; } = true;
 
     /// <summary>Re-declare topology after recovery (default: true). Critical for cluster.</summary>
+    [ConnectionParameter]
     public bool TopologyRecoveryEnabled { get; set; } = true;
 
     /// <summary>Network recovery interval in seconds (default: 5).</summary>
+    [ConnectionParameter]
     public int RecoveryInterval { get; set; } = 5;
 
     /// <summary>Requested heartbeat interval in seconds (default: 60).</summary>
+    [ConnectionParameter]
     public int Heartbeat { get; set; } = 60;
 
     /// <summary>Connection timeout in seconds (default: 60). Prevents hangs on unreachable nodes.</summary>
+    [ConnectionParameter]
     public int ConnectionTimeout { get; set; } = 60;
 
     /// <summary>Socket read timeout in seconds (default: 30).</summary>
+    [ConnectionParameter]
     public int SocketReadTimeout { get; set; } = 30;
 
     /// <summary>Socket write timeout in seconds (default: 30).</summary>
+    [ConnectionParameter]
     public int SocketWriteTimeout { get; set; } = 30;
 
     /// <summary>AMQP continuation timeout in seconds (default: 30).</summary>
+    [ConnectionParameter]
     public int ContinuationTimeout { get; set; } = 30;
 
     /// <summary>Concurrent dispatch limit per connection (default: 1).</summary>
+    [ConnectionParameter]
     public ushort ConsumerDispatchConcurrency { get; set; } = 1;
 
     // ── SSL ──
 
     /// <summary>Enable SSL/TLS for the connection.</summary>
+    [ConnectionParameter]
     public bool Ssl { get; set; }
 
-    /// <summary>SSL server name for certificate validation.</summary>
+    /// <summary>
+    /// The name the broker certificate must carry. Unset, each host of the list is checked against its own name; set it
+    /// when the certificate names a load balancer or an alias.
+    /// </summary>
+    [ConnectionParameter]
     public string? SslServerName { get; set; }
 
-    /// <summary>Path to client certificate file (for mTLS).</summary>
+    /// <summary>Client certificate (PFX) presented for mutual TLS; checked for its validity period at startup.</summary>
+    [ConnectionParameter]
     public string? SslCertPath { get; set; }
 
-    /// <summary>Client certificate passphrase.</summary>
+    /// <summary>Passphrase of <see cref="SslCertPath"/>.</summary>
     [Sensitive]
-    public string? SslCertPassphrase { get; set; }
+    [ConnectionParameter]
+    public string? SslCertPassword { get; set; }
+
+    /// <summary>
+    /// PEM file with the root certificates the broker certificate must chain to, instead of the system trust store — a
+    /// corporate or private CA without installing it in the operating system.
+    /// </summary>
+    [ConnectionParameter]
+    public string? SslCaCertPath { get; set; }
+
+    /// <summary>
+    /// Allowed TLS versions, <c>Tls12</c>, <c>Tls13</c> or <c>Tls12,Tls13</c>. Unset (<c>None</c>), the operating system
+    /// chooses. Older versions are refused.
+    /// </summary>
+    [ConnectionParameter]
+    public System.Security.Authentication.SslProtocols SslProtocols { get; set; }
+
+    /// <summary>
+    /// Revocation check of the broker certificate: <c>NoCheck</c> (default), <c>Online</c> (CRL and OCSP the
+    /// certificate points at) or <c>Offline</c> (the operating system's cache only).
+    /// </summary>
+    [ConnectionParameter]
+    public System.Security.Cryptography.X509Certificates.X509RevocationMode RevocationMode { get; set; }
+
+    /// <summary>Accept a broker certificate whose revocation status cannot be determined. Default false: refused.</summary>
+    [ConnectionParameter]
+    public bool RevocationSoftFail { get; set; }
+
+    /// <summary>
+    /// <c>Plain</c> (default, username and password) or <c>External</c>: the TLS client certificate is the login, no
+    /// password is sent. <c>External</c> needs <c>ssl=true</c> and <c>sslCertPath</c>.
+    /// </summary>
+    [ConnectionParameter]
+    public RabbitMQAuthMechanism AuthMechanism { get; set; }
+
+    /// <summary>The TLS settings of this endpoint's connection, loading the certificate files it names.</summary>
+    internal RabbitMQTlsSettings ResolveTls(string owner) => !Ssl
+        ? RabbitMQTlsSettings.Off
+        : new RabbitMQTlsSettings(
+            true,
+            SslServerName,
+            string.IsNullOrEmpty(SslCertPath) ? null : RabbitMQTls.LoadClientCertificate(SslCertPath, SslCertPassword, owner),
+            SslProtocols,
+            string.IsNullOrEmpty(SslCaCertPath) ? null : RabbitMQTls.LoadCaCertificates(SslCaCertPath, owner),
+            RevocationMode,
+            RevocationSoftFail);
+
+    /// <inheritdoc />
+    protected override string? UnknownParameterHint(string name)
+        => name.Equals("autoAck", StringComparison.OrdinalIgnoreCase)
+            ? "'autoAck' is replaced by 'ackMode': ackMode=auto for autoAck=true, ackMode=manual (the default) for autoAck=false."
+            : name.Equals("sslCertPassphrase", StringComparison.OrdinalIgnoreCase)
+                ? "'sslCertPassphrase' is renamed 'sslCertPassword', the name every other connector uses."
+                : null;
 
     /// <inheritdoc />
     public override void Validate()
@@ -215,10 +304,38 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
         if (Timeout <= 0)
             throw new ArgumentOutOfRangeException(nameof(Timeout), "Timeout must be greater than 0.");
 
-        if (AutoAck && Transacted == true)
+        if (AckMode == AckMode.Auto && Transacted == true)
             throw new ArgumentException(
-                "AutoAck cannot be combined with Transacted: an auto-acked delivery is settled by the broker on hand-off and cannot be transactionally committed or rolled back.");
+                "ackMode=auto cannot be combined with Transacted: an auto-acked delivery is settled by the broker on hand-off and cannot be transactionally committed or rolled back.");
+
+        // A value the broker does not know fails here, naming the option, instead of as a channel error at declare.
+        // Exchange types beyond the built-in four come from plugins and are x-prefixed (x-delayed-message,
+        // x-consistent-hash); the built-in names are written the way the broker names them, which is case-sensitive.
+        var builtInExchangeType = BuiltInExchangeTypes.FirstOrDefault(t => t.Equals(ExchangeType, StringComparison.OrdinalIgnoreCase));
+        if (builtInExchangeType is not null)
+            ExchangeType = builtInExchangeType;
+        else if (!ExchangeType.StartsWith("x-", StringComparison.Ordinal))
+            throw new ArgumentException(
+                $"Unknown 'exchangeType' value '{ExchangeType}'. Allowed: {string.Join(", ", BuiltInExchangeTypes)}, or a plugin type starting with 'x-'.");
+
+        if (!string.IsNullOrEmpty(QueueType) && !QueueTypes.Contains(QueueType, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown 'queueType' value '{QueueType}'. Allowed: {string.Join(", ", QueueTypes)}.");
+
+        if (!string.IsNullOrEmpty(Overflow) && !OverflowStrategies.Contains(Overflow, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown 'overflow' value '{Overflow}'. Allowed: {string.Join(", ", OverflowStrategies)}.");
+
+        // The connection settings of a named factory are checked on the factory; on the URI they are refused next to it.
+        if (string.IsNullOrEmpty(ConnectionFactory))
+            RabbitMQTls.Validate(new RabbitMQTls.TlsRules(
+                Ssl, SslServerName, SslCertPath, SslCertPassword, ClientCertificateObject: false,
+                SslCaCertPath, CaCertificatesObject: false, SslProtocols, RevocationMode, RevocationSoftFail, AuthMechanism),
+                "RabbitMQ endpoint");
     }
+
+
+    private static readonly string[] BuiltInExchangeTypes = ["direct", "topic", "fanout", "headers"];
+    private static readonly string[] QueueTypes = ["classic", "quorum", "stream"];
+    private static readonly string[] OverflowStrategies = ["drop-head", "reject-publish", "reject-publish-dlx"];
 
     /// <summary>
     /// Resolves the mandatory flag. If not explicitly set, uses sensible defaults

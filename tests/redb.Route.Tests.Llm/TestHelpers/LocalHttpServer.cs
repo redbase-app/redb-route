@@ -73,14 +73,7 @@ public sealed class LocalHttpServer : IDisposable
         }
     }
 
-    private static int PickFreePort()
-    {
-        var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((System.Net.IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int PickFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     /// <inheritdoc />
     public void Dispose()

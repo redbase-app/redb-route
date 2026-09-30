@@ -43,6 +43,43 @@ public sealed class RestOptions
     /// <summary>OpenAPI <c>info.version</c>.</summary>
     public string Version { get; set; } = "1.0.0";
 
+    /// <summary>
+    /// Validate client requests before the route runs, like Camel's <c>clientRequestValidation</c>:
+    /// an <c>Accept</c> that excludes the produced type is answered with 406, a missing required or
+    /// non-convertible declared parameter with 400. A verb can override it. Default <c>false</c>:
+    /// parameters declared for the OpenAPI document alone never start refusing requests.
+    /// The 415 check of <c>Consumes</c> runs either way.
+    /// </summary>
+    public bool ClientRequestValidation { get; set; }
+
+    /// <summary>
+    /// Registry name of an <see cref="Abstractions.IProcessor"/> that writes the body of a refused
+    /// request (415, 406, 400), <c>#name</c> or <c>name</c>. It finds the code, reason and parameter in
+    /// <see cref="RestErrorProperties"/>. A name that is not registered fails when the routes start.
+    /// <c>null</c> = the reason as <c>text/plain</c>.
+    /// </summary>
+    public string? ErrorHandler { get; set; }
+
+    /// <summary>
+    /// How the callers of every route of this declaration prove who they are (the http: consumer's <c>inboundAuth</c>):
+    /// <c>Basic</c> with <see cref="InboundUsername"/> / <see cref="InboundPassword"/>, <c>Bearer</c> with the registered
+    /// validator named by <see cref="TokenValidator"/>. A refused request gets 401 before the route runs. The OpenAPI
+    /// document is behind the same check. Default <c>None</c>.
+    /// </summary>
+    public HttpAuthScheme InboundAuth { get; set; } = HttpAuthScheme.None;
+
+    /// <summary>User name <c>InboundAuth=Basic</c> accepts.</summary>
+    public string? InboundUsername { get; set; }
+
+    /// <summary>Password <c>InboundAuth=Basic</c> accepts; take it from configuration (<c>{{…}}</c>).</summary>
+    public string? InboundPassword { get; set; }
+
+    /// <summary>Realm named in <c>WWW-Authenticate</c>; <c>null</c> = the consumer's default.</summary>
+    public string? InboundRealm { get; set; }
+
+    /// <summary>Registry name of the <see cref="IHttpTokenValidator"/> for <c>InboundAuth=Bearer</c>.</summary>
+    public string? TokenValidator { get; set; }
+
     /// <summary>Extra query parameters appended to every generated consumer URI (<c>"ssl=true&amp;sslCertPath=..."</c>), for options the DSL does not model.</summary>
     public string? ExtraConsumerOptions { get; set; }
 }

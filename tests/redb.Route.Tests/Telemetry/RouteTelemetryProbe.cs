@@ -17,6 +17,11 @@ namespace redb.Route.Tests.Telemetry;
 /// a predicate over the finished activity, normally its <c>redb.route.id</c> tag. Spans of other
 /// tests are seen and dropped.
 /// </para>
+/// <para>
+/// One copy: a connector's test project links this file
+/// (<c>&lt;Compile Include="../redb.Route.Tests/Telemetry/RouteTelemetryProbe.cs" Link="Shared/RouteTelemetryProbe.cs" /&gt;</c>)
+/// and imports <c>redb.Route.Tests.Telemetry</c>.
+/// </para>
 /// </summary>
 internal sealed class RouteTelemetryProbe : IDisposable
 {

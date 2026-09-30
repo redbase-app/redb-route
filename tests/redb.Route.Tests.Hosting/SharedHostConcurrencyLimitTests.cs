@@ -32,14 +32,7 @@ public sealed class SharedHostConcurrencyLimitTests : IAsyncLifetime
         return manager;
     }
 
-    private static int GetFreePort()
-    {
-        using var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     /// <summary>Handler that tracks the maximum number of concurrent executions.</summary>
     private sealed class ConcurrencyProbe

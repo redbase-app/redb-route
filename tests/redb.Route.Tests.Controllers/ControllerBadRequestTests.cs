@@ -20,8 +20,21 @@ namespace redb.Route.Tests.Controllers;
 /// the action stays a 500 — the twin tests below pin both sides.
 /// </para>
 /// </summary>
-public sealed class ControllerBadRequestTests
+public sealed class ControllerBadRequestTests : IAsyncLifetime
 {
+    // Owned by the test instance (xUnit makes one per test) and released after it: the dispatcher the factory
+    // below returns keeps using both.
+    private readonly RouteContext _httpContext = new();
+    private ILoggerFactory? _loggerFactory;
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
+    {
+        await _httpContext.DisposeAsync();
+        _loggerFactory?.Dispose();
+    }
+
     // ── Test surface ──
 
     public sealed class StrictOrderRequest
@@ -55,18 +68,16 @@ public sealed class ControllerBadRequestTests
         public void Dispose() { }
     }
 
-    private static (HttpControllerDispatcher Dispatcher, CapturingLogs Logs) CreateHttpDispatcher()
+    private (HttpControllerDispatcher Dispatcher, CapturingLogs Logs) CreateHttpDispatcher()
     {
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(OrdersController));
 
         var logs = new CapturingLogs();
-        var factory = LoggerFactory.Create(b => b.AddProvider(logs).SetMinimumLevel(LogLevel.Debug));
+        _loggerFactory = LoggerFactory.Create(b => b.AddProvider(logs).SetMinimumLevel(LogLevel.Debug));
+        _httpContext.AddService(typeof(ILoggerFactory), _loggerFactory);
 
-        var context = new RouteContext();
-        context.AddService(typeof(ILoggerFactory), factory);
-
-        return (new HttpControllerDispatcher(registry, context), logs);
+        return (new HttpControllerDispatcher(registry, _httpContext), logs);
     }
 
     private static IExchange HttpExchange(string method, string path, string? jsonBody = null,
@@ -154,7 +165,7 @@ public sealed class ControllerBadRequestTests
     [Fact]
     public async Task Grpc_malformed_json_body_is_a_400()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(OrdersController));
 
         var exchange = new Exchange(new Message(Encoding.UTF8.GetBytes("{ not json")));
@@ -182,7 +193,8 @@ public sealed class ControllerBadRequestTests
         // exception the SOAP consumer maps to a Sender fault. An unhandled XmlSerializer
         // exception became a Receiver fault with a generic text — a retry hint for bytes that
         // will fail identically forever.
-        var dispatcher = new SoapControllerDispatcher(new RouteContext(), typeof(SoapOrdersController));
+        await using var context = new RouteContext();
+        var dispatcher = new SoapControllerDispatcher(context, typeof(SoapOrdersController));
         var exchange = new Exchange(new Message("<this is not xml"));
         exchange.In.setHeader(SoapControllerDispatcher.OperationHeader, "Register");
 
@@ -191,12 +203,117 @@ public sealed class ControllerBadRequestTests
         await act.Should().ThrowAsync<MalformedRequestException>();
     }
 
+    // -- A simple value that does not convert is a binding error (Camel: ParameterBindingException) --------
+
+    private HttpControllerDispatcher BindingDispatcher()
+    {
+        var registry = new ControllerRegistry();
+        registry.RegisterController(typeof(BindingController));
+        return new HttpControllerDispatcher(registry, _httpContext);
+    }
+
+    [Fact]
+    public async Task A_query_value_that_is_not_a_number_is_a_400_naming_the_parameter_and_the_value()
+    {
+        var exchange = HttpExchange("GET", "/binding/query");
+        exchange.In.setHeader("redbHttp.QueryParam.page", "abc");
+
+        await BindingDispatcher().Process(exchange);
+
+        var (status, error, message) = ReadError(exchange);
+        status.Should().Be(400, "page=abc is not a page number; binding it as 0 answered a different question");
+        error.Should().Be("BadRequest");
+        message.Should().Contain("page").And.Contain("abc");
+    }
+
+    [Fact]
+    public async Task A_header_value_that_is_not_a_number_is_a_400()
+    {
+        var exchange = HttpExchange("GET", "/binding/header");
+        exchange.In.setHeader("X-Limit", "lots");
+
+        await BindingDispatcher().Process(exchange);
+
+        var (status, _, message) = ReadError(exchange);
+        status.Should().Be(400);
+        message.Should().Contain("X-Limit").And.Contain("lots");
+    }
+
+    [Fact]
+    public async Task SignalR_an_argument_that_is_not_a_number_is_a_400()
+    {
+        await using var context = new RouteContext();
+        var dispatcher = new SignalRControllerDispatcher(context, typeof(EchoController));
+        var exchange = new Exchange(new Message("abc"));
+        exchange.In.setHeader("redbSignalR.Method", nameof(EchoController.GetById));
+
+        await dispatcher.Process(exchange);
+
+        var (status, _, message) = ReadError(exchange);
+        status.Should().Be(400);
+        message.Should().Contain("id").And.Contain("abc");
+    }
+
+    // -- Generic dispatcher: the same 400/500 boundary as the transport dispatchers --------------------------
+
+    private static IExchange GenericExchange(string method, string path)
+    {
+        var exchange = new Exchange();
+        exchange.In.setHeader(ControllerDispatcherProcessor.MethodHeader, method);
+        exchange.In.setHeader(ControllerDispatcherProcessor.PathHeader, path);
+        return exchange;
+    }
+
+    [Fact]
+    public async Task Generic_a_route_param_that_is_not_a_guid_is_a_400()
+    {
+        var registry = new ControllerRegistry();
+        registry.RegisterController(typeof(OrdersController));
+        var exchange = GenericExchange("GET", "orders/abc");
+
+        await new ControllerDispatcherProcessor(registry, _httpContext).Process(exchange);
+
+        var (status, error, message) = ReadError(exchange);
+        status.Should().Be(400);
+        error.Should().Be("BadRequest");
+        message.Should().NotContain("unexpected error");
+    }
+
+    [Fact]
+    public async Task Generic_a_query_value_that_is_not_a_number_is_a_400()
+    {
+        var registry = new ControllerRegistry();
+        registry.RegisterController(typeof(BindingController));
+        var exchange = GenericExchange("GET", "binding/query");
+        exchange.In.setHeader("query.page", "abc");
+
+        await new ControllerDispatcherProcessor(registry, _httpContext).Process(exchange);
+
+        var (status, _, message) = ReadError(exchange);
+        status.Should().Be(400);
+        message.Should().Contain("page").And.Contain("abc");
+    }
+
+    [Fact]
+    public async Task Generic_the_same_exception_inside_the_action_stays_a_500()
+    {
+        var registry = new ControllerRegistry();
+        registry.RegisterController(typeof(OrdersController));
+        var exchange = GenericExchange("GET", "orders");
+
+        await new ControllerDispatcherProcessor(registry, _httpContext).Process(exchange);
+
+        var (status, error, _) = ReadError(exchange);
+        status.Should().Be(500);
+        error.Should().Be("InternalError");
+    }
+
     // ── SignalR ──
 
     [Fact]
     public async Task SignalR_unbindable_args_are_a_400()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new SignalRControllerDispatcher(context, typeof(OrdersController));
 
         var exchange = new Exchange(new Message("{ definitely not bindable"));

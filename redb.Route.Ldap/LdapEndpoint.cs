@@ -191,7 +191,7 @@ public sealed class LdapEndpoint : EndpointBase<LdapEndpointOptions>, IDisposabl
             opts.UseSsl();
 
         // Skip server certificate validation (development only!)
-        if (Options.SkipCertificateValidation)
+        if (Options.TrustAllCertificates)
             opts.ConfigureRemoteCertificateValidationCallback(
                 (sender, certificate, chain, sslPolicyErrors) => true);
 

@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Grpc;
 
@@ -20,6 +21,7 @@ public sealed class GrpcConnectionFactory
     public string? SslCertPath { get; set; }
 
     /// <summary>Password for the PFX certificate.</summary>
+    [Sensitive]
     public string? SslCertPassword { get; set; }
 
     /// <summary>

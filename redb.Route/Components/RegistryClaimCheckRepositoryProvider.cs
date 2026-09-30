@@ -4,24 +4,18 @@ using redb.Route.Processors;
 namespace redb.Route.Components;
 
 /// <summary>
-/// Resolves <see cref="IClaimCheckRepository"/> instances for Claim Check steps.
-/// Mirrors <see cref="RegistryIdempotentRepositoryProvider"/>: repositories live in the
-/// <see cref="IRouteContext"/> registry under keys of the form <c>claimcheck:{name}</c>,
-/// so a route can refer to one by string name with no extra DI plumbing.
+/// Resolves <see cref="IClaimCheckRepository"/> instances for Claim Check steps. A named repository is found in the
+/// <see cref="IRouteContext"/> registry by its bare name, checked for type (Camel's <c>lookupByNameAndType</c>), the
+/// same key every other <c>#name</c> reference uses. The repository of steps that name none is the context's
+/// <see cref="IClaimCheckRepository"/> service, looked up by type.
 /// </summary>
 public static class ClaimCheckRepositoryRegistry
 {
-    /// <summary>Registry key prefix used for named claim check repositories.</summary>
-    public const string KeyPrefix = "claimcheck:";
-
-    /// <summary>Registry key holding the context-wide default repository.</summary>
-    public const string DefaultKey = KeyPrefix + "__default";
-
     private static readonly object DefaultLock = new();
 
     /// <summary>
-    /// Registers an <see cref="IClaimCheckRepository"/> under a logical name, so route steps
-    /// can refer to it as <c>.ClaimCheck(operation, repositoryName: "large-payloads")</c>.
+    /// Registers an <see cref="IClaimCheckRepository"/> in the context registry under <paramref name="name"/>, so
+    /// route steps can refer to it as <c>.ClaimCheck(operation, repositoryName: "large-payloads")</c>.
     /// </summary>
     public static IRouteContext AddClaimCheckRepository(
         this IRouteContext context, string name, IClaimCheckRepository repository)
@@ -30,13 +24,14 @@ public static class ClaimCheckRepositoryRegistry
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentNullException.ThrowIfNull(repository);
 
-        context.AddToRegistry(KeyPrefix + name, repository);
+        context.AddToRegistry(RegistryLookup.Key(name), repository);
         return context;
     }
 
     /// <summary>
-    /// Registers the repository used by Claim Check steps that name none.
-    /// Without it the context falls back to a shared <see cref="InMemoryClaimCheckRepository"/>.
+    /// Registers the repository used by Claim Check steps that name none, as the context's
+    /// <see cref="IClaimCheckRepository"/> service. Without it the context falls back to a shared
+    /// <see cref="InMemoryClaimCheckRepository"/>.
     /// </summary>
     public static IRouteContext SetDefaultClaimCheckRepository(
         this IRouteContext context, IClaimCheckRepository repository)
@@ -44,19 +39,18 @@ public static class ClaimCheckRepositoryRegistry
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(repository);
 
-        context.AddToRegistry(DefaultKey, repository);
+        context.AddService(typeof(IClaimCheckRepository), repository);
         return context;
     }
 
     /// <summary>
-    /// Resolves the repository for a Claim Check step.
-    /// Order: the named registry entry, then a registered default, then an
-    /// <see cref="IClaimCheckRepository"/> service, then a shared in-memory repository
-    /// created once per context.
+    /// Resolves the repository for a Claim Check step. A name is looked up in the registry; without one, the context's
+    /// <see cref="IClaimCheckRepository"/> service (<see cref="SetDefaultClaimCheckRepository"/>, or one the host
+    /// registered), else a shared in-memory repository created once per context and kept as that service.
     /// </summary>
     /// <param name="context">Route context being compiled.</param>
-    /// <param name="repositoryName">Logical name, or null for the default.</param>
-    /// <exception cref="InvalidOperationException">A name was given but nothing is registered under it.</exception>
+    /// <param name="repositoryName">Registry name, or null for the default.</param>
+    /// <exception cref="InvalidOperationException">A name was given and nothing, or an object of another type, is registered under it.</exception>
     public static IClaimCheckRepository ResolveClaimCheckRepository(
         this IRouteContext context, string? repositoryName = null)
     {
@@ -64,20 +58,12 @@ public static class ClaimCheckRepositoryRegistry
 
         if (!string.IsNullOrEmpty(repositoryName))
         {
-            var named = context.GetFromRegistry<IClaimCheckRepository>(KeyPrefix + repositoryName);
-            if (named is null)
-            {
-                throw new InvalidOperationException(
-                    $"No IClaimCheckRepository registered under name '{repositoryName}'. " +
-                    $"Register via context.AddClaimCheckRepository(\"{repositoryName}\", repository).");
-            }
-
-            return named;
+            var key = RegistryLookup.Key(repositoryName);
+            return RegistryLookup.Find<IClaimCheckRepository>(context, key)
+                ?? throw new InvalidOperationException(
+                    $"Nothing is registered under '{key}': register an IClaimCheckRepository with " +
+                    $"context.AddClaimCheckRepository(\"{key}\", repository), or declare <bean name=\"{key}\" type=\"...\"/> in Route-XML.");
         }
-
-        var registeredDefault = context.GetFromRegistry<IClaimCheckRepository>(DefaultKey);
-        if (registeredDefault is not null)
-            return registeredDefault;
 
         var fromServices = context.GetService<IClaimCheckRepository>();
         if (fromServices is not null)
@@ -87,12 +73,12 @@ public static class ClaimCheckRepositoryRegistry
         // have to reach the same store, otherwise the claim key resolves to nothing.
         lock (DefaultLock)
         {
-            var existing = context.GetFromRegistry<IClaimCheckRepository>(DefaultKey);
+            var existing = context.GetService<IClaimCheckRepository>();
             if (existing is not null)
                 return existing;
 
             var created = new InMemoryClaimCheckRepository();
-            context.AddToRegistry(DefaultKey, created);
+            context.AddService(typeof(IClaimCheckRepository), created);
             return created;
         }
     }

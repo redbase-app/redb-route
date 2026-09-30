@@ -169,7 +169,7 @@ public sealed class AmqpConnectionFactoryTests
         var factory = new AmqpConnectionFactory
         {
             Ssl = true,
-            SkipServerCertValidation = true,
+            TrustAllCertificates = true,
         };
 
         var act = () => factory.Build();

@@ -23,6 +23,9 @@ public sealed class RestXmlContribution : IXmlTopLevelContribution
     public XmlElementKind Kind => XmlElementKind.TopLevel;
 
     /// <inheritdoc />
+    public IReadOnlyList<string> GeneratedUsings => ["redb.Route.Http", "redb.Route.Http.Rest"];
+
+    /// <inheritdoc />
     public ElementSpec Spec => new(Name, Kind,
         [
             new AttributeSpec("path", AttributeType.String, Required: true),
@@ -35,6 +38,13 @@ public sealed class RestXmlContribution : IXmlTopLevelContribution
             new AttributeSpec("openApiPath", AttributeType.String),
             new AttributeSpec("title", AttributeType.String),
             new AttributeSpec("version", AttributeType.String),
+            new AttributeSpec("clientRequestValidation", AttributeType.Bool),
+            new AttributeSpec("errorHandler", AttributeType.String),
+            new AttributeSpec("inboundAuth", AttributeType.Enum, EnumValues: ["none", "basic", "bearer"]),
+            new AttributeSpec("inboundUsername", AttributeType.String),
+            new AttributeSpec("inboundPassword", AttributeType.String),
+            new AttributeSpec("inboundRealm", AttributeType.String),
+            new AttributeSpec("tokenValidator", AttributeType.String),
         ],
         [.. VerbNames.Select(verb => new ElementSpec(verb, XmlElementKind.ConfigChild,
             [
@@ -45,8 +55,19 @@ public sealed class RestXmlContribution : IXmlTopLevelContribution
                 new AttributeSpec("type", AttributeType.TypeName),
                 new AttributeSpec("outType", AttributeType.TypeName),
                 new AttributeSpec("bindingMode", AttributeType.Enum, EnumValues: ["off", "json"]),
+                new AttributeSpec("clientRequestValidation", AttributeType.Bool),
             ],
-            [], AllowsSteps: true))]);
+            [ParamSpec], AllowsSteps: true))]);
+
+    private static readonly ElementSpec ParamSpec = new("param", XmlElementKind.ConfigChild,
+        [
+            new AttributeSpec("name", AttributeType.String, Required: true),
+            new AttributeSpec("type", AttributeType.Enum, EnumValues: ["path", "query", "header"]),
+            new AttributeSpec("required", AttributeType.Bool),
+            new AttributeSpec("dataType", AttributeType.Enum, EnumValues: ["string", "integer", "number", "boolean"]),
+            new AttributeSpec("description", AttributeType.String),
+        ],
+        []);
 
     /// <inheritdoc />
     public IRouteDefinition Apply(XElement element, IRouteDefinition current, XmlParseContext context)
@@ -72,6 +93,14 @@ public sealed class RestXmlContribution : IXmlTopLevelContribution
             if (context.Attr(element, "openApiPath") is { } openApiPath) options.OpenApiPath = openApiPath;
             if (context.Attr(element, "title") is { } title) options.Title = title;
             if (context.Attr(element, "version") is { } version) options.Version = version;
+            if (context.Convert<bool>(element, "clientRequestValidation") is { } validate) options.ClientRequestValidation = validate;
+            if (context.Attr(element, "errorHandler") is { } errorHandler) options.ErrorHandler = errorHandler;
+            if (ParseEnum<HttpAuthScheme>(element, "inboundAuth", context, "none, basic, bearer") is { Ok: true, Value: { } inboundAuth })
+                options.InboundAuth = inboundAuth;
+            if (context.Attr(element, "inboundUsername") is { } inboundUsername) options.InboundUsername = inboundUsername;
+            if (context.Attr(element, "inboundPassword") is { } inboundPassword) options.InboundPassword = inboundPassword;
+            if (context.Attr(element, "inboundRealm") is { } inboundRealm) options.InboundRealm = inboundRealm;
+            if (context.Attr(element, "tokenValidator") is { } tokenValidator) options.TokenValidator = tokenValidator;
         });
 
         foreach (var child in element.Elements())
@@ -96,12 +125,15 @@ public sealed class RestXmlContribution : IXmlTopLevelContribution
             if (ParseBinding(child, context) is { } binding) verb.BindingMode(binding);
             if (context.Attr(child, "id") is { Length: > 0 } id) verb.Id(id);
             if (context.Attr(child, "description") is { Length: > 0 } description) verb.Description(description);
+            if (context.Convert<bool>(child, "clientRequestValidation") is { } validate) verb.ClientRequestValidation(validate);
             if (!ApplyGenericType(child, context, "type", typeName => Closed(nameof(RestVerbDefinition.Type), typeName, verb))
                 || !ApplyGenericType(child, context, "outType", typeName => Closed(nameof(RestVerbDefinition.OutType), typeName, verb)))
                 continue;
+            if (!ApplyParams(child, verb, context))
+                continue;
 
             var target = context.Attr(child, "to");
-            var steps = child.Elements().ToList();
+            var steps = child.Elements().Where(e => !IsParam(e)).ToList();
             if (target is not null && steps.Count > 0)
             {
                 context.AddError(child, $"<{verbName}> handles the request with to= or with inline steps — one of the two, not both.");
@@ -119,10 +151,54 @@ public sealed class RestXmlContribution : IXmlTopLevelContribution
             }
             else
             {
-                var route = verb.Route();
-                context.ParseSteps(child, route);
+                IRouteDefinition route = verb.Route();
+                foreach (var step in steps)
+                    route = context.ParseStep(step, route);
             }
         }
+    }
+
+    private static bool IsParam(XElement element) => element.Name.LocalName == "param";
+
+    /// <summary>Declares the verb's <c>&lt;param&gt;</c> children; <c>false</c> when one was refused.</summary>
+    private static bool ApplyParams(XElement verbElement, RestVerbDefinition verb, XmlParseContext context)
+    {
+        var ok = true;
+        foreach (var param in verbElement.Elements().Where(IsParam))
+        {
+            var name = context.RequiredAttr(param, "name");
+            var type = ParseEnum<RestParamType>(param, "type", context, "path, query, header");
+            var dataType = ParseEnum<RestParamDataType>(param, "dataType", context, "string, integer, number, boolean");
+            if (name is null || type is { Ok: false } || dataType is { Ok: false })
+            {
+                ok = false;
+                continue;
+            }
+            try
+            {
+                verb.Param(name, type.Value ?? RestParamType.Query, context.Convert<bool>(param, "required"),
+                    dataType.Value ?? RestParamDataType.String, context.Attr(param, "description"));
+            }
+            catch (ArgumentException ex)
+            {
+                // A refused declaration is a positioned schema error, collected with the rest of the pass.
+                context.AddError(param, ex.Message);
+                ok = false;
+            }
+        }
+        return ok;
+    }
+
+    private static (bool Ok, TEnum? Value) ParseEnum<TEnum>(XElement element, string attribute, XmlParseContext context, string allowed)
+        where TEnum : struct, Enum
+    {
+        var value = context.Attr(element, attribute);
+        if (value is null)
+            return (true, null);
+        if (value.All(char.IsLetter) && Enum.TryParse<TEnum>(value, ignoreCase: true, out var parsed))
+            return (true, parsed);
+        context.AddError(element, $"{attribute}='{value}' is not one of: {allowed}.");
+        return (false, null);
     }
 
     private static RestBindingMode? ParseBinding(XElement element, XmlParseContext context)
@@ -175,6 +251,13 @@ public sealed class RestXmlContribution : IXmlTopLevelContribution
         Opt("openApiPath", v => $"options.OpenApiPath = {XmlCodeWriter.Str(v)};");
         Opt("title", v => $"options.Title = {XmlCodeWriter.Str(v)};");
         Opt("version", v => $"options.Version = {XmlCodeWriter.Str(v)};");
+        Opt("clientRequestValidation", v => $"options.ClientRequestValidation = {XmlCodeWriter.Bool(bool.Parse(v))};");
+        Opt("errorHandler", v => $"options.ErrorHandler = {XmlCodeWriter.Str(v)};");
+        Opt("inboundAuth", v => $"options.InboundAuth = HttpAuthScheme.{Enum.Parse<HttpAuthScheme>(v, true)};");
+        Opt("inboundUsername", v => $"options.InboundUsername = {XmlCodeWriter.Str(v)};");
+        Opt("inboundPassword", v => $"options.InboundPassword = {XmlCodeWriter.Str(v)};");
+        Opt("inboundRealm", v => $"options.InboundRealm = {XmlCodeWriter.Str(v)};");
+        Opt("tokenValidator", v => $"options.TokenValidator = {XmlCodeWriter.Str(v)};");
 
         var declaration = optionLines.Count == 0
             ? $"Rest({XmlCodeWriter.Str(element.Attribute("path")?.Value ?? "")})"
@@ -193,6 +276,10 @@ public sealed class RestXmlContribution : IXmlTopLevelContribution
             if (child.Attribute("description")?.Value is { Length: > 0 } description) chain.Append($".Description({XmlCodeWriter.Str(description)})");
             if (child.Attribute("type")?.Value is { } requestType) chain.Append($".Type<{TypeArg(requestType)}>()");
             if (child.Attribute("outType")?.Value is { } responseType) chain.Append($".OutType<{TypeArg(responseType)}>()");
+            if (child.Attribute("clientRequestValidation")?.Value is { } validate)
+                chain.Append($".ClientRequestValidation({XmlCodeWriter.Bool(bool.Parse(validate))})");
+            foreach (var param in child.Elements().Where(IsParam))
+                chain.Append(PrintParam(param));
 
             if (child.Attribute("to")?.Value is { } target)
             {
@@ -202,10 +289,25 @@ public sealed class RestXmlContribution : IXmlTopLevelContribution
             }
             code.MapTo(child);
             var route = code.PushRoot($"{chain}.Route()", child, "handler");
-            code.PrintSteps(child);
+            foreach (var step in child.Elements().Where(e => !IsParam(e)))
+                code.PrintStep(step);
             code.PopReceiver();
             _ = route;
         }
+    }
+
+    private static string PrintParam(XElement param)
+    {
+        var args = new List<string> { XmlCodeWriter.Str(param.Attribute("name")?.Value ?? "") };
+        if (param.Attribute("type")?.Value is { } type)
+            args.Add($"RestParamType.{Enum.Parse<RestParamType>(type, true)}");
+        if (param.Attribute("required")?.Value is { } required)
+            args.Add($"required: {XmlCodeWriter.Bool(bool.Parse(required))}");
+        if (param.Attribute("dataType")?.Value is { } dataType)
+            args.Add($"dataType: RestParamDataType.{Enum.Parse<RestParamDataType>(dataType, true)}");
+        if (param.Attribute("description")?.Value is { } description)
+            args.Add($"description: {XmlCodeWriter.Str(description)}");
+        return $".Param({string.Join(", ", args)})";
     }
 
     private static string TypeArg(string typeName)

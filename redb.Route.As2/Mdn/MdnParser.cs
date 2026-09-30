@@ -24,7 +24,10 @@ internal static class MdnParser
         var signatureValid = false;
         if (entity is MultipartSigned signed)
         {
-            signatureValid = partnerCert is not null && engine.Verify(signed, partnerCert);
+            // A pinned certificate outside its validity verifies nothing (As2CertificateValidity).
+            signatureValid = partnerCert is not null
+                && As2CertificateValidity.Problem(partnerCert, DateTimeOffset.UtcNow, "The partner's MDN signing certificate") is null
+                && engine.Verify(signed, partnerCert);
             entity = signed[0];   // the multipart/report inside
         }
 
@@ -50,12 +53,30 @@ internal static class MdnParser
             }
         }
 
-        var isPositive = disposition is not null
-            && disposition.Contains("processed", StringComparison.OrdinalIgnoreCase)
-            && !disposition.Contains("error", StringComparison.OrdinalIgnoreCase)
-            && !disposition.Contains("failed", StringComparison.OrdinalIgnoreCase);
+        return new MdnResult(originalMessageId, disposition, mic, signatureValid, IsPositiveDisposition(disposition));
+    }
 
-        return new MdnResult(originalMessageId, disposition, mic, signatureValid, isPositive);
+    /// <summary>
+    /// Whether <paramref name="disposition"/> reports the message as processed, read by its fields (RFC 3798 §3.2.6,
+    /// RFC 4130 §7.4.3): <c>action-mode/sending-mode; disposition-type[/modifier: text]</c>. Positive is the type
+    /// <c>processed</c> with no modifier or a <c>warning</c> one; an <c>error</c> or <c>failure</c> modifier, any other
+    /// type, or a value that is not in that form is not. The free text after the modifier is never read.
+    /// </summary>
+    public static bool IsPositiveDisposition(string? disposition)
+    {
+        if (string.IsNullOrWhiteSpace(disposition)) return false;
+        var semicolon = disposition.IndexOf(';');
+        if (semicolon < 0 || !disposition[..semicolon].Contains('/')) return false;
+
+        var rest = disposition[(semicolon + 1)..].Trim();
+        var slash = rest.IndexOf('/');
+        var type = (slash < 0 ? rest : rest[..slash]).Trim();
+        if (!type.Equals("processed", StringComparison.OrdinalIgnoreCase)) return false;
+        if (slash < 0) return true;
+
+        var modifier = rest[(slash + 1)..];
+        var colon = modifier.IndexOf(':');
+        return (colon < 0 ? modifier : modifier[..colon]).Trim().Equals("warning", StringComparison.OrdinalIgnoreCase);
     }
 
     private static MimeEntity LoadEntity(string? contentType, string? transferEncoding, byte[] body)

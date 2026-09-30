@@ -24,6 +24,9 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     private readonly ConcurrentDictionary<string, IEndpoint> _endpoints = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<IConsumer> _consumers = [];
     private readonly List<IProducer> _producers = [];
+    // Producers are tracked from route compilation, from processors on first use and from producer templates, which
+    // may run on several threads at once.
+    private readonly object _producersLock = new();
 
     // Context-level properties
     private readonly ConcurrentDictionary<string, object?> _properties = new(StringComparer.OrdinalIgnoreCase);
@@ -49,6 +52,26 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     private ILoggerFactory? _loggerFactory;
     private ILogger? _logger;
     private readonly RouteEngineOptions _options;
+
+    /// <summary>The engine's stream caching options (<see cref="RouteEngineOptions.StreamCaching"/>).</summary>
+    internal Configuration.StreamCacheOptions StreamCacheOptions => _options.StreamCaching;
+
+    // The static targets of the route being compiled (To, WireTap, Enrich, load-balancer targets, fixed recipients):
+    // their endpoints are created once the route compiles, as Camel resolves a static to(...) at route startup.
+    private List<string>? _compilingStaticEndpoints;
+    // Resolved static targets an intercept with skipSendToOriginalEndpoint matches: the original may never be sent to
+    // (a dry run whose real component is absent), so their endpoints are not created up front.
+    private HashSet<string>? _compilingSkippedStaticEndpoints;
+
+    /// <summary>
+    /// A processor with a fixed target notes it while its route compiles; the endpoint is then created before the route
+    /// starts, so an unknown scheme, an unknown URI parameter or a missing <c>{{key}}</c> fails the start. Outside a
+    /// compilation (a processor made while messages flow) nothing is noted.
+    /// </summary>
+    internal void NoteStaticEndpoint(string uri) => _compilingStaticEndpoints?.Add(uri);
+
+    /// <summary>The engine's <see cref="RouteEngineOptions.EnableTelemetry"/>, read by transport spans too.</summary>
+    internal bool TelemetryEnabled => _options.EnableTelemetry;
     private readonly List<RouteBuilder> _builders = [];
 
     /// <summary>Registered builders (test-kit seam for AdviceWith; definitions are built on demand).</summary>
@@ -907,6 +930,8 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 _compilingIntercepts = builderIntercepts.Concat(definition.GetIntercepts()).ToList();
                 _interceptBodies.Clear();
                 List<CompletionHandler> completionHandlers = [];
+                _compilingStaticEndpoints = [];
+                _compilingSkippedStaticEndpoints = new HashSet<string>(StringComparer.Ordinal);
                 try
                 {
                     var inner = definition.CreateProcessor(this);
@@ -921,6 +946,12 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                     completionHandlers = builderCompletions.Concat(definition.GetOnCompletions())
                         .Select(c => new CompletionHandler(CompileDetached(c.Outputs), c.Mode, c.Condition, c.BeforeConsumer))
                         .ToList();
+
+                    // The static targets' endpoints, now: a bad URI fails here like any compile error, not on the
+                    // first message. Only the endpoint — its producer is made when a message needs it.
+                    foreach (var staticUri in _compilingStaticEndpoints)
+                        if (!_compilingSkippedStaticEndpoints.Contains(ResolvePlaceholders(staticUri)))
+                            GetEndpoint(staticUri);
                 }
                 catch (Exception ex) when (!_options.ThrowOnCompilationError)
                 {
@@ -929,6 +960,8 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 }
                 finally
                 {
+                    _compilingStaticEndpoints = null;
+                    _compilingSkippedStaticEndpoints = null;
                     _compilingRouteId = null;
                     _compilingMessageHistory = false;
                     _compilingIntercepts = [];
@@ -938,6 +971,10 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 // Wrap with routeId stamp
                 var wrappedPipeline = new PipelineProcessor();
                 wrappedPipeline.Add(new DelegateProcessor(exchange => exchange.RouteId = routeId));
+                // RouteEngineOptions.StreamCaching.Enabled, Camel's context-wide streamCaching: every route caches a
+                // stream body before its first step, so any step can read it again.
+                if (_options.StreamCaching.Enabled)
+                    wrappedPipeline.Add(new StreamCachingTransformer(Extensions.RouteContextExtensions.GetStreamCacheOptions(this)));
                 wrappedPipeline.AddRange(pipeline.Processors);
 
                 // Resolve route policy: explicit definition wins, then a registry name
@@ -1009,18 +1046,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                     finalProcessor = new TimeoutProcessor(finalProcessor, routeTimeout, routeId, this,
                         _loggerFactory?.CreateLogger<TimeoutProcessor>());
 
-                // Apply telemetry / metrics wrappers
-
-                if (_options.EnableTelemetry)
-                    finalProcessor = new InstrumentedProcessor(finalProcessor, $"route:{routeId}");
-
-                if (_options.EnableMetrics)
-                {
-                    var endpointScheme = EndpointUriParser.Parse(fromUri).Scheme;
-                    finalProcessor = new MeteredProcessor(finalProcessor, routeId, EndpointUri.Sanitize(fromUri), endpointScheme);
-                }
-
-                // Wrap with builder-level exception handlers (outermost layer)
+                // Wrap with builder-level exception handlers
                 if (allExceptionDefs.Count > 0)
                 {
                     foreach (var exDef in allExceptionDefs)
@@ -1058,6 +1084,17 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                         }
                         finalProcessor = oeProc;
                     }
+                }
+
+                // Telemetry / metrics: outside every error handler, as the statistics below, so a redelivered exchange is
+                // one span and one measurement with its final outcome — not one per attempt.
+                if (_options.EnableTelemetry)
+                    finalProcessor = new InstrumentedProcessor(finalProcessor, $"route:{routeId}");
+
+                if (_options.EnableMetrics)
+                {
+                    var endpointScheme = EndpointUriParser.Parse(fromUri).Scheme;
+                    finalProcessor = new MeteredProcessor(finalProcessor, routeId, EndpointUri.Sanitize(fromUri), endpointScheme);
                 }
 
                 // OnCompletion blocks: outside every error handler, so "failure" is the escaping exception
@@ -1289,9 +1326,25 @@ public class RouteContext : IRouteContext, IAsyncDisposable
             await StopAllAsync(external, c => c.Stop(stopCt), c => c.GetType().Name, "Consumer", timeoutCts, ct)
                 .ConfigureAwait(false);
 
+            // Phase 1b: processors holding exchanges of their own (open aggregation groups) settle them: nothing more
+            // arrives from outside, and the producers are still alive for what a completion sends on.
+            foreach (var holder in _disposableProcessors.OfType<IStopAwareProcessor>().ToArray())
+            {
+                try
+                {
+                    await holder.OnConsumersStoppedAsync(stopCt).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                {
+                    _logger?.LogError(ex, "Settling {Processor} on stop failed", holder.GetType().Name);
+                }
+            }
+
             // Phase 2: Stop producers in parallel (flush pending sends, close connections).
             // No more inflight exchanges from external consumers, safe to tear down.
-            await StopAllAsync(_producers, p => p.Stop(stopCt), p => p.GetType().Name, "Producer", timeoutCts, ct)
+            IProducer[] producers;
+            lock (_producersLock) producers = [.. _producers];
+            await StopAllAsync(producers, p => p.Stop(stopCt), p => p.GetType().Name, "Producer", timeoutCts, ct)
                 .ConfigureAwait(false);
 
             // Phase 3: Drain Seda/Vm queues in parallel.
@@ -1354,7 +1407,20 @@ public class RouteContext : IRouteContext, IAsyncDisposable
 
     /// <summary>Tracks a producer so it is stopped during context shutdown.</summary>
     /// <param name="producer">Producer instance.</param>
-    internal void TrackProducer(IProducer producer) => _producers.Add(producer);
+    internal void TrackProducer(IProducer producer)
+    {
+        lock (_producersLock) _producers.Add(producer);
+    }
+
+    /// <summary>
+    /// Takes a producer off the shutdown list, for an owner that stops it itself (a producer template). <c>false</c>
+    /// when the producer is not on it: the context has stopped it already, or never tracked it.
+    /// </summary>
+    /// <param name="producer">Producer instance.</param>
+    internal bool UntrackProducer(IProducer producer)
+    {
+        lock (_producersLock) return _producers.Remove(producer);
+    }
 
     /// <inheritdoc />
     public IReadOnlyList<IEndpoint> GetEndpoints() => _endpoints.Values.ToList();
@@ -1490,7 +1556,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     {
         _consumers.Clear();
         _endpoints.Clear();
-        _producers.Clear();
+        lock (_producersLock) _producers.Clear();
         _globalExceptionHandlers.Clear();
         _localExceptionHandlers.Clear();
     }
@@ -1573,6 +1639,8 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 : null;
             if (target is null) continue;
             if (staticUri is not null && !UriMask.IsMatch(intercept.UriPattern!, staticUri)) continue;
+            if (staticUri is not null && intercept.SkipsOriginal)
+                _compilingSkippedStaticEndpoints?.Add(staticUri);
             inner = new InterceptSendProcessor(InterceptBody(intercept), intercept.Condition, intercept.SkipsOriginal, intercept.UriPattern!, target, inner, dynamicResolver);
         }
 

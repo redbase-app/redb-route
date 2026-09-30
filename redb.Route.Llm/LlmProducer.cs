@@ -139,7 +139,17 @@ public sealed class LlmProducer : ConnectableProducer
         }
 
         var sw = Stopwatch.StartNew();
-        var response = await engine.RunAsync(Request(null), ct).ConfigureAwait(false);
+        AgentResponse response;
+        try
+        {
+            response = await engine.RunAsync(Request(null), ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the run is a stop; any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
+        }
         sw.Stop();
 
         WriteResponse(exchange, response, factory);
@@ -175,8 +185,10 @@ public sealed class LlmProducer : ConnectableProducer
                     return onDelta(delta, token);
                 }), ct).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
+                // Only the reader's own token cancelling the run is a stop; any other failure marks the span.
+                activity.RecordFailure(ex);
                 // The body is read outside Producer.Process, so nothing else counts this failure for the endpoint.
                 _endpoint.RecordError(ex);
                 LlmMetrics.AgentRuns.Add(1, ProviderTag(factory), ModelTag(factory), FactoryTag(factory),
@@ -207,18 +219,18 @@ public sealed class LlmProducer : ConnectableProducer
         exchange.Out.Headers[LlmHeaders.ModelId] = factory.ModelId;
     }
 
-    private static Activity? StartActivity(LlmConnectionFactory factory, string operation)
+    private Activity? StartActivity(LlmConnectionFactory factory, string operation)
     {
-        var activity = RouteActivitySource.Source.StartActivity(
+        // A transport span of this endpoint: redb.route.endpoint, and nothing when the context has tracing off.
+        var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             operation == "stream" ? $"llm {factory.Provider}:{factory.ModelId} stream" : $"llm {factory.Provider}:{factory.ModelId}",
-            ActivityKind.Client);
+            ActivityKind.Client, "messaging.system", "llm", _endpoint.Uri.NormalizedKey, operation: operation);
 
         if (activity is { IsAllDataRequested: true })
         {
             activity.SetTag("llm.provider", factory.Provider);
             activity.SetTag("llm.model.id", factory.ModelId);
-            activity.SetTag("messaging.system", "llm");
-            activity.SetTag("messaging.operation", operation);
             if (operation == "stream") activity.SetTag("llm.streaming", true);
         }
 

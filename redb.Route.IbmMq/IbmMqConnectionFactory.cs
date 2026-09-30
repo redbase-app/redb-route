@@ -1,5 +1,6 @@
 using System.Collections;
 using IBM.WMQ;
+using redb.Route.Core;
 
 namespace redb.Route.IbmMq;
 
@@ -30,6 +31,7 @@ public sealed class IbmMqConnectionFactory
     public string? User { get; set; }
 
     /// <summary>Authentication password.</summary>
+    [Sensitive]
     public string? Password { get; set; }
 
     /// <summary>Client name for connection tracking.</summary>

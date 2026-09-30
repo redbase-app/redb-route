@@ -139,24 +139,31 @@ public static class RedbStorageDslExtensions
     // ── Query ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// A server-side props query: the <paramref name="where"/> condition string is translated
-    /// onto redb LINQ by <see cref="Query.RedbQueryTranslator"/> (props paths, comparisons,
-    /// AND/OR/NOT, contains/startsWith/endsWith; value-side subtrees — headers, functions,
-    /// date arithmetic — fold per message into constants; the untranslatable refuses at route
-    /// build). The result list of <c>RedbObject&lt;TProps&gt;</c> goes to the target.
-    /// Order of application: where → filter spec → orderBy → skip → take.
+    /// A server-side query: the <paramref name="where"/> condition string is translated onto
+    /// redb <c>Where</c> over props, <paramref name="whereRedb"/> onto redb <c>WhereRedb</c> over
+    /// the base fields of the stored object (<c>Id</c>, <c>ParentId</c>, <c>ValueGuid</c>,
+    /// <c>ValueString</c>, <c>DateCreate</c>…), both by <see cref="Query.RedbQueryTranslator"/>
+    /// (comparisons, AND/OR/NOT, contains/startsWith/endsWith; value-side subtrees — headers,
+    /// functions, date arithmetic — fold per message into constants; the untranslatable refuses
+    /// at route build). The two conditions combine with AND: the storage cannot mix base fields
+    /// and props inside one OR. The result list of <c>RedbObject&lt;TProps&gt;</c> goes to the target.
+    /// Order of application: whereRedb → where → filter spec → orderBy/orderByRedb → skip → take.
     /// </summary>
     /// <param name="route">Route definition.</param>
     /// <param name="propsType">The props CLR type to query.</param>
-    /// <param name="where">Condition string in the route language; null — no condition.</param>
+    /// <param name="where">Condition over props in the route language; null — no condition.</param>
     /// <param name="orderBy">Props property path to order by; null — storage order.</param>
-    /// <param name="descending">Order direction for <paramref name="orderBy"/>.</param>
+    /// <param name="descending">Order direction for <paramref name="orderBy"/> or <paramref name="orderByRedb"/>.</param>
     /// <param name="take">Row limit.</param>
     /// <param name="skip">Rows to skip.</param>
     /// <param name="filter">Registry name of an <see cref="IRedbQuerySpec{TProps}"/> — the
     /// full-LINQ escape hatch for what the string cannot say.</param>
     /// <param name="storage">Named <see cref="IRedbService"/>; null/empty — the default one.</param>
     /// <param name="target">Where the list goes: <c>body</c> (default), <c>header:Name</c>, <c>property:Name</c>.</param>
+    /// <param name="whereRedb">Condition over the base fields of the stored object; null — no condition.</param>
+    /// <param name="orderByRedb">Base field to order by, instead of <paramref name="orderBy"/>.</param>
+    /// <param name="outputType">What goes to the target: the list (default), the first object or
+    /// null, the number of matches, or whether anything matched.</param>
     public static IRouteDefinition RedbQuery(
         this IRouteDefinition route,
         Type propsType,
@@ -167,28 +174,53 @@ public static class RedbStorageDslExtensions
         int? skip = null,
         string? filter = null,
         string? storage = null,
-        string? target = null)
+        string? target = null,
+        string? whereRedb = null,
+        string? orderByRedb = null,
+        RedbQueryOutput outputType = RedbQueryOutput.List)
     {
         ArgumentNullException.ThrowIfNull(propsType);
-        if (where is null && filter is null && orderBy is null && take is null && skip is null)
+        // Only a list pulls every matching row into memory; one object, a count or a yes/no does not.
+        if (outputType == RedbQueryOutput.List && where is null && whereRedb is null && filter is null && orderBy is null && orderByRedb is null
+            && take is null && skip is null)
             throw new ArgumentException(
-                "RedbQuery without where/filter/orderBy/take/skip would be a full unbounded scan — say what you want.",
+                "RedbQuery without where/whereRedb/filter/orderBy/orderByRedb/take/skip would be a full unbounded scan — say what you want.",
                 nameof(where));
+        if (orderBy is not null && orderByRedb is not null)
+            throw new ArgumentException(
+                "RedbQuery orders by one key: orderBy (a props path) or orderByRedb (a base field), not both.",
+                nameof(orderByRedb));
+        if (outputType == RedbQueryOutput.First && take is not null)
+            throw new ArgumentException(
+                "RedbQuery outputType First reads one object — take does not apply (skip and ordering do).",
+                nameof(take));
+        if (outputType is RedbQueryOutput.Count or RedbQueryOutput.Any
+            && (orderBy is not null || orderByRedb is not null || take is not null || skip is not null))
+            throw new ArgumentException(
+                $"RedbQuery outputType {outputType} answers for all the matches — orderBy/orderByRedb/take/skip do not apply.",
+                nameof(outputType));
 
         // Everything translatable is translated NOW — a broken condition fails the route build.
-        var wherePlan = where is null ? null : Query.RedbQueryTranslator.TranslateWhere(propsType, where);
-        var orderPlan = orderBy is null ? null : Query.RedbQueryTranslator.TranslateOrderBy(propsType, orderBy);
+        var props = Query.QueryRoot.Props(propsType);
+        var wherePlan = where is null ? null : Query.RedbQueryTranslator.TranslateWhere(props, where);
+        var whereRedbPlan = whereRedb is null ? null : Query.RedbQueryTranslator.TranslateWhere(Query.QueryRoot.Base, whereRedb);
+        var orderPlan = orderBy is not null ? Query.RedbQueryTranslator.TranslateOrderBy(props, orderBy)
+            : orderByRedb is not null ? Query.RedbQueryTranslator.TranslateOrderBy(Query.QueryRoot.Base, orderByRedb)
+            : null;
         var store = ParseTarget(target);
         var execute = (Func<IRedbService, IExchange, IRouteContext, Task<object?>>)QueryHelperDef
             .MakeGenericMethod(propsType)
             .CreateDelegate(typeof(Func<IRedbService, IExchange, IRouteContext, Task<object?>>), new QueryPlan
             {
                 Where = wherePlan,
+                WhereRedb = whereRedbPlan,
                 OrderBy = orderPlan,
+                OrderByBase = orderByRedb is not null,
                 Descending = descending,
                 Take = take,
                 Skip = skip,
                 FilterName = filter,
+                Output = outputType,
             });
 
         return route.Process(async (exchange, ct) =>
@@ -256,11 +288,14 @@ public static class RedbStorageDslExtensions
     private sealed class QueryPlan
     {
         public Func<IExchange, System.Linq.Expressions.LambdaExpression>? Where;
+        public Func<IExchange, System.Linq.Expressions.LambdaExpression>? WhereRedb;
         public System.Linq.Expressions.LambdaExpression? OrderBy;
+        public bool OrderByBase;
         public bool Descending;
         public int? Take;
         public int? Skip;
         public string? FilterName;
+        public RedbQueryOutput Output;
         private object? _spec;
         private MethodInfo? _orderMethod;
 
@@ -268,6 +303,8 @@ public static class RedbStorageDslExtensions
             IRedbService redb, IExchange exchange, IRouteContext context) where TProps : class, new()
         {
             var query = redb.Query<TProps>();
+            if (WhereRedb is not null)
+                query = query.WhereRedb((System.Linq.Expressions.Expression<Func<IRedbObject, bool>>)WhereRedb(exchange));
             if (Where is not null)
                 query = query.Where((System.Linq.Expressions.Expression<Func<TProps, bool>>)Where(exchange));
             if (FilterName is not null)
@@ -282,11 +319,19 @@ public static class RedbStorageDslExtensions
             }
             if (OrderBy is not null)
             {
-                // The selector is typed Func<TProps, TKey> with the member's own key type (the
-                // provider's ordering parser reads a plain property access, not a boxing
-                // Convert), so the generic OrderBy is closed once over that key type.
+                // The selector is typed Func<TProps, TKey> (Func<IRedbObject, TKey> for a base field)
+                // with the member's own key type (the provider's ordering parser reads a plain
+                // property access, not a boxing Convert), so the generic OrderBy / OrderByRedb is
+                // closed once over that key type.
+                var method = (OrderByBase, Descending) switch
+                {
+                    (false, false) => "OrderBy",
+                    (false, true) => "OrderByDescending",
+                    (true, false) => "OrderByRedb",
+                    (true, true) => "OrderByDescendingRedb",
+                };
                 _orderMethod ??= typeof(redb.Core.Query.IRedbQueryable<TProps>)
-                    .GetMethod(Descending ? "OrderByDescending" : "OrderBy")!
+                    .GetMethod(method)!
                     .MakeGenericMethod(OrderBy.ReturnType);
                 query = (redb.Core.Query.IRedbQueryable<TProps>)_orderMethod.Invoke(query, [OrderBy])!;
             }
@@ -294,7 +339,13 @@ public static class RedbStorageDslExtensions
                 query = query.Skip(skip);
             if (Take is { } take)
                 query = query.Take(take);
-            return await query.ToListAsync().ConfigureAwait(false);
+            return Output switch
+            {
+                RedbQueryOutput.First => await query.FirstOrDefaultAsync().ConfigureAwait(false),
+                RedbQueryOutput.Count => await query.CountAsync().ConfigureAwait(false),
+                RedbQueryOutput.Any => await query.AnyAsync().ConfigureAwait(false),
+                _ => await query.ToListAsync().ConfigureAwait(false),
+            };
         }
     }
 

@@ -1,4 +1,6 @@
-﻿using redb.Route.Abstractions;
+﻿using Microsoft.Extensions.Logging;
+using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Telemetry;
 
 namespace redb.Route.Processors;
@@ -8,14 +10,32 @@ namespace redb.Route.Processors;
 /// Collects exchanges with the same correlation key, then applies the aggregation strategy
 /// when the completion predicate is satisfied.
 /// </summary>
-public class AggregatorProcessor : IProcessor, IAsyncDisposable
+public class AggregatorProcessor : IProcessor, IAsyncDisposable, IStopAwareProcessor
 {
+    /// <summary>
+    /// Apache Camel <c>forceCompletionOnStop</c>: the groups still open when the context stops complete with what they
+    /// have. Without it they are dropped, with a warning naming how many.
+    /// </summary>
+    internal bool ForceCompletionOnStop { get; init; }
+
+    /// <summary>Logs groups dropped or failing to complete on stop.</summary>
+    internal ILogger? Logger { get; init; }
+
     private readonly Func<IExchange, string> _correlationKey;
     private readonly Func<IExchange, IExchange, IExchange> _aggregationStrategy;
     private readonly Func<IExchange, bool> _completionPredicate;
     private readonly IProcessor _target;
 
-    private readonly Dictionary<string, IExchange> _aggregated = new(StringComparer.Ordinal);
+    // A group outlives the calls that fed it, so it holds exchanges of its own (Camel copies an exchange into its
+    // aggregation repository): every arrival is taken over - its bodies and a way to a DI scope - and all of them are
+    // released once the group has gone on down the route, or has been dropped.
+    private sealed class Group(IExchange aggregate)
+    {
+        public IExchange Aggregate { get; set; } = aggregate;
+        public List<IExchange> Members { get; } = [aggregate];
+    }
+
+    private readonly Dictionary<string, Group> _aggregated = new(StringComparer.Ordinal);
     private readonly object _lock = new();
 
     // ── Inactivity timeout (Route-XML Ф1.3, Camel completionTimeout parity) ──────────────
@@ -73,19 +93,24 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         var key = _correlationKey(exchange);
-        IExchange? completed = null;
+        // The caller disposes its exchange as soon as this returns; the group keeps a copy that owns the bodies.
+        var held = exchange is Core.Exchange own ? own.TakeOver() : exchange.Clone();
+        Group? completed = null;
         var groupCreated = false;
 
         lock (_lock)
         {
-            if (_aggregated.TryGetValue(key, out var existing))
+            if (_aggregated.TryGetValue(key, out var group))
             {
-                var merged = _aggregationStrategy(existing, exchange);
-                _aggregated[key] = merged;
+                var merged = _aggregationStrategy(group.Aggregate, held);
+                group.Members.Add(held);
+                if (!group.Members.Contains(merged))
+                    group.Members.Add(merged);
+                group.Aggregate = merged;
 
                 if (_completionPredicate(merged))
                 {
-                    completed = merged;
+                    completed = group;
                     RemoveGroup(key);
                 }
                 else
@@ -95,12 +120,13 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable
             }
             else
             {
-                _aggregated[key] = exchange;
+                group = new Group(held);
+                _aggregated[key] = group;
                 groupCreated = true;
 
-                if (_completionPredicate(exchange))
+                if (_completionPredicate(held))
                 {
-                    completed = exchange;
+                    completed = group;
                     RemoveGroup(key);
                     groupCreated = false;
                 }
@@ -119,7 +145,11 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable
             ProcessorMetrics.AggregatorCompleted.Add(1);
             if (!groupCreated)
                 ProcessorMetrics.AggregatorInflightGroups.Add(-1);
-            await _target.Process(completed, ct).ConfigureAwait(false);
+            // Completed by this arrival: a failure of the completed group is this call's failure too, as it was when
+            // the group went on with the caller's own exchange.
+            var aggregate = await CompleteAsync(completed, ct).ConfigureAwait(false);
+            if (aggregate.Exception is { } failure && !aggregate.ExceptionHandled)
+                exchange.Exception ??= failure;
         }
         // Pre-completion inputs are consumed silently: only completed aggregates flow to
         // _target (the route tail). The aggregator is wired as tail-consuming, so no
@@ -130,6 +160,31 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable
     public int PendingGroupCount
     {
         get { lock (_lock) return _aggregated.Count; }
+    }
+
+    /// <summary>
+    /// Sends a completed group on down the route in a DI scope of its own, then releases every exchange it held.
+    /// Returns the aggregate, released; its outcome stays readable.
+    /// </summary>
+    private async Task<IExchange> CompleteAsync(Group group, CancellationToken ct)
+    {
+        var aggregate = group.Aggregate;
+        (aggregate as Core.Exchange)?.EnsureOwnScope();
+        try
+        {
+            await _target.Process(aggregate, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            await ReleaseAsync(group).ConfigureAwait(false);
+        }
+        return aggregate;
+    }
+
+    private static async Task ReleaseAsync(Group group)
+    {
+        foreach (var member in group.Members)
+            await member.DisposeAsync().ConfigureAwait(false);
     }
 
     // ── Inactivity-timeout plumbing ──────────────────────────────────────────
@@ -168,7 +223,7 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable
         if (_completionTimeout is not { } timeout)
             return;
 
-        List<IExchange>? expired = null;
+        List<Group>? expired = null;
         lock (_lock)
         {
             var cutoff = DateTime.UtcNow - timeout;
@@ -180,7 +235,7 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable
             }
             if (keys is not null)
             {
-                expired = new List<IExchange>(keys.Count);
+                expired = new List<Group>(keys.Count);
                 foreach (var key in keys)
                 {
                     expired.Add(_aggregated[key]);
@@ -192,21 +247,77 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable
         if (expired is null)
             return;
 
-        foreach (var exchange in expired)
+        foreach (var group in expired)
         {
             if (ct.IsCancellationRequested)
-                return;
+            {
+                await ReleaseAsync(group).ConfigureAwait(false);
+                continue;
+            }
             ProcessorMetrics.AggregatorCompleted.Add(1);
             ProcessorMetrics.AggregatorInflightGroups.Add(-1);
             try
             {
-                await _target.Process(exchange, ct).ConfigureAwait(false);
+                await CompleteAsync(group, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
-                exchange.Exception = ex;
+                group.Aggregate.Exception = ex;
+                Logger?.LogError(ex, "Completing an aggregation group on timeout failed");
             }
         }
+    }
+
+    /// <inheritdoc />
+    async Task IStopAwareProcessor.OnConsumersStoppedAsync(CancellationToken ct)
+    {
+        var groups = TakeAllGroups();
+        if (groups.Count == 0)
+            return;
+
+        if (!ForceCompletionOnStop)
+        {
+            Logger?.LogWarning(
+                "{Count} aggregation group(s) not yet complete were dropped on stop; set forceCompletionOnStop to complete them.",
+                groups.Count);
+            await ReleaseAsync(groups).ConfigureAwait(false);
+            return;
+        }
+
+        foreach (var group in groups)
+        {
+            ProcessorMetrics.AggregatorCompleted.Add(1);
+            try
+            {
+                await CompleteAsync(group, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                group.Aggregate.Exception = ex;
+                Logger?.LogError(ex, "Completing an aggregation group on stop failed");
+            }
+        }
+    }
+
+    /// <summary>Removes every open group, for stop and dispose.</summary>
+    private List<Group> TakeAllGroups()
+    {
+        List<Group> groups;
+        lock (_lock)
+        {
+            groups = [.. _aggregated.Values];
+            _aggregated.Clear();
+            _lastArrival.Clear();
+        }
+        if (groups.Count > 0)
+            ProcessorMetrics.AggregatorInflightGroups.Add(-groups.Count);
+        return groups;
+    }
+
+    private static async Task ReleaseAsync(List<Group> groups)
+    {
+        foreach (var group in groups)
+            await ReleaseAsync(group).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -218,5 +329,14 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable
         if (_timer is not null)
             await _timer.DisposeAsync().ConfigureAwait(false);
         _disposeCts.Dispose();
+
+        // A context disposed without a stop still holds its groups: they are dropped, not silently.
+        var groups = TakeAllGroups();
+        if (groups.Count > 0)
+        {
+            Logger?.LogWarning("{Count} aggregation group(s) not yet complete were dropped when the aggregator was disposed.",
+                groups.Count);
+            await ReleaseAsync(groups).ConfigureAwait(false);
+        }
     }
 }

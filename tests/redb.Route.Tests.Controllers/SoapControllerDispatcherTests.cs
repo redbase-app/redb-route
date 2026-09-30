@@ -61,7 +61,8 @@ public class SoapControllerDispatcherTests
     [Fact]
     public async Task Dispatches_By_Operation_And_Binds_Xml_Body()
     {
-        var dispatcher = new SoapControllerDispatcher(new RouteContext(), typeof(AirController));
+        await using var context = new RouteContext();
+        var dispatcher = new SoapControllerDispatcher(context, typeof(AirController));
         var ex = Exchange("GetFares", "<GetFares xmlns=\"urn:air\"><Route>JFK-LHR</Route></GetFares>");
 
         await dispatcher.Process(ex);
@@ -73,7 +74,8 @@ public class SoapControllerDispatcherTests
     [Fact]
     public async Task SoapOperation_Attribute_Maps_The_Method()
     {
-        var dispatcher = new SoapControllerDispatcher(new RouteContext(), typeof(AirController));
+        await using var context = new RouteContext();
+        var dispatcher = new SoapControllerDispatcher(context, typeof(AirController));
         var ex = Exchange("Ping", null);   // method is Health(), mapped via [SoapOperation("Ping")]
 
         await dispatcher.Process(ex);
@@ -84,7 +86,8 @@ public class SoapControllerDispatcherTests
     [Fact]
     public async Task Unknown_Operation_Throws()
     {
-        var dispatcher = new SoapControllerDispatcher(new RouteContext(), typeof(AirController));
+        await using var context = new RouteContext();
+        var dispatcher = new SoapControllerDispatcher(context, typeof(AirController));
         var act = async () => await dispatcher.Process(Exchange("DoesNotExist", null));
         await act.Should().ThrowAsync<InvalidOperationException>().Where(e => e.Message.Contains("DoesNotExist"));
     }
@@ -92,7 +95,8 @@ public class SoapControllerDispatcherTests
     [Fact]
     public async Task Missing_Operation_Header_Throws()
     {
-        var dispatcher = new SoapControllerDispatcher(new RouteContext(), typeof(AirController));
+        await using var context = new RouteContext();
+        var dispatcher = new SoapControllerDispatcher(context, typeof(AirController));
         var act = async () => await dispatcher.Process(Exchange(null, null));
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
@@ -100,7 +104,8 @@ public class SoapControllerDispatcherTests
     [Fact]
     public async Task Unbindable_Simple_Param_Throws_Readable_Error()
     {
-        var dispatcher = new SoapControllerDispatcher(new RouteContext(), typeof(AirController));
+        await using var context = new RouteContext();
+        var dispatcher = new SoapControllerDispatcher(context, typeof(AirController));
         var act = async () => await dispatcher.Process(Exchange("Bad", "<Bad xmlns=\"urn:air\"/>"));
         // A clear message naming the parameter, not a cryptic reflection ArgumentException.
         (await act.Should().ThrowAsync<InvalidOperationException>()).Which.Message.Should().Contain("'n'");
@@ -109,7 +114,8 @@ public class SoapControllerDispatcherTests
     [Fact]
     public void Ctor_Throws_On_Ambiguous_Operation_Across_Controllers()
     {
-        var act = () => new SoapControllerDispatcher(new RouteContext(), typeof(AirController), typeof(ClashController));
+        using var context = new RouteContext();
+        var act = () => new SoapControllerDispatcher(context, typeof(AirController), typeof(ClashController));
         act.Should().Throw<InvalidOperationException>()
             .Which.Message.Should().Contain("Ambiguous").And.Contain("GetFares");
     }
@@ -117,7 +123,8 @@ public class SoapControllerDispatcherTests
     [Fact]
     public async Task Dispatches_ValueTask_Return()
     {
-        var dispatcher = new SoapControllerDispatcher(new RouteContext(), typeof(AirController));
+        await using var context = new RouteContext();
+        var dispatcher = new SoapControllerDispatcher(context, typeof(AirController));
         var ex = Exchange("Quote", "<GetFares xmlns=\"urn:air\"><Route>X</Route></GetFares>");
         await dispatcher.Process(ex);
         // The ValueTask<T> must be awaited and its result serialized, not the struct itself.
@@ -144,7 +151,8 @@ public class SoapControllerDispatcherTests
         await producer.Start();
 
         var exchange = new Exchange(new Message("<Raw xmlns=\"urn:air\"/>"));
-        await producer.Process(exchange);
+        try { await producer.Process(exchange); }
+        finally { await producer.Stop(); }
 
         var body = exchange.Out!.Body!.ToString()!;
         body.Should().Contain("Raw").And.Contain("ok");
@@ -172,18 +180,12 @@ public class SoapControllerDispatcherTests
         await producer.Start();
 
         var exchange = new Exchange(new Message("<GetFares xmlns=\"urn:air\"><Route>JFK-LHR</Route></GetFares>"));
-        await producer.Process(exchange);
+        try { await producer.Process(exchange); }
+        finally { await producer.Stop(); }
 
         // The controller ran behind the SOAP consumer and its typed reply came back as the response body.
         exchange.Out!.Body!.ToString().Should().Contain("GetFaresResponse").And.Contain("100");
     }
 
-    private static int FreePort()
-    {
-        var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int FreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 }

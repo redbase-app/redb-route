@@ -95,11 +95,26 @@ public sealed class TcpProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"tcp {_options.Host}:{_options.Port}", ActivityKind.Client,
             "network.transport", "tcp",
             _endpoint.Uri.NormalizedKey,
             destination: $"{_options.Host}:{_options.Port}");
 
+        try
+        {
+            await SendMessageAsync(exchange, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the send is a stop; any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
+        }
+    }
+
+    private async Task SendMessageAsync(IExchange exchange, CancellationToken ct)
+    {
         // Reconnect if needed
         if (_client is not { Connected: true })
         {

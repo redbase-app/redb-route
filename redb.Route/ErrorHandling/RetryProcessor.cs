@@ -57,11 +57,9 @@ public sealed class RetryProcessor : IProcessor
                 }
 
                 ProcessorMetrics.RetryAttempts.Add(1);
-                var delay = _policy.GetDelay(attempt);
-
-                // Add ±15% jitter to prevent thundering herd
-                var jitter = delay.TotalMilliseconds * (Random.Shared.NextDouble() * 0.3 - 0.15);
-                var actualDelay = TimeSpan.FromMilliseconds(delay.TotalMilliseconds + jitter);
+                // The policy's delay as it is: jitter only when the policy asks for it (CollisionAvoidanceFactor, off by
+                // default as Camel's collision avoidance), already capped by MaxDelay.
+                var actualDelay = _policy.GetDelay(attempt);
 
                 _logger?.LogWarning(
                     "Exchange processing failed (attempt {Attempt}/{MaxRetries}): {Error}. Retrying in {Delay:F0}ms.",

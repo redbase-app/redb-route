@@ -1,5 +1,6 @@
 using System.Text;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Expressions;
 
 namespace redb.Route.Kafka;
@@ -34,12 +35,13 @@ public sealed class KafkaBuilder
     private string? _sslCertificateLocation;
     private string? _sslKeyLocation;
     private string? _sslKeyPassword;
+    private string? _sslEndpointIdentification;
     private string? _connectionFactory;
 
     // Consumer
     private string? _groupId;
     private string? _autoOffsetReset;
-    private string? _enableAutoCommit;
+    private AckMode? _ackMode;
     private string? _maxPollRecords;
     private string? _pollTimeoutMs;
     private bool _breakOnFirstError;
@@ -57,6 +59,7 @@ public sealed class KafkaBuilder
     private string? _retries;
     private bool _recordMetadata;
     private string? _key;
+    private bool? _keyFromHeader;
     private string? _partitionNumber;
     private bool? _transacted;
     private bool? _enableIdempotence;
@@ -98,6 +101,17 @@ public sealed class KafkaBuilder
     {
         _sslCertificateLocation = certPath.ToTemplateString(); _sslKeyLocation = keyPath?.ToTemplateString(); _sslKeyPassword = keyPassword?.ToTemplateString(); return this;
     }
+    /// <summary>Client certificate for mutual TLS (template strings, support <c>${...}</c>).</summary>
+    public KafkaBuilder SslCert(string certPath, string? keyPath = null, string? keyPassword = null)
+    {
+        _sslCertificateLocation = certPath; _sslKeyLocation = keyPath; _sslKeyPassword = keyPassword; return this;
+    }
+
+    /// <summary>
+    /// Whether the broker's hostname is verified against its certificate (<c>sslEndpointIdentificationAlgorithm</c>
+    /// https / none). Unset, librdkafka verifies it.
+    /// </summary>
+    public KafkaBuilder SslVerifyHostname(bool verify = true) { _sslEndpointIdentification = verify ? "https" : "none"; return this; }
 
     /// <summary>Use a named connection factory registered in DI.</summary>
     public KafkaBuilder ConnectionFactory(IExpression name) { _connectionFactory = name.ToTemplateString(); return this; }
@@ -115,11 +129,10 @@ public sealed class KafkaBuilder
     public KafkaBuilder AutoOffsetReset(string reset) { _autoOffsetReset = reset; return this; }
 
     /// <summary>
-    /// Framework-level auto-commit (default <c>true</c>): commit the offset inline after a successful
-    /// Process. A transactional route (<c>.Transacted()</c>/<c>.CommitTransaction()</c>) takes
-    /// precedence and the inline commit is skipped. Set <c>false</c> to commit only at a transaction boundary.
+    /// When the offset is committed: after the route (<see cref="Core.AckMode.Manual"/>, default; a transactional
+    /// route's commit takes precedence) or on receipt (<see cref="Core.AckMode.Auto"/>, at-most-once).
     /// </summary>
-    public KafkaBuilder EnableAutoCommit(bool enabled) { _enableAutoCommit = enabled ? "true" : "false"; return this; }
+    public KafkaBuilder AckMode(AckMode mode) { _ackMode = mode; return this; }
 
     /// <summary>Max records per poll.</summary>
     public KafkaBuilder MaxPollRecords(int max) { _maxPollRecords = max.ToString(); return this; }
@@ -134,7 +147,7 @@ public sealed class KafkaBuilder
     /// <summary>Stop consuming on first error.</summary>
     public KafkaBuilder BreakOnFirstError() { _breakOnFirstError = true; return this; }
 
-    /// <summary>Seek to a specific position: "beginning", "end", or offset number.</summary>
+    /// <summary>Seek each assigned partition once to a position: "beginning" or "end".</summary>
     public KafkaBuilder SeekTo(string position) { _seekTo = position; return this; }
 
     /// <summary>Treat topic name as a regex pattern.</summary>
@@ -168,7 +181,7 @@ public sealed class KafkaBuilder
 
     // ── Producer ──────────────────────────────────────────────────────
 
-    /// <summary>Acknowledge level: None, Leader, All. Default "Leader".</summary>
+    /// <summary>Acknowledge level: None, Leader, All. Default "All".</summary>
     public KafkaBuilder Acks(string acks) { _acks = acks; return this; }
 
     /// <summary>Number of retries. Default 3.</summary>
@@ -183,6 +196,12 @@ public sealed class KafkaBuilder
     public KafkaBuilder Key(IExpression key) { _key = key.ToTemplateString(); return this; }
     /// <summary>Message key for partitioning (template string, supports <c>${...}</c>).</summary>
     public KafkaBuilder Key(string key) { _key = key; return this; }
+
+    /// <summary>
+    /// Whether a record sent without <see cref="Key(string)"/> takes the key of the record the route consumed. Default
+    /// true; <c>KeyFromHeader(false)</c> sends it without a key.
+    /// </summary>
+    public KafkaBuilder KeyFromHeader(bool carry = true) { _keyFromHeader = carry; return this; }
 
     /// <summary>Explicit partition number.</summary>
     public KafkaBuilder Partition(int number) { _partitionNumber = number.ToString(); return this; }
@@ -265,12 +284,13 @@ public sealed class KafkaBuilder
         AppendIf("sslCertificateLocation", _sslCertificateLocation);
         AppendIf("sslKeyLocation", _sslKeyLocation);
         AppendIf("sslKeyPassword", _sslKeyPassword);
+        AppendIf("sslEndpointIdentificationAlgorithm", _sslEndpointIdentification);
         AppendIf("connectionFactory", _connectionFactory);
 
         // Consumer
         AppendIf("groupId", _groupId);
         AppendIf("autoOffsetReset", _autoOffsetReset);
-        AppendIf("enableAutoCommit", _enableAutoCommit);
+        AppendIf("ackMode", _ackMode?.ToString().ToLowerInvariant());
         AppendIf("maxPollRecords", _maxPollRecords);
         AppendIf("pollTimeoutMs", _pollTimeoutMs);
         AppendBool("breakOnFirstError", _breakOnFirstError);
@@ -288,6 +308,7 @@ public sealed class KafkaBuilder
         AppendIf("retries", _retries);
         AppendBool("recordMetadata", _recordMetadata);
         AppendIf("key", _key);
+        if (_keyFromHeader is { } keyFromHeader) Append("keyFromHeader", keyFromHeader ? "true" : "false");
         AppendIf("partitionNumber", _partitionNumber);
         if (_transacted is { } transacted) Append("transacted", transacted ? "true" : "false");
         if (_enableIdempotence is { } idempotence) Append("enableIdempotence", idempotence ? "true" : "false");

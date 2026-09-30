@@ -510,7 +510,8 @@ export class RouteGraphEditorProvider implements vscode.CustomTextEditorProvider
                 name: option.name,
                 type: option.type,
                 required: false,
-                enumValues: option.enumValues ?? (option.type === "bool" ? ["true", "false"] : null),
+                // A flags option takes several members ("Tls12,Tls13"): a text field, not a pick-one list.
+                enumValues: option.type === "flags" ? null : option.enumValues ?? (option.type === "bool" ? ["true", "false"] : null),
                 value: actual === undefined ? null : (secret ? "***" : actual.value),
                 secret,
                 declared: true,

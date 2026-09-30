@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -9,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Http;
+using redb.Route.Telemetry;
 
 namespace redb.Route.SignalR;
 
@@ -97,8 +99,22 @@ public class SignalRConsumer : IConsumer
     /// <summary>
     /// Processes an exchange through the pipeline. Called by <see cref="RedbBridgeHub"/>.
     /// </summary>
-    internal async Task ProcessExchange(IExchange exchange, CancellationToken ct)
+    /// <param name="exchange">The invocation or lifecycle event.</param>
+    /// <param name="ct">The connection's abort token.</param>
+    /// <param name="handshake">
+    /// The trace context the client sent with its connection request, or <c>default</c>. A hub message carries no
+    /// headers of its own, so the span of each one is a root that links this context; the connection may live for
+    /// hours and is never the parent.
+    /// </param>
+    internal async Task ProcessExchange(IExchange exchange, CancellationToken ct, ActivityContext handshake = default)
     {
+        using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"signalr {_endpoint.HubPath} receive", ActivityKind.Consumer, "messaging.system", "signalr",
+            _endpoint.Uri.NormalizedKey, null, static (_, _) => null,
+            destination: _endpoint.HubPath, operation: "receive",
+            links: handshake == default ? null : [new ActivityLink(handshake)]);
+
         // Pipeline statistics belong to the core: StatisticsProcessor wraps a routed consumer
         // and counts MessagesIn/Errors - self-recording here double-counted them (ownership audit).
         _drain.Increment();
@@ -116,6 +132,12 @@ public class SignalRConsumer : IConsumer
         {
             _drain.Decrement();
         }
+
+        // The connection's own abort cancelling the route is not a failure; any other cancellation, a timeout inside
+        // the route, is.
+        if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+            && (failure is not OperationCanceledException || !ct.IsCancellationRequested))
+            span.Activity.RecordFailure(failure);
 
         Interlocked.Increment(ref _processedCount);
     }

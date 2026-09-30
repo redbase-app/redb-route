@@ -60,7 +60,7 @@ public class DistributedCacheTests
     {
         await using var ctx = Context(Memory()).AddRoutes(b =>
         {
-            b.From("direct://put").To("cache:r?action=put&key=${header.id}&cacheHeaders=true");
+            b.From("direct://put").To("cache:r?action=put&key=${header.id}&headers=n,flag");
             b.From("direct://get").To("cache:r?action=get&key=${header.id}").To("mock://get");
         });
         await ctx.Start();
@@ -75,6 +75,31 @@ public class DistributedCacheTests
         got[0].In.Headers["n"].Should().Be(5L, "JSON numbers come back as Int64");
         got[0].In.Headers["flag"].Should().Be(true);
         got[1].In.Body.Should().BeEquivalentTo(new byte[] { 1, 2, 3 });
+    }
+
+    [Fact]
+    public async Task Clear_RemovesASlidingKeyKeptAliveByReads()
+    {
+        // The store keeps its own list of written keys (IDistributedCache cannot enumerate) and sweeps the
+        // expired ones every 256 writes. A sliding entry that is read all the time outlives its write plus
+        // the window, so the list must follow the reads, or clear skips a live key.
+        var store = new DistributedCacheStore(Memory(), null);
+        var key = CacheKeys.For("r", "warm");
+        // A one-second window read every 100 ms: the margin has to survive a machine busy with other builds.
+        await store.SetAsync(key, new CacheEntry { Body = "v" }, ttl: null, sliding: TimeSpan.FromSeconds(1), CancellationToken.None);
+
+        var until = DateTime.UtcNow.AddMilliseconds(1500);
+        while (DateTime.UtcNow < until)
+        {
+            (await store.GetAsync(key, CancellationToken.None)).Should().NotBeNull("reads renew a sliding entry");
+            await Task.Delay(100);
+        }
+        for (var i = 0; i < 256; i++)
+            await store.SetAsync(CacheKeys.For("r", $"other-{i}"), new CacheEntry { Body = "x" }, TimeSpan.FromMinutes(1), null, CancellationToken.None);
+
+        await store.ClearAsync("r", CancellationToken.None);
+
+        (await store.GetAsync(key, CancellationToken.None)).Should().BeNull("clear must remove a key that is still alive");
     }
 
     [Fact]

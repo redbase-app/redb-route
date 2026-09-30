@@ -1,4 +1,5 @@
 using System.Security.Cryptography.X509Certificates;
+using redb.Route.Core;
 
 namespace redb.Route.As2;
 
@@ -59,6 +60,14 @@ public sealed class As2ConnectionFactory
     /// <summary>URL the partner posts asynchronous MDNs to (our receiver).</summary>
     public string? AsyncMdnUrl { get; set; }
 
+    /// <summary>
+    /// Receive side: the hosts (DNS names or IP literals, compared case-insensitively) an asynchronous MDN may be
+    /// posted to. The address comes from the partner's <c>Receipt-Delivery-Option</c> header; a receipt is posted
+    /// only when the message authenticated, <see cref="MdnMode"/> is <see cref="As2MdnMode.Async"/>, and the
+    /// address's host is listed here. Required for a receive endpoint whose <see cref="MdnMode"/> is async.
+    /// </summary>
+    public IList<string> AsyncMdnAllowedHosts { get; set; } = [];
+
     // ── Transport security ───────────────────────────────────────────────────
     /// <summary>
     /// PFX certificate our receive server presents to the partner over TLS. Distinct from
@@ -68,5 +77,22 @@ public sealed class As2ConnectionFactory
     public string? SslCertPath { get; set; }
 
     /// <summary>Password for <see cref="SslCertPath"/>.</summary>
+    [Sensitive]
     public string? SslCertPassword { get; set; }
+
+    /// <summary>
+    /// Permits the legacy algorithms <c>sha-1</c> (broken collision resistance) and <c>3des</c> (a 64-bit block,
+    /// SWEET32) for <see cref="SignAlg"/> and <see cref="EncryptAlg"/>. Only for a partner that still requires them;
+    /// default false, so a new agreement does not inherit weak cryptography by copy and paste.
+    /// </summary>
+    public bool AllowLegacyAlgorithms { get; set; }
+
+    /// <summary>
+    /// Checks the agreement; throws <see cref="InvalidOperationException"/> naming <paramref name="name"/> and what is
+    /// missing or wrong: both identifiers, supported (and, unless allowed, non-legacy) algorithms, our certificate with
+    /// its private key and the partner's certificate wherever something is signed or encrypted, and absolute http(s)
+    /// URLs. Every endpoint naming the factory calls it when it starts; what only one side needs (a partner URL on a
+    /// send, receipt hosts on an async receive) that side checks itself.
+    /// </summary>
+    public void Validate(string name) => As2Profile.From(this).Validate($"AS2 connection factory '{name}'");
 }

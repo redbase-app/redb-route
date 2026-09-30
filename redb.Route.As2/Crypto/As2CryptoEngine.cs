@@ -59,6 +59,34 @@ internal sealed class As2CryptoEngine : IAs2CryptoEngine
     }
 
     /// <inheritdoc />
+    public void DecryptTo(ApplicationPkcs7Mime encrypted, X509Certificate2 ourCert, Stream output)
+    {
+        ArgumentNullException.ThrowIfNull(encrypted);
+        ArgumentNullException.ThrowIfNull(ourCert);
+        ArgumentNullException.ThrowIfNull(output);
+        if (encrypted.SecureMimeType != SecureMimeType.EnvelopedData || encrypted.Content is null)
+            throw new ArgumentException("Entity is not S/MIME enveloped-data.", nameof(encrypted));
+
+        using var ctx = new TemporarySecureMimeContext();
+        ctx.Import(ourCert);
+        using var der = encrypted.Content.Open();   // the transfer encoding (base64) removed
+        ctx.DecryptTo(der, output);
+    }
+
+    /// <inheritdoc />
+    public void DecompressTo(ApplicationPkcs7Mime compressed, Stream output)
+    {
+        ArgumentNullException.ThrowIfNull(compressed);
+        ArgumentNullException.ThrowIfNull(output);
+        if (compressed.SecureMimeType != SecureMimeType.CompressedData || compressed.Content is null)
+            throw new ArgumentException("Entity is not S/MIME compressed-data.", nameof(compressed));
+
+        using var ctx = new TemporarySecureMimeContext();
+        using var der = compressed.Content.Open();
+        ctx.DecompressTo(der, output);
+    }
+
+    /// <inheritdoc />
     public bool Verify(MultipartSigned signed, X509Certificate2 signerCert)
     {
         ArgumentNullException.ThrowIfNull(signed);
@@ -104,33 +132,48 @@ internal sealed class As2CryptoEngine : IAs2CryptoEngine
     }
 
     /// <inheritdoc />
+    public As2Mic ComputeReceivedMic(MimeEntity part, string micalg)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        using var hasher = CreateHash(micalg);
+        using (var stream = new CryptoStream(Stream.Null, hasher, CryptoStreamMode.Write, leaveOpen: true))
+        {
+            // No Prepare: that would re-encode a binary part (as OpenAS2 signs it) to base64 before it is hashed. The
+            // part was parsed from the wire, so its headers and content are written back as they came.
+            part.WriteTo(FormatOptions.Default, stream);
+        }
+        return new As2Mic(Convert.ToBase64String(hasher.Hash!), NormalizeAlg(micalg));
+    }
+
+    /// <inheritdoc />
     public As2Mic ComputeMic(MimeEntity part, string micalg, bool includeHeaders)
     {
         ArgumentNullException.ThrowIfNull(part);
 
-        using var stream = new MemoryStream();
-        if (includeHeaders)
+        // Hashed as it is written: the content is never copied into memory to be hashed (a received one may be spooled).
+        using var hasher = CreateHash(micalg);
+        using (var stream = new CryptoStream(Stream.Null, hasher, CryptoStreamMode.Write, leaveOpen: true))
         {
-            // Signed / encrypted: hash the MIME headers + content, CRLF-canonicalized (RFC 4130 §7.3.1).
-            var options = FormatOptions.Default.Clone();
-            options.NewLineFormat = NewLineFormat.Dos;
-            part.Prepare(EncodingConstraint.SevenBit);
-            part.WriteTo(options, stream);
-        }
-        else if (part is MimePart { Content: not null } mp)
-        {
-            // Plain: hash the decoded content only, without MIME headers.
-            mp.Content.DecodeTo(stream);
-        }
-        else
-        {
-            part.WriteTo(stream);
+            if (includeHeaders)
+            {
+                // Signed / encrypted: hash the MIME headers + content, CRLF-canonicalized (RFC 4130 §7.3.1).
+                var options = FormatOptions.Default.Clone();
+                options.NewLineFormat = NewLineFormat.Dos;
+                part.Prepare(EncodingConstraint.SevenBit);
+                part.WriteTo(options, stream);
+            }
+            else if (part is MimePart { Content: not null } mp)
+            {
+                // Plain: hash the decoded content only, without MIME headers.
+                mp.Content.DecodeTo(stream);
+            }
+            else
+            {
+                part.WriteTo(stream);
+            }
         }
 
-        stream.Position = 0;
-        using var hasher = CreateHash(micalg);
-        var digest = hasher.ComputeHash(stream);
-        return new As2Mic(Convert.ToBase64String(digest), NormalizeAlg(micalg));
+        return new As2Mic(Convert.ToBase64String(hasher.Hash!), NormalizeAlg(micalg));
     }
 
     /// <summary>

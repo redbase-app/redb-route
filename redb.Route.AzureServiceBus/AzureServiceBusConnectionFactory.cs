@@ -1,4 +1,5 @@
 using Azure.Messaging.ServiceBus;
+using redb.Route.Core;
 
 namespace redb.Route.AzureServiceBus;
 
@@ -11,6 +12,7 @@ namespace redb.Route.AzureServiceBus;
 public sealed class AzureServiceBusConnectionFactory
 {
     /// <summary>Azure Service Bus connection string.</summary>
+    [Sensitive]
     public string ConnectionString { get; set; } = "";
 
     /// <summary>Maximum number of retries (default 3).</summary>

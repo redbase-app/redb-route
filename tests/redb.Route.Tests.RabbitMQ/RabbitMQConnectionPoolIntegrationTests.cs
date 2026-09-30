@@ -82,8 +82,8 @@ public sealed class RabbitMQConnectionPoolIntegrationTests
         var qa = $"pool-fac-a-{Guid.NewGuid():N}";
         var qb = $"pool-fac-b-{Guid.NewGuid():N}";
 
-        var epA = CreateEndpoint(component, qa, "connectionFactory=conn-1");
-        var epB = CreateEndpoint(component, qb, "connectionFactory=conn-2");
+        var epA = (RabbitMQEndpoint)component.CreateEndpoint(EndpointUriParser.Parse($"rabbitmq://{qa}?connectionFactory=conn-1&declare=true"));
+        var epB = (RabbitMQEndpoint)component.CreateEndpoint(EndpointUriParser.Parse($"rabbitmq://{qb}?connectionFactory=conn-2&declare=true"));
 
         var pa = (RabbitMQProducer)epA.CreateProducer();
         var pb = (RabbitMQProducer)epB.CreateProducer();
@@ -263,5 +263,59 @@ public sealed class RabbitMQConnectionPoolIntegrationTests
         await consumer.Stop();
         await endpoint.Stop();
         await component.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Pool_publisherConnection_puts_the_producer_on_a_connection_of_its_own()
+    {
+        // Flow control and alarms block a publishing connection as a whole; a consumer on it could not ack.
+        var component = new RabbitMQComponent();
+        var queue = $"pool-pubconn-{Guid.NewGuid():N}";
+
+        var consumerEp = CreateEndpoint(component, queue);
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        var consumer = (RabbitMQConsumer)consumerEp.CreateConsumer(processor);
+        await consumer.Start();
+
+        var producerEp = CreateEndpoint(component, queue, "publisherConnection=true");
+        var producer = (RabbitMQProducer)producerEp.CreateProducer();
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("over the publisher connection")));
+
+        component.PooledConnectionCount.Should().Be(2, "the same connection settings, one connection to consume and one to publish");
+        var names = (await component.GetPooledConnectionsAsync()).Select(c => c.ClientProvidedName).ToList();
+        names.Should().ContainSingle(n => n != null && n.EndsWith("(publisher)"), "the management UI tells the two apart");
+
+        await producer.Stop(); await producerEp.Stop();
+        await consumer.Stop(); await consumerEp.Stop();
+        await component.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Pool_publisherConnection_on_a_consumer_sends_its_rpc_replies_over_the_publisher_connection()
+    {
+        var server = new RabbitMQComponent();
+        var queue = $"pool-pubconn-rpc-{Guid.NewGuid():N}";
+
+        var serverEp = CreateEndpoint(server, queue, "publisherConnection=true");
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(ci => { ci.Arg<IExchange>().Out = new Message("pong"); return Task.CompletedTask; });
+        var consumer = (RabbitMQConsumer)serverEp.CreateConsumer(processor);
+        await consumer.Start();
+
+        var client = new RabbitMQComponent();
+        var clientEp = CreateEndpoint(client, queue, "replyTo=true&timeout=15");
+        var rpc = (RabbitMQProducer)clientEp.CreateProducer();
+        await rpc.Start();
+        var exchange = new Exchange(new Message("ping"));
+        await rpc.Process(exchange);
+
+        exchange.HasOut.Should().BeTrue();
+        server.PooledConnectionCount.Should().Be(2, "the consumer receives and acks on one connection and replies over the other");
+
+        await rpc.Stop(); await clientEp.Stop(); await client.DisposeAsync();
+        await consumer.Stop(); await serverEp.Stop(); await server.DisposeAsync();
     }
 }

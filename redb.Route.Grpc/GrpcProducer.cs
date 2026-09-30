@@ -129,6 +129,7 @@ public class GrpcProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             "grpc.invoke", ActivityKind.Client,
             "rpc.system", "grpc",
             _endpoint.Uri.NormalizedKey);
@@ -176,6 +177,16 @@ public class GrpcProducer : ConnectableProducer
             metadata.Add(metaKey, value.ToString() ?? string.Empty);
         }
 
+        // The context of this call, over a traceparent the header bridge copied from an incoming request: that one
+        // names the previous hop, and the HTTP handler under Grpc.Net.Client does not overwrite a trace header already
+        // on the request. Metadata keeps repeated keys, so the copied entries go first.
+        RouteTelemetryExtensions.InjectTraceContext(activity, metadata, static (m, name, value) =>
+        {
+            while (m.Get(name) is { } copied)
+                m.Remove(copied);
+            m.Add(name, value);
+        });
+
         // Grpc.Net.Client compresses a request when this metadata entry is present; the server then reads
         // grpc-encoding off the wire. We only ask for it when the endpoint opted in.
         if (_options.Compression == GrpcCompression.Gzip)
@@ -205,6 +216,7 @@ public class GrpcProducer : ConnectableProducer
         }
         catch (RpcException rpcEx)
         {
+            activity.RecordFailure(rpcEx);
             Logger?.LogError(rpcEx, "gRPC call failed: endpoint={Endpoint}{Method}, status={StatusCode}, detail={Detail}",
                 _endpoint.BuildProducerAddress(), _options.MethodPath, rpcEx.StatusCode, rpcEx.Status.Detail);
 

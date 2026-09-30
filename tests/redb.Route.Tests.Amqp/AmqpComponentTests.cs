@@ -57,7 +57,7 @@ public sealed class AmqpComponentTests
     public void CreateEndpoint_WithConsumerOptions_ParsesCorrectly()
     {
         var uri = EndpointUriParser.Parse(
-            "amqp://q1?host=localhost&credit=50&concurrentConsumers=4&autoAccept=false&receiveTimeout=30");
+            "amqp://q1?host=localhost&credit=50&concurrentConsumers=4&ackMode=auto&receiveTimeout=30");
 
         var endpoint = (AmqpEndpoint)_sut.CreateEndpoint(uri);
         endpoint.Address.Should().Be("q1");

@@ -1,23 +1,22 @@
 # redb.Route.As2
 
-**AS2 (RFC 4130) B2B/EDI transport for the [redb.Route](../redb.Route) ESB framework.** Exchange business
-documents with trading partners over HTTP(S) using signed and encrypted S/MIME messages and MDN receipts —
-the protocol the retail, logistics and EDI world runs on (Walmart, Amazon, and their supplier networks).
+**AS2 (RFC 4130) B2B/EDI transport for the [redb.Route](../redb.Route) integration framework.** Exchange business
+documents with trading partners over HTTP(S) as signed and encrypted S/MIME messages, confirmed by MDN receipts:
+the protocol retail, logistics and EDI networks run on.
 
 Schemes: `as2` (HTTP), `as2s` (HTTPS).
 
-- **Send** (`.To(...)`) — compress → sign → encrypt a payload and POST it to a partner, then verify the MDN.
-- **Receive** (`.From(...)`) — host an AS2 server: decrypt, verify, hand the document to your route, return an MDN.
-- **Both directions**, **synchronous and asynchronous MDN**, **signed MDN**, and the standard signature /
-  encryption algorithm matrix.
+- **Send** (`.To(...)`): compress, sign and encrypt a payload, POST it to the partner, verify the MDN.
+- **Receive** (`.From(...)`): host an AS2 server that checks who sent the message, decrypts and verifies it, hands the
+  document to your route and answers with the MDN the sender asked for.
+- **Asynchronous MDN** in both roles, **signed MDN**, **duplicate detection**, bounded request and response sizes.
 
-Crypto is provided by **MimeKit** (Bouncy Castle underneath) — the same cryptographic foundation the AS2
-industry interoperates on (Apache camel-as2, OpenAS2, Mendelson). Interop is validated against a live
-**OpenAS2 v4.9.0** server (see [TESTING.md](TESTING.md)).
+Crypto is **MimeKit** (Bouncy Castle underneath), the foundation Apache camel-as2, OpenAS2 and Mendelson interoperate
+on. Interop is tested in both directions against a live **OpenAS2 4.9.0** (see [TESTING.md](TESTING.md)).
 
 ---
 
-## Install & register
+## Install and register
 
 ```csharp
 services.AddRedbRoute(route =>
@@ -27,34 +26,59 @@ services.AddRedbRoute(route =>
 });
 ```
 
-`AddRedbRouteAs2()` registers the `as2` / `as2s` schemes and shares one Kestrel receive server with every
-other HTTP-based connector in the process (via `redb.Route.Http.Hosting`).
+`AddRedbRouteAs2()` registers the `as2` and `as2s` schemes and shares one Kestrel receive server with every other
+HTTP-based connector in the process (`redb.Route.Http.Hosting`): an HTTP route and an AS2 route on one port do not
+fight over it.
 
 ---
 
-## Trading partners — `As2ConnectionFactory`
+## The agreement: `As2ConnectionFactory`
 
-A partner is a bundle of certificates, AS2 identifiers and an agreed profile. Register it **once** by name;
-routes reference it with `.ConnectionFactory("name")`, so certificates never live in a URI.
+A trading partnership is certificates, AS2 identifiers and an agreed profile. Register it once by name; endpoints
+name it with `.ConnectionFactory("name")`, so no certificate or password lives in a URI.
 
 ```csharp
 context.AddToRegistry("walmart", new As2ConnectionFactory
 {
-    OurCertificate     = ourPfx,     // our cert + PRIVATE key — signs outgoing, decrypts incoming
-    PartnerCertificate = theirCer,   // partner's PUBLIC cert — encrypts outgoing, verifies their signature
-    As2From = "OUR-AS2-ID",
-    As2To   = "WALMART-AS2-ID",
+    OurCertificate     = ourPfx,       // our certificate WITH its private key: signs what we send, decrypts what we receive
+    PartnerCertificate = theirCer,     // the partner's public certificate: encrypts for it, verifies its signatures
+    As2From = "OUR-AS2-ID",            // us: AS2-From on send, the AS2-To we accept on receive
+    As2To   = "WALMART-AS2-ID",        // them: AS2-To on send, the AS2-From we accept on receive
     PartnerUrl = "https://partner.example.com/as2",
 
-    // Profile (what both sides agreed on)
     Sign = true, Encrypt = true, Compress = false,
     SignAlg = "sha-256", EncryptAlg = "aes-128-cbc",
-    SignedMdn = true, MdnMode = As2MdnMode.Sync,
+    MdnMode = As2MdnMode.Sync, SignedMdn = true, RequireValidMdn = true,
 });
 ```
 
-`OurCertificate` must carry a private key (an `X509Certificate2` loaded from a PKCS#12/PFX). Mark the PFX
-password `[Sensitive]` when it comes from a URI (`certPassword`) so it is redacted in logs.
+| Property | Default | Meaning |
+|---|---|---|
+| `OurCertificate` | none | Our S/MIME certificate with its private key. Required when anything is signed or encrypted, or a signed MDN is agreed. |
+| `PartnerCertificate` | none | The partner's certificate. Required in the same cases. It is **pinned**: a signature is accepted only when made by this certificate, not merely by a valid one. |
+| `As2From` / `As2To` | required | Our and the partner's AS2 identifiers (RFC 4130 §6.2). |
+| `PartnerUrl` | from the send URI | Where the producer POSTs. If both the factory and the send URI name one, they must be the same. |
+| `Sign` / `Encrypt` / `Compress` | `true` / `true` / `false` | What we do on send, and what we require on receive (an unsigned or unencrypted message where the agreement requires it is refused). |
+| `SignAlg` | `sha-256` | Signature digest, and the MIC algorithm. |
+| `EncryptAlg` | `aes-128-cbc` | Content encryption. |
+| `AllowLegacyAlgorithms` | `false` | Permits `sha-1` and `3des`. Without it they are refused when the endpoint starts. |
+| `MdnMode` | `Sync` | Send: which MDN we ask for. Receive: `Async` permits posting receipts to the address the sender names, `None` never sends an MDN. |
+| `SignedMdn` | `true` | Send: ask for a signed MDN (as `required`), and do not count an unsigned one as a confirmation. |
+| `RequireValidMdn` | `false` | Send: a transfer the MDN does not confirm fails the exchange (sync) or the receipt is refused (async, see below). |
+| `AsyncMdnUrl` | none | Send, async: the URL the partner posts our receipt to (your `As2.ReceiveMdn` endpoint). |
+| `AsyncMdnAllowedHosts` | empty | Receive, async: the hosts a receipt may be posted to. Required when a receive endpoint's `MdnMode` is `Async`. |
+| `SslCertPath` / `SslCertPassword` | none | The TLS certificate of the receive server (not the S/MIME key). The password is `[Sensitive]`. |
+
+**Checked at start.** Every endpoint that names a factory checks it when it starts (`As2ConnectionFactory.Validate`):
+identifiers present, algorithms supported and not legacy unless allowed, our certificate present with its private key
+and the partner's certificate present wherever something is signed or encrypted, URLs absolute `http(s)`. A send
+endpoint also needs a partner URL, and `AsyncMdnUrl` for async; an async receive endpoint needs `AsyncMdnAllowedHosts`.
+A broken agreement stops the route from starting; it never answers a partner's first message with an error.
+
+**One source.** When an endpoint names a factory, the factory is the whole agreement: agreement options on the URI
+(`sign`, `signAlg`, `mdnMode`, `as2From`, `asyncMdnAllowedHosts`, ...) are refused, naming the parameters. Without a
+factory the inline URI options are the agreement; they carry no certificates, so that is only for an agreement that
+neither signs nor encrypts.
 
 ---
 
@@ -65,28 +89,39 @@ From("direct://outbound")
     .To(As2.Send("https://partner.example.com/as2").ConnectionFactory("walmart"));
 ```
 
-The producer compresses (if enabled), signs, encrypts, and POSTs the message. For a **synchronous MDN** the
-receipt is parsed, its signature verified, and its `Received-Content-MIC` checked against what we sent — the
-outcome lands on `exchange.Out`:
+The producer compresses (if agreed), signs, encrypts and POSTs the document, with `AS2-From`, `AS2-To`, a fresh
+`Message-ID` and, unless `MdnMode` is `None`, `Disposition-Notification-To`. With `SignedMdn` it asks for
+`signed-receipt-protocol=required, pkcs7-signature; signed-receipt-micalg=required, <SignAlg>`. Our and the partner's
+certificates must be within their validity period, or the send fails before anything is posted.
+
+The sent `Message-ID` and MIC are on `exchange.In` (`Message-ID`, `redbAs2.mic`, `redbAs2.micalg`). A synchronous MDN
+is read (at most `maxResponseBodySize` bytes), its signature verified against the pinned partner certificate, and its
+`Received-Content-MIC` compared with ours. The verdict lands on `exchange.Out`:
 
 | Header on `exchange.Out` | Meaning |
 |---|---|
-| `redbAs2.mdnDisposition` | e.g. `automatic-action/MDN-sent-automatically; processed` |
-| `redbAs2.signatureValid` | `bool` — the MDN's signature verified |
-| `redbAs2.mdnMicMatch` | `bool` — the partner received exactly what we sent, intact |
+| `redbAs2.mdnConfirmed` | `true` only when the disposition is positive, the MIC matched, and the signature is valid where `SignedMdn` is agreed. **The one to branch on.** |
+| `redbAs2.mdnMicStatus` | `matched`, `mismatch`, `absent` (the MDN carries no MIC) or `unknown` (nothing to compare with) |
+| `redbAs2.mdnMicMatch` | `true` only for `matched` |
+| `redbAs2.signatureValid` | the MDN was signed and the signature verified |
+| `redbAs2.mdnDisposition` | the raw `Disposition`, e.g. `automatic-action/MDN-sent-automatically; processed` |
 
 ```csharp
 From("direct://outbound")
     .To(As2.Send("https://partner/as2").ConnectionFactory("walmart"))
     .Choice()
-        .When(e => e.Out!.GetHeader<bool>(As2Headers.MdnMicMatch))
-            .Log("delivered & verified")
+        .When(e => e.Out!.GetHeader<bool>(As2Headers.MdnConfirmed))
+            .Log("delivered and verified")
         .Otherwise()
             .To("direct://delivery-alert");
 ```
 
-The connector does **not** throw on a negative MDN or MIC mismatch — it surfaces the outcome and logs a
-warning, leaving the policy decision to your route.
+Without `RequireValidMdn` an unconfirmed MDN is logged and left to the route; with it, the exchange fails and the
+route's error handling takes over. A missing MIC is never a match (RFC 4130 requires one in every MDN).
+
+Exchange headers are bridged onto the request, except redb metadata (`redbAs2.*`), the AS2 and MIME headers the
+connector sets itself, hop-by-hop headers, `Host`, and credentials (`Authorization`, `Proxy-Authorization`,
+`Cookie`, `Set-Cookie`): a token from an inbound caller or an internal service never reaches the partner.
 
 ---
 
@@ -98,145 +133,204 @@ From(As2.Receive("/inbound/orders").Host("0.0.0.0").Port(4080).ConnectionFactory
     .To("direct://process-order");
 ```
 
-The decrypted, verified business document is the exchange body; its real content type is on
-`Message.ContentType` (e.g. `application/edi-x12`). A synchronous MDN is returned automatically. Metadata is
-surfaced under `redbAs2.*`:
+What happens to a request, in order:
 
-| Header | Meaning |
+1. **Size.** A body over `maxRequestBodySize` (100 MB by default) is answered `413` before it is read.
+2. **Who.** `AS2-From` must be the partner's identifier and `AS2-To` ours (case-sensitive, a quoted-string is
+   unquoted, RFC 4130 §6.2).
+3. **Decrypt** with `OurCertificate`, **verify** the signature against the pinned `PartnerCertificate` (which must be
+   within its validity period), **decompress**.
+4. **Policy.** A message not signed or not encrypted where the agreement requires it is refused.
+5. **Duplicates** (with `idempotentRepository`): a `Message-ID` processed before is answered and not delivered.
+6. **Route.** The decrypted document is the body; its content type is `Message.ContentType` (e.g. `application/edi-x12`).
+7. **MDN**, as the request asked (below).
+
+A refused message never reaches the route. Its MDN carries the RFC 4130 §7.4.3 code (`authentication-failed`,
+`decryption-failed`, `decompression-failed`, `insufficient-message-security`, `unexpected-processing-error`) and a
+fixed text with a reference (the request's trace identifier); the detail is in our log under that reference, never in
+the MDN.
+
+| Header on the received exchange | Meaning |
 |---|---|
-| `redbAs2.mic` / `redbAs2.micalg` | the computed Message Integrity Check + algorithm |
-| `redbAs2.signatureValid` | `true` only when the message was signed and the signature verified against the partner cert; `false` for an unsigned message (nothing was verified) |
+| `redbAs2.signatureValid` | `true` only when the message was signed and the signature verified; `false` for an unsigned one |
+| `redbAs2.mic` / `redbAs2.micalg` | the MIC returned in the MDN, and its algorithm |
 | `redbAs2.remoteAddress` | the sender's IP |
-| `redbAs2.partner` | the resolved connection-factory name |
+| `redbAs2.partner` | the connection-factory name |
 
-AS2 wire headers (`AS2-From`, `AS2-To`, `Message-ID`, `Subject`, `Disposition-Notification-*`) are copied
-onto the message verbatim. The S/MIME **wrapper** `Content-Type` is deliberately *not* copied into the
-headers — only the inner business content type reaches `Message.ContentType`.
+The request's own headers (`AS2-From`, `AS2-To`, `Message-ID`, `Subject`, `Disposition-Notification-*`, your partner's
+business headers) are copied verbatim, except the S/MIME wrapper's MIME headers, hop-by-hop headers and the hop's
+credentials (`Authorization`, `Proxy-Authorization`, `Cookie`). A principal the host resolved is on the exchange
+(`ExchangePrincipal`).
+
+### The MDN the receiver returns
+
+- **Only when asked**: no `Disposition-Notification-To`, no MDN (the answer is an empty `200`). `MdnMode = None` never
+  sends one.
+- **Signed when asked**: when `Disposition-Notification-Options` asks for `pkcs7-signature`, signed with
+  `OurCertificate`.
+- **With the requested MIC algorithm**: the first `signed-receipt-micalg` usable here (legacy only when allowed) is the
+  algorithm of the MIC and of the MDN signature; if none is, the agreement's `SignAlg`, with a warning in the log.
+- **Synchronous** in the response, unless the request names a `Receipt-Delivery-Option` and all of these hold, in
+  which case it is posted there: the message **authenticated** (identifiers matched and, where signing is agreed, the
+  signature verified), the agreement's `MdnMode` is `Async`, and the URL is absolute `http(s)`, without user
+  information, to a host in `AsyncMdnAllowedHosts`. Anything else is logged and the MDN goes in the response: an
+  unauthenticated caller cannot make us POST, least of all a receipt signed by our key, to an address of its choosing.
+  The asynchronous MDN is posted after the `200`, outside the request, bounded by `timeout`, counted by the stop drain.
+
+### Duplicates
+
+A partner that did not see our answer sends the document again with the same `Message-ID`. Name an
+`IIdempotentRepository` and the resend is answered with a positive MDN,
+`processed/warning: duplicate-document`, and the same MIC, and is not delivered again:
+
+```csharp
+context.AddIdempotentRepository("as2-walmart", new InMemoryIdempotentRepository());   // or a durable one
+From(As2.Receive("/inbound/orders").Port(4080).ConnectionFactory("walmart").IdempotentRepository("as2-walmart"))
+```
+
+The id is claimed only after the message authenticated (a forged copy cannot burn the id of the real one) and released
+when the route fails, so the partner's resend is then delivered. The repository decides whether ids survive a restart
+and are shared across nodes; give the endpoint one of its own. Without a repository every copy is delivered: the route
+can still use `.IdempotentConsumer(e => e.In.GetHeader<string>(As2Headers.MessageId))`.
 
 ### Receiving over TLS
 
-Two different certificates are in play, and they are not interchangeable:
-`As2ConnectionFactory.OurCertificate` is the S/MIME key that signs and decrypts the **message**;
-the one below secures the **connection**.
+Two certificates, not interchangeable: `OurCertificate` is the S/MIME key of the **message**; this one secures the
+**connection**.
 
 ```csharp
-// certificate on the endpoint
 From(As2.Receive("/inbound/orders").Host("0.0.0.0").Port(4443)
         .Tls("/certs/as2-server.pfx", "password")
         .ConnectionFactory("walmart"))
 
-// or keep its password in the registry with the rest of the partner config
-context.AddToRegistry("walmart", new As2ConnectionFactory
-{
-    OurCertificate = ourSmimeKey,          // signs and decrypts the payload
-    SslCertPath = "/certs/as2-server.pfx", // presented on the TLS connection
-    SslCertPassword = secrets.PfxPassword,
-});
-From(As2.Receive("/inbound/orders").Host("0.0.0.0").Port(4443).Tls().ConnectionFactory("walmart"))
+// or keep the password in the registry
+context.AddToRegistry("walmart", new As2ConnectionFactory { /* ... */ SslCertPath = "/certs/as2-server.pfx", SslCertPassword = secret });
+From(As2.Receive("/inbound/orders").Port(4443).Tls().ConnectionFactory("walmart"))
 ```
 
-The certificate may also come from the host
-(`AddRedbRouteHttpHosting(o => o.Tls.DefaultCertificatePath = ...)`), which is the usual choice when
-several transports share one port. A TLS receiver that finds a certificate in none of the three
-places **refuses to bind**. Previously it opened a plaintext port while advertising `https://` to
-the trading partner.
+The certificate may also come from the host (`AddRedbRouteHttpHosting(o => o.Tls.DefaultCertificatePath = ...)`). A
+TLS receiver that finds none **refuses to bind**; it never opens a plaintext port behind an `https://` URL.
 
 ---
 
-## MDN modes
+## Asynchronous MDN
 
 ```csharp
-MdnMode = As2MdnMode.Sync    // receipt returned in the HTTP response (default)
-MdnMode = As2MdnMode.Async   // receiver acks 200, then POSTs the MDN to a separate URL later
-MdnMode = As2MdnMode.None    // no receipt requested
-SignedMdn = true             // request/produce a signed MDN (common requirement)
-```
-
-### Asynchronous MDN
-
-The sender registers the outgoing `Message-ID`; the partner posts the MDN back later to a receiver you host:
-
-```csharp
-// Partner config
+// Send side of the agreement
 MdnMode = As2MdnMode.Async,
 AsyncMdnUrl = "https://our-host:4081/as2/mdn",
 
 // Routes
-From(As2.Receive("/inbound").Host("0.0.0.0").Port(4080).ConnectionFactory("walmart"))
-    .To("direct://process");
+From("direct://outbound")
+    .To(As2.Send("https://partner/as2").ConnectionFactory("walmart"));
 
 From(As2.ReceiveMdn("/as2/mdn").Host("0.0.0.0").Port(4081).ConnectionFactory("walmart"))
     .Process(e =>
     {
-        // correlated to the original message by Original-Message-ID
-        var original = e.In.GetHeader<string>(As2Headers.MessageId);
-        var ok = e.In.GetHeader<bool>(As2Headers.MdnMicMatch);
+        var original  = e.In.GetHeader<string>(As2Headers.MessageId);      // Original-Message-ID
+        var confirmed = e.In.GetHeader<bool>(As2Headers.MdnConfirmed);
     });
 ```
 
+The producer records the sent `Message-ID` and MIC and returns; the verdict arrives later as its own exchange on the
+`ReceiveMdn` route, with the same headers as a synchronous MDN (`mdnConfirmed`, `mdnMicStatus`, `mdnMicMatch`,
+`signatureValid`, `mdnDisposition`) plus `remoteAddress` and `partner`.
+
+- An MDN for a message nobody waits for (no `Original-Message-ID`, sent before a restart, older than the 30-minute
+  correlation window, or sent from another node: the record is in memory) has `mdnMicStatus = unknown` and is not a
+  confirmation.
+- Where `SignedMdn` is agreed, an unsigned or foreign-signed MDN is not a confirmation and does not end the wait, so
+  the partner's genuine receipt still finds the message. With `RequireValidMdn` as well, it is refused (`400`) and not
+  delivered.
+- A negative MDN from the partner is delivered, unconfirmed: the route must learn that the transfer failed.
+- The receiver has the message receiver's lifecycle: stop drain, `maxConcurrentRequests`, `maxRequestBodySize`, a
+  `Consumer` span.
+
 ---
 
-## Algorithm matrix
+## Algorithms
 
-| Knob | Supported values |
+| Knob | Values |
 |---|---|
-| `SignAlg` | `sha-1`, `sha-256` (default), `sha-384`, `sha-512` |
-| `EncryptAlg` | `aes-128-cbc` (default), `aes-192-cbc`, `aes-256-cbc`, `3des` |
+| `SignAlg` | `sha-256` (default), `sha-384`, `sha-512`; `sha-1` **legacy**, only with `AllowLegacyAlgorithms` |
+| `EncryptAlg` | `aes-128-cbc` (default), `aes-192-cbc`, `aes-256-cbc`; `3des` **legacy** (SWEET32), only with `AllowLegacyAlgorithms` |
 | `Compress` | `true` / `false` (RFC 3274) |
 
-An unsupported algorithm fails fast when the route is built (`Validate()`), not at run time.
+AES-GCM is not supported. An unsupported or unallowed algorithm stops the endpoint from starting.
 
 ---
 
-## URI form (advanced)
+## Endpoint options
 
-The DSL is sugar over URIs; you can write them directly:
+| Option | Side | Default | Meaning |
+|---|---|---|---|
+| `connectionFactory` | both | none | The agreement (above). |
+| `host` / `port` | receive | `0.0.0.0` / `4080` | Where the receive server listens. |
+| `mode` | receive | `message` | `mdn` for an asynchronous-MDN receiver (`As2.ReceiveMdn`). |
+| `useTls`, `sslCertPath`, `sslCertPassword` | receive | off | TLS of the receive server; the `as2s` scheme sets `useTls`. |
+| `maxRequestBodySize` | receive | 100 MB | Larger requests are answered 413 before they are read. |
+| `maxConcurrentRequests`, `requestQueueLimit`, `rejectStatusCode`, `retryAfterSeconds` | receive | `0`, `0`, `429`, `1` | Admission limit, below. |
+| `idempotentRepository` | receive | none | Duplicate detection, above. |
+| `streamBody` | receive | `false` | The body is the spooled payload as a `Stream` (closed with the exchange) instead of `byte[]`. |
+| `timeout` | both | 30000 ms | The outgoing POST: the message on send, the asynchronous MDN on receive. |
+| `maxResponseBodySize` | send | 4 MB | The synchronous MDN is read up to this; larger fails the send without reading it. |
+
+The fluent builder has the same knobs: `.Host()`, `.Port()`, `.Tls()`, `.ConnectionFactory()`,
+`.MaxRequestBodySize()`, `.MaxResponseBodySize()`, `.IdempotentRepository()`, `.StreamBody()`, `.MaxConcurrentRequests()`,
+`.RejectStatusCode()`, `.RetryAfterSeconds()`. The URI form:
 
 ```
 as2:/inbound/orders?host=0.0.0.0&port=4080&connectionFactory=walmart      # receive server
 as2:/as2/mdn?host=0.0.0.0&port=4081&mode=mdn&connectionFactory=walmart     # async-MDN receiver
-as2s://partner.example.com/as2?connectionFactory=walmart                   # producer (HTTPS ⇒ as2s)
+as2s://partner.example.com/as2?connectionFactory=walmart                   # producer (https => as2s)
 ```
 
-`https://` in `As2.Send(...)` maps to the `as2s` scheme; the receive-path's first segment is preserved
-(no truncation). Certificates and algorithms come from the connection factory, not the URI.
+The receive path is kept whole (its first segment is not taken for a host). Passwords are `[Sensitive]` and redacted
+from logs; an unknown parameter is refused with the nearest option name.
+
+### Admission limit
+
+Kestrel runs as many handlers as requests arrive. `maxConcurrentRequests` caps the concurrent pipeline executions of an
+endpoint; the overflow beyond `requestQueueLimit` waiting requests is shed with `rejectStatusCode` and `Retry-After`
+before any MIME or crypto work (AS2 partners retry on their own). A shed request is counted in `Rejected`, not in
+`MessagesIn` or `Errors`. The limit is per endpoint; for "slow down, do not drop" use `.Threads(n)` in the route.
 
 ---
 
 ## Cross-cutting
 
-Like every redb.Route connector, AS2 endpoints get **statistics & health** (`IEndpointStatistics`, visible in
-the Tsak dashboard) and **distributed tracing** for free — the producer opens a `Client` span and the
-consumer a `Consumer` span linked to the inbound W3C `traceparent`. Secrets are `[Sensitive]`-redacted; the
-receive server is the shared Kestrel host, so an HTTP route and an AS2 route in the same worker share one
-server and never fight over a port.
+Statistics and health (`IEndpointStatistics`, visible in the Tsak dashboard), and distributed tracing on the core's
+transport contract: the producer opens a `"{partner AS2 id} send"` Client span and writes its context to the request
+(replacing a `traceparent` bridged from the exchange); the message and MDN receivers open `"{path} receive"` Consumer
+spans whose parent is the host's request span when the application traces ASP.NET Core, else the sender's
+`traceparent`, else a root, with the sender's baggage put back. A refused message, a failed route or a failed send
+marks the span an error; `EnableTelemetry=false` opens none. Stopping a receive route waits for the messages
+and asynchronous MDNs already in flight, and cancels them when the drain times out.
 
 ---
 
-## Status & maturity
+## Limits and known gaps
 
-Functionally complete: send + receive, sync + async + signed MDN, the algorithm matrix, cross-cutting
-mechanics. Interop is **validated against a live OpenAS2 v4.9.0 in both directions** (`redb → OpenAS2` and
-`OpenAS2 → redb`, signed + encrypted, positive MDN, MIC verified) — see [TESTING.md](TESTING.md). The design
-and phase plan live in `../../docs/as2`.
+- **Revocation** of certificates (CRL/OCSP) is not checked, nor is the chain: the pin is the trust. Validity periods
+  are checked.
+- **Asynchronous MDN delivery** is one attempt; a failure is logged, not retried.
+- **Correlation** of asynchronous MDNs is in memory, per process, for 30 minutes.
+- **Spooling.** The request, each decrypted and decompressed stage and the payload go through the core stream cache
+  (`StreamCaching` options: memory up to the threshold, 128 KB by default, then a temporary file), as in the AS4
+  receiver. What MimeKit and Bouncy Castle buffer inside one decryption step is theirs; `byte[]` bodies (without
+  `streamBody`) are the payload in memory by definition.
+- `AS2-Version` is not negotiated (we speak 1.2). AS2 Restart (resuming a partial transfer) and multiple attachments
+  (RFC 6362) are not supported.
 
-Part of the redb.Route connector family.
+---
 
-## Concurrency limits
+## Tested on
 
-Kestrel executes as many handlers as requests arrive; without a limit a route has no ceiling.
-The admission limit caps concurrent pipeline executions per endpoint and sheds the overflow
-BEFORE any pipeline work (load shedding, not backpressure):
+- **141 tests** on net8.0, net9.0 and net10.0: crypto round-trips over the algorithm matrix, loopback over a live
+  Kestrel (sync, async and signed MDN, spans, statistics, principal), the security checks above (forged signatures,
+  foreign identifiers, receipt-URL traps, unsigned receipts, expired certificates), limits and drain, duplicates.
+- **Interop against OpenAS2 4.9.0** (Docker), both directions, synchronous and asynchronous MDN: our signed and encrypted message accepted by OpenAS2
+  with a positive signed MDN whose MIC we verify; OpenAS2's message received, decrypted, verified and routed, and our
+  MDN accepted by OpenAS2, which checks our MIC on the asynchronous path. See [TESTING.md](TESTING.md).
 
-| Parameter | Default | Description |
-|---|---|---|
-| `maxConcurrentRequests` | `0` (unlimited) | Max concurrent pipeline executions |
-| `requestQueueLimit` | `0` | Requests over the limit that WAIT (FIFO) instead of being rejected |
-| `rejectStatusCode` | `429` | Status for a shed request |
-| `retryAfterSeconds` | `1` | `Retry-After` header value; `0` = do not send |
-
-A shed request is answered before an exchange exists: it appears in the endpoint's `Rejected`
-counter, not in `MessagesIn` or `Errors`. The limit is strictly per endpoint — other routes on
-the same listener keep their own budget. For "slow down but do not drop" semantics use
-`.Threads(n)` in the route instead; the two compose (the limit sheds at the door, Threads
-paces inside).
+Design notes and the review this version answers are in `../../docs/as2`.

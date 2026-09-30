@@ -19,6 +19,7 @@ public class GrpcControllerIntegrationTests : IAsyncLifetime
     private GrpcConsumer? _consumer;
     private GrpcProducer? _producer;
     private int _port;
+    private RouteContext? _context;
 
     public Task InitializeAsync()
     {
@@ -30,6 +31,7 @@ public class GrpcControllerIntegrationTests : IAsyncLifetime
     {
         if (_producer is not null) await _producer.Stop();
         if (_consumer is not null) await _consumer.Stop();
+        if (_context is not null) await _context.DisposeAsync();
     }
 
     /// <summary>
@@ -38,7 +40,8 @@ public class GrpcControllerIntegrationTests : IAsyncLifetime
     /// </summary>
     private async Task StartPair(params Type[] controllerTypes)
     {
-        var context = new RouteContext();
+        _context = new RouteContext();
+        var context = _context;
         var dispatcher = new GrpcControllerDispatcher(context, controllerTypes);
 
         // Consumer (server)
@@ -164,9 +167,10 @@ public class GrpcControllerIntegrationTests : IAsyncLifetime
         var exchange = CreateGrpcExchange("Delete", 1);
         await _producer!.Process(exchange);
 
-        // Void method — response body may be empty/null but no exception
+        // A void action answers with no body: the request payload ("1") must not come back as the reply.
         exchange.Exception.Should().BeNull();
         exchange.Out.Should().NotBeNull();
+        (exchange.Out!.Body as byte[] ?? Array.Empty<byte>()).Should().BeEmpty();
     }
 
     // ── Multi-controller qualified dispatch ─────────────
@@ -222,12 +226,5 @@ public class GrpcControllerIntegrationTests : IAsyncLifetime
         }
     }
 
-    private static int GetFreePort()
-    {
-        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 }

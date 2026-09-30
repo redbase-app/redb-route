@@ -1,3 +1,4 @@
+using redb.Route.Core;
 using Azure.Messaging.ServiceBus;
 using redb.Route.AzureServiceBus;
 
@@ -58,16 +59,11 @@ public sealed class AzureServiceBusEndpointOptionsTests
     }
 
     [Fact]
-    public void Validate_InvalidReceiveMode_Throws()
+    public void Bind_InvalidAckMode_Throws()
     {
-        var options = new AzureServiceBusEndpointOptions
-        {
-            ConnectionString = "Endpoint=sb://test",
-            ReceiveMode = "Invalid"
-        };
-        var act = () => options.Validate();
-        act.Should().Throw<ArgumentOutOfRangeException>()
-            .WithParameterName("ReceiveMode");
+        var options = new AzureServiceBusEndpointOptions();
+        var act = () => options.BindFromUri(new Dictionary<string, string> { ["ackMode"] = "Invalid" });
+        act.Should().Throw<ArgumentException>().WithMessage("*ackMode=manual*ackMode=auto*");
     }
 
     [Fact]
@@ -132,7 +128,7 @@ public sealed class AzureServiceBusEndpointOptionsTests
         {
             ["connectionString"] = "Endpoint=sb://test",
             ["subscriptionName"] = "sub1",
-            ["receiveMode"] = "ReceiveAndDelete",
+            ["ackMode"] = "auto",
             ["maxConcurrentCalls"] = "5",
             ["prefetchCount"] = "10",
             ["maxAutoLockRenewalDuration"] = "600",
@@ -160,7 +156,7 @@ public sealed class AzureServiceBusEndpointOptionsTests
 
         options.ConnectionString.Should().Be("Endpoint=sb://test");
         options.SubscriptionName.Should().Be("sub1");
-        options.ReceiveMode.Should().Be("ReceiveAndDelete");
+        options.AckMode.Should().Be(AckMode.Auto);
         options.ResolvedMaxConcurrentCalls.Should().Be(5);
         options.PrefetchCount.Should().Be(10);
         options.MaxAutoLockRenewalDuration.Should().Be(600);
@@ -189,7 +185,7 @@ public sealed class AzureServiceBusEndpointOptionsTests
     {
         var options = new AzureServiceBusEndpointOptions();
 
-        options.ReceiveMode.Should().Be("PeekLock");
+        options.AckMode.Should().Be(AckMode.Manual);
         options.ResolvedMaxConcurrentCalls.Should().Be(1);
         options.PrefetchCount.Should().Be(0);
         options.MaxAutoLockRenewalDuration.Should().Be(300);
@@ -211,21 +207,22 @@ public sealed class AzureServiceBusEndpointOptionsTests
     [Fact]
     public void ParsedReceiveMode_PeekLock()
     {
-        var options = new AzureServiceBusEndpointOptions { ReceiveMode = "PeekLock" };
+        var options = new AzureServiceBusEndpointOptions { AckMode = AckMode.Manual };
         options.ParsedReceiveMode.Should().Be(ServiceBusReceiveMode.PeekLock);
     }
 
     [Fact]
     public void ParsedReceiveMode_ReceiveAndDelete()
     {
-        var options = new AzureServiceBusEndpointOptions { ReceiveMode = "ReceiveAndDelete" };
+        var options = new AzureServiceBusEndpointOptions { AckMode = AckMode.Auto };
         options.ParsedReceiveMode.Should().Be(ServiceBusReceiveMode.ReceiveAndDelete);
     }
 
     [Fact]
     public void ParsedReceiveMode_CaseInsensitive()
     {
-        var options = new AzureServiceBusEndpointOptions { ReceiveMode = "receiveanddelete" };
+        var options = new AzureServiceBusEndpointOptions();
+        options.BindFromUri(new Dictionary<string, string> { ["ackMode"] = "AUTO" });
         options.ParsedReceiveMode.Should().Be(ServiceBusReceiveMode.ReceiveAndDelete);
     }
 

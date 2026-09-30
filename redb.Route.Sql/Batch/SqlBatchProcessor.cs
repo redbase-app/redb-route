@@ -5,6 +5,7 @@ using System.Runtime.ExceptionServices;
 using System.Transactions;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Sql.Connection;
 
 namespace redb.Route.Sql.Batch;
 
@@ -61,6 +62,8 @@ internal sealed class SqlBatchProcessor(SqlEndpoint endpoint, SqlEndpointOptions
         var plan = SqlParameterPlan.Create(sql, options.ExplicitParameters, options.PlaceholderStyle, options.BackslashEscapes);
         var factory = endpoint.ResolveConnectionFactory();
         await using var connection = await factory.CreateConnectionAsync(readOnly: false, ct).ConfigureAwait(false);
+        if (SqlAmbientTransaction.Refusal(connection) is { } refusal)
+            throw refusal;
         var writer = ChooseWriter(connection);
 
         DbTransaction? transaction = null;

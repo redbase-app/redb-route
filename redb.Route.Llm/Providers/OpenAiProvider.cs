@@ -544,9 +544,19 @@ public sealed class OpenAiProvider : ILlmProvider
         var usage = LlmUsage.Empty;
         if (json["usage"] is JsonObject u)
         {
-            var inT = u["prompt_tokens"]?.GetValue<int>() ?? 0;
+            // A prompt served from the provider's cache: OpenAI reports it in prompt_tokens_details.cached_tokens,
+            // DeepSeek in prompt_cache_hit_tokens (and fills the OpenAI-shaped one with zero), a gateway may fill
+            // either — they name the same quantity, so the one that reports a number wins. LlmUsage.InputTokens is
+            // the remainder billed at full price, not the whole prompt, so the cached part comes out of
+            // prompt_tokens; DeepSeek names that remainder itself. The write side has no field on this path:
+            // DeepSeek does not bill cache creation separately and OpenAI's cache is implicit.
+            var prompt = u["prompt_tokens"]?.GetValue<int>() ?? 0;
+            var cacheRead = Math.Max(
+                (u["prompt_tokens_details"] as JsonObject)?["cached_tokens"]?.GetValue<int>() ?? 0,
+                u["prompt_cache_hit_tokens"]?.GetValue<int>() ?? 0);
+            var fullPrice = u["prompt_cache_miss_tokens"]?.GetValue<int>() ?? Math.Max(0, prompt - cacheRead);
             var outT = u["completion_tokens"]?.GetValue<int>() ?? 0;
-            usage = new LlmUsage(inT, outT);
+            usage = new LlmUsage(fullPrice, outT, CacheReadInputTokens: cacheRead);
         }
 
         // OpenAI exposes system_fingerprint at the response root; xAI / Together

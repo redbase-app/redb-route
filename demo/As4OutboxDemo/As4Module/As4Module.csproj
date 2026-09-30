@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Project 1 of 2: the Tsak MODULE.
+       A class library. Its DLL is what gets packed into As4Module.tpkg and hot-loaded by the
+       Tsak worker. It contains ONLY route code; the worker supplies the connectors. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>As4Module</RootNamespace>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- redb.Route.As4 is not on NuGet yet: the demo builds against the sources.
+       Switch to PackageReference after publishing (as EchoModule references its packages). -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\..\src\redb.Route.As4\redb.Route.As4.csproj" />
+    <ProjectReference Include="..\..\..\src\redb.Route.File\redb.Route.File.csproj" />
+  </ItemGroup>
+
+  <!-- After build: zip manifest.json + the module DLL into output/As4Module.tpkg. -->
+  <PropertyGroup>
+    <TsakModuleName>As4Module</TsakModuleName>
+  </PropertyGroup>
+  <Target Name="PackTpkg" AfterTargets="Build">
+    <PropertyGroup>
+      <_TpkgStaging>$(IntermediateOutputPath)tpkg</_TpkgStaging>
+      <_TpkgFile>$(MSBuildThisFileDirectory)output\$(TsakModuleName).tpkg</_TpkgFile>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_TpkgStaging)" />
+    <MakeDir Directories="$(_TpkgStaging)" />
+    <MakeDir Directories="$(MSBuildThisFileDirectory)output" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)manifest.json" DestinationFolder="$(_TpkgStaging)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(_TpkgStaging)" />
+    <!-- {ModuleName}.config.json gives the module a named context (ContextName). -->
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)$(TsakModuleName).config.json"
+          DestinationFolder="$(_TpkgStaging)"
+          Condition="Exists('$(MSBuildThisFileDirectory)$(TsakModuleName).config.json')" />
+    <ZipDirectory SourceDirectory="$(_TpkgStaging)" DestinationFile="$(_TpkgFile)" Overwrite="true" />
+    <Message Importance="high" Text="Packed $(TsakModuleName) -> $(_TpkgFile)" />
+  </Target>
+
+</Project>

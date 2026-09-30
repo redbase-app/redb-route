@@ -1,4 +1,5 @@
 using Confluent.Kafka;
+using Confluent.Kafka.Admin;
 using redb.Route.Abstractions;
 
 namespace redb.Route.Kafka;
@@ -25,15 +26,15 @@ internal sealed class KafkaConsumedOffsets
     private readonly KafkaCommitAction _commit;
     private int _state;
 
-    public KafkaConsumedOffsets(IConsumer<string, byte[]> consumer, KafkaCommitAction commit, string cluster)
+    public KafkaConsumedOffsets(IConsumer<string, byte[]> consumer, KafkaCommitAction commit, string? cluster)
     {
         _consumer = consumer;
         _commit = commit;
         Cluster = cluster;
     }
 
-    /// <summary>The consumer's cluster, as <see cref="ClusterOf"/> normalizes it.</summary>
-    public string Cluster { get; }
+    /// <summary>The consumer's cluster id (<see cref="ClusterIdOf"/>); null when the consumer could not read it.</summary>
+    public string? Cluster { get; }
 
     /// <summary>The positions to commit: the next offset to read, per partition.</summary>
     public IReadOnlyList<TopicPartitionOffset> Offsets => _commit.NextOffsets;
@@ -53,22 +54,25 @@ internal sealed class KafkaConsumedOffsets
     /// <summary>The route returned to the consumer: no transaction may take them any more.</summary>
     public void Close() => Interlocked.CompareExchange(ref _state, Closed, Open);
 
-    /// <summary>The offsets offered on <paramref name="exchange"/> for a producer of <paramref name="cluster"/>, if any.</summary>
-    public static KafkaConsumedOffsets? OfferedOn(IExchange exchange, string cluster) =>
+    /// <summary>True once the route returned to the consumer: a transaction that did not take them before cannot now.</summary>
+    public bool IsClosed => Volatile.Read(ref _state) == Closed;
+
+    /// <summary>The offsets a Kafka consumer offered on <paramref name="exchange"/>, of whatever cluster, if any.</summary>
+    public static KafkaConsumedOffsets? OfferedOn(IExchange exchange) =>
         exchange.Properties.TryGetValue(PropertyKey, out var value) && value is KafkaConsumedOffsets offsets
-        && offsets.Cluster == cluster
             ? offsets
             : null;
 
     /// <summary>
-    /// A cluster's identity for matching a consumer with a producer: its bootstrap servers, trimmed, lower-cased, without
-    /// duplicates and sorted, so the same brokers listed in another order are the same cluster. A producer of another
-    /// cluster cannot commit these offsets: they belong to the consumer group of this one.
+    /// A cluster's identity for matching a consumer with a producer: the cluster id its brokers report, read through the
+    /// client's own connection (<paramref name="handle"/>). Brokers listed differently on the two ends are still one
+    /// cluster; a producer of another cluster cannot commit these offsets, they belong to the consumer group of this one.
     /// </summary>
-    public static string ClusterOf(string? bootstrapServers) =>
-        string.Join(",", (bootstrapServers ?? "")
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(s => s.ToLowerInvariant())
-            .Distinct()
-            .Order(StringComparer.Ordinal));
+    public static async Task<string> ClusterIdOf(Handle handle, TimeSpan timeout)
+    {
+        using var admin = new DependentAdminClientBuilder(handle).Build();
+        var cluster = await admin.DescribeClusterAsync(new DescribeClusterOptions { RequestTimeout = timeout })
+            .ConfigureAwait(false);
+        return cluster.ClusterId ?? throw new InvalidOperationException("The Kafka cluster reported no cluster id.");
+    }
 }

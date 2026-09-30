@@ -100,9 +100,13 @@ public sealed class SoapProducer : ConnectableProducer
                 envelope, SoapEnvelope.ContentType(version, action), attachments,
                 version == SoapVersion.Soap12 ? action : null);
 
+        // An RPC span: the operation is rpc.method; the URL and the SOAPAction are not messaging destinations.
         using var span = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"soap {action ?? "call"}", ActivityKind.Client, "rpc.system", "soap",
-            _endpoint.Uri.NormalizedKey, url, action);
+            _endpoint.Uri.NormalizedKey);
+        if (span is { IsAllDataRequested: true } && !string.IsNullOrEmpty(action))
+            span.SetTag("rpc.method", action);
 
         // The envelope is what we SEND. It used to land in BytesIn because that was the only
         // byte counter the statistics surface had.
@@ -116,7 +120,26 @@ public sealed class SoapProducer : ConnectableProducer
         if (version == SoapVersion.Soap11 && !string.IsNullOrEmpty(action))
             request.Headers.TryAddWithoutValidation("SOAPAction", $"\"{action}\"");
 
-        using var response = await _http!.SendAsync(request, ct).ConfigureAwait(false);
+        // The context of this call, written by the producer rather than left to HttpClient instrumentation the
+        // application may not have.
+        RouteTelemetryExtensions.InjectTraceContext(span, request, static (r, name, value) =>
+        {
+            r.Headers.Remove(name);
+            r.Headers.TryAddWithoutValidation(name, value);
+        });
+
+        HttpResponseMessage sent;
+        try
+        {
+            sent = await _http!.SendAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the call is a stop; an HttpClient timeout (a TaskCanceledException) failed.
+            span.RecordFailure(ex);
+            throw;
+        }
+        using var response = sent;
         var respBytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
 
         // Inbound MTOM: unwrap multipart/related and surface the attachments on the reply.
@@ -153,6 +176,8 @@ public sealed class SoapProducer : ConnectableProducer
             exchange.In.Headers[SoapHeaders.FaultCode] = parsed.FaultCode;
             exchange.In.Headers[SoapHeaders.FaultString] = parsed.FaultString;
             exchange.In.Headers[SoapHeaders.IsFault] = true;
+            // A client span is an error for a fault either way: the call did not do what it asked.
+            span?.SetStatus(ActivityStatusCode.Error, parsed.FaultString);
 
             // throwOnFault=false: the fault is an answer the service is designed to give, and the
             // route branches on the headers instead of catching. Explicit, never guessed from the

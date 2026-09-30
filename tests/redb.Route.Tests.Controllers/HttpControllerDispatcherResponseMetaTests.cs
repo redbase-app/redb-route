@@ -73,7 +73,8 @@ public class HttpControllerDispatcherResponseMetaTests
     {
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(FacadeResponseMetaController));
-        var dispatcher = new HttpControllerDispatcher(registry, new RouteContext());
+        await using var context = new RouteContext();
+        var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("POST", "/facade/presets-503");
         await dispatcher.Process(exchange);
@@ -89,7 +90,8 @@ public class HttpControllerDispatcherResponseMetaTests
     {
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(FacadeResponseMetaController));
-        var dispatcher = new HttpControllerDispatcher(registry, new RouteContext());
+        await using var context = new RouteContext();
+        var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("POST", "/facade/presets-content-type");
         await dispatcher.Process(exchange);

@@ -58,6 +58,7 @@ internal sealed class SqlProducer : IProducer
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             "sql.execute", ActivityKind.Client,
             "db.system", _endpoint.Component.Scheme,
             _endpoint.Uri.NormalizedKey);
@@ -105,6 +106,11 @@ internal sealed class SqlProducer : IProducer
 
         // The replica only when the endpoint's author declares the statement read-only: the SQL text cannot tell.
         var connection = await factory.CreateConnectionAsync(readOnly: _options.ReadOnly, ct).ConfigureAwait(false);
+        if (SqlAmbientTransaction.Refusal(connection) is { } refusal)
+        {
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw refusal;
+        }
 
         // From here the connection is owned resource: everything that can throw — starting the
         // transaction included, since a dropped socket or a cancellation surfaces exactly there —
@@ -181,6 +187,8 @@ internal sealed class SqlProducer : IProducer
         }
         catch (Exception ex)
         {
+            if (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                activity.RecordFailure(ex);
             _logger?.LogError(ex, "SQL execution failed: dataSource={DataSource}, outputType={OutputType}",
                 _options.DataSource, _options.OutputType);
             if (tx != null)

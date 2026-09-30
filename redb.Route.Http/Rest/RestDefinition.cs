@@ -102,8 +102,21 @@ public sealed class RestDefinition
 
     private string ConsumerUri(string path, string method)
     {
-        var uri = $"http://{Options.Host}:{Options.Port}{path}?methods={method}&inOut=true";
-        return string.IsNullOrWhiteSpace(Options.ExtraConsumerOptions) ? uri : uri + "&" + Options.ExtraConsumerOptions.TrimStart('&');
+        var uri = new System.Text.StringBuilder($"http://{Options.Host}:{Options.Port}{path}?methods={method}&inOut=true");
+        void Add(string key, string? value)
+        {
+            if (value is not null)
+                uri.Append('&').Append(key).Append('=').Append(Uri.EscapeDataString(value));
+        }
+        if (Options.InboundAuth != HttpAuthScheme.None)
+            Add("inboundAuth", Options.InboundAuth.ToString().ToLowerInvariant());
+        Add("inboundUsername", Options.InboundUsername);
+        Add("inboundPassword", Options.InboundPassword);
+        Add("inboundRealm", Options.InboundRealm);
+        Add("tokenValidator", Options.TokenValidator);
+        if (!string.IsNullOrWhiteSpace(Options.ExtraConsumerOptions))
+            uri.Append('&').Append(Options.ExtraConsumerOptions.TrimStart('&'));
+        return uri.ToString();
     }
 
     private static void Append(IRouteDefinition route, IProcessorDefinition step)

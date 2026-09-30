@@ -206,7 +206,7 @@ services:
       - "2222:22"
     command: testuser:secret:::upload
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 22"]
+      test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/22"]   # the image has bash, not nc
       interval: 10s
       timeout: 3s
       retries: 5
@@ -385,6 +385,17 @@ services:
       retries: 20
       start_period: 30s
 
+  # ── Health probe for distroless images ──────────────────────────────────────
+  # The Service Bus emulator and mock-oauth2-server images have no shell, nc or wget, so a CMD-SHELL health check
+  # can never run there and the containers show "unhealthy" while working. A static busybox, copied once into a
+  # named volume, is the probe they mount read-only.
+  healthprobe-init:
+    image: busybox:musl
+    container_name: route-healthprobe-init
+    command: ["cp", "/bin/busybox", "/probe/busybox"]
+    volumes:
+      - healthprobe:/probe
+
   servicebus:
     image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
     container_name: route-servicebus
@@ -393,14 +404,18 @@ services:
         condition: service_healthy
       sqledge:
         condition: service_started
+      healthprobe-init:
+        condition: service_completed_successfully
     ports:
       - "5300:5672"     # AMQP (remapped to avoid conflict with RabbitMQ on 5672)
     environment:
       SQL_SERVER: sqledge
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "StrongP@ss1"
+    volumes:
+      - healthprobe:/probe:ro
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 5672"]
+      test: ["CMD", "/probe/busybox", "nc", "-z", "127.0.0.1", "5672"]   # distroless: the probe from healthprobe-init
       interval: 15s
       timeout: 5s
       retries: 10
@@ -554,8 +569,13 @@ services:
           "httpServer": "NettyWrapper",
           "tokenCallbacks": []
         }
+    depends_on:
+      healthprobe-init:
+        condition: service_completed_successfully
+    volumes:
+      - healthprobe:/probe:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/default/.well-known/openid-configuration || exit 1"]
+      test: ["CMD", "/probe/busybox", "wget", "-qO-", "http://127.0.0.1:8080/default/.well-known/openid-configuration"]   # distroless: the probe from healthprobe-init
       interval: 10s
       timeout: 5s
       retries: 5
@@ -610,3 +630,4 @@ volumes:
   mssql-data:
   mssql-log:
   mssql-secrets:
+  healthprobe:

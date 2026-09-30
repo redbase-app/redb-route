@@ -3,6 +3,7 @@ using Azure.Messaging.ServiceBus;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.AzureServiceBus;
 
@@ -62,8 +63,8 @@ internal sealed class AzureServiceBusConsumer : IConsumer
         _drain.Start(ct);
         await _processor.StartProcessingAsync(ct).ConfigureAwait(false);
 
-        _logger?.LogInformation("ASB consumer started: entity={Entity}, receiveMode={Mode}, concurrent={Concurrent}",
-            _endpoint.EntityName, _options.ReceiveMode, _options.ResolvedMaxConcurrentCalls);
+        _logger?.LogInformation("ASB consumer started: entity={Entity}, ackMode={Mode}, concurrent={Concurrent}",
+            _endpoint.EntityName, _options.AckMode, _options.ResolvedMaxConcurrentCalls);
     }
 
     public async Task Stop(CancellationToken ct = default)
@@ -90,6 +91,8 @@ internal sealed class AzureServiceBusConsumer : IConsumer
     private async Task OnMessageAsync(ProcessMessageEventArgs args)
     {
         _drain.Increment();
+        // The receive span covers the whole unit of work, settlement included; the route's spans sit under it.
+        using var span = AzureServiceBusTrace.StartReceiveSpan(_endpoint, args.Message);
         Exchange? exchange = null;
         var pipelineFailed = false;
         try
@@ -110,6 +113,9 @@ internal sealed class AzureServiceBusConsumer : IConsumer
                 throw;
             }
 
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled)
+                AzureServiceBusTrace.RecordFailure(span.Activity, failure, args.CancellationToken);
+
             // Acknowledge (PeekLock): complete a unit of work that ended well, abandon or dead-letter one that did not.
             if (_options.ParsedReceiveMode == ServiceBusReceiveMode.PeekLock)
             {
@@ -118,6 +124,7 @@ internal sealed class AzureServiceBusConsumer : IConsumer
         }
         catch (Exception ex)
         {
+            AzureServiceBusTrace.RecordFailure(span.Activity, ex, args.CancellationToken);
             if (_options.ParsedReceiveMode == ServiceBusReceiveMode.PeekLock)
             {
                 try

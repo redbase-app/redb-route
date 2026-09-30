@@ -309,7 +309,7 @@ public class RedbXmlContributionsTests : IAsyncDisposable
         await _context.Start();
 
         await _redb.Received(1).SyncSchemeAsync<RedbXmlOrderProps>();
-        _context.GetFromRegistry<IIdempotentRepository>("idempotent:orders-idem")
+        _context.GetFromRegistry<IIdempotentRepository>("orders-idem")
             .Should().NotBeNull("the repository must be reachable by <idempotentConsumer repository=…>");
     }
 
@@ -371,5 +371,141 @@ public class RedbXmlContributionsTests : IAsyncDisposable
         code.Should().Contain("RedbDelete(\"${header.gone}\", storage: \"archive\")");
         code.Should().Contain("RedbQuery(").And.Contain("where: \"Value == 'x'\"")
             .And.Contain("orderBy: \"Value\"").And.Contain("descending: true").And.Contain("take: 5");
+    }
+
+    // ── whereRedb / orderByRedb: the base fields of the stored object ─
+
+    [Fact]
+    public async Task RedbQuery_WhereRedb_FiltersOnBaseFields_AndCombinesWithWhere()
+    {
+        var query = Substitute.For<redb.Core.Query.IOrderedRedbQueryable<RedbXmlOrderProps>>();
+        System.Linq.Expressions.Expression<Func<redb.Core.Models.Contracts.IRedbObject, bool>>? capturedBase = null;
+        System.Linq.Expressions.Expression<Func<RedbXmlOrderProps, bool>>? capturedProps = null;
+        query.WhereRedb(Arg.Do<System.Linq.Expressions.Expression<Func<redb.Core.Models.Contracts.IRedbObject, bool>>>(e => capturedBase = e))
+            .Returns(query);
+        query.Where(Arg.Do<System.Linq.Expressions.Expression<Func<RedbXmlOrderProps, bool>>>(e => capturedProps = e))
+            .Returns(query);
+        query.OrderByRedb(Arg.Any<System.Linq.Expressions.Expression<Func<redb.Core.Models.Contracts.IRedbObject, long>>>())
+            .Returns(query);
+        query.ToListAsync().Returns([]);
+        _redb.Query<RedbXmlOrderProps>().Returns(query);
+
+        _context.AddXmlRoutesFromContent("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="redb-query-base">
+                <from uri="direct://redb-query-base-in"/>
+                <redbQuery type="redb.Route.Tests.Xml.RedbXmlOrderProps, redb.Route.Tests.Xml"
+                           whereRedb="ValueGuid == header.key AND ParentId == null"
+                           where="Rank > 0" orderByRedb="Id"/>
+              </route>
+            </routes>
+            """, options: Options);
+        var producer = await StartAndProducer("direct://redb-query-base-in");
+        var key = Guid.NewGuid();
+
+        await producer.Process(Msg(headers: ("key", key.ToString())));
+
+        capturedProps.Should().NotBeNull("where= still filters the props");
+        capturedBase.Should().NotBeNull();
+        var predicate = capturedBase!.Compile();
+        predicate(new RedbObject<RedbXmlOrderProps> { ValueGuid = key }).Should().BeTrue();
+        predicate(new RedbObject<RedbXmlOrderProps> { ValueGuid = key, ParentId = 1 }).Should().BeFalse();
+        query.Received(1).OrderByRedb(Arg.Any<System.Linq.Expressions.Expression<Func<redb.Core.Models.Contracts.IRedbObject, long>>>());
+    }
+
+    [Fact]
+    public void RedbQuery_WhereRedbOnAPropsName_IsAPositionedLoadError()
+    {
+        var act = () => _context.AddXmlRoutesFromContent("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="redb-query-base-bad">
+                <from uri="direct://redb-query-base-bad-in"/>
+                <redbQuery type="redb.Route.Tests.Xml.RedbXmlOrderProps, redb.Route.Tests.Xml"
+                           whereRedb="Rank == 1"/>
+              </route>
+            </routes>
+            """, options: Options);
+
+        act.Should().Throw<XmlRouteException>()
+            .Which.Errors.Should().ContainSingle(e =>
+                e.Contains("(4,") && e.Contains("'Rank' is neither a base field") && e.Contains("ValueGuid"));
+    }
+
+    [Fact]
+    public void Generator_PrintsWhereRedbAndOrderByRedb()
+    {
+        var document = XDocument.Parse("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="redb-gen-base">
+                <from uri="direct://redb-gen-base-in"/>
+                <redbQuery type="redb.Route.Tests.Xml.RedbXmlOrderProps, redb.Route.Tests.Xml"
+                           whereRedb="ValueString == header.code" orderByRedb="DateCreate" descending="true"/>
+              </route>
+            </routes>
+            """);
+
+        var code = XmlCodeGenerator.Generate(document, "RedbBaseGenerated", "Tests.Generated", options: Options);
+
+        code.Should().Contain("whereRedb: \"ValueString == header.code\"").And.Contain("orderByRedb: \"DateCreate\"");
+    }
+
+    [Fact]
+    public void Schema_KnowsWhereRedbAndOrderByRedb()
+    {
+        var document = XDocument.Parse("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="redb-schema-base">
+                <from uri="direct://in"/>
+                <redbQuery type="X" whereRedb="Id == 1" orderByRedb="Id"/>
+              </route>
+            </routes>
+            """, LoadOptions.SetLineInfo);
+
+        XmlRouteSchema.Validate(document, ElementRegistry.CreateDefault(Options.Extensions)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RedbQuery_OutputTypeFirst_LandsOneObject_AndPrints()
+    {
+        var query = Substitute.For<redb.Core.Query.IOrderedRedbQueryable<RedbXmlOrderProps>>();
+        var found = new RedbObject<RedbXmlOrderProps>();
+        query.WhereRedb(Arg.Any<System.Linq.Expressions.Expression<Func<redb.Core.Models.Contracts.IRedbObject, bool>>>())
+            .Returns(query);
+        query.FirstOrDefaultAsync().Returns(found);
+        _redb.Query<RedbXmlOrderProps>().Returns(query);
+        const string xml = """
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="redb-query-first">
+                <from uri="direct://redb-query-first-in"/>
+                <redbQuery type="redb.Route.Tests.Xml.RedbXmlOrderProps, redb.Route.Tests.Xml"
+                           whereRedb="ValueGuid == header.key" outputType="First" target="property:existing"/>
+              </route>
+            </routes>
+            """;
+
+        _context.AddXmlRoutesFromContent(xml, options: Options);
+        var producer = await StartAndProducer("direct://redb-query-first-in");
+        var exchange = Msg(headers: ("key", Guid.NewGuid().ToString()));
+        await producer.Process(exchange);
+
+        exchange.Properties["existing"].Should().BeSameAs(found);
+        XmlCodeGenerator.Generate(XDocument.Parse(xml), "FirstGenerated", "Tests.Generated", options: Options)
+            .Should().Contain("outputType: RedbQueryOutput.First");
+    }
+
+    [Fact]
+    public void RedbQuery_UnknownOutputType_IsASchemaError()
+    {
+        var act = () => _context.AddXmlRoutesFromContent("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="redb-query-output-bad">
+                <from uri="direct://redb-query-output-bad-in"/>
+                <redbQuery type="redb.Route.Tests.Xml.RedbXmlOrderProps, redb.Route.Tests.Xml"
+                           whereRedb="Id > 0" outputType="Single"/>
+              </route>
+            </routes>
+            """, options: Options);
+
+        act.Should().Throw<XmlRouteException>().Which.Errors.Should().Contain(e => e.Contains("Single"));
     }
 }

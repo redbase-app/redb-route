@@ -17,6 +17,14 @@ public class Exchange : IExchange
     private bool _ownsScope = true;
     private int _scopesReleased; // 0 = not released, 1 = released (Interlocked)
 
+    // Body ownership, as a Camel unit of work: the exchange that owns a body disposes it, once, when it is done. A copy
+    // shares its origin's body by reference, so it disposes only a body no ancestor carries or lent it; one an ancestor
+    // carries (the aggregated result, a merged-back body) goes on that ancestor's account instead.
+    private Exchange? _origin;
+    private HashSet<object>? _lent;            // disposable bodies this exchange lent to its copies or took over from them
+    private readonly object _bodiesLock = new();
+    private bool _bodiesReleased;               // under _bodiesLock
+
     /// <inheritdoc />
     public IMessage In { get; set; }
 
@@ -85,22 +93,7 @@ public class Exchange : IExchange
 
     /// <inheritdoc />
     public T? GetProperty<T>(string key)
-    {
-        if (!_properties.TryGetValue(key, out var value) || value is null)
-            return default;
-
-        if (value is T typed)
-            return typed;
-
-        try
-        {
-            return (T)Convert.ChangeType(value, typeof(T));
-        }
-        catch
-        {
-            return default;
-        }
-    }
+        => _properties.TryGetValue(key, out var value) ? TypedValue.Convert<T>(value, $"property '{key}'") : default;
 
     /// <inheritdoc />
     public void Stop() => _stopped = true;
@@ -121,6 +114,7 @@ public class Exchange : IExchange
 
         if (Out != null)
             clone.Out = Out.Clone();
+        LendBodiesTo(clone);
 
         foreach (var kvp in _properties)
         {
@@ -156,6 +150,7 @@ public class Exchange : IExchange
 
         if (Out != null)
             snapshot.Out = Out.Snapshot();
+        LendBodiesTo(snapshot);
 
         foreach (var kvp in _properties)
         {
@@ -202,6 +197,8 @@ public class Exchange : IExchange
             child._scope = _scopeFactory.CreateScope();
         }
 
+        // Its message is its own; a body it hands back to this exchange stays on this exchange's account.
+        child._origin = this;
         return child;
     }
 
@@ -226,6 +223,7 @@ public class Exchange : IExchange
             child._properties[kvp.Key] = kvp.Value;
         }
 
+        child._origin = this;
         return child;
     }
 
@@ -248,6 +246,7 @@ public class Exchange : IExchange
 
         if (Out != null)
             clone.Out = Out.Clone();
+        LendBodiesTo(clone);
 
         foreach (var kvp in _properties)
         {
@@ -383,10 +382,8 @@ public class Exchange : IExchange
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        // Cleanup body resources (Stream, StreamCache, etc.)
-        await DisposeBodyIfNeeded(In.Body).ConfigureAwait(false);
-        if (Out is not null)
-            await DisposeBodyIfNeeded(Out.Body).ConfigureAwait(false);
+        // The bodies this exchange owns (Stream, StreamCache, etc.): once, and not one an ancestor still carries.
+        await ReleaseBodies().ConfigureAwait(false);
 
         // Release DI scopes if not already released via ReleaseScopes()
         await ReleaseScopes().ConfigureAwait(false);
@@ -394,11 +391,133 @@ public class Exchange : IExchange
         GC.SuppressFinalize(this);
     }
 
-    private static async ValueTask DisposeBodyIfNeeded(object? body)
+    /// <summary>
+    /// Hands the bodies of this exchange over to <paramref name="successor"/>, a copy that carries on with them after this
+    /// exchange is done (<c>.Threads()</c>): this exchange then disposes none, the successor disposes them as their owner.
+    /// </summary>
+    internal void HandOverBodiesTo(Exchange successor)
     {
-        if (body is IAsyncDisposable asyncDisposable)
-            await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-        else if (body is IDisposable disposable)
-            disposable.Dispose();
+        HashSet<object> bodies;
+        lock (_bodiesLock)
+        {
+            bodies = OwnedBodies();
+            _lent = null;
+            _bodiesReleased = true;
+        }
+        lock (successor._bodiesLock)
+        {
+            successor._origin = null;
+            successor._bodiesReleased = false;
+            foreach (var body in bodies)
+                (successor._lent ??= new HashSet<object>(ReferenceEqualityComparer.Instance)).Add(body);
+        }
+    }
+
+    /// <summary>
+    /// A copy that carries on with this exchange after its caller is done with it (an aggregation group): it takes the
+    /// bodies over and keeps the DI scope factory, without a scope of its own until <see cref="EnsureOwnScope"/>.
+    /// </summary>
+    internal Exchange TakeOver()
+    {
+        var copy = (Exchange)Clone();
+        copy._scopeFactory = _scopeFactory;
+        HandOverBodiesTo(copy);
+        return copy;
+    }
+
+    /// <summary>Gives the exchange a DI scope of its own when it has none and a factory to make one.</summary>
+    internal void EnsureOwnScope()
+    {
+        if (_scope is not null || _scopeFactory is null)
+            return;
+        _scope = _scopeFactory.CreateScope();
+        _ownsScope = true;
+    }
+
+    private static bool IsDisposable(object? body) => body is IAsyncDisposable or IDisposable;
+
+    // Called under _bodiesLock: the current disposable bodies and the ones on this exchange's account.
+    private HashSet<object> OwnedBodies()
+    {
+        var bodies = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        if (IsDisposable(In.Body)) bodies.Add(In.Body!);
+        if (IsDisposable(Out?.Body)) bodies.Add(Out!.Body!);
+        if (_lent is not null) bodies.UnionWith(_lent);
+        return bodies;
+    }
+
+    // A copy shares this exchange's bodies by reference: they stay on this exchange's account.
+    private void LendBodiesTo(Exchange copy)
+    {
+        copy._origin = this;
+        lock (_bodiesLock)
+        {
+            if (_bodiesReleased) return;
+            if (IsDisposable(In.Body)) (_lent ??= new HashSet<object>(ReferenceEqualityComparer.Instance)).Add(In.Body!);
+            if (IsDisposable(Out?.Body)) (_lent ??= new HashSet<object>(ReferenceEqualityComparer.Instance)).Add(Out!.Body!);
+        }
+    }
+
+    // Takes a body on this exchange's account when it carries it or lent it and has not been released yet.
+    private bool TryKeep(object body)
+    {
+        lock (_bodiesLock)
+        {
+            if (_bodiesReleased) return false;
+            if (!(ReferenceEquals(In.Body, body) || ReferenceEquals(Out?.Body, body) || _lent?.Contains(body) == true))
+                return false;
+            (_lent ??= new HashSet<object>(ReferenceEqualityComparer.Instance)).Add(body);
+            return true;
+        }
+    }
+
+    private async ValueTask ReleaseBodies()
+    {
+        HashSet<object> bodies;
+        lock (_bodiesLock)
+        {
+            if (_bodiesReleased) return;
+            _bodiesReleased = true;
+            bodies = OwnedBodies();
+            _lent = null;
+        }
+
+        foreach (var body in bodies)
+        {
+            // A body an ancestor still carries or lent is the ancestor's to dispose (a copy's result aggregated into it,
+            // a body merged back, the body this copy shares with it).
+            var kept = false;
+            for (var ancestor = _origin; ancestor is not null && !kept; ancestor = ancestor._origin)
+                kept = ancestor.TryKeep(body);
+            if (kept)
+                continue;
+
+            try
+            {
+                if (body is IAsyncDisposable asyncDisposable)
+                    await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                else
+                    ((IDisposable)body).Dispose();
+            }
+            catch (Exception ex)
+            {
+                // Like the scopes: one body failing to dispose must not strand the others or the DI scopes after them.
+                ResolveLogger()?.LogError(ex, "Disposing a message body ({BodyType}) failed on exchange {ExchangeId} (route '{RouteId}'); remaining bodies and scopes are still released.",
+                    body.GetType().Name, ExchangeId, RouteId);
+            }
+        }
+    }
+
+    private ILogger? ResolveLogger()
+    {
+        try
+        {
+            return (_scope?.ServiceProvider?.GetService<ILoggerFactory>() ?? Context?.GetService<ILoggerFactory>())
+                ?.CreateLogger("redb.Route.Exchange");
+        }
+        catch (ObjectDisposedException)
+        {
+            return null; // the scope is gone; nothing left to log through
+        }
     }
 }

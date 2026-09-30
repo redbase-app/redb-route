@@ -1,5 +1,6 @@
 using System.Text;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Amqp;
 
@@ -46,7 +47,7 @@ public sealed class AmqpBuilder
 
     // Consumer
     private int? _credit;
-    private bool? _autoAccept;
+    private AckMode? _ackMode;
     private string? _concurrentConsumers;
     private int? _receiveTimeout;
 
@@ -130,8 +131,8 @@ public sealed class AmqpBuilder
     /// <summary>Link credit (prefetch). Default 100.</summary>
     public AmqpBuilder Credit(int credit) { _credit = credit; return this; }
 
-    /// <summary>Auto-accept received messages. Default true.</summary>
-    public AmqpBuilder AutoAccept(bool accept = true) { _autoAccept = accept; return this; }
+    /// <summary>When a delivery is settled: after the route (<see cref="Core.AckMode.Manual"/>, default) or on receipt (<see cref="Core.AckMode.Auto"/>).</summary>
+    public AmqpBuilder AckMode(AckMode mode) { _ackMode = mode; return this; }
 
     /// <summary>Number of concurrent consumers. Default 1.</summary>
     public AmqpBuilder ConcurrentConsumers(int count) { _concurrentConsumers = count.ToString(); return this; }
@@ -258,7 +259,7 @@ public sealed class AmqpBuilder
 
         // Consumer
         AppendInt("credit", _credit);
-        AppendBoolExplicit("autoAccept", _autoAccept);
+        if (_ackMode is { } ackMode) Append("ackMode", ackMode.ToString().ToLowerInvariant());
         AppendIf("concurrentConsumers", _concurrentConsumers);
         AppendInt("receiveTimeout", _receiveTimeout);
 

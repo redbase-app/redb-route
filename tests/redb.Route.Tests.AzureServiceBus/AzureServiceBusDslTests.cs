@@ -1,3 +1,4 @@
+using redb.Route.Core;
 using redb.Route.AzureServiceBus;
 using redb.Route.AzureServiceBus.Fluent;
 
@@ -48,12 +49,12 @@ public sealed class AzureServiceBusDslTests
     {
         var uri = Asb.Queue("orders")
             .ConnectionString("Endpoint=sb://test")
-            .ReceiveMode("ReceiveAndDelete")
+            .AckMode(AckMode.Auto)
             .MaxConcurrentCalls(5)
             .PrefetchCount(10)
             .Build();
 
-        uri.Should().Contain("receiveMode=ReceiveAndDelete");
+        uri.Should().Contain("ackMode=auto");
         uri.Should().Contain("maxConcurrentCalls=5");
         uri.Should().Contain("prefetchCount=10");
     }

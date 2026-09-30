@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Project 2 of 2: the DEBUG HOST.
+       A tiny console app. It prepares the demo folder (a self-signed certificate, outbox/, inbox/), then calls
+       As4Module.InitRoute.main(ctx), the exact method the Tsak worker calls. Run/F5 this to debug without Tsak. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>As4Worker</RootNamespace>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\As4Module\As4Module.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.3" />
+  </ItemGroup>
+
+</Project>

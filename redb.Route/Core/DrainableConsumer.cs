@@ -132,23 +132,42 @@ public abstract class DrainableConsumer : IConsumer
     /// Processes an exchange with automatic inflight count tracking.
     /// Increments before, decrements in finally. Disposes the exchange after processing.
     /// </summary>
-    protected async Task ProcessWithTracking(IExchange exchange, CancellationToken processingCt)
+    protected Task ProcessWithTracking(IExchange exchange, CancellationToken processingCt)
+        => ProcessWithTracking(exchange, default, processingCt);
+
+    /// <summary>
+    /// <see cref="ProcessWithTracking(IExchange, CancellationToken)"/> inside the receive span of the exchange, opened by
+    /// the consumer (<see cref="Telemetry.RouteTelemetryExtensions.StartConsumerSpan{TCarrier}"/>). A failed route marks
+    /// the span, whether its failure stayed on the exchange or escaped the pipeline; the consumer's own stop does not,
+    /// any other cancellation (an HttpClient timeout inside the route) does. The span stays the consumer's to dispose.
+    /// </summary>
+    protected async Task ProcessWithTracking(IExchange exchange, Telemetry.TransportSpan span, CancellationToken processingCt)
     {
         _drain.Increment();
         try
         {
-            await Processor.Process(exchange, processingCt).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (processingCt.IsCancellationRequested)
-        {
-            throw; // shutdown — let the worker loop exit
-        }
-        catch (Exception ex)
-        {
-            // Last-resort net: the route's own error handling (OnException / DeadLetterChannel) runs inside the
-            // pipeline; only a genuinely unhandled exchange reaches here. Log and drop it — a single failure
-            // must NOT terminate the worker and silently stop the consumer draining the queue.
-            Logger?.LogError(ex, "{Consumer} dropped an exchange after an unhandled failure; continuing.", ConsumerName);
+            try
+            {
+                await Processor.Process(exchange, processingCt).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (processingCt.IsCancellationRequested)
+            {
+                throw; // shutdown — let the worker loop exit
+            }
+            catch (Exception ex)
+            {
+                // Last-resort net: the route's own error handling (OnException / DeadLetterChannel) runs inside the
+                // pipeline, and a failure it did not handle stays on the exchange; what escapes is a cancellation those
+                // handlers pass on. It goes on the exchange too, so a consumer that decides on the outcome (delete after
+                // read, move on failure) sees a failed route rather than a clean one. Logged and dropped — a single
+                // failure must NOT terminate the worker and silently stop the consumer draining the queue.
+                exchange.Exception ??= ex;
+                Logger?.LogError(ex, "{Consumer} dropped an exchange after an unhandled failure; continuing.", ConsumerName);
+            }
+
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+                && (failure is not OperationCanceledException || !processingCt.IsCancellationRequested))
+                Telemetry.RouteTelemetryExtensions.RecordFailure(span.Activity, failure);
         }
         finally
         {

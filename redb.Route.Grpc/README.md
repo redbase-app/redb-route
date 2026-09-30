@@ -195,3 +195,16 @@ paces inside).
 gRPC specifics: the limit counts **unary** calls only. A streaming call would hold a permit
 for its whole life and starve the limit, and a shed health probe would flap orchestrators —
 both are deliberately outside the limit.
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), both spans with `rpc.system = grpc` and
+`redb.route.endpoint`:
+
+- **Consumer.** One `Server` span per call, `grpc receive`. Its parent is the host's ASP.NET Core span when the
+  application instruments ASP.NET Core, otherwise the caller's `traceparent` metadata; without one it is a root. The
+  caller's baggage is back on it, the route's spans are its children, and a failed call marks it an error.
+- **Producer.** One `Client` span per call, `grpc.invoke`; an error for a failed call. The call carries the context of
+  this span: a `traceparent` the header bridge copied from an incoming request into the metadata is replaced, as it
+  names the previous hop.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span. A context that came in still goes out.

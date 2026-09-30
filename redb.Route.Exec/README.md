@@ -111,3 +111,16 @@ Other controls:
 ## License
 
 Apache-2.0
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `redb.route.endpoint`:
+
+- **Consumer (schedule).** One `Consumer` span per tick, `exec {executable} receive`. A tick carries no trace context,
+  so the span is a root, never a child of the activity the timer loop inherited from whoever started the routes; the
+  run of the command and the route are its children. A failed tick marks it an error; our own stop does not.
+- **Producer.** One `Client` span per run, `exec {executable}`, with `process.executable.name` = the file name of the
+  resolved command and `process.exit.code`. The arguments, which often carry secrets, are never on the span. A refused
+  command, a failed start or a cancellation that is not our own marks it an error; a non-zero exit code does not, it is
+  in `redbExec.ExitCode`.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.

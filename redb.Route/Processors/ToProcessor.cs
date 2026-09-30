@@ -28,6 +28,7 @@ public class ToProcessor : IProcessor
     {
         _endpointUri = endpointUri ?? throw new ArgumentNullException(nameof(endpointUri));
         _context = context ?? throw new ArgumentNullException(nameof(context));
+        (context as RouteContext)?.NoteStaticEndpoint(endpointUri);
     }
 
     /// <inheritdoc />

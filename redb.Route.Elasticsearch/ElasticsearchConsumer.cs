@@ -1,3 +1,4 @@
+using ActivityKind = System.Diagnostics.ActivityKind;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -6,6 +7,7 @@ using Elastic.Clients.Elasticsearch.Core.Search;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Elasticsearch;
 
@@ -217,7 +219,7 @@ internal sealed class ElasticsearchConsumer : DrainableConsumer
                 headers[ElasticsearchHeaders.SortValues] = JsonSerializer.Serialize(hit.Sort);
 
             // Pipeline statistics are the core StatisticsProcessor's (ownership audit).
-            await ProcessWithTracking(exchange, ct).ConfigureAwait(false);
+            await ProcessTracedAsync(exchange, ct).ConfigureAwait(false);
 
             // Post-processing: delete after read
             if (_options.DeleteAfterRead && hit.Id is not null &&
@@ -226,6 +228,20 @@ internal sealed class ElasticsearchConsumer : DrainableConsumer
                 await _client!.DeleteAsync(_endpoint.IndexName, hit.Id, ct).ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    /// <see cref="DrainableConsumer.ProcessWithTracking"/> inside the span of the hit. A hit carries no trace context, so
+    /// the span is a root, never a child of the activity the poll loop holds. A failed route marks it, whether the failure
+    /// stays on the exchange or escapes the pipeline; our own stop does not.
+    /// </summary>
+    private async Task ProcessTracedAsync(IExchange exchange, CancellationToken ct)
+    {
+        using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"es {_endpoint.IndexName} receive", ActivityKind.Consumer, "db.system", "elasticsearch",
+            _endpoint.Uri.NormalizedKey, null, static (_, _) => null, destination: _endpoint.IndexName, operation: "receive");
+        await ProcessWithTracking(exchange, span, ct).ConfigureAwait(false);
     }
 
     // ═══════════════════════════════════════════════════════════════════

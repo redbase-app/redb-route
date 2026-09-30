@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Google.Cloud.Firestore;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Firebase;
 
@@ -189,6 +191,11 @@ internal sealed class FirestoreConsumer : IConsumer
             return;
         }
 
+        // A document change carries no trace context: its span is a root, never a child of the listener's activity.
+        using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"firestore {_endpoint.CollectionPath} receive", ActivityKind.Consumer, "db.system", "firestore",
+            _endpoint.Uri.NormalizedKey, null, static (_, _) => null, destination: _endpoint.CollectionPath, operation: "receive");
         Exchange? exchange = null;
         try
         {
@@ -210,10 +217,19 @@ internal sealed class FirestoreConsumer : IConsumer
             // MessagesIn is counted by the core StatisticsProcessor - ownership audit.
 
             await _processor.Process(exchange, ct).ConfigureAwait(false);
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+                && (failure is not OperationCanceledException || !ct.IsCancellationRequested))
+                span.Activity.RecordFailure(failure);
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException ex)
+        {
+            // Our own stop is not a failure of the change; any other cancellation is.
+            if (!ct.IsCancellationRequested)
+                span.Activity.RecordFailure(ex);
+        }
         catch (Exception ex)
         {
+            span.Activity.RecordFailure(ex);
             // Pipeline errors are counted by the core StatisticsProcessor (ownership audit).
             _logger?.LogError(ex, "Firestore change processing failed: {Collection}/{DocId}",
                 _endpoint.CollectionPath, change.Document.Id);

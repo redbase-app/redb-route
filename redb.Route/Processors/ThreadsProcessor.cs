@@ -162,6 +162,12 @@ public sealed class ThreadsProcessor : IProcessor, IRouteLifecycleListener
         var copy = exchange.Clone();
         // The worker is a transaction boundary: the copy must not see the sending .Transacted() block as its own.
         TransactedActions.DetachFromBlock(copy);
+        // The caller is done with its exchange as soon as this returns, the worker is not: the copy owns the bodies from
+        // here, or the caller's disposal would close a stream the worker still reads.
+        var original = exchange as Core.Exchange;
+        var successor = copy as Core.Exchange;
+        if (original is not null && successor is not null)
+            original.HandOverBodiesTo(successor);
 
         if (_shuttingDown)
         {
@@ -184,7 +190,10 @@ public sealed class ThreadsProcessor : IProcessor, IRouteLifecycleListener
         {
             // Enqueue failed (cancellation under backpressure / EnqueueTimeout) and the copy was neither
             // enqueued nor run inline — dispose it here so its per-exchange DI scope / DB connection is
-            // released, then rethrow so the caller still observes the cancellation/fault.
+            // released, then rethrow so the caller still observes the cancellation/fault. The bodies go back to the
+            // caller's exchange first: the caller still has it.
+            if (original is not null && successor is not null)
+                successor.HandOverBodiesTo(original);
             await copy.DisposeAsync().ConfigureAwait(false);
             throw;
         }

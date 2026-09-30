@@ -91,14 +91,12 @@ public sealed class TelegramProducer : ConnectableProducer
             ?? throw new InvalidOperationException(
                 $"{ProducerName}: producer client is unavailable (stopped concurrently?).");
 
-        using var activity = RouteActivitySource.Source.StartActivity(
-            $"telegram.{_endpoint.Mode} publish", ActivityKind.Producer);
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"telegram.{_endpoint.Mode} publish", ActivityKind.Producer, "messaging.system", "telegram",
+            _endpoint.Uri.NormalizedKey, operation: "publish");
         if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag("messaging.system", "telegram");
-            activity.SetTag("messaging.operation", "publish");
             activity.SetTag("messaging.telegram.mode", _endpoint.Mode);
-        }
 
         // Per-request timeout linked to the caller ct. Uses the dedicated producer send timeout
         // (SendTimeoutSeconds) — independent from the long-poll HTTP ceiling on the shared client, so a
@@ -155,13 +153,14 @@ public sealed class TelegramProducer : ConnectableProducer
         }
         catch (ApiRequestException ex)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity.RecordFailure(ex);
             LogPublishDiagnostics(ex, exchange, chatIdForLog);
             throw;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            // Only our own token cancelling the send is a stop; the per-request timeout or any other failure marks the span.
+            activity.RecordFailure(ex);
             throw;
         }
     }

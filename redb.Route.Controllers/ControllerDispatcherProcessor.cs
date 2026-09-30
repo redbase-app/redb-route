@@ -105,32 +105,32 @@ public sealed class ControllerDispatcherProcessor : IProcessor
         var sw = filterContext is not null ? System.Diagnostics.Stopwatch.StartNew() : null;
         try
         {
+            // The boundary between "the caller's error" and "our error" is the resolution step, as on the HTTP,
+            // SignalR and gRPC dispatchers: a FormatException while binding a route or query value is a 400, the
+            // same exception inside the action is a 500. The filters' AfterAsync still runs (finally below).
+            object?[] parameters;
+            try
+            {
+                parameters = ParameterResolver.ResolveParameters(action.Method, exchange, routeParams);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                if (filterContext is not null) filterContext.Exception = ex;
+                WriteError(exchange, 400, ControllerErrorReporting.BadRequestCode,
+                    ControllerErrorReporting.ReportBadRequest(_logger, ex, exchange, $"{method} {path}"));
+                return;
+            }
+            if (filterContext is not null) filterContext.Arguments = parameters;
+
             var controller = (RedbController)Activator.CreateInstance(action.ControllerType)!;
             controller.Context = _context;
             controller.Exchange = exchange;
 
-            var parameters = ParameterResolver.ResolveParameters(action.Method, exchange, routeParams);
-            if (filterContext is not null) filterContext.Arguments = parameters;
-
-            var result = action.Method.Invoke(controller, parameters);
-
-            // Await if the method returns a Task
-            if (result is Task task)
-            {
-                await task;
-                result = GetTaskResult(task);
-            }
+            // The action's own exception, one TargetInvocationException removed (see ActionInvoker).
+            var result = await ActionInvoker.InvokeAsync(action.Method, controller, parameters);
 
             if (filterContext is not null) filterContext.Result = result;
             WriteResult(exchange, result);
-        }
-        catch (TargetInvocationException tie) when (tie.InnerException is not null)
-        {
-            // Sync controller methods surface user exceptions wrapped in TIE via MethodInfo.Invoke.
-            // Async methods return a faulted Task; `await` re-throws the original exception (no TIE).
-            // Only unwrap TIE — never blindly deref .InnerException on arbitrary exceptions.
-            if (filterContext is not null) filterContext.Exception = tie.InnerException;
-            WriteUnhandled(exchange, tie.InnerException, path, method);
         }
         catch (Exception ex)
         {
@@ -157,12 +157,20 @@ public sealed class ControllerDispatcherProcessor : IProcessor
 
     private static void WriteResult(IExchange exchange, object? result)
     {
+        // An Out that already exists was written by the action (or a step before the dispatcher): that is the reply.
+        // Only a clone the dispatcher makes here carries the request body, and only that one is cleared below.
+        var createdHere = exchange.Out is null;
         exchange.Out ??= exchange.In.Clone();
         var defaultCode = result is null ? 204 : 200;
 
         if (result is not null)
         {
             exchange.Out.Body = result;
+        }
+        else if (createdHere)
+        {
+            // No result, no body: our own clone of the request is not the reply.
+            exchange.Out.Body = null;
         }
 
         // Respect meta already set by the controller (e.g. facade Forward propagating an
@@ -200,15 +208,5 @@ public sealed class ControllerDispatcherProcessor : IProcessor
         // Errors are authoritative: overwrite whatever a controller may have set before throwing.
         exchange.Out.setHeader("status.code", statusCode);
         exchange.Out.setHeader("Content-Type", "application/json");
-    }
-
-    private static object? GetTaskResult(Task task)
-    {
-        var type = task.GetType();
-        if (!type.IsGenericType)
-            return null;
-
-        // Task<T> — extract .Result
-        return type.GetProperty("Result")?.GetValue(task);
     }
 }

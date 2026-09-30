@@ -7,6 +7,7 @@ using redb.Route.Core;
 using redb.Route.Expressions;
 using redb.Route.Sql.Connection;
 using redb.Route.Sql.Mapping;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Sql;
 
@@ -200,6 +201,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         {
             var row = rows[i];
             var exchange = CreateExchange(bodies[i] ?? row, row, sql, rows.Count, executionMs);
+            using var span = StartReceiveSpan();
             IncrementInflight();
             try
             {
@@ -215,6 +217,7 @@ internal sealed class SqlConsumer : DrainableConsumer
             }
             finally
             {
+                RecordOutcome(span, exchange, ct);
                 DecrementInflight();
                 await exchange.DisposeAsync().ConfigureAwait(false);
             }
@@ -278,6 +281,7 @@ internal sealed class SqlConsumer : DrainableConsumer
                     rowCount++;
 
                     var exchange = CreateExchange(body, row, sql, -1, executionMs);
+                    using var span = StartReceiveSpan();
                     IncrementInflight();
                     try
                     {
@@ -301,6 +305,7 @@ internal sealed class SqlConsumer : DrainableConsumer
                     }
                     finally
                     {
+                        RecordOutcome(span, exchange, ct);
                         DecrementInflight();
                         await exchange.DisposeAsync().ConfigureAwait(false);
                     }
@@ -438,6 +443,7 @@ internal sealed class SqlConsumer : DrainableConsumer
     private async Task<bool> RunListExchangeAsync(
         Exchange exchange, DbConnection connection, DbTransaction? tx, Func<ValueTask> afterRoute, CancellationToken ct)
     {
+        using var span = StartReceiveSpan();
         IncrementInflight();
         try
         {
@@ -468,6 +474,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         }
         finally
         {
+            RecordOutcome(span, exchange, ct);
             DecrementInflight();
             await exchange.DisposeAsync().ConfigureAwait(false);
         }
@@ -495,6 +502,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         else
         {
             var exchange = CreateExchange(result, null, sql, 1, executionMs);
+            using var span = StartReceiveSpan();
             IncrementInflight();
             try
             {
@@ -510,6 +518,7 @@ internal sealed class SqlConsumer : DrainableConsumer
             }
             finally
             {
+                RecordOutcome(span, exchange, ct);
                 DecrementInflight();
                 await exchange.DisposeAsync().ConfigureAwait(false);
             }
@@ -547,6 +556,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         else
         {
             var exchange = CreateExchange(body, row, sql, 1, executionMs);
+            using var span = StartReceiveSpan();
             IncrementInflight();
             try
             {
@@ -562,6 +572,7 @@ internal sealed class SqlConsumer : DrainableConsumer
             }
             finally
             {
+                RecordOutcome(span, exchange, ct);
                 DecrementInflight();
                 await exchange.DisposeAsync().ConfigureAwait(false);
             }
@@ -578,16 +589,27 @@ internal sealed class SqlConsumer : DrainableConsumer
         {
             var empty = new Dictionary<string, object?>();
             var emptyExchange = CreateExchange(empty, empty, sql, 0, executionMs);
+            // An exchange the route runs has its span, an empty one too; only a poll that routes nothing has none.
+            using var span = StartReceiveSpan();
             try { await Processor.Process(emptyExchange, ct).ConfigureAwait(false); }
-            finally { await emptyExchange.DisposeAsync().ConfigureAwait(false); }
+            finally
+            {
+                RecordOutcome(span, emptyExchange, ct);
+                await emptyExchange.DisposeAsync().ConfigureAwait(false);
+            }
         }
         else if (_options.SendEmptyMessageWhenIdle)
         {
             var idleExchange = Exchange.Create(new Message(null), _endpoint.ScopeFactory);
             idleExchange.In.Headers[SqlHeaders.Query] = sql;
             idleExchange.In.Headers[SqlHeaders.RowCount] = 0;
+            using var span = StartReceiveSpan();
             try { await Processor.Process(idleExchange, ct).ConfigureAwait(false); }
-            finally { await idleExchange.DisposeAsync().ConfigureAwait(false); }
+            finally
+            {
+                RecordOutcome(span, idleExchange, ct);
+                await idleExchange.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
 
@@ -643,6 +665,23 @@ internal sealed class SqlConsumer : DrainableConsumer
     /// <param name="sql">The resolved poll query, echoed into the <c>redbSql.query</c> header.</param>
     /// <param name="rowCount">Rows in this poll cycle; -1 when streaming (not known upfront).</param>
     /// <param name="executionTimeMs">Query execution time in milliseconds.</param>
+    /// <summary>
+    /// The span of one exchange a poll routes — a row, or the list of a batch. A row carries no trace context, so it is a
+    /// root, never a child of the activity the poll loop holds. A poll that routes no exchange opens none.
+    /// </summary>
+    private TransportSpan StartReceiveSpan() => RouteTelemetryExtensions.StartConsumerSpan<object?>(
+        (_endpoint.Component as ComponentBase)?.Context,
+        "sql.receive", ActivityKind.Consumer, "db.system", _endpoint.Component.Scheme, _endpoint.Uri.NormalizedKey,
+        null, static (_, _) => null);
+
+    /// <summary>Marks the span failed when the exchange failed; our own stop (the poll's token) is not a failure.</summary>
+    private static void RecordOutcome(TransportSpan span, IExchange exchange, CancellationToken ct)
+    {
+        if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+            && (failure is not OperationCanceledException || !ct.IsCancellationRequested))
+            span.Activity.RecordFailure(failure);
+    }
+
     private Exchange CreateExchange(object? body, Dictionary<string, object?>? row, string sql, int rowCount, long executionTimeMs)
     {
         var exchange = Exchange.Create(new Message(body), _endpoint.ScopeFactory);

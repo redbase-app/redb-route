@@ -39,6 +39,18 @@ public class AsyncBean
         await Task.Yield();
         exchange.In.Headers["touched"] = true;
     }
+
+    public async ValueTask<string> HandleValue(IExchange exchange)
+    {
+        await Task.Delay(20);
+        return $"value:{exchange.In.Body}";
+    }
+
+    public async ValueTask TouchValue(IExchange exchange)
+    {
+        await Task.Delay(20);
+        exchange.In.Headers["touched"] = true;
+    }
 }
 
 /// <summary>Void bean: the body must stay untouched.</summary>
@@ -108,15 +120,16 @@ public class BeanComponentTests : IAsyncDisposable
     }
 
     /// <summary>
-    /// To-endpoints are created lazily, on the first message (engine-wide behaviour, not a bean:
-    /// special case; early detection is the packaging checks' and the XML loader's job). The error
-    /// paths therefore fire on the first send.
+    /// A static To's endpoint is created when its route starts (engine-wide behaviour, as Camel resolves a static
+    /// to(...) at startup, not a bean: special case), so a bad bean: target fails the start, with the same message it
+    /// used to give on the first send.
     /// </summary>
-    private async Task<Func<Task>> FirstSend(string fromUri)
-    {
-        var producer = await StartAndProducer(fromUri);
-        return () => producer.Process(new Exchange(new Message("x")));
-    }
+    private Task<Func<Task>> FirstSend(string fromUri)
+        => Task.FromResult<Func<Task>>(async () =>
+        {
+            var producer = await StartAndProducer(fromUri);
+            await producer.Process(new Exchange(new Message("x")));
+        });
 
     // ── Registry form ────────────────────────────────────────────────────────
 
@@ -134,7 +147,7 @@ public class BeanComponentTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task RegistryForm_MissingObject_FailsTheFirstSendNamingTheReference()
+    public async Task RegistryForm_MissingObject_FailsTheStartNamingTheReference()
     {
         _context.AddRoutes(r => r.From("direct://bean-regx").To("bean:#absent?method=Greet"));
         var act = await FirstSend("direct://bean-regx");
@@ -253,6 +266,33 @@ public class BeanComponentTests : IAsyncDisposable
         await producer.Process(exchange);
 
         exchange.In.Headers.Should().ContainKey("touched");
+        exchange.In.Body.Should().Be("m");
+    }
+
+    [Fact]
+    public async Task AsyncValueTaskOfT_AwaitsAndPutsTheResultIntoTheBody()
+    {
+        _context.AddRoutes(r => r.From("direct://bean-valuetask-t")
+            .To($"bean:{Q(typeof(AsyncBean))}?method=HandleValue"));
+        var producer = await StartAndProducer("direct://bean-valuetask-t");
+
+        var exchange = new Exchange(new Message("m"));
+        await producer.Process(exchange);
+
+        exchange.In.Body.Should().Be("value:m", "a ValueTask<T> is awaited like a Task<T>, not put into the body");
+    }
+
+    [Fact]
+    public async Task AsyncValueTask_AwaitsAndLeavesTheBody()
+    {
+        _context.AddRoutes(r => r.From("direct://bean-valuetask")
+            .To($"bean:{Q(typeof(AsyncBean))}?method=TouchValue"));
+        var producer = await StartAndProducer("direct://bean-valuetask");
+
+        var exchange = new Exchange(new Message("m"));
+        await producer.Process(exchange);
+
+        exchange.In.Headers.Should().ContainKey("touched", "the method is awaited before the step ends");
         exchange.In.Body.Should().Be("m");
     }
 

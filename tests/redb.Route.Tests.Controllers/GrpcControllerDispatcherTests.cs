@@ -28,7 +28,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Dispatches_by_method_name()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         var exchange = CreateExchange("Echo", "hello");
@@ -44,7 +44,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Dispatches_no_args_method()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         var exchange = CreateExchange("GetAll");
@@ -59,7 +59,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Dispatches_with_byte_body()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         // Simulate real gRPC body: byte[] containing JSON
@@ -75,7 +75,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Dispatches_complex_object_from_bytes()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         var request = new CreateModuleRequest { Name = "TestModule" };
@@ -92,7 +92,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Dispatches_multiple_positional_args_from_bytes()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         var args = new object[] { 42, new CreateModuleRequest { Name = "Updated" } };
@@ -110,7 +110,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Dispatches_async_method()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         var exchange = CreateExchange("AsyncMethod", "test");
@@ -125,7 +125,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Dispatches_void_method_returns_204()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         var exchange = CreateExchange("Delete", 1);
@@ -139,7 +139,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Dispatches_with_default_param()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         var exchange = CreateExchange("WithDefault", "hello");
@@ -156,7 +156,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Qualified_name_dispatches_to_correct_controller()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context,
             typeof(EchoController), typeof(StatusController));
 
@@ -172,7 +172,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Unqualified_name_resolves_first_registered()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context,
             typeof(EchoController), typeof(StatusController));
 
@@ -191,7 +191,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Missing_header_returns_400()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         var exchange = CreateExchange(null);
@@ -205,7 +205,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Unknown_method_returns_404()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         var exchange = CreateExchange("NonExistent");
@@ -219,7 +219,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Case_insensitive_dispatch()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         var exchange = CreateExchange("echo", "test");
@@ -234,7 +234,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public async Task Empty_byte_array_body_treated_as_null()
     {
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new GrpcControllerDispatcher(context, typeof(EchoController));
 
         var exchange = CreateExchange("GetAll");
@@ -250,7 +250,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public void Ctor_throws_for_non_controller_type()
     {
-        var context = new RouteContext();
+        using var context = new RouteContext();
         var act = () => new GrpcControllerDispatcher(context, typeof(string));
         act.Should().Throw<ArgumentException>();
     }
@@ -258,7 +258,7 @@ public class GrpcControllerDispatcherTests
     [Fact]
     public void Ctor_throws_for_empty_types()
     {
-        var context = new RouteContext();
+        using var context = new RouteContext();
         var act = () => new GrpcControllerDispatcher(context);
         act.Should().Throw<ArgumentException>();
     }
@@ -269,7 +269,8 @@ public class GrpcControllerDispatcherTests
     public async Task JsonObject_FromBody_param_gets_whole_object()
     {
         var ex = CreateExchange("CreateBody", new CreateModuleRequest { Name = "N" }, serializeAsBytes: true);
-        await new GrpcControllerDispatcher(new RouteContext(), typeof(BindController)).Process(ex);
+        await using var context = new RouteContext();
+        await new GrpcControllerDispatcher(context, typeof(BindController)).Process(ex);
         DeserializeResult<string>(ex.Out!.Body).Should().Be("N");
     }
 
@@ -277,7 +278,8 @@ public class GrpcControllerDispatcherTests
     public async Task JsonObject_lone_complex_param_gets_whole_object()   // preserves today's behavior
     {
         var ex = CreateExchange("CreateBare", new CreateModuleRequest { Name = "N" }, serializeAsBytes: true);
-        await new GrpcControllerDispatcher(new RouteContext(), typeof(BindController)).Process(ex);
+        await using var context = new RouteContext();
+        await new GrpcControllerDispatcher(context, typeof(BindController)).Process(ex);
         DeserializeResult<string>(ex.Out!.Body).Should().Be("N");
     }
 
@@ -286,7 +288,8 @@ public class GrpcControllerDispatcherTests
     {
         var ex = CreateExchange("Update");
         ex.In.Body = JsonSerializer.SerializeToUtf8Bytes(new { id = "X", name = "N" });
-        await new GrpcControllerDispatcher(new RouteContext(), typeof(BindController)).Process(ex);
+        await using var context = new RouteContext();
+        await new GrpcControllerDispatcher(context, typeof(BindController)).Process(ex);
         DeserializeResult<string>(ex.Out!.Body).Should().Be("X|N");
     }
 
@@ -295,7 +298,8 @@ public class GrpcControllerDispatcherTests
     {
         var ex = CreateExchange("List");
         ex.In.Body = JsonSerializer.SerializeToUtf8Bytes(new { offset = 10 });
-        await new GrpcControllerDispatcher(new RouteContext(), typeof(BindController)).Process(ex);
+        await using var context = new RouteContext();
+        await new GrpcControllerDispatcher(context, typeof(BindController)).Process(ex);
         DeserializeResult<string>(ex.Out!.Body).Should().Be("10:25");
     }
 
@@ -303,7 +307,8 @@ public class GrpcControllerDispatcherTests
     public async Task JsonArray_body_stays_positional()
     {
         var ex = CreateExchange("Update", new object[] { "X", new CreateModuleRequest { Name = "N" } }, serializeAsBytes: true);
-        await new GrpcControllerDispatcher(new RouteContext(), typeof(BindController)).Process(ex);
+        await using var context = new RouteContext();
+        await new GrpcControllerDispatcher(context, typeof(BindController)).Process(ex);
         DeserializeResult<string>(ex.Out!.Body).Should().Be("X|N");
     }
 
@@ -312,7 +317,8 @@ public class GrpcControllerDispatcherTests
     {
         var ex = CreateExchange("CreateBare");
         ex.In.Body = JsonSerializer.SerializeToUtf8Bytes(new { name = "N", unexpected = "ignored" });
-        await new GrpcControllerDispatcher(new RouteContext(), typeof(BindController)).Process(ex);
+        await using var context = new RouteContext();
+        await new GrpcControllerDispatcher(context, typeof(BindController)).Process(ex);
         DeserializeResult<string>(ex.Out!.Body).Should().Be("N");
     }
 
@@ -330,13 +336,4 @@ public class GrpcControllerDispatcherTests
             return typed;
         throw new InvalidOperationException($"Expected byte[] or {typeof(T).Name}, got {body?.GetType().Name ?? "null"}");
     }
-}
-
-/// <summary>Controller exercising the JSON-object name-binding rules for <c>ResolvePositional</c>.</summary>
-public class BindController : RedbController
-{
-    public string CreateBody([FromBody] CreateModuleRequest r) => r.Name;          // [FromBody] → whole object
-    public string CreateBare(CreateModuleRequest request) => request.Name;         // lone complex → whole object
-    public string Update([FromRoute("id")] string id, [FromBody] CreateModuleRequest r) => $"{id}|{r.Name}";
-    public string List(int offset = 0, int count = 25) => $"{offset}:{count}";     // simple params by key, defaults kept
 }

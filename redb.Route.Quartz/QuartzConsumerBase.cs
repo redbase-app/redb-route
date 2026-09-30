@@ -1,8 +1,10 @@
 using System.Collections.Specialized;
+using System.Diagnostics;
 using Quartz;
 using Quartz.Impl;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Quartz;
 
@@ -262,14 +264,27 @@ public abstract class QuartzConsumerBase : IConsumer
         try
         {
             var exchange = CreateExchange(jobContext);
+            // A fire carries no trace context: its span is a root, never a child of the scheduler thread's activity.
+            using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+                (_endpoint.Component as ComponentBase)?.Context,
+                $"{_endpoint.Component.Scheme} receive", ActivityKind.Consumer, "redb.system", _endpoint.Component.Scheme,
+                _endpoint.Uri.NormalizedKey, null, static (_, _) => null, operation: "receive");
             try
             {
                 await _processor.Process(exchange, processingCt).ConfigureAwait(false);
 
                 if (exchange.Exception != null && !exchange.ExceptionHandled)
                 {
+                    // Our own stop is not a failure of the fire; any other cancellation is.
+                    if (exchange.Exception is not OperationCanceledException || !processingCt.IsCancellationRequested)
+                        span.Activity.RecordFailure(exchange.Exception);
                     await routeContext.HandleException(exchange, exchange.Exception, processingCt).ConfigureAwait(false);
                 }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !processingCt.IsCancellationRequested)
+            {
+                span.Activity.RecordFailure(ex);
+                throw;
             }
             finally
             {

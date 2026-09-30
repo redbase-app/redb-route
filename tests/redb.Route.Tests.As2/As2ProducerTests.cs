@@ -177,14 +177,7 @@ public class As2ProducerTests
             "Host — hop-by-hop заголовок HTTP-транспорта, а не полезная нагрузка AS2-моста");
     }
 
-    private static int FreePort()
-    {
-        var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int FreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     private static X509Certificate2 MakeCert(string cn)
     {

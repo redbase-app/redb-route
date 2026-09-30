@@ -56,7 +56,7 @@ From(Pop3.Read("pop3.example.com")
 
 | Category | Methods |
 |----------|---------|
-| **Connection** | `.Port()`, `.Security(mode)`, `.ConnectionTimeout()`, `.Timeout()`, `.Username()`, `.Password()`, `.AccessToken()`, `.AuthMechanism()`, `.SkipCertificateValidation()`, `.ClientCert()` |
+| **Connection** | `.Port()`, `.Security(mode)`, `.ConnectionTimeout()`, `.Timeout()`, `.Username()`, `.Password()`, `.AccessToken()`, `.AuthMechanism()`, `.TrustAllCertificates()`, `.ClientCert()` |
 | **SMTP** | `Smtp.Send(server)`, `.From()`, `.To()`, `.Cc()`, `.Bcc()`, `.ReplyTo()`, `.Subject()`, `.ContentType()`, `.AlternativeBody()`, `.Attachments()` |
 | **IMAP** | `Imap.Read(server)`, `.Folder()`, `.AdditionalFolders()`, `.Idle()`, `.IdleTimeout()`, `.SearchQuery()` |
 | **POP3** | `Pop3.Read(server)` |
@@ -90,3 +90,15 @@ context.AddToRegistry("prod", new MailConnectionFactory
 });
 // smtp://noreply@internal?connectionFactory=prod
 ```
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `messaging.system` = `imap` / `pop3` / `smtp` and
+`redb.route.endpoint`:
+
+- **IMAP and POP3 consumers.** One `Consumer` span per routed message, `{host} receive`. The connector reads no trace
+  context from a message, so the span is a root, never a child of the activity the poll loop inherited from whoever
+  started the routes; an empty mailbox opens none. A failed route marks it an error; our own stop does not.
+- **SMTP producer.** One `Producer` span per send, `{host} send`; an error when the send fails, unless our own token
+  cancelled it.
+- `RouteEngineOptions.EnableTelemetry = false` opens none of these spans.

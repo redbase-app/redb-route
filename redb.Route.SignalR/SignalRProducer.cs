@@ -79,6 +79,7 @@ public class SignalRProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"signalr {_options.Mode} {_options.Method}", ActivityKind.Producer,
             "messaging.system", "signalr",
             _endpoint.Uri.NormalizedKey,
@@ -94,8 +95,10 @@ public class SignalRProducer : ConnectableProducer
 
             // MessagesOut is recorded by the core (ToProcessor / the template) - ownership audit.
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
+            // Only our own token cancelling the send is a stop; any other failure marks the span.
+            activity.RecordFailure(ex);
             Logger?.LogError(ex, "SignalR send failed: hub={HubPath}, method={Method}, mode={Mode}",
                 _endpoint.HubPath, _options.Method, _options.Mode);
             throw; // the core records the error against this endpoint

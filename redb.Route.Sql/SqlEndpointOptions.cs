@@ -1,5 +1,4 @@
 using System.Data;
-using System.Reflection;
 using redb.Route.Core;
 
 namespace redb.Route.Sql;
@@ -12,6 +11,7 @@ namespace redb.Route.Sql;
 /// and URI strings converge here through <c>BindFromUri()</c>.
 /// </para>
 /// </summary>
+[LenientProperties]
 public sealed class SqlEndpointOptions : EndpointOptions
 {
     // ── Mode ──────────────────────────────────────────────────────────
@@ -248,29 +248,5 @@ public sealed class SqlEndpointOptions : EndpointOptions
                 "readOnly=true polls the read replica, where onSuccess / onFailure / onBatchComplete and transacted=true cannot " +
                 "mark or lock the rows; rows read on a lagging replica and marked on the primary would be delivered again. " +
                 "Poll the primary database (no readOnly) when the poll marks its rows.");
-
-        RejectUnconvertibleOptionValues();
-    }
-
-    /// <summary>
-    /// A value given for one of this connector's own options that cannot be converted to the option's type is not an unknown
-    /// parameter to pass over: the option would silently keep its default — a <c>${...}</c> expression for <c>batchSize</c>
-    /// used to turn batching off and send the whole list to a single statement. Numeric and enum options take constants or
-    /// <c>{{property}}</c> placeholders.
-    /// </summary>
-    private void RejectUnconvertibleOptionValues()
-    {
-        foreach (var (key, value) in UnmappedParameters)
-        {
-            var property = typeof(SqlEndpointOptions).GetProperty(key,
-                BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase | BindingFlags.DeclaredOnly);
-            if (property is not { CanWrite: true })
-                continue;
-
-            var type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
-            throw new ArgumentException(
-                $"Option '{key}' has the value '{value}', which cannot be converted to {type.Name}. " +
-                "This option does not accept ${...} expressions; use a constant or a {{property}} placeholder.");
-        }
     }
 }

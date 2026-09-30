@@ -41,6 +41,7 @@ internal sealed class FirestoreProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"firestore {_options.Operation}", ActivityKind.Client,
             "db.system", "firestore",
             _endpoint.Uri.NormalizedKey,
@@ -49,28 +50,37 @@ internal sealed class FirestoreProducer : ConnectableProducer
 
         var collection = _db!.Collection(_endpoint.CollectionPath);
 
-        switch (_options.Operation)
+        try
         {
-            case FirestoreOperationType.Set:
-                await ProcessSet(exchange, collection, ct).ConfigureAwait(false);
-                break;
-            case FirestoreOperationType.Get:
-                await ProcessGet(exchange, collection, ct).ConfigureAwait(false);
-                break;
-            case FirestoreOperationType.Update:
-                await ProcessUpdate(exchange, collection, ct).ConfigureAwait(false);
-                break;
-            case FirestoreOperationType.Delete:
-                await ProcessDelete(exchange, collection, ct).ConfigureAwait(false);
-                break;
-            case FirestoreOperationType.Query:
-                await ProcessQuery(exchange, collection, ct).ConfigureAwait(false);
-                break;
-            case FirestoreOperationType.BatchWrite:
-                await ProcessBatchWrite(exchange, collection, ct).ConfigureAwait(false);
-                break;
-            default:
-                throw new InvalidOperationException($"Unknown Firestore operation: {_options.Operation}");
+            switch (_options.Operation)
+            {
+                case FirestoreOperationType.Set:
+                    await ProcessSet(exchange, collection, ct).ConfigureAwait(false);
+                    break;
+                case FirestoreOperationType.Get:
+                    await ProcessGet(exchange, collection, ct).ConfigureAwait(false);
+                    break;
+                case FirestoreOperationType.Update:
+                    await ProcessUpdate(exchange, collection, ct).ConfigureAwait(false);
+                    break;
+                case FirestoreOperationType.Delete:
+                    await ProcessDelete(exchange, collection, ct).ConfigureAwait(false);
+                    break;
+                case FirestoreOperationType.Query:
+                    await ProcessQuery(exchange, collection, ct).ConfigureAwait(false);
+                    break;
+                case FirestoreOperationType.BatchWrite:
+                    await ProcessBatchWrite(exchange, collection, ct).ConfigureAwait(false);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown Firestore operation: {_options.Operation}");
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the call is a stop; any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
         }
     }
 

@@ -148,9 +148,10 @@ public sealed class RedbSaveXmlContribution : IXmlElementContribution
 }
 
 /// <summary>
-/// The <c>&lt;redbQuery&gt;</c> element: a server-side props query — the <c>where</c> string
-/// rides the engine's ONE expression AST into redb LINQ, <c>filter="#spec"</c> is the
-/// full-LINQ escape hatch. A condition the translator refuses is a positioned load error.
+/// The <c>&lt;redbQuery&gt;</c> element: a server-side query — the <c>where</c> string (props)
+/// and the <c>whereRedb</c> string (base fields of the stored object) ride the engine's ONE
+/// expression AST into redb LINQ, <c>filter="#spec"</c> is the full-LINQ escape hatch. A
+/// condition the translator refuses is a positioned load error.
 /// </summary>
 public sealed class RedbQueryXmlContribution : IXmlElementContribution
 {
@@ -175,6 +176,12 @@ public sealed class RedbQueryXmlContribution : IXmlElementContribution
             new AttributeSpec("filter", AttributeType.Reference),
             new AttributeSpec("storage", AttributeType.String),
             new AttributeSpec("target", AttributeType.String),
+            // The base fields of the stored object (Id, ParentId, ValueGuid, DateCreate...) — redb
+            // WhereRedb / OrderByRedb; ANDed with where=, since one OR cannot mix the two.
+            new AttributeSpec("whereRedb", AttributeType.Expression),
+            new AttributeSpec("orderByRedb", AttributeType.String),
+            // The terminal operation: the list (default), FirstOrDefault, Count or Any.
+            new AttributeSpec("outputType", AttributeType.Enum, EnumValues: ["List", "First", "Count", "Any"]),
         ],
         // The condition may live as the element's text instead of the where attribute — a
         // CDATA block frees it from &lt; escaping. Exactly one of the two forms.
@@ -197,6 +204,9 @@ public sealed class RedbQueryXmlContribution : IXmlElementContribution
                 "<redbQuery> takes the condition either as where= or as the element's text (CDATA welcome), not both.");
             return current;
         }
+        var output = context.Convert<RedbQueryOutput>(element, "outputType");
+        if (output is null && context.Attr(element, "outputType") is not null)
+            return current; // the malformed value is already a positioned error
         try
         {
             return current.RedbQuery(type,
@@ -207,7 +217,10 @@ public sealed class RedbQueryXmlContribution : IXmlElementContribution
                 skip: context.Convert<int>(element, "skip"),
                 filter: context.Attr(element, "filter"),
                 storage: context.Attr(element, "storage"),
-                target: context.Attr(element, "target"));
+                target: context.Attr(element, "target"),
+                whereRedb: context.Attr(element, "whereRedb"),
+                orderByRedb: context.Attr(element, "orderByRedb"),
+                outputType: output ?? RedbQueryOutput.List);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
@@ -231,6 +244,10 @@ public sealed class RedbQueryXmlContribution : IXmlElementContribution
         if (element.Attribute("filter")?.Value is { } filter) args.Add($"filter: {XmlCodeWriter.Str(filter)}");
         if (element.Attribute("storage")?.Value is { } storage) args.Add($"storage: {XmlCodeWriter.Str(storage)}");
         if (element.Attribute("target")?.Value is { } target) args.Add($"target: {XmlCodeWriter.Str(target)}");
+        if (element.Attribute("whereRedb")?.Value is { } whereRedb) args.Add($"whereRedb: {XmlCodeWriter.Str(whereRedb)}");
+        if (element.Attribute("orderByRedb")?.Value is { } orderByRedb) args.Add($"orderByRedb: {XmlCodeWriter.Str(orderByRedb)}");
+        if (element.Attribute("outputType")?.Value is { } outputType)
+            args.Add($"outputType: RedbQueryOutput.{Enum.Parse<RedbQueryOutput>(outputType, ignoreCase: true)}");
         code.Verb(element, "RedbQuery", [.. args]);
     }
 }
@@ -288,7 +305,12 @@ public sealed class RedbContextXmlContribution : IXmlContextContribution
             ElementSpec.Child("syncScheme", allowsSteps: false,
                 new AttributeSpec("type", AttributeType.TypeName, Required: true)),
             ElementSpec.Child("idempotentRepository", allowsSteps: false,
-                new AttributeSpec("name", AttributeType.String, Required: true),
+                // Registers a redb idempotent repository under this bare name — the key
+                // <idempotentConsumer repository="#name"> and a consumer's idempotentRepository= look up.
+                new AttributeSpec("name", AttributeType.String, Required: true)
+                {
+                    Registers = $"{typeof(Repositories.RedbIdempotentRepository).FullName}, {typeof(Repositories.RedbIdempotentRepository).Assembly.GetName().Name}",
+                },
                 new AttributeSpec("ttl", AttributeType.Duration),
                 new AttributeSpec("processorName", AttributeType.String)),
         ],

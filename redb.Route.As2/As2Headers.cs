@@ -50,8 +50,22 @@ public static class As2Headers
     public const string RemoteAddress = Prefix + "remoteAddress";
     /// <summary>MDN disposition outcome.</summary>
     public const string MdnDisposition = Prefix + "mdnDisposition";
-    /// <summary>Whether the MDN's Received-Content-MIC matched what we sent.</summary>
+    /// <summary>
+    /// True only when the MDN's Received-Content-MIC was compared with the MIC we sent and is the same; false when it
+    /// differs, is absent, or there was nothing to compare it with (see <see cref="MdnMicStatus"/>).
+    /// </summary>
     public const string MdnMicMatch = Prefix + "mdnMicMatch";
+    /// <summary>
+    /// The outcome of the MIC comparison: <c>matched</c>, <c>mismatch</c>, <c>absent</c> (the MDN carries no
+    /// Received-Content-MIC) or <c>unknown</c> (the MDN names no message we are waiting for: no Original-Message-ID,
+    /// or one sent before a restart, evicted after the correlation TTL, or sent by another node).
+    /// </summary>
+    public const string MdnMicStatus = Prefix + "mdnMicStatus";
+    /// <summary>
+    /// True when the MDN confirms the transfer: its disposition is positive, its MIC matched, and its signature is
+    /// valid where the agreement asks for a signed MDN. The one header to branch on for "delivered and verified".
+    /// </summary>
+    public const string MdnConfirmed = Prefix + "mdnConfirmed";
 
     /// <summary>True if the header name is a redb AS2 metadata header (must not be bridged onto the wire).</summary>
     public static bool IsRedbHeader(string key)
@@ -72,6 +86,9 @@ public static class As2Headers
         // HTTP hop-by-hop
         "Connection", "Keep-Alive", "Transfer-Encoding", "TE", "Trailer", "Upgrade",
         "Proxy-Authorization", "Proxy-Authenticate",
+        // Credentials and state of another hop: bridged, an inbound caller's (or an internal service's) token or
+        // session would reach the trading partner.
+        "Authorization", "Cookie", "Set-Cookie",
         // Belongs to THIS request's target: bridging it from an inbound http consumer turned
         // every From(http) -> To(as2) route into an accidental preserve-host proxy.
         "Host",

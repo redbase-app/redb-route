@@ -197,7 +197,7 @@ internal sealed class IbmMqXmsConsumerEngine
         var ct = _drain.ProcessingToken;
 
         // Continue the W3C distributed trace carried in the message properties.
-        using var activity = StartConsumerActivity(message);
+        using var span = StartConsumerSpan(message);
 
         var exchange = CreateExchange(message);
 
@@ -233,6 +233,9 @@ internal sealed class IbmMqXmsConsumerEngine
         }
         catch (Exception ex)
         {
+            // Our own stop (the processing token) is not a failure; any other cancellation is.
+            if (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                span.Activity.RecordFailure(ex);
             _logger?.LogError(ex,
                 "IBM MQ XMS message processing error: destination={Destination}", _endpoint.Destination);
 
@@ -293,27 +296,19 @@ internal sealed class IbmMqXmsConsumerEngine
 
     // ── W3C trace context propagation ──
 
-    private Activity? StartConsumerActivity(XmsMessage message)
+    private TransportSpan StartConsumerSpan(XmsMessage message)
     {
-        var traceParent = TryGetStringProperty(message, "traceparent");
-        var traceState = TryGetStringProperty(message, "tracestate");
+        var span = RouteTelemetryExtensions.StartConsumerSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_endpoint.Destination} receive", ActivityKind.Consumer,
+            "messaging.system", "wmq", _endpoint.Uri.NormalizedKey,
+            message, TryGetStringProperty,
+            destination: _endpoint.Destination, operation: "receive");
 
-        ActivityContext parentContext = default;
-        if (!string.IsNullOrEmpty(traceParent))
-            ActivityContext.TryParse(traceParent, traceState, out parentContext);
-
-        var activity = RouteActivitySource.Source.StartActivity(
-            $"{_endpoint.Destination} receive", ActivityKind.Consumer, parentContext);
-
-        if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag("messaging.system", "wmq");
-            activity.SetTag("messaging.operation", "receive");
-            activity.SetTag("messaging.destination.name", _endpoint.Destination);
+        if (span.Activity is { IsAllDataRequested: true } activity)
             activity.SetTag("messaging.ibmmq.queue_manager", _options.QueueManager);
-        }
 
-        return activity;
+        return span;
     }
 
     // ── RPC reply ──

@@ -59,26 +59,80 @@ public class CacheComponentTests
     }
 
     [Fact]
-    public async Task InvalidOptions_FailLoudly_WhenTheEndpointIsCreated()
+    public async Task Clear_RemovesAKeyThatWasPutTwice()
     {
-        // To(...) creates its endpoint on the first message (the producer is lazy for every component),
-        // so the option validation surfaces there, with the reason in the message.
         await using var ctx = Context().AddRoutes(b =>
         {
-            b.From("direct://x").To("cache:r?action=put");
-            b.From("direct://y").To("cache:r?action=flush&key=k");
-            b.From("direct://z").To("cache:r?action=put&key=k&ttl=soon");
+            b.From("direct://put2").To("cache:overwrite?action=put&key=k");
+            b.From("direct://get2").To("cache:overwrite?action=get&key=k").To("mock://get2");
+            b.From("direct://clear2").To("cache:overwrite?action=clear");
         });
         await ctx.Start();
 
-        var noKey = () => ctx.SendBody("direct://x", "v");
-        await noKey.Should().ThrowAsync<ArgumentException>().WithMessage("*needs key*");
+        await ctx.SendBody("direct://put2", "first");
+        await ctx.SendBody("direct://put2", "second");
+        // MemoryCache runs the replaced entry's eviction callback on the thread pool; let it fire before clear.
+        await Task.Delay(200);
+        await ctx.SendBody("direct://clear2", "x");
+        await ctx.SendBody("direct://get2", "x");
 
-        var badAction = () => ctx.SendBody("direct://y", "v");
-        await badAction.Should().ThrowAsync<ArgumentException>().WithMessage("*unknown action*");
+        ctx.Mock("mock://get2").ReceivedExchanges[0].In.Headers["cache.hit"].Should().Be(false, "clear must remove an overwritten key too");
+    }
 
-        var badTtl = () => ctx.SendBody("direct://z", "v");
-        await badTtl.Should().ThrowAsync<FormatException>();
+    [Fact]
+    public async Task InvalidOptions_FailLoudly_WhenTheEndpointIsCreated()
+    {
+        // A static To's endpoint is created when its route starts, so the option validation stops the start, with the
+        // reason in the message.
+        await StartOf("cache:r?action=put").Should().ThrowAsync<ArgumentException>().WithMessage("*needs key*");
+        await StartOf("cache:r?action=flush&key=k").Should().ThrowAsync<ArgumentException>().WithMessage("*unknown action*");
+        await StartOf("cache:r?action=put&key=k&ttl=soon").Should().ThrowAsync<FormatException>();
+    }
+
+    /// <summary>Starting a context with one route that sends to <paramref name="target"/>.</summary>
+    private static Func<Task> StartOf(string target) => async () =>
+    {
+        await using var ctx = Context().AddRoutes(b => b.From("direct://start-of").To(target));
+        await ctx.Start();
+    };
+
+    [Fact]
+    public async Task Put_StoresOnlyTheNamedHeaders()
+    {
+        await using var ctx = Context().AddRoutes(b =>
+        {
+            b.From("direct://put-named").To("cache:named?action=put&key=k&headers=X-Rate,X-Missing");
+            b.From("direct://get-named").To("cache:named?action=get&key=k").To("mock://get-named");
+        });
+        await ctx.Start();
+
+        await ctx.SendBodyAndHeaders("direct://put-named", "v", new Dictionary<string, object?>
+        {
+            ["X-Rate"] = 5, ["Other"] = "first", ["Authorization"] = "Bearer one",
+        });
+        await ctx.SendBodyAndHeaders("direct://get-named", "x", new Dictionary<string, object?>
+        {
+            ["Other"] = "second", ["Authorization"] = "Bearer two",
+        });
+
+        var got = ctx.Mock("mock://get-named").ReceivedExchanges[0].In;
+        got.Headers["cache.hit"].Should().Be(true);
+        got.Body.Should().Be("v");
+        got.Headers["X-Rate"].Should().Be(5);
+        got.Headers["Other"].Should().Be("second", "a header the put did not name is not stored");
+        got.Headers["Authorization"].Should().Be("Bearer two");
+        got.Headers.Should().NotContainKey("X-Missing");
+    }
+
+    [Fact]
+    public async Task HeaderOptions_AreRefused_WhenTheyCannotBeHonoured()
+    {
+        await StartOf("cache:r?action=put&key=k&cacheHeaders=true").Should()
+            .ThrowAsync<ArgumentException>("a put cannot tell the value's headers from the request's").WithMessage("*headers=*");
+        await StartOf("cache:r?action=put&key=k&headers=X-Rate,Authorization").Should()
+            .ThrowAsync<ArgumentException>().WithMessage("*Authorization*credential*");
+        await StartOf("cache:r?action=get&key=k&headers=X-Rate").Should()
+            .ThrowAsync<ArgumentException>().WithMessage("*headers=*put*");
     }
 
     [Theory]

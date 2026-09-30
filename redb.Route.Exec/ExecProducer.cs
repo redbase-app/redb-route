@@ -55,12 +55,6 @@ public sealed class ExecProducer : ConnectableProducer
         EnsureStarted();
         ArgumentNullException.ThrowIfNull(exchange);
 
-        using var activity = RouteTelemetryExtensions.StartTransportSpan(
-            $"exec {_options.Command ?? "<dynamic>"}",
-            ActivityKind.Client,
-            "process.executable.name", "exec",
-            _endpoint.Uri.NormalizedKey);
-
         var (command, args) = ResolveCommand(exchange);
 
         if (string.IsNullOrWhiteSpace(command))
@@ -68,16 +62,36 @@ public sealed class ExecProducer : ConnectableProducer
                 "exec://: no command resolved. Set the URI 'command' option, the redbExec.Command header, " +
                 "or send a JSON body with a \"command\" field.");
 
-        EnsureAllowed(command);
+        // The span is named after the resolved executable, the file name only: the arguments, which carry secrets,
+        // never reach it.
+        var executable = Path.GetFileName(command);
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"exec {executable}", ActivityKind.Client,
+            "process.executable.name", executable,
+            _endpoint.Uri.NormalizedKey);
 
-        var psi = BuildStartInfo(command, args);
-        // Do NOT log argument values — they routinely carry secrets (tokens, passwords
-        // passed as CLI flags). Emit the executable and the argument count only.
-        Logger?.LogDebug("exec → {Command} ({ArgCount} args)", psi.FileName, args.Count);
+        try
+        {
+            EnsureAllowed(command);
 
-        var result = await RunAsync(psi, ct).ConfigureAwait(false);
+            var psi = BuildStartInfo(command, args);
+            // Do NOT log argument values — they routinely carry secrets (tokens, passwords
+            // passed as CLI flags). Emit the executable and the argument count only.
+            Logger?.LogDebug("exec → {Command} ({ArgCount} args)", psi.FileName, args.Count);
 
-        WriteOutput(exchange, command, args, result);
+            var result = await RunAsync(psi, ct).ConfigureAwait(false);
+            if (activity is { IsAllDataRequested: true })
+                activity.SetTag("process.exit.code", result.ExitCode);
+
+            WriteOutput(exchange, command, args, result);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the run is a stop; a refused command or a failed start marks the span.
+            activity.RecordFailure(ex);
+            throw;
+        }
     }
 
     // ── Resolution ─────────────────────────────────────────────────

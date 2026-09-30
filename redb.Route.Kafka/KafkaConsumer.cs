@@ -18,7 +18,8 @@ public sealed class KafkaConsumer : DrainableConsumer
     private readonly KafkaEndpoint _endpoint;
     private readonly KafkaEndpointOptions _options;
     private IConsumer<string, byte[]>? _consumer;
-    private string _cluster = "";
+    // The cluster id, read on the first offer of consumed offsets (the consumer is connected by then) and kept.
+    private string? _cluster;
 
     /// <inheritdoc />
     protected override IEndpoint ConsumerEndpoint => _endpoint;
@@ -43,7 +44,7 @@ public sealed class KafkaConsumer : DrainableConsumer
     protected override Task OnStarting(CancellationToken ct)
     {
         var config = _options.BuildConsumerConfig(_endpoint.ResolvedFactory, _endpoint.Uri.RawParameters);
-        _cluster = KafkaConsumedOffsets.ClusterOf(config.BootstrapServers);
+        KafkaOptionParsers.WarnIfPasswordInClear(config, Logger, $"kafka consumer {_endpoint.TopicName}");
 
         _consumer = new ConsumerBuilder<string, byte[]>(config)
             .SetValueDeserializer(Deserializers.ByteArray)
@@ -207,7 +208,7 @@ public sealed class KafkaConsumer : DrainableConsumer
         var result = _consumer!.Consume(pollCt);
         if (result?.Message is null) return;
 
-        using var activity = StartConsumerActivity(result);
+        using var span = StartReceiveSpan(result);
 
         var exchange = CreateExchange(result);
         IncrementInflight();
@@ -216,7 +217,11 @@ public sealed class KafkaConsumer : DrainableConsumer
             // The offset is advanced by this consumer after the unit of work ended well, not by the route
             // transaction: the transaction owns the database and the outgoing sends.
             var commitAction = new KafkaCommitAction(_consumer, result, Logger);
-            var offered = OfferOffsets(exchange, commitAction);
+            var offered = await OfferOffsetsAsync(exchange, commitAction).ConfigureAwait(false);
+
+            // ackMode=auto: the offset is committed on receipt, before the route runs (at-most-once).
+            if (_options.AckMode == AckMode.Auto)
+                commitAction.Commit();
 
             try
             {
@@ -240,6 +245,7 @@ public sealed class KafkaConsumer : DrainableConsumer
                 // the NEXT successful commit then covered this record's offset - a Kafka commit is
                 // a position, not a per-record mark - so the message was effectively lost with
                 // nothing but a log line.
+                MarkFailed(span, ex);
                 await HandleProcessingFailure(ex, [result], pollCt).ConfigureAwait(false);
                 return;
             }
@@ -248,9 +254,9 @@ public sealed class KafkaConsumer : DrainableConsumer
 
             // Auto-commit: settle the offset inline after successful processing — UNLESS a
             // transactional route already committed it (commitAction.Committed), in which case
-            // the transaction owns the commit and EnableAutoCommit is ignored.
-            if (_options.EnableAutoCommit && !commitAction.Committed)
-                await commitAction.Commit(processingCt).ConfigureAwait(false);
+            // the transaction owns the commit.
+            if (_options.AckMode == AckMode.Manual && !commitAction.Committed)
+                commitAction.Commit();
         }
         finally
         {
@@ -260,16 +266,41 @@ public sealed class KafkaConsumer : DrainableConsumer
     }
 
     /// <summary>
+    /// The id of the cluster this consumer reads, for a transactional producer to tell whether it may take the offsets.
+    /// Read once, on the first offer: the consumer has just received a record, so the brokers are there. When it cannot
+    /// be read, this exchange's offsets are offered without it (a producer then leaves them to the consumer and says so),
+    /// and the next offer reads again.
+    /// </summary>
+    private async Task<string?> ClusterIdAsync()
+    {
+        if (_cluster is not null)
+            return _cluster;
+        try
+        {
+            _cluster = await KafkaConsumedOffsets.ClusterIdOf(_consumer!.Handle, ClusterIdTimeout).ConfigureAwait(false);
+        }
+        catch (KafkaException ex)
+        {
+            Logger?.LogWarning(ex,
+                "Kafka consumer on topic {Topic} could not read its cluster id: the offsets of this record cannot ride in a " +
+                "Kafka transaction (at-least-once for it); it is read again on the next record", _endpoint.TopicName);
+        }
+        return _cluster;
+    }
+
+    private static readonly TimeSpan ClusterIdTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// Offers the offsets this consumer is about to commit to a Kafka-transactional producer of the same cluster in the
     /// route (<see cref="KafkaConsumedOffsets"/>): committed in its transaction, they leave with its sends. Only with
-    /// auto-commit on — with it off the application commits the offsets, and a transaction must not do it behind its back.
+    /// ackMode=manual — with ackMode=auto the offset is already committed on receipt.
     /// </summary>
-    private KafkaConsumedOffsets? OfferOffsets(IExchange exchange, KafkaCommitAction commitAction)
+    private async Task<KafkaConsumedOffsets?> OfferOffsetsAsync(IExchange exchange, KafkaCommitAction commitAction)
     {
-        if (!_options.EnableAutoCommit)
+        if (_options.AckMode != AckMode.Manual)
             return null;
 
-        var offered = new KafkaConsumedOffsets(_consumer!, commitAction, _cluster);
+        var offered = new KafkaConsumedOffsets(_consumer!, commitAction, await ClusterIdAsync().ConfigureAwait(false));
         exchange.Properties[KafkaConsumedOffsets.PropertyKey] = offered;
         return offered;
     }
@@ -350,8 +381,7 @@ public sealed class KafkaConsumer : DrainableConsumer
 
         if (batch.Count == 0) return;
 
-        using var activity = StartConsumerActivity(batch[0]);
-        activity?.SetTag("messaging.batch.message_count", batch.Count);
+        using var span = StartBatchSpan(batch);
 
         var exchange = CreateBatchExchange(batch);
         IncrementInflight();
@@ -361,7 +391,11 @@ public sealed class KafkaConsumer : DrainableConsumer
             var last = batch[^1];
             // As in the single-record path: the consumer advances the offset, the transaction does not.
             var commitAction = new KafkaCommitAction(_consumer!, batch, Logger);
-            var offered = OfferOffsets(exchange, commitAction);
+            var offered = await OfferOffsetsAsync(exchange, commitAction).ConfigureAwait(false);
+
+            // ackMode=auto: the offset is committed on receipt, before the route runs (at-most-once).
+            if (_options.AckMode == AckMode.Auto)
+                commitAction.Commit();
 
             try
             {
@@ -383,6 +417,7 @@ public sealed class KafkaConsumer : DrainableConsumer
             {
                 // Волна A2: the batch failed as one unit - with breakOnFirstError every partition
                 // of the batch is sought back to its first offset, so the whole batch comes again.
+                MarkFailed(span, ex);
                 await HandleProcessingFailure(ex, batch, pollCt).ConfigureAwait(false);
                 return;
             }
@@ -391,8 +426,8 @@ public sealed class KafkaConsumer : DrainableConsumer
 
             // Auto-commit the last batch offset inline after success — unless a transactional
             // route already committed it (see ProcessSingleMessage for the rationale).
-            if (_options.EnableAutoCommit && !commitAction.Committed)
-                await commitAction.Commit(processingCt).ConfigureAwait(false);
+            if (_options.AckMode == AckMode.Manual && !commitAction.Committed)
+                commitAction.Commit();
         }
         finally
         {
@@ -401,76 +436,90 @@ public sealed class KafkaConsumer : DrainableConsumer
         }
     }
 
-    // ── Trace context propagation ──
+    // ── Tracing ──
 
     /// <summary>
-    /// Extracts W3C trace context from Kafka message headers and starts a Consumer activity
-    /// linked to the producer's trace.
+    /// Reads a trace field from Kafka headers the way the connector always has: the name compared without case, the
+    /// value decoded as UTF-8 (an invalid sequence decodes to replacement characters, which the W3C parser refuses).
     /// </summary>
-    private Activity? StartConsumerActivity(ConsumeResult<string, byte[]> result)
+    private static readonly TraceHeaderReader<Headers?> ReadTraceHeader = static (headers, name) =>
+        headers?.FirstOrDefault(h => string.Equals(h.Key, name, StringComparison.OrdinalIgnoreCase)) is { } header
+            ? Encoding.UTF8.GetString(header.GetValueBytes())
+            : null;
+
+    /// <summary>
+    /// The receive span of one record: its parent is the sender's context from the record's headers, a root without
+    /// one (never the poll thread's ambient activity), and the sender's baggage comes back on it. The core contract
+    /// (<see cref="RouteTelemetryExtensions.StartConsumerSpan{TCarrier}"/>), so it honours EnableTelemetry and carries
+    /// redb.route.endpoint.
+    /// </summary>
+    private TransportSpan StartReceiveSpan(ConsumeResult<string, byte[]> result)
     {
-        var propagator = DistributedContextPropagator.Current;
-
-        propagator.ExtractTraceIdAndState(result.Message.Headers,
-            static (object? carrier, string key, out string? value, out IEnumerable<string>? values) =>
-            {
-                value = null;
-                values = null;
-                if (carrier is not Headers h) return;
-                try
-                {
-                    var header = h.FirstOrDefault(x =>
-                        string.Equals(x.Key, key, StringComparison.OrdinalIgnoreCase));
-                    if (header is not null)
-                        value = Encoding.UTF8.GetString(header.GetValueBytes());
-                }
-                catch { /* malformed trace header — skip */ }
-            },
-            out var traceParent,
-            out var traceState);
-
-        ActivityContext parentContext = default;
-        if (!string.IsNullOrEmpty(traceParent))
-            ActivityContext.TryParse(traceParent, traceState, out parentContext);
-
-        Activity? activity;
-        if (parentContext == default)
+        var span = StartSpan(result.Topic, result.Message.Headers, links: null);
+        if (span.Activity is { IsAllDataRequested: true } activity)
         {
-            // Волна A7: StartActivity(parentContext: default) does NOT create a root span - it
-            // inherits Activity.Current, so an ambient activity left by the host would adopt
-            // every receive. Clear it first (the house pattern, see DetachedDispatch.Enter).
-            var savedCurrent = Activity.Current;
-            Activity.Current = null;
-            activity = RouteActivitySource.Source.StartActivity(
-                $"{result.Topic} receive", ActivityKind.Consumer);
-            if (activity is null)
-                Activity.Current = savedCurrent;
-        }
-        else
-        {
-            activity = RouteActivitySource.Source.StartActivity(
-                $"{result.Topic} receive", ActivityKind.Consumer, parentContext);
-        }
-
-        if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag("messaging.system", "kafka");
-            activity.SetTag("messaging.operation", "receive");
-            activity.SetTag("messaging.destination.name", result.Topic);
-            activity.SetTag("messaging.kafka.consumer.group", _options.GroupId);
             activity.SetTag("messaging.kafka.destination.partition", result.Partition.Value);
             activity.SetTag("messaging.kafka.message.offset", result.Offset.Value);
-
             if (!string.IsNullOrEmpty(result.Message.Key))
                 activity.SetTag("messaging.kafka.message.key", result.Message.Key);
         }
+        return span;
+    }
 
-        return activity;
+    /// <summary>
+    /// The receive span of a batch: a root of its own, linked to the context of every record that carries one. The
+    /// records come from different senders and traces; none of them is the batch's parent.
+    /// </summary>
+    private TransportSpan StartBatchSpan(List<ConsumeResult<string, byte[]>> batch)
+    {
+        var links = new List<ActivityLink>(batch.Count);
+        foreach (var result in batch)
+        {
+            var sender = RouteTelemetryExtensions.ExtractTraceContext(result.Message.Headers, ReadTraceHeader);
+            if (sender != default)
+                links.Add(new ActivityLink(sender));
+        }
+
+        // No carrier: the batch span is a root.
+        var span = StartSpan(batch[0].Topic, carrier: null, links);
+        span.Activity?.SetTag("messaging.batch.message_count", batch.Count);
+        return span;
+    }
+
+    /// <summary>
+    /// Marks the receive span failed by the route. Only the consumer's own cancellation (its stop) is not a failure,
+    /// and it never gets here: the processing path rethrows it first. Any other cancellation is one, an HttpClient
+    /// timeout inside the route (a TaskCanceledException) for one.
+    /// </summary>
+    private static void MarkFailed(TransportSpan span, Exception failure) => span.Activity.RecordFailure(failure);
+
+    private TransportSpan StartSpan(string topic, Headers? carrier, IEnumerable<ActivityLink>? links)
+    {
+        var span = RouteTelemetryExtensions.StartConsumerSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{topic} receive", ActivityKind.Consumer,
+            "messaging.system", "kafka", _endpoint.Uri.NormalizedKey,
+            carrier, ReadTraceHeader,
+            destination: topic, operation: "receive", links: links);
+        span.Activity?.SetTag("messaging.kafka.consumer.group", _options.GroupId);
+        return span;
     }
 
     // ── Exchange creation ──
 
     private Exchange CreateExchange(ConsumeResult<string, byte[]> result)
+    {
+        var exchange = Exchange.Create(MessageOf(result), _endpoint.ScopeFactory);
+        exchange.Pattern = ExchangePattern.InOnly;
+        return exchange;
+    }
+
+    /// <summary>
+    /// One record as a message: its headers, <see cref="Message.ContentType"/> from its content-type header, and the
+    /// redbKafka.* metadata. The single and the batch path both build it here, so one topic gives one message shape
+    /// whatever maxPollRecords is.
+    /// </summary>
+    private Message MessageOf(ConsumeResult<string, byte[]> result)
     {
         var message = new Message
         {
@@ -504,42 +553,14 @@ public sealed class KafkaConsumer : DrainableConsumer
         if (!string.IsNullOrEmpty(result.Message.Key))
             message.Headers[KafkaHeaders.Key] = result.Message.Key;
 
-        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
-        exchange.Pattern = ExchangePattern.InOnly;
-        return exchange;
+        return message;
     }
 
     private Exchange CreateBatchExchange(List<ConsumeResult<string, byte[]>> batch)
     {
         var messages = new List<IMessage>(batch.Count);
         foreach (var result in batch)
-        {
-            var msg = new Message { Body = result.Message.Value };
-            msg.Headers[KafkaHeaders.Topic] = result.Topic;
-            msg.Headers[KafkaHeaders.Partition] = result.Partition.Value;
-            msg.Headers[KafkaHeaders.Offset] = result.Offset.Value;
-
-            if (result.Message.Headers is not null)
-            {
-                foreach (var h in result.Message.Headers)
-                {
-                    try
-                    {
-                        var headerValue = Encoding.UTF8.GetString(h.GetValueBytes());
-                        msg.Headers[h.Key] = headerValue;
-
-                        // Волна A7: the single-message path restores ContentType, the batch path
-                        // did not - one topic gave a different message shape depending on
-                        // maxPollRecords.
-                        if (string.Equals(h.Key, "content-type", StringComparison.OrdinalIgnoreCase))
-                            msg.ContentType = headerValue;
-                    }
-                    catch (Exception ex) { Logger?.LogDebug(ex, "Kafka: malformed batch header '{Key}'", h.Key); }
-                }
-            }
-
-            messages.Add(msg);
-        }
+            messages.Add(MessageOf(result));
 
         var batchMessage = new Message { Body = messages };
         batchMessage.Headers[KafkaHeaders.BatchSize] = batch.Count;
@@ -621,9 +642,12 @@ public sealed class KafkaConsumer : DrainableConsumer
 }
 
 /// <summary>
-/// Deferred Kafka offset commit action. Commits or rolls back the offset for an exchange.
+/// The position a consumer commits for one exchange (a record, or every partition of a batch). The consumer commits it
+/// inline, on receipt with ackMode=auto or after the route with ackMode=manual, unless a Kafka transaction already did
+/// (<see cref="MarkCommitted"/>, through <see cref="KafkaConsumedOffsets"/>). It is not a transacted action: a route's
+/// transaction never commits or rolls it back.
 /// </summary>
-internal sealed class KafkaCommitAction : ITransactedAction
+internal sealed class KafkaCommitAction
 {
     private readonly IConsumer<string, byte[]> _consumer;
     private readonly ConsumeResult<string, byte[]> _result;
@@ -666,13 +690,15 @@ internal sealed class KafkaCommitAction : ITransactedAction
     /// <summary>A Kafka transaction committed the offsets (<c>SendOffsetsToTransaction</c>): nothing is left to commit.</summary>
     public void MarkCommitted() => Interlocked.Exchange(ref _committed, 1);
 
-    public Task Commit(CancellationToken ct = default)
+    /// <summary>
+    /// Commits the position, once. Synchronous: librdkafka's commit waits for the group coordinator and takes no
+    /// cancellation, so a stop waits for a commit already under way (bounded by the client's own timeouts).
+    /// </summary>
+    public void Commit()
     {
-        // Idempotent: the transactional route and the inline auto-commit path may both reach here;
-        // only the first wins. (Kafka offset commit is itself idempotent, but the flag also lets the
-        // consumer skip the redundant inline call after a transactional commit.)
+        // Once: after a Kafka transaction committed the offsets (MarkCommitted), the inline commit is skipped.
         if (Interlocked.Exchange(ref _committed, 1) != 0)
-            return Task.CompletedTask;
+            return;
 
         if (_batchOffsets is not null)
         {
@@ -686,13 +712,5 @@ internal sealed class KafkaCommitAction : ITransactedAction
             _logger?.LogDebug("Kafka offset committed: topic={Topic}, partition={Partition}, offset={Offset}",
                 _result.Topic, _result.Partition.Value, _result.Offset.Value);
         }
-        return Task.CompletedTask;
-    }
-
-    public Task Rollback(CancellationToken ct = default)
-    {
-        _logger?.LogDebug("Kafka offset rollback (no commit): topic={Topic}, partition={Partition}, offset={Offset}",
-            _result.Topic, _result.Partition.Value, _result.Offset.Value);
-        return Task.CompletedTask;
     }
 }

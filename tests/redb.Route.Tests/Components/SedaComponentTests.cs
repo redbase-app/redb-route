@@ -49,7 +49,7 @@ public class SedaComponentTests : IAsyncDisposable
     public void Endpoint_Unbounded_ReturnsNegativeOneForQueueSize()
     {
         var component = new SedaComponent();
-        var uri = EndpointUriParser.Parse("seda://test");
+        var uri = EndpointUriParser.Parse("seda://test?size=0");
         var endpoint = (SedaEndpoint)component.CreateEndpoint(uri);
         // Unbounded channels don't support Count, so CurrentQueueSize returns -1
         endpoint.CurrentQueueSize.Should().Be(-1);
@@ -60,8 +60,16 @@ public class SedaComponentTests : IAsyncDisposable
     {
         var opts = new SedaEndpointOptions();
         opts.ResolvedConcurrentConsumers.Should().Be(1, "дефолт остаётся 1, как у Camel/Spring/Azure (В-7)");
-        opts.Size.Should().Be(0);
+        opts.Size.Should().Be(1000, "bounded by default, as Camel's seda: an unbounded queue is an explicit size=0");
         opts.Timeout.Should().Be(30000);
+    }
+
+    [Fact]
+    public void Endpoint_WithoutSize_IsBounded()
+    {
+        var component = new SedaComponent();
+        var endpoint = (SedaEndpoint)component.CreateEndpoint(EndpointUriParser.Parse("seda://default-bound"));
+        endpoint.CurrentQueueSize.Should().Be(0, "a bounded queue counts its items; an unbounded one reports -1");
     }
 
     [Fact]

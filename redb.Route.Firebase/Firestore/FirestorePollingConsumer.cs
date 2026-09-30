@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Google.Cloud.Firestore;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Firebase;
 
@@ -130,8 +132,15 @@ internal sealed class FirestorePollingConsumer : DrainableConsumer
         exchange.In.Headers[FirestoreHeaders.ReadTime] = readTime;
 
         // MessagesIn is counted by the core StatisticsProcessor - ownership audit.
-        await ProcessWithTracking(exchange, ct).ConfigureAwait(false);
+        using var span = StartReceiveSpan();
+        await ProcessWithTracking(exchange, span, ct).ConfigureAwait(false);
     }
+
+    /// <summary>The root span of one change: a Firestore document carries no trace context.</summary>
+    private TransportSpan StartReceiveSpan() => RouteTelemetryExtensions.StartConsumerSpan<object?>(
+        (_endpoint.Component as ComponentBase)?.Context,
+        $"firestore {_endpoint.CollectionPath} receive", ActivityKind.Consumer, "db.system", "firestore",
+        _endpoint.Uri.NormalizedKey, null, static (_, _) => null, destination: _endpoint.CollectionPath, operation: "receive");
 
     private async Task EmitRemovedAsync(string docId, Timestamp readTime, CancellationToken ct)
     {
@@ -142,6 +151,7 @@ internal sealed class FirestorePollingConsumer : DrainableConsumer
         exchange.In.Headers[FirestoreHeaders.ReadTime] = readTime;
 
         // MessagesIn is counted by the core StatisticsProcessor - ownership audit.
-        await ProcessWithTracking(exchange, ct).ConfigureAwait(false);
+        using var span = StartReceiveSpan();
+        await ProcessWithTracking(exchange, span, ct).ConfigureAwait(false);
     }
 }

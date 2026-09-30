@@ -10,8 +10,10 @@ public sealed class RouteEngineOptions
     public const string SectionName = "RedbRoute";
 
     /// <summary>
-    /// Whether to enable OpenTelemetry instrumentation on route pipelines.
-    /// Default: <c>true</c>.
+    /// Whether to enable OpenTelemetry tracing: the route spans and the transport spans connectors open through
+    /// <see cref="Telemetry.RouteTelemetryExtensions"/> with this context. Off, neither is opened, so a trace never
+    /// holds a transport span without the route it belongs to; an incoming or ambient trace context is still passed
+    /// on to the next hop. Default: <c>true</c>.
     /// </summary>
     public bool EnableTelemetry { get; set; } = true;
 

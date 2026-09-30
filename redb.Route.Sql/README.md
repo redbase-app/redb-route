@@ -325,7 +325,13 @@ Producers (`Execute` and `Procedure`) **always** open a local transaction when t
 one — write atomicity does not need `transacted=true`, and the option is a no-op there. The consumer
 is the only place that reads `transacted`. A route-level `.Transacted()` wraps the pipeline in a
 `TransactionScope`; the connector then detects the ambient transaction, skips its local one, and
-enlists the connection.
+enlists the connection. Two `sql:` steps in one block share the transaction (PostgreSQL and SQL Server hand the
+same enlisted connection back from the pool).
+
+A connection that does not join the block's transaction would commit on its own and keep its rows when the block
+rolls back. Such a step is refused before it writes: Microsoft.Data.Sqlite, which has no System.Transactions
+support; Firebird without `Enlist=true` (its client enlists only when asked); and any provider whose connection
+string says `Enlist=false` or `AutoEnlist=false`. Other providers are taken at their own enlistment defaults.
 
 The connector opens its own connection. Inside a transacted route that also writes through `redb` to the
 **same** database that is a second connection in the transaction, which SQL Server refuses (a distributed
@@ -463,3 +469,16 @@ A default is not written into the URI: an option left unset keeps the default of
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `db.system` = the scheme and
+`redb.route.endpoint`:
+
+- **Consumer.** One `Consumer` span, `sql.receive`, per routed exchange: a row, or the list of a batch
+  (`pollDelivery=List`). A row carries no trace context, so the span is a root, never a child of the activity the poll
+  runs under. A poll that routes nothing opens none; one that routes an empty exchange (`routeEmptyResultSet`,
+  `sendEmptyMessageWhenIdle`) opens one for it. A failed route marks it an error; our own stop does not.
+- **Producers.** `sql.execute` and `sql.procedure`, `Client` spans; an error when the statement fails, unless our own
+  token cancelled it.
+- `RouteEngineOptions.EnableTelemetry = false` opens none of these spans.

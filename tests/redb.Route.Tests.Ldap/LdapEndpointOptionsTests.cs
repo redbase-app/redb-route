@@ -32,7 +32,7 @@ public sealed class LdapEndpointOptionsTests
         opts.ProtocolVersion.Should().Be(3);
         opts.FollowReferrals.Should().BeTrue();
         opts.MaxConnections.Should().Be(10);
-        opts.SkipCertificateValidation.Should().BeFalse();
+        opts.TrustAllCertificates.Should().BeFalse();
         opts.ClientCertPath.Should().BeNull();
         opts.ClientCertPassword.Should().BeNull();
     }

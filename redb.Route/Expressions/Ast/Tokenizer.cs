@@ -176,6 +176,32 @@ public class Tokenizer
     /// Advances the position by one character and returns the new current character.
     /// </summary>
     /// <returns>The character at the new position, or <c>'\0'</c> if the end of input is reached.</returns>
+    /// <summary>
+    /// If the next word after optional whitespace is exactly <paramref name="word"/> (case-insensitive,
+    /// ending at a non-identifier character), consumes it and returns true; otherwise leaves the
+    /// position untouched. Lets "NOT IN" become one token while "NOT inStock" stays NOT + identifier.
+    /// </summary>
+    private bool TryConsumeFollowingWord(string word)
+    {
+        var probe = _position;
+        while (probe < _length && char.IsWhiteSpace(_input[probe]))
+            probe++;
+        if (probe == _position)
+            return false;   // "NOTIN" is one identifier, not two words
+
+        if (probe + word.Length > _length
+            || string.Compare(_input, probe, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) != 0)
+            return false;
+
+        var end = probe + word.Length;
+        if (end < _length && (char.IsLetterOrDigit(_input[end]) || _input[end] == '_' || _input[end] == '.'))
+            return false;   // "NOT inStock", "NOT in.x": a longer identifier, not the IN operator
+
+        while (_position < end)
+            Advance();
+        return true;
+    }
+
     private char Advance()
     {
         _position++;
@@ -228,14 +254,29 @@ public class Tokenizer
             Advance();
         }
 
+        var upper = result.ToUpperInvariant();
+
+        // IN is an operator even with a parenthesis right after it: "x in('a','b')" is a list
+        // literal, not a call to a function named "in". Checked before the function rule for that
+        // reason; the other word operators keep their order, so nothing they parse changes.
+        if (upper == "IN")
+        {
+            return new Token(TokenType.Operator, "IN", startPos);
+        }
+
         // If the identifier is followed by an opening parenthesis, treat it as a function call
         if (_position < _length && _currentChar == '(')
         {
             return new Token(TokenType.Function, result, startPos);
         }
 
+        // "NOT IN" is one binary operator, not a unary NOT in front of a stray IN.
+        if (upper == "NOT" && TryConsumeFollowingWord("IN"))
+        {
+            return new Token(TokenType.Operator, "NOT IN", startPos);
+        }
+
         // Check for word-operators (NOT, AND, OR, XOR)
-        var upper = result.ToUpperInvariant();
         if (upper == "NOT" || upper == "AND" || upper == "OR" || upper == "XOR")
         {
             return new Token(TokenType.Operator, upper, startPos);

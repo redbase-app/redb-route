@@ -37,6 +37,7 @@ public sealed class HttpConnectionFactory
     public string? Username { get; set; }
 
     /// <summary>Password for Basic auth.</summary>
+    [Sensitive]
     public string? Password { get; set; }
 
     /// <summary>
@@ -44,6 +45,7 @@ public sealed class HttpConnectionFactory
     /// (e.g. <c>${env:BILLING_TOKEN}</c>, <c>${header.jwt}</c>) — an expression is resolved per
     /// request, a plain value is used as-is.
     /// </summary>
+    [Sensitive]
     public string? AuthToken { get; set; }
 
     /// <summary>Request timeout in milliseconds (default 30000).</summary>
@@ -56,6 +58,7 @@ public sealed class HttpConnectionFactory
     public string? SslCertPath { get; set; }
 
     /// <summary>Password for the TLS certificate.</summary>
+    [Sensitive]
     public string? SslCertPassword { get; set; }
 
     /// <summary>

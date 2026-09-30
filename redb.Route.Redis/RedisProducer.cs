@@ -57,6 +57,7 @@ public sealed class RedisProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"redis {_endpoint.OperationType}", ActivityKind.Client,
             "db.system", "redis",
             _endpoint.Uri.NormalizedKey,
@@ -73,8 +74,9 @@ public sealed class RedisProducer : ConnectableProducer
         {
             await DispatchOperationAsync(exchange, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
+            activity.RecordFailure(ex);
             Logger?.LogError(ex, "Redis {Operation} failed: resource={Resource}, connected={IsConnected}, db={Database}",
                 _endpoint.OperationType, _endpoint.Resource, _db?.Multiplexer?.IsConnected, _db?.Database);
             throw;

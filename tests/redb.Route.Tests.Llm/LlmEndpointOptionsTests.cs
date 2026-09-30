@@ -108,9 +108,8 @@ public sealed class LlmEndpointOptionsTests
     [Fact]
     public void Validate_UnknownOption_IsRefused_WithTheNearestName()
     {
-        var opts = Bind("llm://c?tempreature=0.2");
-
-        var act = () => opts.Validate();
+        // Refused while binding, in the core, before Validate runs.
+        var act = () => Bind("llm://c?tempreature=0.2");
 
         act.Should().Throw<ArgumentException>("a misspelt option would silently run with the default")
             .Which.Message.Should().Contain("tempreature").And.Contain("temperature", "the nearest option is named");
@@ -119,9 +118,7 @@ public sealed class LlmEndpointOptionsTests
     [Fact]
     public void Validate_ValueThatDoesNotConvert_IsRefused()
     {
-        var opts = Bind("llm://c?maxIterations=abc");
-
-        var act = () => opts.Validate();
+        var act = () => Bind("llm://c?maxIterations=abc");
 
         act.Should().Throw<ArgumentException>("the option would silently keep its default")
             .Which.Message.Should().Contain("maxIterations").And.Contain("abc");
@@ -143,5 +140,24 @@ public sealed class LlmEndpointOptionsTests
 
         opts.UnmappedParameters.Should().BeEmpty("every option the DSL writes is one the endpoint reads");
         opts.Invoking(o => o.Validate()).Should().NotThrow();
+    }
+
+    [Fact]
+    public void Bind_StreamWithoutAMode_SaysWhatEachModeDoes()
+    {
+        var act = () => Bind("llm://c?stream=true");
+
+        act.Should().Throw<ArgumentException>()
+            .Which.Message.Should().Contain("stream=calls").And.Contain("stream=body")
+            .And.Contain("inside the route", "the connector says what each mode does, not only that it exists");
+    }
+
+    [Fact]
+    public void Bind_StreamNumberThatNamesNoMode_IsRefused()
+    {
+        // A number converts into any enum; 5 names no mode, and the binding refuses it.
+        var act = () => Bind("llm://c?stream=5");
+
+        act.Should().Throw<ArgumentException>().Which.Message.Should().Contain("stream=5");
     }
 }

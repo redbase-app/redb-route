@@ -232,7 +232,13 @@ internal static partial class CoreContributions
                 StrategyArg(A(e, "strategy") ?? ""),
                 A(e, "completion") is { } c ? XmlCodeWriter.Str(c) : (A(e, "completionSize") ?? A(e, "completionTimeout")) is null ? null : "null",
                 A(e, "completionSize") ?? (A(e, "completionTimeout") is null ? null : "null"),
-                A(e, "completionTimeout") is { } t ? XmlCodeWriter.Ts(ParseTs(t)) : null), "EndAggregate"),
+                A(e, "completionTimeout") is { } t ? XmlCodeWriter.Ts(ParseTs(t)) : null), "EndAggregate", w2 =>
+                {
+                    // Before the steps: a flag of the aggregate itself, printed as the parser sets it.
+                    if (A(e, "forceCompletionOnStop") is { } force)
+                        w2.Config(bool.Parse(force) ? "ForceCompletionOnStop()" : "ForceCompletionOnStop(false)");
+                    w2.PrintSteps(e);
+                }),
             ["loop"] = (e, w) =>
             {
                 var copy = A(e, "copy") == "true";

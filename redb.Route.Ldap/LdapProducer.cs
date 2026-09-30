@@ -48,7 +48,10 @@ internal sealed class LdapProducer : ConnectableProducer
     {
         EnsureStarted();
 
-        using var activity = RouteActivitySource.Source.StartActivity($"ldap.{_endpoint.OperationType}");
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"ldap.{_endpoint.OperationType}", ActivityKind.Client, "network.protocol.name", "ldap",
+            _endpoint.Uri.NormalizedKey);
         activity?.SetTag("ldap.operation", _endpoint.OperationType.ToString());
         activity?.SetTag("ldap.base_dn", _endpoint.BaseDn);
         activity?.SetTag("ldap.server", _options.Server);
@@ -69,13 +72,15 @@ internal sealed class LdapProducer : ConnectableProducer
         }
         catch (LdapException ex)
         {
+            activity.RecordFailure(ex);
             Logger?.LogError(ex, "LDAP {Operation} failed: baseDn={BaseDn}, resultCode={Code}",
                 _endpoint.OperationType, _endpoint.BaseDn, ex.ResultCode);
             _endpoint.RecordError(ex);
             throw;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
+            activity.RecordFailure(ex);
             Logger?.LogError(ex, "LDAP {Operation} failed: baseDn={BaseDn}",
                 _endpoint.OperationType, _endpoint.BaseDn);
             _endpoint.RecordError(ex);

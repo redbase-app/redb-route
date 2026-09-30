@@ -21,6 +21,10 @@ public sealed class SoapConsumer : IConsumer
     private readonly IProcessor _processor;
     private readonly SharedHttpServerManager _server;
     private RouteRegistration? _registration;
+
+    // Unregistering the route stops new requests; the ones already in the pipeline still have to
+    // finish, and the listener stays up while another route holds the port.
+    private readonly InflightDrainGuard _drain = new();
     private ILogger? _logger;
 
     public IEndpoint Endpoint => _endpoint;
@@ -35,6 +39,8 @@ public sealed class SoapConsumer : IConsumer
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
+        _drain.Start(ct);
+
         _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
         var o = _endpoint.SoapOptions;
         var factory = ResolveFactory();
@@ -120,10 +126,39 @@ public sealed class SoapConsumer : IConsumer
         if (_registration is null) return;
         _server.UnregisterRoute(_registration);
         _registration = null;
+        await _drain.DrainAsync(ct, _logger, $"soap://{_endpoint.SoapOptions.Host}:{_endpoint.SoapOptions.Port}{_endpoint.SoapOptions.Path}").ConfigureAwait(false);
         await _server.StopIfEmpty(_endpoint.SoapOptions.Host, _endpoint.SoapOptions.Port, ct).ConfigureAwait(false);
     }
 
     private async Task HandleRequest(HttpContext http)
+    {
+        // Counted for the drain: a call already inside the pipeline must finish before Stop returns,
+        // even though the listener stays up for the other routes on this port.
+        _drain.Increment();
+        // The server span of the request, over the whole of it, the refused ones too: the caller's trace goes on from
+        // the host's span when ASP.NET Core instrumentation opened it, else from traceparent; without either it is a root.
+        using var span = RouteTelemetryExtensions.StartConsumerSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            "soap receive", ActivityKind.Server, "rpc.system", "soap", _endpoint.Uri.NormalizedKey,
+            http.Request.Headers, static (headers, name) => headers.TryGetValue(name, out var value) ? value.ToString() : null,
+            InboundParent.HostRequest);
+        try
+        {
+            await HandleRequestCore(http, span.Activity).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !http.RequestAborted.IsCancellationRequested)
+        {
+            // Only the caller going away is a stop; any other cancellation (a timeout inside the route) is a failure.
+            span.Activity.RecordFailure(ex);
+            throw;
+        }
+        finally
+        {
+            _drain.Decrement();
+        }
+    }
+
+    private async Task HandleRequestCore(HttpContext http, Activity? span)
     {
         // WSDL publishing: a GET serves the contract and never enters the SOAP pipeline.
         if (HttpMethods.IsGet(http.Request.Method))
@@ -173,8 +208,6 @@ public sealed class SoapConsumer : IConsumer
             }
         }
 
-        using var span = RouteTelemetryExtensions.StartTransportSpan(
-            "soap receive", ActivityKind.Server, "rpc.system", "soap", _endpoint.Uri.NormalizedKey);
         // Pipeline statistics (MessagesIn/BytesIn) are the core StatisticsProcessor's - the
         // ownership audit removed the double. Transport-level failures above stay recorded here.
 
@@ -296,7 +329,10 @@ public sealed class SoapConsumer : IConsumer
         try
         {
             try { await _processor.Process(exchange, http.RequestAborted).ConfigureAwait(false); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { exchange.Exception ??= ex; }
+            catch (Exception ex) when (ex is not OperationCanceledException || !http.RequestAborted.IsCancellationRequested)
+            {
+                exchange.Exception ??= ex;
+            }
 
             if (exchange.Exception is not null && !exchange.ExceptionHandled)
             {
@@ -325,6 +361,10 @@ public sealed class SoapConsumer : IConsumer
                 }
 
                 var chosen = exchange.Exception as SoapFaultException;
+                // As a 4xx against a 5xx: a Sender/Client fault the route chose is an answer to the caller, not a
+                // failure; a Receiver/Server fault and any other exception is ours.
+                if (!IsSenderFault(chosen?.FaultCode))
+                    span.RecordFailure(exchange.Exception);
                 await WriteFault(
                         http, version,
                         chosen?.FaultString
@@ -350,8 +390,11 @@ public sealed class SoapConsumer : IConsumer
                 var declaredCode = outMsg.Headers.TryGetValue(SoapHeaders.FaultCode, out var dc)
                     ? dc?.ToString()
                     : null;
-                await WriteFault(http, version, declaredReason, declaredCode ?? SoapEnvelope.SenderCode(version))
-                    .ConfigureAwait(false);
+                var code = declaredCode ?? SoapEnvelope.SenderCode(version);
+                // The same rule as a thrown fault: a Receiver/Server code is ours even when the route sent it on purpose.
+                if (!IsSenderFault(code))
+                    span?.SetStatus(ActivityStatusCode.Error, declaredReason);
+                await WriteFault(http, version, declaredReason, code).ConfigureAwait(false);
                 return;
             }
 
@@ -490,6 +533,18 @@ public sealed class SoapConsumer : IConsumer
         var rest = ct[(idx + "action=".Length)..];
         var end = rest.IndexOf(';');
         return (end < 0 ? rest : rest[..end]).Trim().Trim('"');
+    }
+
+    /// <summary>
+    /// Whether <paramref name="faultCode"/> is the caller's fault: <c>Client</c> (SOAP 1.1) or <c>Sender</c> (SOAP 1.2),
+    /// with or without a prefix. <c>null</c> is the default Receiver/Server code.
+    /// </summary>
+    private static bool IsSenderFault(string? faultCode)
+    {
+        if (string.IsNullOrEmpty(faultCode))
+            return false;
+        var local = faultCode[(faultCode.LastIndexOf(':') + 1)..];
+        return local is "Client" or "Sender";
     }
 
     private static async Task WriteFault(

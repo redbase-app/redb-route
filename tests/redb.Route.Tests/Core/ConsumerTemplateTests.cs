@@ -111,6 +111,21 @@ public class ConsumerTemplateTests : IDisposable
     // ── SEDA: Receive (blocking) ──
 
     [Fact]
+    public async Task DoneUoW_On_A_Seda_Exchange_Is_Accepted_Once()
+    {
+        // Callers write one loop for any endpoint: Receive, handle, DoneUoW. A SEDA exchange has no
+        // unit of work to commit, but completing it is still accepted — once.
+        StartBoth();
+        await SendToSeda("seda:uow", "hello");
+
+        var exchange = await _consumer.Receive("seda:uow");
+        await _consumer.DoneUoW(exchange);
+
+        var again = () => _consumer.DoneUoW(exchange);
+        await again.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
     public async Task Receive_Seda_ReturnsExchange()
     {
         StartBoth();

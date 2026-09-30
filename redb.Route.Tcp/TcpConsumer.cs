@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -8,6 +9,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Tcp;
 
@@ -267,6 +269,11 @@ public sealed class TcpConsumer : IConsumer
 
                 var exchange = BuildExchange(data, connectionId, remoteEp, localEp);
 
+                // A framed message carries no trace context: its span is a root, never a child of the connection's activity.
+                using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+                    (_endpoint.Component as ComponentBase)?.Context,
+                    $"tcp {_options.Host}:{_options.Port} receive", ActivityKind.Consumer, "network.transport", "tcp",
+                    _endpoint.Uri.NormalizedKey, null, static (_, _) => null, operation: "receive");
                 _drain.Increment();
                 try
                 {
@@ -280,6 +287,11 @@ public sealed class TcpConsumer : IConsumer
                             remoteEp);
                         exchange.Exception = ex;
                     }
+
+                    // Our own stop is not a failure; any other cancellation, a timeout inside the route, is.
+                    if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+                        && (failure is not OperationCanceledException || !_drain.ProcessingToken.IsCancellationRequested))
+                        span.Activity.RecordFailure(failure);
 
                     // InOut: write response back (use drain-safe token so response completes during drain)
                     if (_options.InOut && exchange.Exception is null)

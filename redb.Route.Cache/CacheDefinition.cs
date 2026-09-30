@@ -13,7 +13,8 @@ namespace redb.Route.Cache;
 /// </summary>
 public sealed class CacheDefinition : RouteDefinitionBase<CacheDefinition>, IRouteScope
 {
-    private Func<IExchange, string> _key;
+    private readonly Func<IExchange, string> _key;
+    private bool _keyFromBody;
     private TimeSpan? _ttl;
     private TimeSpan? _sliding;
     private string _region = "default";
@@ -49,10 +50,15 @@ public sealed class CacheDefinition : RouteDefinitionBase<CacheDefinition>, IRou
     /// <summary>Use the in-process cache (default).</summary>
     public CacheDefinition InMemory() { _provider = CacheProvider.Memory; return this; }
 
-    /// <summary>Key = SHA-256 of the body (WSO2 "hash of the whole request" mode) instead of the explicit key.</summary>
+    /// <summary>
+    /// Key = SHA-256 of the body instead of the explicit key (WSO2 "hash of the request" mode). Only the
+    /// body is hashed: the content type and the headers are not part of the key. A stream body is read
+    /// to the end for it, and the message continues with its bytes; an object goes through the context's
+    /// data format, the way the distributed cache stores it.
+    /// </summary>
     public CacheDefinition KeyFromBody()
     {
-        _key = static exchange => BodyHash(exchange.In.Body);
+        _keyFromBody = true;
         return this;
     }
 
@@ -67,16 +73,19 @@ public sealed class CacheDefinition : RouteDefinitionBase<CacheDefinition>, IRou
     public override IProcessor CreateProcessor(IRouteContext context)
     {
         var options = CacheStores.Options(context);
-        var store = CacheStores.Resolve(context, _provider ?? options.DefaultProvider);
+        var provider = _provider ?? options.DefaultProvider;
+        var store = CacheStores.Resolve(context, provider);
+        var flights = CacheStores.Flights(context, provider);
         var inner = NodePipeline.Body(context, Outputs);
         var region = _region;
-        var key = _key;
+        var registry = context.GetService<IDataFormatRegistry>();
+        Func<IExchange, string> key = _keyFromBody ? exchange => BodyHash(exchange.In, registry) : _key;
         var ttl = _ttl ?? options.DefaultTtl;
         if (ttl is { } t && t <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(ttl), t, "Cache: the TTL must be positive.");
         if (_sliding is { } s && s <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException("sliding", s, "Cache: the sliding expiration must be positive.");
-        return new CacheScopeProcessor(store, e => CacheKeys.For(region, key(e)), region, ttl, _sliding, _cacheHeaders, inner);
+        return new CacheScopeProcessor(store, flights, e => CacheKeys.For(region, key(e)), ttl, _sliding, _cacheHeaders, inner);
     }
 
     internal static Func<IExchange, string> KeyFromTemplate(string keyTemplate)
@@ -93,15 +102,39 @@ public sealed class CacheDefinition : RouteDefinitionBase<CacheDefinition>, IRou
         };
     }
 
-    internal static string BodyHash(object? body)
+    /// <summary>
+    /// SHA-256 of the message body. A stream can be read once and the inner steps still need the body,
+    /// so its bytes replace it on the message, as they do when a miss is stored.
+    /// </summary>
+    internal static string BodyHash(IMessage message, IDataFormatRegistry? registry)
     {
-        var bytes = body switch
+        byte[] bytes;
+        switch (message.Body)
         {
-            null => [],
-            byte[] b => b,
-            string s => Encoding.UTF8.GetBytes(s),
-            _ => System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(body),
-        };
+            case null:
+                bytes = [];
+                break;
+            case byte[] raw:
+                bytes = raw;
+                break;
+            case string text:
+                bytes = Encoding.UTF8.GetBytes(text);
+                break;
+            case Stream stream:
+                bytes = CacheEntry.ReadToEnd(stream);
+                message.Body = bytes;
+                break;
+            case var body:
+                try
+                {
+                    bytes = CacheSerialization.Serialize(registry, body, message.ContentType).Bytes;
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Cache: KeyFromBody cannot hash a {body.GetType().Name} body: {ex.Message}", ex);
+                }
+                break;
+        }
         return Convert.ToHexString(SHA256.HashData(bytes));
     }
 }

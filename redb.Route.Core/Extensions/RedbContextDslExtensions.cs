@@ -44,8 +44,8 @@ public static class RedbContextDslExtensions
     }
 
     /// <summary>
-    /// Registers a <see cref="RedbIdempotentRepository"/> under
-    /// <c>idempotent:{name}</c> in the context registry — the key
+    /// Registers a <see cref="RedbIdempotentRepository"/> in the context registry under
+    /// <paramref name="name"/>, as is — the name
     /// <c>IdempotentConsumer(keyExpression, repositoryName)</c> and the markup's
     /// <c>&lt;idempotentConsumer repository="…"&gt;</c> look up. Built lazily when the context
     /// starts (the repository needs the context's service provider for per-exchange scoping).
@@ -71,9 +71,7 @@ public static class RedbContextDslExtensions
                 ProcessorName = processorName ?? name,
                 Ttl = ttl,
             };
-            ctx.AddToRegistry(
-                RegistryIdempotentRepositoryProvider.KeyPrefix + name,
-                new RedbIdempotentRepository(scopeFactory, options));
+            ctx.AddIdempotentRepository(name, new RedbIdempotentRepository(scopeFactory, options));
             return Task.CompletedTask;
         }));
         return context;

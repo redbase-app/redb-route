@@ -25,14 +25,7 @@ public class TcpProducerTests : IAsyncLifetime
     private TcpFraming _framing = TcpFraming.TextLine;
     private string _delimiter = "\n";
 
-    private static int GetFreePort()
-    {
-        using var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     public Task InitializeAsync()
     {

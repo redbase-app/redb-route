@@ -123,6 +123,7 @@ public sealed class BeanComponent : ComponentBase
 }
 
 /// <summary>Options for <c>bean:</c> endpoints. Everything unmapped binds to the bean instance.</summary>
+[LenientProperties]
 public sealed class BeanEndpointOptions : EndpointOptions
 {
     /// <summary>
@@ -296,8 +297,8 @@ public sealed partial class BeanInvoker
             .Lambda<Func<object, IExchange, CancellationToken, object?>>(body, instance, exchange, ct)
             .Compile();
 
-        var (returnsValue, taskResult) = ClassifyReturn(method.ReturnType);
-        return new BeanInvoker(invoke, returnsValue, taskResult);
+        var (returnsValue, taskResult, toTask) = ClassifyReturn(method.ReturnType);
+        return new BeanInvoker(AwaitableAsTask(invoke, toTask), returnsValue, taskResult);
     }
 }
 
@@ -372,8 +373,8 @@ public sealed partial class BeanInvoker
             return call(instance, args, ct);
         }
 
-        var (returnsValue, taskResult) = ClassifyReturn(method.ReturnType);
-        return new BeanInvoker(Invoke, returnsValue, taskResult);
+        var (returnsValue, taskResult, toTask) = ClassifyReturn(method.ReturnType);
+        return new BeanInvoker(AwaitableAsTask(Invoke, toTask), returnsValue, taskResult);
     }
 
     /// <summary>Splits top-level commas, respecting quotes (with backslash escapes) and nesting.</summary>
@@ -465,10 +466,25 @@ public sealed partial class BeanInvoker
     }
 
     /// <summary>Shared return-shape classification for both invoker forms.</summary>
-    private static (bool ReturnsValue, Func<Task, object?>? TaskResult) ClassifyReturn(Type returnType)
+    // A ValueTask or ValueTask<T> is awaited like Task and Task<T>: the method's return value is turned into a Task
+    // once, where the invoker is built, so the producer awaits one shape. It used to be taken for a plain value — the
+    // struct became the body and an async method was not awaited.
+    private static (bool ReturnsValue, Func<Task, object?>? TaskResult, Func<object?, object?>? ToTask) ClassifyReturn(Type returnType)
     {
         if (returnType == typeof(void) || returnType == typeof(Task))
-            return (false, null);
+            return (false, null, null);
+        if (returnType == typeof(ValueTask))
+            return (false, null, static raw => ((ValueTask)raw!).AsTask());
+        if (returnType.IsGenericType && returnType.GetGenericTypeDefinition() == typeof(ValueTask<>))
+        {
+            var raw = Expression.Parameter(typeof(object), "raw");
+            var asTask = Expression.Call(Expression.Convert(raw, returnType), returnType.GetMethod(nameof(ValueTask.AsTask))!);
+            var toTask = Expression
+                .Lambda<Func<object?, object?>>(Expression.Convert(asTask, typeof(object)), raw)
+                .Compile();
+            var (_, getter, _) = ClassifyReturn(typeof(Task<>).MakeGenericType(returnType.GetGenericArguments()));
+            return (false, getter, toTask);
+        }
         if (returnType.IsGenericType && returnType.GetGenericTypeDefinition() == typeof(Task<>))
         {
             var task = Expression.Parameter(typeof(Task), "task");
@@ -476,10 +492,14 @@ public sealed partial class BeanInvoker
             var getter = Expression
                 .Lambda<Func<Task, object?>>(Expression.Convert(result, typeof(object)), task)
                 .Compile();
-            return (false, getter);
+            return (false, getter, null);
         }
-        return (true, null);
+        return (true, null, null);
     }
+
+    private static Func<object, IExchange, CancellationToken, object?> AwaitableAsTask(
+        Func<object, IExchange, CancellationToken, object?> invoke, Func<object?, object?>? toTask)
+        => toTask is null ? invoke : (instance, exchange, ct) => toTask(invoke(instance, exchange, ct));
 }
 
 /// <summary>

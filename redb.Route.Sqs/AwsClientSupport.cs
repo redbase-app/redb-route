@@ -69,6 +69,28 @@ internal static class AwsClientSupport
     /// <c>redbSqs.attr.</c>) is forwarded with the prefix stripped (so sqs→sqs/sns bridges preserve
     /// attributes); framework headers (<c>redbSqs.*</c> / <c>redbSns.*</c>) are dropped.
     /// </summary>
+    /// <summary>The most message attributes SQS and SNS accept on one message.</summary>
+    public const int MaxMessageAttributes = 10;
+
+    /// <summary>
+    /// Fails the send when the message carries more attributes than SQS/SNS accept, naming how many came from the
+    /// exchange headers and how many from the trace context, instead of letting the service refuse it with a bare count.
+    /// Nothing is dropped to make it fit: which attribute to lose is not the connector's call.
+    /// </summary>
+    /// <param name="total">Attributes on the message, trace context included.</param>
+    /// <param name="fromHeaders">Attributes mapped from the exchange headers.</param>
+    /// <param name="producer">The producer, for the message.</param>
+    public static void EnsureAttributeLimit(int total, int fromHeaders, string producer)
+    {
+        if (total <= MaxMessageAttributes)
+            return;
+        throw new InvalidOperationException(
+            $"'{producer}' would send {total} message attributes, at most {MaxMessageAttributes} are accepted: " +
+            $"{fromHeaders} from the exchange headers and {total - fromHeaders} for the trace context " +
+            "(traceparent, tracestate, baggage). Nothing was sent. Remove the headers the next hop does not need " +
+            "before this step (.RemoveHeaders(...)).");
+    }
+
     public static string? MapHeaderToAttributeName(string key)
     {
         if (key.StartsWith(SqsHeaders.MessageAttributePrefix, StringComparison.Ordinal))

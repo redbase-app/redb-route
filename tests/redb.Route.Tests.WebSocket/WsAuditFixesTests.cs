@@ -34,14 +34,7 @@ public sealed class WsAuditFixesTests : IAsyncLifetime
         foreach (var f in _tempFiles) if (File.Exists(f)) File.Delete(f);
     }
 
-    private static int GetFreePort()
-    {
-        using var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     private static WsEndpoint Endpoint(WsComponent component, string path,
         Dictionary<string, string>? pars = null)

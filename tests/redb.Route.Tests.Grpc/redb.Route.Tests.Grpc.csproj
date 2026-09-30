@@ -20,6 +20,10 @@
   <ItemGroup>
     <!-- One span capture for the smoke tests: the test root trace keeps parallel test classes out. -->
     <Compile Include="../Shared/SpanCapture.cs" Link="Shared/SpanCapture.cs" />
+    <Compile Include="../redb.Route.Tests/Telemetry/RouteTelemetryProbe.cs" Link="Shared/RouteTelemetryProbe.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/TestPorts.cs" Link="Shared/TestPorts.cs" />
   </ItemGroup>
 </Project>
 

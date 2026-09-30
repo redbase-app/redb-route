@@ -108,6 +108,11 @@ Templates support `{param}` placeholders that are extracted from the request pat
 - Complex type → deserialized from body
 - Simple type with default value → uses default
 
+**Conversion.** Header, query, route and property values are parsed with the invariant culture (`12.5` is twelve
+and a half on every server). A value that is missing binds as the parameter's default (or the type's). A value that
+is present but does not convert is a binding error naming the parameter and the value, as Camel's
+`ParameterBindingException`: the dispatchers answer `400`, SOAP a Sender fault, a direct invoke fails the exchange.
+
 ## Dispatchers
 
 ### ControllerDispatcherProcessor (Generic)
@@ -224,13 +229,20 @@ var action = registry.Resolve(HttpMethodType.Get, "orders/42", out var routePara
 
 ## Response Conventions
 
+These are the replies of the five **dispatchers** (generic, HTTP, SignalR, gRPC; SOAP answers faults instead of
+error bodies). They end the exchange as an API endpoint does. The direct-invoke overloads are route steps and
+follow the bean rules below instead.
+
 | Scenario | `status.code` | Body |
 |----------|---------------|------|
-| Method returns a value | `200` | Return value (JSON-serialized for HTTP/gRPC) |
-| Method returns `null` or `Task` (void) | `204` | — |
-| Missing headers | `400` | `ControllerErrorResponse` |
+| Method returns a value (`T`, `Task<T>`, `ValueTask<T>`) | `200` | Return value (JSON-serialized for HTTP/gRPC) |
+| Method returns `null`, `void`, `Task` or `ValueTask` | `204` | — (the request body is not echoed) |
+| Missing headers, or a value that does not bind | `400` | `ControllerErrorResponse` |
 | No matching action | `404` | `ControllerErrorResponse` |
 | Exception during invocation | `500` | `ControllerErrorResponse` |
+
+An action may answer by itself: write `Exchange.Out` (body, status, headers), call `Exchange.Stop()` and return
+`null`. The dispatcher keeps that reply as it is and only fills in a missing `status.code` and `Content-Type`.
 
 ```csharp
 // Error response model
@@ -264,6 +276,27 @@ All methods are on `IRouteDefinition`:
 | `RedbGrpcController<T>()` | gRPC | `dispatch-method` |
 | `RedbGrpcController(types)` | gRPC | `dispatch-method` |
 | `RedbGrpcController(registry)` | gRPC | `dispatch-method` |
+
+### Direct invoke is a bean step
+
+`RedbController<T>(methodName)`, `RedbController(registry, ctrlName, methodName)` and
+`RedbController(registry, ctrlExpr, methodExpr)` call one method as a step in the middle of a route, the way the
+core's `.Bean<TService>(...)` and the `bean:` endpoint do (Camel's `.bean(...)`), with the controller conveniences
+on top: an instance per exchange, `Context`/`Exchange` set, and the binding attributes above.
+
+| Method returns | Message after the step |
+|----------------|------------------------|
+| a value (`T`, `Task<T>`, `ValueTask<T>`) | the value is the body, `status.code` = `200` |
+| `null`, `void`, `Task` or `ValueTask` | unchanged: the next step sees what this one received |
+| throws | the exchange fails with the action's own exception, so `OnException(typeof(...))` matches it |
+
+```csharp
+// The audit step records and passes the order on untouched; the pricing step replaces the body.
+route.From("direct://orders")
+     .RedbController<AuditController>(nameof(AuditController.Record))     // void
+     .RedbController<PricingController>(nameof(PricingController.Quote))  // returns a Quote
+     .To("direct://billing");
+```
 
 ## Requirements
 

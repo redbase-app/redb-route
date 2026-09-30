@@ -67,12 +67,5 @@ public sealed class WsTelemetrySmokeTests : IAsyncLifetime
     private static bool IsOwnEndpoint(Activity activity, int port) =>
         activity.GetTagItem("redb.route.endpoint") is string endpoint && endpoint.Contains($":{port}/");
 
-    private static int GetFreePort()
-    {
-        using var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 }

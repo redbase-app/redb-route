@@ -146,3 +146,16 @@ context.AddToRegistry("prod", new WsConnectionFactory
 });
 // wss://feed.internal/ticks?connectionFactory=prod
 ```
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `messaging.system` = `websocket` and
+`redb.route.endpoint`:
+
+- **Consumer.** One `Consumer` span, `ws {path} receive`, per routed message, the InOut reply included. A frame carries
+  no headers, so the span is a root; when the client sent `traceparent` with its upgrade request, every span of that
+  connection links that context. The connection itself, which may live for hours, is never the parent, and a
+  connection that sends nothing opens no span. A failed route marks the span an error; our own stop does not.
+- **Producer.** One `Producer` span per send, `ws send {mode}`; an error when the send fails, unless our own token
+  cancelled it. No trace context is written to the frame.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.

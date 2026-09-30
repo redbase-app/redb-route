@@ -50,7 +50,7 @@ From(Amqp.Address("orders")
 |----------|---------|
 | **Connection** | `.Host()`, `.Port()`, `.User()`, `.Password()`, `.ContainerId()`, `.VirtualHost()`, `.Ssl()`, `.ConnectionFactory()` |
 | **Link** | `.Durable()`, `.ExpiryPolicy()`, `.TerminusTimeout()`, `.DistributionMode()`, `.Dynamic()`, `.FilterSelector()`, `.Capabilities()`, `.SenderSettleMode()`, `.ReceiverSettleMode()` |
-| **Consumer** | `.Credit()`, `.AutoAccept()`, `.ConcurrentConsumers()`, `.ReceiveTimeout()` |
+| **Consumer** | `.Credit()`, `.AckMode()`, `.ConcurrentConsumers()`, `.ReceiveTimeout()` |
 | **Producer** | `.MessageDurable()`, `.MessagePriority()`, `.MessageTtl()`, `.ContentType()`, `.Subject()`, `.GroupId()`, `.ReplyTo()`, `.Timeout()`, `.Transacted()`, `.LocalTransactions()`, `.Declare()`, `.RoutingType()` |
 
 ## Transactions
@@ -114,3 +114,17 @@ Anything else — `0`, a negative, a typo — fails at endpoint creation naming 
 int-typed option silently fell back to 1). Raising the value trades ordering for throughput:
 messages from the same queue are processed out of order, and your processors must be safe to
 run in parallel.
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`). The W3C context travels in the application
+properties: `traceparent`, `tracestate`, `baggage`.
+
+- **Consumer.** One `Consumer` span per message, `{address} receive`, over the whole unit of work, settlement included.
+  Its parent is the sender's `traceparent`; without one it is a root, never a child of the activity the receive loop
+  inherited from whoever started the routes. The sender's baggage is back on it, the route's spans are its children, it
+  carries `redb.route.endpoint`, `messaging.message.id` and `messaging.amqp.subject`, and a failed route marks it an
+  error.
+- **Producer.** One `Producer` span per send, `{address} publish`; an error when the send fails. The message carries
+  the context of this span: a `traceparent` the header bridge copied from a received message is replaced.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span. A context that came in still goes out.

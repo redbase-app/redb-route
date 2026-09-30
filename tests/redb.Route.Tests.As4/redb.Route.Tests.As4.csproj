@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.As4\redb.Route.As4.csproj" />
+    <!-- Ф8: an HTTP route and an AS4 route on one shared listener. -->
+    <ProjectReference Include="..\..\redb.Route.Http\redb.Route.Http.csproj" />
+    <!-- Ф8: the node, its partners and an as4: route from Route-XML. -->
+    <ProjectReference Include="..\..\redb.Route.Xml\redb.Route.Xml.csproj" />
+    <Compile Include="../Shared/TestPorts.cs" Link="Shared/TestPorts.cs" />
+    <!-- The span filter of the core telemetry tests: a test sees only the spans of its own endpoints. -->
+    <Compile Include="../redb.Route.Tests/Telemetry/RouteTelemetryProbe.cs" Link="Shared/RouteTelemetryProbe.cs" />
+  </ItemGroup>
+  <!-- The AS4 consumer hosts Kestrel, so the test runner needs the ASP.NET runtime. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>
+

@@ -30,8 +30,18 @@ public sealed class AzureServiceBusEndpointOptions : EndpointOptions
 
     // ── Consumer: Receive mode ──
 
-    /// <summary>Receive mode: PeekLock (default) or ReceiveAndDelete.</summary>
-    public string ReceiveMode { get; set; } = "PeekLock";
+    /// <summary>
+    /// When a message is settled (<see cref="Core.AckMode"/>). <c>Manual</c> (default): received with PeekLock and
+    /// completed after a turn that ended well, abandoned on failure (at-least-once). <c>Auto</c>: received with
+    /// ReceiveAndDelete, the broker removes it on hand-off (at-most-once).
+    /// </summary>
+    public AckMode AckMode { get; set; } = AckMode.Manual;
+
+    /// <inheritdoc />
+    protected override string? UnknownParameterHint(string name)
+        => name.Equals("receiveMode", StringComparison.OrdinalIgnoreCase)
+            ? "'receiveMode' is replaced by 'ackMode': ackMode=manual (the default) is PeekLock, ackMode=auto is ReceiveAndDelete."
+            : null;
 
     /// <summary>Maximum concurrent handler invocations: a number or "auto" (= max(CPU, 2)). Default 1.</summary>
     // A string so "auto" binds verbatim instead of silently degrading to the int default (В-7).
@@ -156,10 +166,6 @@ public sealed class AzureServiceBusEndpointOptions : EndpointOptions
         if (MaxConcurrentSessions < 1)
             throw new ArgumentOutOfRangeException(nameof(MaxConcurrentSessions), "Must be >= 1");
 
-        if (!ReceiveMode.Equals("PeekLock", StringComparison.OrdinalIgnoreCase)
-            && !ReceiveMode.Equals("ReceiveAndDelete", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentOutOfRangeException(nameof(ReceiveMode), "Must be PeekLock or ReceiveAndDelete");
-
         if (!string.IsNullOrWhiteSpace(SubQueue)
             && !SubQueue.Equals("deadletter", StringComparison.OrdinalIgnoreCase)
             && !SubQueue.Equals("transferdeadletter", StringComparison.OrdinalIgnoreCase))
@@ -185,7 +191,7 @@ public sealed class AzureServiceBusEndpointOptions : EndpointOptions
 
     /// <summary>Parsed receive mode enum.</summary>
     internal ServiceBusReceiveMode ParsedReceiveMode
-        => ReceiveMode.Equals("ReceiveAndDelete", StringComparison.OrdinalIgnoreCase)
+        => AckMode == AckMode.Auto
             ? ServiceBusReceiveMode.ReceiveAndDelete
             : ServiceBusReceiveMode.PeekLock;
 

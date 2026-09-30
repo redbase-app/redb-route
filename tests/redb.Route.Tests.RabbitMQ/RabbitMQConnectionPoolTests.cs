@@ -127,4 +127,32 @@ public sealed class RabbitMQConnectionPoolTests
 
         act.Should().NotThrowAsync();
     }
+
+    [Theory]
+    [InlineData("heartbeat=10")]
+    [InlineData("connectionTimeout=5")]
+    [InlineData("socketReadTimeout=5")]
+    [InlineData("socketWriteTimeout=5")]
+    [InlineData("continuationTimeout=5")]
+    [InlineData("automaticRecovery=false")]
+    [InlineData("topologyRecoveryEnabled=false")]
+    [InlineData("recoveryInterval=30")]
+    [InlineData("clientName=billing")]
+    [InlineData("password=other")]
+    public void ResolveKey_an_endpoint_with_other_connection_settings_gets_its_own_connection(string setting)
+    {
+        // The first endpoint must not decide the connection of the second: a shared connection has one set of settings.
+        var plain = RabbitMQComponent.ResolveConnectionKey(OptionsFromUri("rabbitmq://q?host=h&username=alice"));
+        var other = RabbitMQComponent.ResolveConnectionKey(OptionsFromUri($"rabbitmq://q?host=h&username=alice&{setting}"));
+
+        other.Should().NotBe(plain);
+    }
+
+    [Fact]
+    public void ResolveKey_carries_no_password_in_clear()
+    {
+        var key = RabbitMQComponent.ResolveConnectionKey(OptionsFromUri("rabbitmq://q?host=h&username=alice&password=s3cr3t-value"));
+
+        key.Should().NotContain("s3cr3t-value", "the key is written to the log when the connection opens");
+    }
 }

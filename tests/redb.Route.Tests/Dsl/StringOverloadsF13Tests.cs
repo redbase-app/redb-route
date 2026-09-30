@@ -1,5 +1,6 @@
 using FluentAssertions;
 using redb.Route.Abstractions;
+using redb.Route.Components;
 using redb.Route.Aggregation;
 using redb.Route.Core;
 using redb.Route.Definitions;
@@ -147,7 +148,7 @@ public class StringOverloadsF13Tests : IAsyncDisposable
     public async Task IdempotentConsumer_KeyExpressionAndRegistryName_SkipsDuplicates()
     {
         var processed = new List<object?>();
-        _context.AddToRegistry("idempotent:f13-idemp-repo", new InMemoryIdempotentRepository());
+        _context.AddIdempotentRepository("f13-idemp-repo", new InMemoryIdempotentRepository());
         _context.AddRoutes(r =>
         {
             r.From("direct://f13-idemp-in")

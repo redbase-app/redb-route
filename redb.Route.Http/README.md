@@ -129,6 +129,47 @@ parameters arrive as `header.id`, query as `header.query.*`; the status code is 
 `{basePath}/openapi.json` (`RestOptions.OpenApi` / `OpenApiPath`). Several `Rest(...)` declarations
 share a port.
 
+### Request validation
+
+Parameters are declared on the verb with `Param(...)` and always go to the OpenAPI document. They are
+enforced only when `ClientRequestValidation` is on (Camel's `clientRequestValidation`), for the whole
+declaration or per verb, so parameters written down for the document alone never start refusing
+requests:
+
+```csharp
+this.Rest("/api/items", o => { o.Port = 8080; o.ClientRequestValidation = true; o.ErrorHandler = "#restErrors"; })
+    .Get("/{id}").Produces("application/json")
+        .Param("id", RestParamType.Path, dataType: RestParamDataType.Integer)
+        .Param("limit", RestParamType.Query, required: true, dataType: RestParamDataType.Integer, description: "Page size")
+        .Param("X-Tenant", RestParamType.Header, required: true)
+        .To("direct:get-item");
+```
+
+In order, before the route runs:
+
+| Check | Answer |
+|---|---|
+| `Content-Type` against `Consumes` (runs with validation off too) | 415 |
+| `Accept` against `Produces`: no header admits everything; the most specific matching range decides; `q=0` refuses | 406 |
+| a required parameter is missing, or a value does not convert to its `dataType` (`integer`, `number`, `boolean`; invariant culture) | 400, naming the parameter |
+
+A path parameter must be a segment of the template and is always required. The refusal body is the
+reason as `text/plain`. `ErrorHandler` names a registered `IProcessor` that writes it instead: it
+finds the code, reason and parameter in the `RestErrorProperties` exchange properties, and may change
+the status. A name that is not registered stops the start.
+
+In Route-XML:
+
+```xml
+<rest path="/api/items" port="8080" clientRequestValidation="true" errorHandler="#restErrors">
+  <get path="/{id}" produces="application/json" to="direct:get-item">
+    <param name="id" type="path" dataType="integer"/>
+    <param name="limit" required="true" dataType="integer" description="Page size"/>
+    <param name="X-Tenant" type="header" required="true"/>
+  </get>
+</rest>
+```
+
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
@@ -148,6 +189,57 @@ context.AddToRegistry("prod", new HttpConnectionFactory
 // http://api.internal/orders?connectionFactory=prod
 ```
 
+## Credentials: outbound and inbound
+
+`authScheme`, `username`, `password` and `authToken` are what a **producer** sends. Written on a consumer URI they
+are refused at startup — naming the parameters, never their values — instead of starting an endpoint that looks
+protected and accepts everyone. A connection factory a consumer references for its TLS certificate may still carry
+producer credentials; only what the consumer URI writes itself is taken as intent.
+
+A **consumer** checks its callers with `inboundAuth` (refused on a producer the same way):
+
+| `inboundAuth` | Also needs | A refused request |
+|---|---|---|
+| `basic` | `inboundUsername`, `inboundPassword` (from configuration: `{{api.password}}`) | 401, `WWW-Authenticate: Basic realm="…", charset="UTF-8"` |
+| `bearer` | `tokenValidator=#name`, a registered `IHttpTokenValidator` | 401, `WWW-Authenticate: Bearer realm="…"`, with `error="invalid_token"` when the validator refused the token |
+
+```csharp
+context.AddToRegistry("tokens", new MyTokenValidator());     // IHttpTokenValidator
+r.From("http://0.0.0.0:8080/orders?inboundAuth=bearer&tokenValidator=#tokens&inboundRealm=orders")
+    .Process(e => { var who = ExchangePrincipal.Get(e)?.Identity?.Name; /* ... */ });
+```
+
+A refused request never reaches the route. An accepted one reaches it with the principal on the exchange
+(`ExchangePrincipal.Get`) and **without** the `Authorization` header, so a route that logs or forwards its headers does
+not carry the credentials on. Basic compares both halves in constant time. `inboundRealm` (default `redb`) is the realm
+of the challenge. A half-declared check — credentials without `inboundAuth`, `basic` without a password, `bearer`
+without a validator, an unregistered validator name — stops the start.
+
+**Boundary.** The connector does not read tokens. JWT parsing, signing keys and their rotation, audiences, scopes and
+roles belong to the identity provider's library (redb.Identity, or any OpenID Connect client), plugged in through
+`IHttpTokenValidator`; access policies beyond "who is this" belong to the route. Do not add a token parser here.
+
+`Rest(...)` takes the same check for every route of the declaration (`RestOptions.InboundAuth`, `InboundUsername`,
+`InboundPassword`, `InboundRealm`, `TokenValidator`; in Route-XML the attributes of the same names on `<rest>`). The
+OpenAPI document is behind it too.
+
+## Request headers and the response
+
+A consumer puts the request's headers on the exchange and, for `inOut=true`, writes the message's headers into the
+response. Three rules keep a client from shaping that response:
+
+1. **Response fields never come in.** `Set-Cookie`, `Location`, `WWW-Authenticate`, `Proxy-Authenticate`,
+   `Authentication-Info`, `Proxy-Authentication-Info`, `Retry-After`, `Server`, `Age`, `ETag`, `Accept-Ranges` and
+   `Vary` in a request are dropped before the exchange is built (`HttpHeaders.ResponseOnlyHeaders`). Stricter than
+   Camel's inbound filter, which removes only its own headers: a request has no use for them.
+2. **The request is not echoed.** A header still holding the value the client sent is not written back.
+3. **What the route wrote goes out.** A header the route set is written even when the client sent one with the same
+   name: a request carrying `Cache-Control` cannot remove the route's `Cache-Control: no-store`.
+
+A processor that builds a response header from a request value — copies a header, reflects a parameter — answers for
+that value itself: validate or encode it before writing. Writing the request's own value back under its own name is
+an echo and is held back by rule 2.
+
 ## Concurrency limits
 
 Kestrel executes as many handlers as requests arrive; without a limit a route has no ceiling.
@@ -166,3 +258,16 @@ counter, not in `MessagesIn` or `Errors`. The limit is strictly per endpoint —
 the same listener keep their own budget. For "slow down but do not drop" semantics use
 `.Threads(n)` in the route instead; the two compose (the limit sheds at the door, Threads
 paces inside).
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`):
+
+- **Consumer.** One `Server` span per request, named `{method} {path}`, over the whole request, refused ones included.
+  Its parent is the host's ASP.NET Core span when the application instruments ASP.NET Core, otherwise the caller's
+  `traceparent`; without one it is a root. The caller's baggage is back on it, and the route's spans are its children.
+  It carries `redb.route.endpoint` and `http.response.status_code`, and is an error for a 5xx.
+- **Producer.** One `Client` span per call, named `HTTP {method}`, with `http.response.status_code`; an error for a
+  4xx, a 5xx or a failed call. The request carries the context of this span: a `traceparent` the header bridge copied
+  from an incoming request is replaced, as it names the previous hop.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span. A context that came in still goes out.

@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.SignalR;
 
@@ -15,6 +16,7 @@ namespace redb.Route.SignalR;
 public sealed class SignalRConnectionFactory
 {
     /// <summary>Bearer access token for hub authentication.</summary>
+    [Sensitive]
     public string? AccessToken { get; set; }
 
     /// <summary>Transport to use (WebSockets, ServerSentEvents, LongPolling).</summary>
@@ -27,6 +29,7 @@ public sealed class SignalRConnectionFactory
     public string? SslCertPath { get; set; }
 
     /// <summary>Password for the PFX certificate.</summary>
+    [Sensitive]
     public string? SslCertPassword { get; set; }
 
     /// <summary>

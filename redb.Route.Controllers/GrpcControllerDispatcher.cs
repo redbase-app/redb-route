@@ -83,24 +83,10 @@ public sealed class GrpcControllerDispatcher : IProcessor
             controller.Context = _context;
             controller.Exchange = exchange;
 
-            var result = entry.Method.Invoke(controller, parameters);
-
-            if (result is Task task)
-            {
-                await task;
-                result = GetTaskResult(task);
-            }
+            // The action's own exception, one TargetInvocationException removed (see ActionInvoker).
+            var result = await ActionInvoker.InvokeAsync(entry.Method, controller, parameters);
 
             WriteResult(exchange, result);
-        }
-        catch (TargetInvocationException tie) when (tie.InnerException is not null)
-        {
-            // A sync action surfaces its exception wrapped in TIE by MethodInfo.Invoke; an async one
-            // rethrows the original from the faulted task. Unwrap TIE and nothing else: `ex.InnerException
-            // ?? ex` would skip a level on the async path and log a deeper transient wrapper (a
-            // SocketException inside a DbException) instead of the failure the action actually reported.
-            WriteError(exchange, 500, ControllerErrorReporting.ErrorCode,
-                ControllerErrorReporting.Report(_logger, tie.InnerException, exchange, methodName));
         }
         catch (Exception ex)
         {
@@ -175,10 +161,16 @@ public sealed class GrpcControllerDispatcher : IProcessor
 
     private static void WriteResult(IExchange exchange, object? result)
     {
+        // An Out that already exists was written by the action (or a step before the dispatcher): that is the reply,
+        // with its own body and status. Only a clone the dispatcher makes here carries the request body.
+        var createdHere = exchange.Out is null;
         exchange.Out ??= exchange.In.Clone();
         if (result is null)
         {
-            exchange.Out.setHeader("status.code", 204);
+            if (createdHere)
+                exchange.Out.Body = null;   // our own clone of the request is not the reply
+            if (!exchange.Out.Headers.ContainsKey("status.code"))
+                exchange.Out.setHeader("status.code", 204);
             return;
         }
 
@@ -201,13 +193,6 @@ public sealed class GrpcControllerDispatcher : IProcessor
                 StatusCode = statusCode
             }, JsonOptions);
         exchange.Out.setHeader("status.code", statusCode);
-    }
-
-    private static object? GetTaskResult(Task task)
-    {
-        var type = task.GetType();
-        if (!type.IsGenericType) return null;
-        return type.GetProperty("Result")?.GetValue(task);
     }
 
     internal sealed record MethodEntry(Type ControllerType, MethodInfo Method);

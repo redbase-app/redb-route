@@ -60,12 +60,16 @@ internal sealed class CacheProducer : IProducer
         switch (_options.ParsedAction)
         {
             case CacheAction.Get:
+                // Where the entry came from is part of it: a reply the scope cached out of Out goes back to
+                // Out, so a request-reply consumer answers with it and not with the request body.
                 var hit = await store.GetAsync(key, ct).ConfigureAwait(false);
-                if (hit is not null) hit.ApplyTo(exchange.In);
+                hit?.ApplyTo(exchange);
                 exchange.In.Headers[CacheScopeProcessor.HitHeader] = hit is not null;
                 break;
             case CacheAction.Put:
-                await store.SetAsync(key, CacheEntry.From(exchange.In, _options.CacheHeaders), _ttl, _sliding, ct).ConfigureAwait(false);
+                // The message as it reached this step: the pipeline has folded the previous step's reply
+                // into In by now, so there is no Out to store.
+                await store.SetAsync(key, CacheEntry.FromMessage(exchange.In, _options.ParsedHeaders), _ttl, _sliding, ct).ConfigureAwait(false);
                 break;
             case CacheAction.Remove:
                 await store.RemoveAsync(key, ct).ConfigureAwait(false);

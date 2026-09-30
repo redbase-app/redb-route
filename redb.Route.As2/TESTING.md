@@ -2,7 +2,7 @@
 
 How the AS2 connector is tested, and the proof it interoperates with a real, independent AS2 implementation.
 
-Test project: `redb.Route/tests/redb.Route.Tests.As2` — **36 tests, green on net8.0 / net9.0 / net10.0.**
+Test project: `redb.Route/tests/redb.Route.Tests.As2`: **141 test cases per target framework, green on net8.0 / net9.0 / net10.0** (2026-09-28, OpenAS2 stand up; without it the four interop cases are reported skipped).
 
 ---
 
@@ -23,6 +23,16 @@ Pure, fast, no network. Self-signed certificates are generated in-process (no PF
   × `{compress on/off}`, each a full round-trip with MIC verification.
 - **Options / DSL** — URI binding, fail-fast validation (bad port, async without a target, unsupported
   algorithm), `[Sensitive]` redaction, and DSL URI building (the receive path is never truncated).
+
+### Security and protocol (REVIEW-2026-09-28)
+
+Each finding of the review has a test written to fail first: a receipt-URL **trap** (a local listener that must
+receive nothing) for a stranger's signature, a sync agreement, and a host not allowed; foreign `AS2-From`/`AS2-To`;
+MDNs without MIC, without `Original-Message-ID`, for unknown messages, unsigned where signed is agreed; the MDN only
+when asked, signed only when asked, with the requested micalg; credentials not handed on; 413 over the size limits;
+the stop drain and span of the MDN receiver; the agreement checked at start; legacy algorithms; expired and
+not-yet-valid certificates; duplicates. Files: `As2ReceiveSecurityTests`, `As2MdnVerdictTests`, `As2LimitsTests`,
+`As2AgreementTests`, `As2ProtocolTests`, `As2DuplicateTests`.
 
 ### End-to-end — loopback over a live Kestrel
 
@@ -79,18 +89,43 @@ AS2Util             - Pending MDN MSG FILE deleted ...   (our MDN correlated Ope
 ```
 
 Our consumer **decrypted** OpenAS2's message with our private key, **verified OpenAS2's signature**, delivered
-the EDI payload to the route, and returned a **signed MDN that OpenAS2 accepted and correlated** (MIC processed,
-pending MDN cleared).
+the EDI payload to the route, and returned a **signed MDN that OpenAS2 accepted** (pending MDN cleared).
 
-This closes the "hard part" of AS2 in **both directions**: our RFC-4130 MIC computation, S/MIME structure and
-MDN handling — send and receive — are correct against a real, independent partner, not merely self-consistent.
+**Correction (2026-09-28).** OpenAS2 4.9.0 does **not** compare the MIC of a synchronous MDN (no `MIC check` in its
+trace log), so the paragraph above never proved our received-side MIC. The asynchronous path does compare it, and the
+first asynchronous run failed with `MIC not matched`: the receiver prepared the received signed part for 7bit before
+hashing it, turning OpenAS2's `binary` part into base64. Fixed (`ComputeReceivedMic` hashes the part as received);
+the asynchronous interop below is the proof of the MIC in this direction.
+
+### Asynchronous MDN, both directions
+
+- **redb → OpenAS2** (`Redb_To_OpenAs2_AsyncMdn_IsPostedBack_Signed_AndConfirms`): we send with
+  `Receipt-Delivery-Option` pointing at our `As2.ReceiveMdn` endpoint (`host.docker.internal:<port>`); OpenAS2 answers
+  200 and logs `sent AsyncMDN ... OK`; our receiver verifies its signature and MIC: `mdnConfirmed = true`.
+- **OpenAS2 → redb** (`OpenAs2_To_Redb_AsyncMdn_IsPostedToOpenAs2_AndItClosesThePendingMessage`): partnership
+  `openas2-to-redb-async` (partner `redb-async`, `as2_receipt_option = http://127.0.0.1:14081`); our receiver answers
+  200 and posts the signed MDN to OpenAS2's MDN receiver, which logs `MIC check` and deletes its pending message.
+
+The asynchronous runs found three defects, each fixed with a test that failed first:
+
+1. The machine-readable MDN part went out quoted-printable when a field line was long (OpenAS2 Message-IDs are about
+   90 characters); RFC 3798 §3.1 requires 7bit, and OpenAS2 read the Original-Message-ID undecoded, cut at the soft
+   line break (`As2MdnEncodingTests`).
+2. The received MIC above (`As2ReceivedMicTests` and the interop).
+3. The producer registered the wait for an asynchronous MDN after the partner's 200; OpenAS2 often posts the MDN
+   first, which then read as `unknown` (`As2AsyncMdnOrderTests`).
+
+This closes the "hard part" of AS2 in **both directions and both MDN modes**: MIC, S/MIME structure and MDN
+handling are correct against a real, independent partner, not merely self-consistent.
 
 ### Running the interop test
 
 The harness lives outside the repo at `C:\Work\yaml\as2` (Docker compose + OpenAS2 config + generated certs;
 see its `README.md`). The interop test is `As2InteropTests` (`[Trait("Category", "Interop")]`) and is
-**gated** — it no-ops unless OpenAS2 is reachable on `127.0.0.1:14080`, so the normal suite stays green
-without the container.
+**gated** by `[As2InteropFact]`: without OpenAS2 on `127.0.0.1:14080` the cases are reported **skipped**, with the
+reason, never passed; `REDB_AS2_INTEROP=1` turns a missing stand into a failure. The reverse case listens on the
+fixed port the stand posts to (15081), so the three target frameworks take turns on it through a lock file in the
+temp directory, and each waits for its own uniquely named document.
 
 ```bash
 cd C:\Work\yaml\as2
@@ -124,4 +159,4 @@ attribute (required by the OpenAS2 poller).
 
 - **Additional real implementations** — the loopback matrix covers the algorithm space; broadening interop
   coverage to Mendelson and partner gateways is future work.
-- **Async MDN against OpenAS2** — async MDN is covered by loopback e2e; exercising it across OpenAS2 is a nice-to-have.
+- ~~Async MDN against OpenAS2~~ — done 2026-09-28, both directions (above).

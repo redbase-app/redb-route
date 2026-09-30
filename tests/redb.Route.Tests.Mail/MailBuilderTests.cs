@@ -89,8 +89,8 @@ public class MailBuilderTests
     [Fact]
     public void SkipCertificateValidation_SetsParam()
     {
-        var uri = Smtp.Send("s").SkipCertificateValidation().Build();
-        uri.Should().Contain("skipCertificateValidation=true");
+        var uri = Smtp.Send("s").TrustAllCertificates().Build();
+        uri.Should().Contain("trustAllCertificates=true");
     }
 
     // ── SMTP producer ───────────────────────────────────────────────

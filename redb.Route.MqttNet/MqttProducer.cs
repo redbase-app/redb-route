@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using MQTTnet;
+using MQTTnet.Formatter;
 using MQTTnet.Packets;
 using MQTTnet.Protocol;
 using redb.Route.Abstractions;
@@ -75,6 +76,7 @@ internal sealed class MqttProducer : ConnectableProducer
         var topic = ResolvePublishTopic(exchange);
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"{topic} publish", ActivityKind.Producer,
             "messaging.system", "mqtt",
             _endpoint.Uri.NormalizedKey,
@@ -109,9 +111,22 @@ internal sealed class MqttProducer : ConnectableProducer
         if (expiryInterval > 0)
             builder.WithMessageExpiryInterval((uint)expiryInterval);
 
-        // User properties from exchange headers
-        if (exchange.In.Headers.TryGetValue(MqttHeaders.UserProperties, out var userPropsObj)
-            && userPropsObj is Dictionary<string, string> userProps)
+        // User properties from exchange headers. A copy: the trace context below is this send's, not the exchange's.
+        var userProps = exchange.In.Headers.TryGetValue(MqttHeaders.UserProperties, out var userPropsObj)
+                        && userPropsObj is Dictionary<string, string> headerProps
+            ? new Dictionary<string, string>(headerProps)
+            : null;
+
+        // The trace context travels in user properties, which exist only in MQTT 5: under 3.1.1 MQTTnet refuses
+        // them, so nothing is written. The write replaces a traceparent copied from an earlier hop.
+        if (_client.Options?.ProtocolVersion == MqttProtocolVersion.V500)
+        {
+            userProps ??= new Dictionary<string, string>();
+            RouteTelemetryExtensions.InjectTraceContext(activity, userProps,
+                static (props, name, value) => props[name] = value);
+        }
+
+        if (userProps is not null)
         {
             foreach (var (key, value) in userProps)
                 builder.WithUserProperty(key, new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes(value)));
@@ -123,8 +138,10 @@ internal sealed class MqttProducer : ConnectableProducer
         {
             await _client.PublishAsync(message, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
+            // Only our own token cancelling the publish is a stop; any other failure marks the span.
+            activity.RecordFailure(ex);
             Logger?.LogError(ex, "MQTT publish failed: topic={Topic}, QoS={Qos}, server={Server}:{Port}, connected={IsConnected}",
                 topic, qos, _options.Server, _options.Port, _client?.IsConnected);
             throw;

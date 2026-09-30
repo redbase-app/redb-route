@@ -13,5 +13,9 @@
     </Content>
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="../redb.Route.Tests/Telemetry/RouteTelemetryProbe.cs" Link="Shared/RouteTelemetryProbe.cs" />
+  </ItemGroup>
+
 </Project>
 

@@ -37,14 +37,7 @@ public sealed class SignalRBackplaneTests : IAsyncLifetime
         foreach (var m in _managers) await m.DisposeAsync();
     }
 
-    private static int GetFreePort()
-    {
-        using var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     /// <summary>One "replica": its own listener, its own component, both wired to one Redis.</summary>
     private (SignalRComponent component, SignalREndpoint endpoint, int port) StartReplica(string channelPrefix)

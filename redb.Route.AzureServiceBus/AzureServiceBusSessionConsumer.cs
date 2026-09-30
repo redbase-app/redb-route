@@ -3,6 +3,7 @@ using Azure.Messaging.ServiceBus;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.AzureServiceBus;
 
@@ -95,6 +96,8 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
     private async Task OnSessionMessageAsync(ProcessSessionMessageEventArgs args)
     {
         _drain.Increment();
+        // The receive span covers the whole unit of work, settlement included; the route's spans sit under it.
+        using var span = AzureServiceBusTrace.StartReceiveSpan(_endpoint, args.Message);
         Exchange? exchange = null;
         var pipelineFailed = false;
         try
@@ -115,6 +118,9 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
                 throw;
             }
 
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled)
+                AzureServiceBusTrace.RecordFailure(span.Activity, failure, args.CancellationToken);
+
             if (_options.ParsedReceiveMode == ServiceBusReceiveMode.PeekLock)
             {
                 await AcknowledgeAsync(args, exchange).ConfigureAwait(false);
@@ -122,6 +128,7 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
         }
         catch (Exception ex)
         {
+            AzureServiceBusTrace.RecordFailure(span.Activity, ex, args.CancellationToken);
             if (_options.ParsedReceiveMode == ServiceBusReceiveMode.PeekLock)
             {
                 try

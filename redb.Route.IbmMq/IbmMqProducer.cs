@@ -149,32 +149,39 @@ public sealed class IbmMqProducer : ConnectableProducer
     {
         EnsureStarted();
 
-        using var activity = RouteActivitySource.Source.StartActivity(
-            $"{_endpoint.Destination} publish", ActivityKind.Producer);
-
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_endpoint.Destination} publish", ActivityKind.Producer,
+            "messaging.system", "wmq", _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.Destination, operation: "publish");
         if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag("messaging.system", "wmq");
-            activity.SetTag("messaging.operation", "publish");
-            activity.SetTag("messaging.destination.name", _endpoint.Destination);
             activity.SetTag("messaging.ibmmq.queue_manager", _options.QueueManager);
-        }
 
         var msg = IbmMqMessageHelper.BuildOutgoingMessage(exchange, _options);
 
         // Inject W3C trace context into MQ message properties (RFH2 usr folder) - not in
         // targetClient=Mq mode, where a legacy app must see raw MQMD+body with no properties.
+        // The context of this send replaces a traceparent copied from a received message; with tracing off, the
+        // context that came in goes out.
         if (_options.TargetClient != IbmMqTargetClient.Mq)
-            InjectTraceContext(activity, msg);
+            RouteTelemetryExtensions.InjectTraceContext(activity, msg, static (m, name, value) => m.SetStringProperty(name, value));
 
-        if (_options.ReplyTo)
+        try
         {
-            await ProcessRpcAsync(exchange, msg, ct).ConfigureAwait(false);
+            if (_options.ReplyTo)
+            {
+                await ProcessRpcAsync(exchange, msg, ct).ConfigureAwait(false);
+            }
+            else if (TransactedActions.Defers(exchange, _options.Transacted))
+                ProcessTransactional(exchange, msg);
+            else
+                ProcessImmediate(msg);
         }
-        else if (TransactedActions.Defers(exchange, _options.Transacted))
-            ProcessTransactional(exchange, msg);
-        else
-            ProcessImmediate(msg);
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            activity.RecordFailure(ex);
+            throw;
+        }
     }
 
     // ── Immediate send ──
@@ -423,23 +430,6 @@ public sealed class IbmMqProducer : ConnectableProducer
             _outputTopic!.Put(msg, pmo);
         else
             _outputQueue!.Put(msg, pmo);
-    }
-
-    // ── Trace context ──
-
-    private static void InjectTraceContext(Activity? activity, MQMessage msg)
-    {
-        if (activity is null) return;
-
-        var propagator = DistributedContextPropagator.Current;
-        propagator.Inject(activity, msg, static (carrier, key, value) =>
-        {
-            if (carrier is MQMessage mqMsg && !string.IsNullOrEmpty(value))
-            {
-                try { mqMsg.SetStringProperty(key, value); }
-                catch { /* Skip if property name is invalid */ }
-            }
-        });
     }
 
     // ── Helpers ──

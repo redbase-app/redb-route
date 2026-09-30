@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 using StackExchange.Redis;
 
 namespace redb.Route.Redis;
@@ -104,6 +106,7 @@ public sealed class RedisConsumer : DrainableConsumer
     {
         var exchange = Exchange.Create(new Message(message.ToString()), _endpoint.ScopeFactory);
         exchange.Pattern = ExchangePattern.InOnly;
+        using var span = StartReceiveSpan();
         IncrementInflight();
         try
         {
@@ -117,6 +120,7 @@ public sealed class RedisConsumer : DrainableConsumer
         }
         catch (Exception ex)
         {
+            RecordFailure(span, ex, ct);
             Logger?.LogError(ex, "Error processing Pub/Sub message from channel {Channel}", channel);
         }
         finally
@@ -199,7 +203,7 @@ public sealed class RedisConsumer : DrainableConsumer
                         consumerName,
                         StreamPosition.NewMessages,
                         _options.StreamReadCount,
-                        noAck: _options.StreamNoAck).ConfigureAwait(false);
+                        noAck: _options.AckMode == AckMode.Auto).ConfigureAwait(false);
                 }
                 else
                 {
@@ -255,6 +259,7 @@ public sealed class RedisConsumer : DrainableConsumer
     private async Task ProcessStreamEntryAsync(
         StreamEntry entry, IDatabase db, string streamName, string? consumerGroup, CancellationToken ct)
     {
+        using var span = StartReceiveSpan();
         try
         {
             // Build fields dictionary (raw strings)
@@ -284,7 +289,7 @@ public sealed class RedisConsumer : DrainableConsumer
 
                 // Acknowledge the entry now that the whole unit of work, the route transaction included, is done. A
                 // failed entry is not acknowledged: it stays pending, for streamClaimMinIdleMs to claim again.
-                if (!string.IsNullOrEmpty(consumerGroup) && !_options.StreamNoAck)
+                if (!string.IsNullOrEmpty(consumerGroup) && _options.AckMode == AckMode.Manual)
                 {
                     await db.StreamAcknowledgeAsync(streamName, consumerGroup, entry.Id).ConfigureAwait(false);
                 }
@@ -299,6 +304,7 @@ public sealed class RedisConsumer : DrainableConsumer
         }
         catch (Exception ex)
         {
+            RecordFailure(span, ex, ct);
             Logger?.LogError(ex, "Error processing stream entry {MessageId} from {Stream}", entry.Id, streamName);
         }
     }
@@ -391,6 +397,7 @@ public sealed class RedisConsumer : DrainableConsumer
     {
         var exchange = Exchange.Create(new Message(message.ToString()), _endpoint.ScopeFactory);
         exchange.Pattern = ExchangePattern.InOnly;
+        using var span = StartReceiveSpan();
         IncrementInflight();
         try
         {
@@ -405,6 +412,7 @@ public sealed class RedisConsumer : DrainableConsumer
         }
         catch (Exception ex)
         {
+            RecordFailure(span, ex, ct);
             Logger?.LogError(ex, "Error processing list message from {Key}", key);
             return false;
         }
@@ -415,4 +423,19 @@ public sealed class RedisConsumer : DrainableConsumer
         }
     }
 
+    /// <summary>
+    /// The span of one message, entry or item: it carries no trace context (a Redis value has no headers; a stream entry's
+    /// fields are its body), so the span is a root, never a child of the activity the consumer loop holds.
+    /// </summary>
+    private TransportSpan StartReceiveSpan() => RouteTelemetryExtensions.StartConsumerSpan<object?>(
+        (_endpoint.Component as ComponentBase)?.Context,
+        $"redis {_endpoint.OperationType} receive", ActivityKind.Consumer, "messaging.system", "redis", _endpoint.Uri.NormalizedKey,
+        null, static (_, _) => null, destination: _endpoint.Resource, operation: "receive");
+
+    /// <summary>Marks the span failed; our own stop is not a failure, any other cancellation is.</summary>
+    private static void RecordFailure(TransportSpan span, Exception exception, CancellationToken ct)
+    {
+        if (exception is not OperationCanceledException || !ct.IsCancellationRequested)
+            span.Activity.RecordFailure(exception);
+    }
 }

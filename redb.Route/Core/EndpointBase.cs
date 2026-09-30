@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Text;
-using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using redb.Route.Abstractions;
 
@@ -343,15 +342,12 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
         if (body is byte[] bytes) return bytes.Length;
         if (body is ReadOnlyMemory<byte> rom) return rom.Length;
         if (body is ArraySegment<byte> seg) return seg.Count;
+        // A stream is measured by its length when it has one; a forward-only stream cannot be measured without reading
+        // it, and serializing the stream object would count its properties, not its content.
+        if (body is Stream stream) return stream.CanSeek ? (int)Math.Min(stream.Length, int.MaxValue) : 0;
 
-        try
-        {
-            var json = JsonSerializer.Serialize(body);
-            return Encoding.UTF8.GetByteCount(json);
-        }
-        catch
-        {
-            return 0;
-        }
+        // Any other object counts as 0, as Camel counts no bytes at all: serializing it on every exchange only to count
+        // the bytes of the result doubled the serialization cost of an object route.
+        return 0;
     }
 }

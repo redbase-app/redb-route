@@ -14,8 +14,8 @@ namespace redb.Route.As2;
 /// AS2 send side (client): builds an S/MIME message (compress → sign → encrypt per the partner profile) and
 /// POSTs it to the partner over HTTP(S). Extends <see cref="ConnectableProducer"/> with an internal
 /// <see cref="HttpClient"/>; presents our certificate for mutual TLS. The computed MIC and Message-ID are
-/// written back to the exchange so a later MDN (Ф4/Ф5) can be correlated and verified. See
-/// <c>docs/as2/02-DESIGN.md §7</c>. Ф2: sends and confirms transport success; MDN reception is Ф4.
+/// written back to the exchange; a synchronous MDN is verified here (<see cref="Mdn.MdnVerdict"/>), an asynchronous
+/// one is correlated by the <c>ReceiveMdn</c> endpoint. See <c>docs/as2/02-DESIGN.md §7</c>.
 /// </summary>
 internal sealed class As2Producer : ConnectableProducer
 {
@@ -23,6 +23,7 @@ internal sealed class As2Producer : ConnectableProducer
     private readonly As2EndpointOptions _options;
     private readonly IAs2CryptoEngine _engine = new As2CryptoEngine();
     private HttpClient? _http;
+    private As2Profile? _profile;
 
     public As2Producer(As2Endpoint endpoint, As2EndpointOptions options)
     {
@@ -38,9 +39,23 @@ internal sealed class As2Producer : ConnectableProducer
     /// <inheritdoc />
     protected override Task ConnectAsync(CancellationToken ct)
     {
+        // The agreement is resolved and checked once, here: a broken one stops the producer from starting instead of
+        // failing every message.
+        var profile = As2Profile.Resolve(_endpoint.Context, _options, EndpointUri.Sanitize(_options.PartnerUrl));
+        if (string.IsNullOrEmpty(profile.PartnerUrl))
+            throw new InvalidOperationException("AS2 producer has no partner URL (set it on the URI or on the connection factory).");
+        if (!string.IsNullOrEmpty(_options.ConnectionFactory) && !string.IsNullOrEmpty(_options.PartnerUrl)
+            && !string.Equals(profile.PartnerUrl.TrimEnd('/'), _options.PartnerUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"AS2 producer {EndpointUri.Sanitize(_options.PartnerUrl)}: connection factory '{_options.ConnectionFactory}' names PartnerUrl " +
+                $"{EndpointUri.Sanitize(profile.PartnerUrl)}; the endpoint URI and the factory must name the same partner.");
+        if (profile.MdnMode == As2MdnMode.Async && profile.AsyncMdnUrl is null)
+            throw new InvalidOperationException(
+                "AS2 producer: MdnMode is async, so AsyncMdnUrl must say where the partner posts the receipt.");
+        _profile = profile;
+
         var handler = new HttpClientHandler();
         // Mutual TLS: present our certificate to the partner on HTTPS connections.
-        var profile = As2Profile.Resolve(_endpoint.Context, _options);
         if (profile.OurCertificate is not null)
             handler.ClientCertificates.Add(profile.OurCertificate);
 
@@ -65,13 +80,10 @@ internal sealed class As2Producer : ConnectableProducer
         EnsureStarted();
         ArgumentNullException.ThrowIfNull(exchange);
 
-        var profile = As2Profile.Resolve(_endpoint.Context, _options);
-        if (string.IsNullOrEmpty(profile.PartnerUrl))
-            throw new InvalidOperationException("AS2 producer has no partner URL (set it on the URI, options, or connection factory).");
-        if (profile.Sign && profile.OurCertificate is null)
-            throw new InvalidOperationException("AS2 signing requires OurCertificate on the connection factory.");
-        if (profile.Encrypt && profile.PartnerCertificate is null)
-            throw new InvalidOperationException("AS2 encryption requires PartnerCertificate on the connection factory.");
+        var profile = _profile!;
+        // A pinned certificate is used only while valid: the partner would refuse the message anyway, after our retries.
+        if (profile.Sign) As2CertificateValidity.Ensure(profile.OurCertificate!, "Our signing certificate");
+        if (profile.Encrypt) As2CertificateValidity.Ensure(profile.PartnerCertificate!, "The partner's encryption certificate");
 
         // 1. Payload MIME entity from the exchange body.
         MimeEntity entity = BuildPayload(exchange.In);
@@ -116,7 +128,9 @@ internal sealed class As2Producer : ConnectableProducer
                 string.IsNullOrEmpty(profile.As2From) ? "as2@redb.route" : profile.As2From);
             if (profile.SignedMdn)
                 AddHeader(request, As2Headers.DispositionNotificationOptions,
-                    $"signed-receipt-protocol=optional, pkcs7-signature; signed-receipt-micalg=optional, {profile.SignAlg}");
+                    // Required, not optional: the agreement does not accept an unsigned receipt (MdnVerdict), so the
+                    // partner must not think it may send one.
+                    $"signed-receipt-protocol=required, pkcs7-signature; signed-receipt-micalg=required, {profile.SignAlg}");
             if (profile.MdnMode == As2MdnMode.Async && !string.IsNullOrEmpty(profile.AsyncMdnUrl))
                 AddHeader(request, As2Headers.ReceiptDeliveryOption, profile.AsyncMdnUrl);
         }
@@ -133,21 +147,65 @@ internal sealed class As2Producer : ConnectableProducer
             content.Headers.TryAddWithoutValidation("Content-Disposition", contentDisposition);
         request.Content = content;
 
-        // 5. Telemetry + POST.
+        // 5. Telemetry + POST. The span is opened on the core contract (EnableTelemetry=false opens none) and its context
+        // is written to the request, replacing a traceparent bridged from the exchange: HttpClient writes none of its own
+        // when the header is already there, and the partner would see the previous hop instead of this send.
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
-            "AS2 POST", ActivityKind.Client, "messaging.system", "as2",
+            _endpoint.Context, $"{profile.As2To} send", ActivityKind.Client, "messaging.system", "as2",
             _endpoint.Uri.NormalizedKey, destination: profile.PartnerUrl, operation: "send");
+        RouteTelemetryExtensions.InjectTraceContext(activity, request, static (r, name, value) =>
+        {
+            r.Headers.Remove(name);
+            r.Headers.TryAddWithoutValidation(name, value);
+        });
 
-        var response = await _http!.SendAsync(request, ct).ConfigureAwait(false);
+        try
+        {
+            await SendAndVerifyAsync(exchange, profile, request, messageId, mic, ct).ConfigureAwait(false);
+        }
+        // A cancellation is a failure unless the caller asked for it: HttpClient reports its own timeout (no answer from
+        // the partner within `timeout`) as TaskCanceledException.
+        catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            activity.RecordFailure(e);
+            throw;
+        }
+    }
 
-        // Record what we sent so a later MDN (Ф4/Ф5) can be correlated and its Received-Content-MIC verified.
+    /// <summary>POSTs the message and, for a synchronous MDN, verifies the receipt; throws when the send failed.</summary>
+    private async Task SendAndVerifyAsync(IExchange exchange, As2Profile profile, HttpRequestMessage request, string messageId,
+        As2Mic mic, CancellationToken ct)
+    {
+        // Record what we send so the MDN can be correlated and its Received-Content-MIC verified.
         exchange.In.Headers[As2Headers.MessageId] = messageId;
         exchange.In.Headers[As2Headers.Mic] = mic.Digest;
         exchange.In.Headers[As2Headers.MicAlg] = mic.Algorithm;
 
+        // Async: the wait exists BEFORE the POST. A partner may post the MDN before it answers this request (OpenAS2
+        // often does); registered after the answer, that receipt would read as one nobody waits for. Nothing waits on
+        // the entry: the verdict reaches the ReceiveMdn route as its own exchange.
+        var correlation = profile.MdnMode == As2MdnMode.Async ? (_endpoint.Component as As2Component)?.Correlation : null;
+        correlation?.Register(messageId, mic);
+
+        HttpResponseMessage response;
+        try
+        {
+            // Headers first: the body is read below, bounded, and only for a synchronous MDN.
+            response = await _http!.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            correlation?.Complete(messageId);   // not delivered: nothing is waiting for a receipt
+            throw;
+        }
+        using var _ = response;
+
         if (!response.IsSuccessStatusCode)
+        {
+            correlation?.Complete(messageId);
             throw new HttpRequestException(
                 $"AS2 POST to {EndpointUri.Sanitize(profile.PartnerUrl)} failed: {(int)response.StatusCode} {response.ReasonPhrase}");
+        }
 
         // Synchronous MDN: parse the receipt, verify its signature, and confirm the partner's
         // Received-Content-MIC matches what we sent. The MDN lands on exchange.Out (InOut).
@@ -156,46 +214,57 @@ internal sealed class As2Producer : ConnectableProducer
             var mdnContentType = response.Content.Headers.ContentType?.ToString();
             var mdnCte = response.Content.Headers.TryGetValues("Content-Transfer-Encoding", out var cteValues)
                 ? string.Join(",", cteValues) : null;
-            var mdnBytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            var mdnBytes = await ReadBoundedAsync(response, messageId, ct).ConfigureAwait(false);
 
             var result = MdnParser.Parse(mdnContentType, mdnCte, mdnBytes, _engine, profile.PartnerCertificate);
-            var micMatch = result.ReceivedMic is null || result.ReceivedMic.Value.Matches(mic);
+            var verdict = MdnVerdict.Of(result, mic, profile.SignedMdn);
 
             var outMessage = new Message(mdnBytes) { ContentType = mdnContentType };
             outMessage.Headers[As2Headers.MdnDisposition] = result.Disposition ?? string.Empty;
             outMessage.Headers[As2Headers.SignatureValid] = result.SignatureValid;
-            outMessage.Headers[As2Headers.MdnMicMatch] = micMatch;
+            outMessage.Headers[As2Headers.MdnMicMatch] = verdict.MicMatch;
+            outMessage.Headers[As2Headers.MdnMicStatus] = verdict.MicStatus;
+            outMessage.Headers[As2Headers.MdnConfirmed] = verdict.Confirmed;
             exchange.Out = outMessage;
             exchange.Pattern = ExchangePattern.InOut;
 
-            // A definitive rejection means the transfer is NOT confirmed: a negative disposition, a MIC
-            // mismatch (tamper/corruption), or a missing/invalid signature when a signed MDN was required. The
-            // outcome is always on the redbAs2.mdn* headers (accurate now that an unsigned MDN reads
-            // signatureValid=false); with RequireValidMdn it is also a hard failure for the route.
-            var unacceptable = !result.IsPositive || !micMatch || (profile.SignedMdn && !result.SignatureValid);
-            if (unacceptable)
+            // Not confirmed: a negative disposition, a MIC that is not the one we sent (or is absent), or a missing or
+            // invalid signature where a signed MDN is agreed. Always on the redbAs2.mdn* headers; with RequireValidMdn
+            // also a failure of the send.
+            if (verdict.Problem(result) is { } problem)
             {
-                Logger?.LogWarning(
-                    "AS2 MDN not acceptable: id={MessageId}, disposition={Disposition}, micMatch={MicMatch}, sigValid={SigValid}",
-                    messageId, result.Disposition, micMatch, result.SignatureValid);
+                Logger?.LogWarning("AS2 MDN for message {MessageId} does not confirm the transfer: {Problem}.", messageId, problem);
                 if (profile.RequireValidMdn)
-                    throw new InvalidOperationException(
-                        $"AS2 transfer not confirmed for '{messageId}': disposition='{result.Disposition ?? "(none)"}', " +
-                        $"micMatch={micMatch}, signatureValid={result.SignatureValid}" +
-                        (profile.SignedMdn && !result.SignatureValid ? " (a signed MDN was required)" : "") + ".");
+                    throw new InvalidOperationException($"AS2 transfer of '{messageId}' is not confirmed by its MDN: {problem}.");
             }
-        }
-        else if (profile.MdnMode == As2MdnMode.Async)
-        {
-            // Register the outgoing message so the async MDN, arriving later at our As2.ReceiveMdn endpoint,
-            // can be correlated by Message-ID and its Received-Content-MIC verified against what we sent.
-            (_endpoint.Component as As2Component)?.Correlation.Register(messageId, mic);
         }
 
         Logger?.LogDebug("AS2 message sent: id={MessageId}, partner={Partner}", messageId, profile.As2To);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>The response body, refused past <c>maxResponseBodySize</c> without reading the rest (as the AS4 producer).</summary>
+    private async Task<byte[]> ReadBoundedAsync(HttpResponseMessage response, string messageId, CancellationToken ct)
+    {
+        var limit = _options.MaxResponseBodySize;
+        if (response.Content.Headers.ContentLength is { } declared && declared > limit)
+            throw new InvalidOperationException(
+                $"AS2 response to '{messageId}' declares {declared} bytes, over maxResponseBodySize {limit}; it is not an MDN.");
+
+        await using var body = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[81920];
+        int read;
+        while ((read = await body.ReadAsync(chunk, ct).ConfigureAwait(false)) > 0)
+        {
+            if (buffer.Length + read > limit)
+                throw new InvalidOperationException(
+                    $"AS2 response to '{messageId}' is over maxResponseBodySize {limit} bytes; it is not an MDN.");
+            buffer.Write(chunk, 0, read);
+        }
+        return buffer.ToArray();
+    }
 
     /// <summary>Wraps the exchange body (byte[] preserved as-is; string/other UTF-8 encoded) in a MIME part.</summary>
     private static MimePart BuildPayload(IMessage message)

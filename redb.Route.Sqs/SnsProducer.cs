@@ -73,6 +73,7 @@ internal sealed class SnsProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"{_endpoint.TopicName} publish", ActivityKind.Producer,
             "messaging.system", "sns",
             _endpoint.Uri.NormalizedKey,
@@ -83,7 +84,7 @@ internal sealed class SnsProducer : ConnectableProducer
         {
             TopicArn = _topicArn,
             Message = AwsClientSupport.ResolveTextBody(exchange.In.Body),
-            MessageAttributes = BuildAttributes(exchange),
+            MessageAttributes = BuildAttributes(exchange, activity),
         };
 
         var subject = ResolveHeader(exchange, SnsHeaders.Subject) ?? _options.ResolveOption(_options.Subject, exchange);
@@ -114,9 +115,21 @@ internal sealed class SnsProducer : ConnectableProducer
         // The request is built now, from the exchange as it is at this step; only the publish itself waits for the
         // commit when the producer joins the enclosing .Transacted() block.
         if (TransactedActions.Defers(exchange, _options.Transacted))
+        {
             TransactedActions.RegisterSend(exchange, $"sns-publish-{Guid.NewGuid():N}", Publish, ProducerName);
-        else
+            return;
+        }
+
+        try
+        {
             await Publish(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the publish is a stop; a timeout or any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
+        }
         // No RecordMessageOut: the core (ToProcessor / the template) owns it (ownership audit).
     }
 
@@ -126,7 +139,11 @@ internal sealed class SnsProducer : ConnectableProducer
     private static string? ResolveHeader(IExchange exchange, string key) =>
         exchange.In.Headers.TryGetValue(key, out var v) && v is not null ? v.ToString() : null;
 
-    private static Dictionary<string, MessageAttributeValue> BuildAttributes(IExchange exchange)
+    /// <summary>
+    /// Maps forwardable headers to message attributes and adds the trace context of <paramref name="activity"/> (the
+    /// publish span; without one, the ambient context), replacing a traceparent copied from a received message.
+    /// </summary>
+    private Dictionary<string, MessageAttributeValue> BuildAttributes(IExchange exchange, Activity? activity)
     {
         var attrs = new Dictionary<string, MessageAttributeValue>();
         foreach (var (key, value) in exchange.In.Headers)
@@ -140,17 +157,10 @@ internal sealed class SnsProducer : ConnectableProducer
                 StringValue = Convert.ToString(value, CultureInfo.InvariantCulture) ?? "",
             };
         }
-        InjectTraceContext(attrs);
+        var fromHeaders = attrs.Count;
+        RouteTelemetryExtensions.InjectTraceContext(activity, attrs, static (a, name, value) =>
+            a[name] = new MessageAttributeValue { DataType = "String", StringValue = value });
+        AwsClientSupport.EnsureAttributeLimit(attrs.Count, fromHeaders, ProducerName);
         return attrs;
-    }
-
-    /// <summary>Injects <c>traceparent</c>/<c>tracestate</c> from the current <see cref="Activity"/> as attributes.</summary>
-    private static void InjectTraceContext(Dictionary<string, MessageAttributeValue> attrs)
-    {
-        var activity = Activity.Current;
-        if (activity is null) return;
-        DistributedContextPropagator.Current.Inject(activity, attrs, static (carrier, key, value) =>
-            ((Dictionary<string, MessageAttributeValue>)carrier!)[key] =
-                new MessageAttributeValue { DataType = "String", StringValue = value });
     }
 }

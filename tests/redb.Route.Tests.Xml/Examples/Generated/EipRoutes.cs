@@ -28,6 +28,7 @@ public sealed class EipRoutes : RouteBuilder
         route0.To("bean:#demoStamps?method=SetBatchIdAndBody");
         route0.Log("[AGG] Event: batchId=${header.batchId}, body=${body}");
         var s1 = route0.Aggregate("${header.batchId}", AggregationStrategies.ByName("concat: + "), null, 3);
+        s1.ForceCompletionOnStop();
         s1.Log("[AGG] Aggregated 3 events: ${body}");
         s1.EndAggregate();
 

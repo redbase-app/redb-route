@@ -81,6 +81,18 @@ public static class HttpHeaders
         "Content-Disposition", "Content-Range"
     };
 
+    /// <summary>
+    /// Fields only a response carries (RFC 9110 §10.2 and §11, RFC 6265 <c>Set-Cookie</c>). A consumer drops them from an
+    /// inbound request before the exchange is built, so neither the route nor the response ever holds a value a client
+    /// planted under a response field's name. Stricter than Camel's inbound filter, which removes only its own
+    /// <c>Camel*</c> headers: a request has no legitimate use for these, and one that sends them is probing.
+    /// </summary>
+    public static readonly IReadOnlySet<string> ResponseOnlyHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "Set-Cookie", "Location", "WWW-Authenticate", "Proxy-Authenticate", "Authentication-Info",
+        "Proxy-Authentication-Info", "Retry-After", "Server", "Age", "ETag", "Accept-Ranges", "Vary",
+    };
+
     /// <summary>Returns true if the header key belongs to the HTTP component (starts with "redbHttp.").</summary>
     public static bool IsRedbHeader(string key) =>
         key.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase);

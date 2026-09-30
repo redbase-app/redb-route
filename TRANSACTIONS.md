@@ -272,6 +272,18 @@ an action on the broker, not an undo of the work, and with `Retry` outside the t
 while the local retry was still working on the same message. Outgoing sends are the opposite case and stay inside the
 transaction: not sending is a real undo.
 
+When the consumer settles is one option with the same name and meaning on every broker consumer, `ackMode`:
+
+| `ackMode` | Settled | Delivery | RabbitMQ | AMQP 1.0 | Kafka | SQS | Service Bus | Redis Streams |
+|---|---|---|---|---|---|---|---|---|
+| `manual` (default) | after the route, by its outcome | at-least-once | ack / nack-requeue | accept / release | offset commit | delete / visible again | PeekLock complete / abandon | `XACK` / stays pending |
+| `auto` | on receipt, before the route | at-most-once | broker auto-ack | accept | offset commit | delete | ReceiveAndDelete | `XREADGROUP NOACK` |
+
+It replaces `autoAck` (RabbitMQ), `autoAccept` (AMQP), `enableAutoCommit` (Kafka), `deleteAfterRead` (SQS),
+`receiveMode` (Service Bus) and `streamNoAck` (Redis); each of those is refused with its replacement named. The
+`false` settings of `autoAccept`, `enableAutoCommit` and `deleteAfterRead` settled nothing at all and have no
+successor. IBM MQ settles through its syncpoint and has no `ackMode`.
+
 `.WireTap(...)` is deliberately outside all of this. The tapped branch runs detached, with the ambient transaction
 suppressed, so it can publish even when the transaction later rolls back. Use it for notifications and copies, not for
 a message the next service will act on.

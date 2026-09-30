@@ -1,5 +1,6 @@
 using System.Text;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Expressions;
 
 namespace redb.Route.RabbitMQ;
@@ -54,9 +55,10 @@ public sealed class RabbitBuilder
     // Consumer
     private string? _concurrentConsumers;
     private string? _prefetchCount;
-    private bool _autoAck;
+    private AckMode? _ackMode;
     private bool? _transacted;
     private bool? _mandatory;
+    private bool _publisherConnection;
     private bool _replyTo;
     private string? _timeout;
 
@@ -84,7 +86,12 @@ public sealed class RabbitBuilder
     private bool _ssl;
     private string? _sslServerName;
     private string? _sslCertPath;
-    private string? _sslCertPassphrase;
+    private string? _sslCertPassword;
+    private string? _sslCaCertPath;
+    private System.Security.Authentication.SslProtocols _sslProtocols;
+    private System.Security.Cryptography.X509Certificates.X509RevocationMode _revocationMode;
+    private bool _revocationSoftFail;
+    private RabbitMQAuthMechanism _authMechanism;
 
     internal RabbitBuilder(string queue)
     {
@@ -198,11 +205,11 @@ public sealed class RabbitBuilder
     public RabbitBuilder PrefetchCount(IExpression count) { _prefetchCount = count.ToTemplateString(); return this; }
 
     /// <summary>
-    /// Broker-side auto-acknowledge. When enabled the broker settles every delivery on hand-off
-    /// (at-most-once): no manual ack/nack and a failed turn does NOT requeue. Default off (at-least-once).
-    /// Cannot be combined with <see cref="Transacted()"/>.
+    /// When the delivery is settled. <see cref="Core.AckMode.Auto"/>: the broker settles it on hand-off
+    /// (at-most-once), a failed turn does not requeue it. Default <see cref="Core.AckMode.Manual"/> (at-least-once).
+    /// Auto cannot be combined with <see cref="Transacted()"/>.
     /// </summary>
-    public RabbitBuilder AutoAck(bool enabled = true) { _autoAck = enabled; return this; }
+    public RabbitBuilder AckMode(AckMode mode) { _ackMode = mode; return this; }
 
     /// <summary>Enable transacted channel.</summary>
     public RabbitBuilder Transacted() { _transacted = true; return this; }
@@ -215,6 +222,12 @@ public sealed class RabbitBuilder
 
     /// <summary>Set mandatory flag on published messages.</summary>
     public RabbitBuilder Mandatory() { _mandatory = true; return this; }
+
+    /// <summary>
+    /// Publish over a connection of its own: this endpoint's sends and its consumer's RPC replies go over a second
+    /// connection with the same settings, so the broker blocking publishers cannot stop consumers from acking.
+    /// </summary>
+    public RabbitBuilder PublisherConnection() { _publisherConnection = true; return this; }
 
     /// <summary>Enable request-reply with temporary reply queue.</summary>
     public RabbitBuilder ReplyTo() { _replyTo = true; return this; }
@@ -236,7 +249,7 @@ public sealed class RabbitBuilder
     /// <summary>Max queue size from an expression.</summary>
     public RabbitBuilder MaxLengthBytes(IExpression max) { _maxLengthBytes = max.ToTemplateString(); return this; }
 
-    /// <summary>Overflow strategy: "drop-head", "reject-publish".</summary>
+    /// <summary>Overflow strategy: "drop-head", "reject-publish", "reject-publish-dlx".</summary>
     public RabbitBuilder Overflow(string policy) { _overflow = policy; return this; }
 
     /// <summary>Dead letter exchange name.</summary>
@@ -305,9 +318,25 @@ public sealed class RabbitBuilder
     /// <summary>Enable SSL with optional server name and client certificate.</summary>
     public RabbitBuilder Ssl(IExpression? serverName = null, IExpression? certPath = null, IExpression? certPassphrase = null)
     {
-        _ssl = true; _sslServerName = serverName?.ToTemplateString(); _sslCertPath = certPath?.ToTemplateString(); _sslCertPassphrase = certPassphrase?.ToTemplateString();
+        _ssl = true; _sslServerName = serverName?.ToTemplateString(); _sslCertPath = certPath?.ToTemplateString(); _sslCertPassword = certPassphrase?.ToTemplateString();
         return this;
     }
+
+    /// <summary>PEM file with the root certificates the broker certificate must chain to, instead of the system trust store.</summary>
+    public RabbitBuilder SslCaCertPath(IExpression path) { _sslCaCertPath = path.ToTemplateString(); return this; }
+
+    /// <summary>Allowed TLS versions: <c>Tls12</c>, <c>Tls13</c> or both. Unset, the operating system chooses.</summary>
+    public RabbitBuilder SslProtocols(System.Security.Authentication.SslProtocols protocols) { _sslProtocols = protocols; return this; }
+
+    /// <summary>Revocation check of the broker certificate; <paramref name="softFail"/> accepts an undeterminable status.</summary>
+    public RabbitBuilder RevocationMode(System.Security.Cryptography.X509Certificates.X509RevocationMode mode, bool softFail = false)
+    {
+        _revocationMode = mode; _revocationSoftFail = softFail;
+        return this;
+    }
+
+    /// <summary>Log in with the TLS client certificate (<see cref="RabbitMQAuthMechanism.External"/>) instead of a password.</summary>
+    public RabbitBuilder AuthMechanism(RabbitMQAuthMechanism mechanism) { _authMechanism = mechanism; return this; }
 
     // ── Build ─────────────────────────────────────────────────────────
 
@@ -363,10 +392,11 @@ public sealed class RabbitBuilder
         // Consumer
         AppendIf("concurrentConsumers", _concurrentConsumers);
         AppendIf("prefetchCount", _prefetchCount);
-        AppendBool("autoAck", _autoAck);
+        AppendIf("ackMode", _ackMode?.ToString().ToLowerInvariant());
         if (_transacted is { } transacted) Append("transacted", transacted ? "true" : "false");
         AppendBoolExplicit("mandatory", _mandatory);
         AppendBool("replyTo", _replyTo);
+        AppendBool("publisherConnection", _publisherConnection);
         AppendIf("timeout", _timeout);
 
         // Queue limits
@@ -393,7 +423,12 @@ public sealed class RabbitBuilder
         AppendBool("ssl", _ssl);
         AppendIf("sslServerName", _sslServerName);
         AppendIf("sslCertPath", _sslCertPath);
-        AppendIf("sslCertPassphrase", _sslCertPassphrase);
+        AppendIf("sslCertPassword", _sslCertPassword);
+        AppendIf("sslCaCertPath", _sslCaCertPath);
+        if (_sslProtocols != System.Security.Authentication.SslProtocols.None) Append("sslProtocols", _sslProtocols.ToString().Replace(" ", string.Empty));
+        if (_revocationMode != System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck) Append("revocationMode", _revocationMode.ToString());
+        AppendBool("revocationSoftFail", _revocationSoftFail);
+        if (_authMechanism != RabbitMQAuthMechanism.Plain) Append("authMechanism", _authMechanism.ToString());
 
         return sb.ToString();
     }

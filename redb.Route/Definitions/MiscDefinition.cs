@@ -176,8 +176,7 @@ public sealed class StreamCachingDefinition : ProcessorDefinition
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
     {
-        var globalOptions = context.GetService<Configuration.StreamCacheOptions>()
-            ?? new Configuration.StreamCacheOptions();
+        var globalOptions = Extensions.RouteContextExtensions.GetStreamCacheOptions(context);
         var options = _spoolThreshold.HasValue
             ? new Configuration.StreamCacheOptions
             {

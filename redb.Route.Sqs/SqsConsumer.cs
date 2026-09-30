@@ -117,7 +117,7 @@ internal sealed class SqsConsumer : DrainableConsumer
 
     private async Task HandleMessageAsync(SqsMessage msg, CancellationToken processingCt)
     {
-        using var activity = StartConsumerActivity(msg);
+        using var span = StartConsumerSpan(msg);
 
         IncrementInflight();
         IExchange? exchange = null;
@@ -125,6 +125,10 @@ internal sealed class SqsConsumer : DrainableConsumer
         try
         {
             exchange = CreateExchange(msg);
+
+            // ackMode=auto: deleted on receipt, before the route runs (at-most-once).
+            if (_options.AckMode == AckMode.Auto)
+                await _client!.DeleteMessageAsync(_queueUrl, msg.ReceiptHandle, processingCt).ConfigureAwait(false);
 
             // The message is deleted (or made visible again) by this consumer below, after the whole unit of
             // work ended well; the route transaction owns the database and the outgoing sends.
@@ -141,10 +145,14 @@ internal sealed class SqsConsumer : DrainableConsumer
 
             // A rollback-only exchange (.RollbackAll()) counts as failed: its work was rolled back.
             var failed = exchange.EndedInFailure();
+            // A failed route marks the span, a rolled-back one does not; our own stop is not a failure.
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+                && (failure is not OperationCanceledException || !processingCt.IsCancellationRequested))
+                span.Activity.RecordFailure(failure);
 
             // Settle here whether or not the route is transacted: the acknowledgement is the consumer's, and by now
             // the route transaction has committed the database and sent what it deferred.
-            if (!failed && _options.DeleteAfterRead)
+            if (!failed && _options.AckMode == AckMode.Manual)
                 await _client!.DeleteMessageAsync(_queueUrl, msg.ReceiptHandle, processingCt).ConfigureAwait(false);
             else if (failed && _options.ResetVisibilityOnFailure)
                 await SafeResetVisibilityAsync(msg.ReceiptHandle).ConfigureAwait(false);
@@ -158,6 +166,7 @@ internal sealed class SqsConsumer : DrainableConsumer
             // Any other failure (incl. a downstream TaskCanceledException that is NOT our shutdown token).
             // No RecordError: the pipeline already counted it (StatisticsProcessor); this catch only
             // logs and restores visibility (ownership audit).
+            span.Activity.RecordFailure(ex);
             Logger?.LogError(ex, "SQS message processing failed on queue {Queue}, messageId={MessageId}",
                 _endpoint.QueueName, msg.MessageId);
             if (_options.ResetVisibilityOnFailure)
@@ -217,27 +226,19 @@ internal sealed class SqsConsumer : DrainableConsumer
         return Exchange.Create(message, _endpoint.ScopeFactory);
     }
 
-    private Activity? StartConsumerActivity(SqsMessage msg)
+    private TransportSpan StartConsumerSpan(SqsMessage msg)
     {
-        ActivityContext parentContext = default;
-        if (msg.MessageAttributes is not null
-            && msg.MessageAttributes.TryGetValue("traceparent", out var tp)
-            && !string.IsNullOrEmpty(tp.StringValue))
-        {
-            var traceState = msg.MessageAttributes.TryGetValue("tracestate", out var ts) ? ts.StringValue : null;
-            ActivityContext.TryParse(tp.StringValue, traceState, out parentContext);
-        }
-
-        var activity = RouteActivitySource.Source.StartActivity(
-            $"{_endpoint.QueueName} receive", ActivityKind.Consumer, parentContext);
-        if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag("messaging.system", "sqs");
-            activity.SetTag("messaging.operation", "receive");
-            activity.SetTag("messaging.destination.name", _endpoint.QueueName);
+        // The W3C context rides in the message attributes: traceparent, tracestate, baggage.
+        var span = RouteTelemetryExtensions.StartConsumerSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_endpoint.QueueName} receive", ActivityKind.Consumer,
+            "messaging.system", "sqs", _endpoint.Uri.NormalizedKey,
+            msg.MessageAttributes,
+            static (attrs, name) => attrs is not null && attrs.TryGetValue(name, out var value) ? value.StringValue : null,
+            destination: _endpoint.QueueName, operation: "receive");
+        if (span.Activity is { IsAllDataRequested: true } activity)
             activity.SetTag("messaging.message.id", msg.MessageId);
-        }
-        return activity;
+        return span;
     }
 
     // ── Visibility heartbeat ──────────────────────────────────────────

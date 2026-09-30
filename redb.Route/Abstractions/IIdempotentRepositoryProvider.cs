@@ -22,7 +22,8 @@ public interface IIdempotentRepositoryProvider
     IIdempotentRepository Get(string name);
 
     /// <summary>
-    /// Tries to look up a repository by name without throwing.
+    /// Looks up a repository by name. <c>false</c> when nothing is registered under it; an object of another type
+    /// under the name is a configuration error and throws <see cref="System.InvalidOperationException"/>.
     /// </summary>
     bool TryGet(string name, out IIdempotentRepository repository);
 }

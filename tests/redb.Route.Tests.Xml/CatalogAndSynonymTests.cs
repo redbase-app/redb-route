@@ -116,7 +116,7 @@ public class CatalogAndSynonymTests : IAsyncDisposable
         cat.Package.Should().Be(typeof(CatComponent).Assembly.GetName().Name);
 
         var options = cat.Options.ToDictionary(o => o.Name);
-        options["Retries"].Should().BeEquivalentTo(new CatalogOption("Retries", "int", "3", false, null));
+        options["Retries"].Should().BeEquivalentTo(new CatalogOption("Retries", "int", "3", false, null, Role: null, ConnectionParameter: false, ConnectionFactoryReference: false));
         options["Password"].Sensitive.Should().BeTrue("the [Sensitive] mark must reach the property panel");
         options["Mode"].Type.Should().Be("enum");
         options["Mode"].EnumValues.Should().Equal("Fast", "Safe");

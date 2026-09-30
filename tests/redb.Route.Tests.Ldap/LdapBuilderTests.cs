@@ -213,8 +213,8 @@ public sealed class LdapBuilderTests
     [Fact]
     public void SkipCertificateValidation_SetsParam()
     {
-        var uri = LdapDsl.Search("dc=test").SkipCertificateValidation().Build();
-        uri.Should().Contain("skipCertificateValidation=true");
+        var uri = LdapDsl.Search("dc=test").TrustAllCertificates().Build();
+        uri.Should().Contain("trustAllCertificates=true");
     }
 
     [Fact]

@@ -72,12 +72,5 @@ public sealed class HttpReservedHeaderTests : IAsyncLifetime
         seen.In.GetHeader<string>("X-Tenant").Should().Be("acme");
     }
 
-    private static int GetFreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 }

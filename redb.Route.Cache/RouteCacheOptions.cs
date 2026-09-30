@@ -28,20 +28,25 @@ public sealed class RouteCacheOptions
 /// <summary>Durations as people write them in URIs: <c>500ms</c>, <c>30s</c>, <c>5m</c>, <c>2h</c>, <c>1d</c>, or <c>hh:mm:ss</c>.</summary>
 public static class CacheDuration
 {
-    /// <summary>Parses a duration; <c>null</c> / empty → <c>null</c>.</summary>
+    /// <summary>Parses a duration; <c>null</c> / empty → <c>null</c>. Anything unusable is a <see cref="FormatException"/>.</summary>
     public static TimeSpan? Parse(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
         var value = text.Trim();
 
         TimeSpan? parsed = null;
-        foreach (var (suffix, factor) in Units)
+        foreach (var (suffix, millisecondsPerUnit) in Units)
         {
             if (!value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) continue;
             var number = value[..^suffix.Length].Trim();
             if (double.TryParse(number, NumberStyles.Float, CultureInfo.InvariantCulture, out var amount))
             {
-                parsed = factor(amount);
+                // A number TimeSpan cannot hold (too large, NaN, infinity) is a typo like any other, so it
+                // is the same FormatException, not the OverflowException / ArgumentException of TimeSpan.
+                var milliseconds = amount * millisecondsPerUnit;
+                if (!(Math.Abs(milliseconds) <= TimeSpan.MaxValue.TotalMilliseconds))
+                    throw new FormatException($"'{text}' is not a duration a TimeSpan can hold (at most {TimeSpan.MaxValue.TotalDays:F0} days).");
+                parsed = TimeSpan.FromMilliseconds(milliseconds);
                 break;
             }
         }
@@ -60,12 +65,12 @@ public static class CacheDuration
         return parsed;
     }
 
-    private static readonly (string Suffix, Func<double, TimeSpan> Factor)[] Units =
+    private static readonly (string Suffix, double MillisecondsPerUnit)[] Units =
     [
-        ("ms", TimeSpan.FromMilliseconds),
-        ("s", TimeSpan.FromSeconds),
-        ("m", TimeSpan.FromMinutes),
-        ("h", TimeSpan.FromHours),
-        ("d", TimeSpan.FromDays),
+        ("ms", 1),
+        ("s", 1_000),
+        ("m", 60_000),
+        ("h", 3_600_000),
+        ("d", 86_400_000),
     ];
 }

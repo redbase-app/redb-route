@@ -305,185 +305,142 @@ public sealed class XmlRouteLoader
 }
 
 /// <summary>
-/// The <c>&lt;bean&gt;</c> container section: declares an object in the context registry, with
-/// <c>&lt;property&gt;</c> binding through the shared converter, <c>&lt;constructorArg&gt;</c>
-/// values (nested anonymous beans arrive in a later increment), and the same type resolution
-/// the <c>bean:</c> component uses.
+/// The <c>&lt;bean&gt;</c> container section: declares an object in the context registry. The
+/// markup is read by <see cref="BeanModel"/> and built by <see cref="BeanFactory"/> — the same
+/// pair generated code and the package gate use. References resolve against the registry as it
+/// stands, so a bean may refer only to beans declared before it (document order, the context
+/// file first) or registered by module code; anything else is a positioned error.
 /// </summary>
 internal static class BeanSection
 {
     internal static void Declare(XElement element, XmlParseContext ctx)
     {
         var name = ctx.RequiredAttr(element, "name");
-        var typeName = ctx.RequiredAttr(element, "type");
-        if (name is null || typeName is null)
+        if (name is null)
             return;
-
-        try
-        {
-            var instance = Create(typeName, element, ctx);
-            if (instance is not null)
-                ctx.RouteContext.AddToRegistry(name, instance);
-        }
-        catch (Exception ex)
-        {
-            ctx.AddError(element, ex.Message);
-        }
+        var declaration = BeanModel.Parse(element, ctx.AddError);
+        if (declaration is null)
+            return;
+        var instance = Build(declaration, ctx);
+        if (instance is not null)
+            ctx.RouteContext.AddToRegistry(name, instance);
     }
 
-    private static object? Create(string typeName, XElement element, XmlParseContext ctx)
+    private static object? Build(BeanDeclaration bean, XmlParseContext ctx)
     {
         var resolver = ctx.RouteContext.GetService<IBeanTypeResolver>() ?? DefaultBeanTypeResolver.Instance;
-        var type = resolver.Resolve(typeName);
+        var type = resolver.Resolve(bean.TypeName);
         if (type is null)
         {
-            ctx.AddError(element, $"<bean> type '{typeName}' was not found in the loaded assemblies.");
+            ctx.AddError(bean.At, $"<bean> type '{bean.TypeName}' was not found in the loaded assemblies.");
             return null;
         }
 
         var args = new List<object?>();
-        foreach (var arg in element.Elements().Where(e => e.Name.LocalName == "constructorArg"))
+        List<Type>? argumentTypes = bean.TypedArguments ? [] : null;
+        foreach (var arg in bean.ConstructorArgs)
         {
-            var value = ctx.Attr(arg, "value");
-            var nested = arg.Elements().Where(c => c.Name.LocalName == "bean").ToList();
-            if ((value is null) == (nested.Count == 0) || nested.Count > 1)
-            {
-                ctx.AddError(arg, "<constructorArg> takes either value= or exactly one nested anonymous <bean type=…>.");
+            if (!TryRaw(arg.Value, ctx, out var raw))
                 return null;
-            }
-            if (value is not null)
-            {
-                var resolvedArg = ResolveConfigValue(value, arg, ctx);
-                if (resolvedArg is null)
-                    return null;
-                args.Add(resolvedArg);
+            args.Add(raw);
+            if (arg.TypeName is null)
                 continue;
-            }
-            // A nested bean is anonymous — built the same way, just not registered by name.
-            var nestedTypeName = ctx.RequiredAttr(nested[0], "type");
-            if (nestedTypeName is null)
-                return null;
-            var inner = Create(nestedTypeName, nested[0], ctx);
-            if (inner is null)
-                return null;
-            args.Add(inner);
-        }
-        var provider = ctx.RouteContext.GetServiceProvider() ?? EmptyProvider.Instance;
-        object? instance;
-        if (ctx.Attr(element, "factoryMethod") is { Length: > 0 } factoryMethod)
-        {
-            // Some types are created by a static method and not by a public constructor
-            // (X509CertificateLoader is the reason this exists). The constructorArg values are
-            // that method's arguments, in order.
-            var method = type.GetMethods(BindingFlags.Public | BindingFlags.Static)
-                .FirstOrDefault(m => m.Name == factoryMethod && m.GetParameters().Length == args.Count);
-            if (method is null)
+            if (resolver.Resolve(arg.TypeName) is not { } argumentType)
             {
-                ctx.AddError(element, $"type '{type.FullName}' has no public static method " +
-                                      $"'{factoryMethod}' taking {args.Count} argument(s).");
+                ctx.AddError(arg.Value.At, $"<constructorArg type=\"{arg.TypeName}\">: the type was not found in the loaded assemblies.");
                 return null;
             }
-            instance = method.Invoke(null, BindArguments(method, args));
-            if (instance is null)
-            {
-                ctx.AddError(element, $"'{type.FullName}.{factoryMethod}' returned null.");
-                return null;
-            }
+            argumentTypes!.Add(argumentType);
         }
-        else
+        var resolve = Placeholders(ctx);
+        object instance;
+        try
         {
-            instance = args.Count > 0
-                ? ActivatorUtilities.CreateInstance(provider, type, args.ToArray()!)
-                : ActivatorUtilities.CreateInstance(provider, type);
+            instance = BeanFactory.Instantiate(
+                type, args, argumentTypes, bean.FactoryMethod, ctx.RouteContext.GetServiceProvider() ?? EmptyProvider.Instance, resolve);
+        }
+        catch (Exception ex)
+        {
+            ctx.AddError(bean.At, (ex as TargetInvocationException)?.InnerException?.Message ?? ex.Message);
+            return null;
         }
 
-        foreach (var property in element.Elements().Where(e => e.Name.LocalName == "property"))
+        foreach (var property in bean.Properties)
         {
-            var key = ctx.RequiredAttr(property, "key");
-            var value = ctx.Attr(property, "value");
-            var nestedProperty = property.Elements().Where(c => c.Name.LocalName == "bean").ToList();
-            if (key is null)
+            if (!TryRaw(property.Value, ctx, out var raw))
                 continue;
-            if ((value is null) == (nestedProperty.Count == 0) || nestedProperty.Count > 1)
+            try
             {
-                ctx.AddError(property, "<property> takes either value= or exactly one nested anonymous <bean type=...>.");
-                continue;
+                BeanFactory.Assign(instance, property.Key, raw, resolve);
             }
-            var propInfo = type.GetProperty(key);
-            if (propInfo is null || !propInfo.CanWrite)
+            catch (Exception ex)
             {
-                ctx.AddError(property, $"type '{type.FullName}' has no writable public property '{key}'.");
-                continue;
+                ctx.AddError(property.At, (ex as TargetInvocationException)?.InnerException?.Message ?? ex.Message);
             }
-            if (nestedProperty.Count == 1)
-            {
-                // The property holds an OBJECT: a certificate, credentials, a serializer. Built
-                // exactly like a nested constructor argument, just assigned instead of passed.
-                var nestedTypeName = ctx.RequiredAttr(nestedProperty[0], "type");
-                if (nestedTypeName is null)
-                    continue;
-                var nestedInstance = Create(nestedTypeName, nestedProperty[0], ctx);
-                if (nestedInstance is null)
-                    continue;
-                if (!propInfo.PropertyType.IsInstanceOfType(nestedInstance))
-                {
-                    ctx.AddError(property, $"'{nestedInstance.GetType().FullName}' is not assignable to " +
-                                           $"{propInfo.PropertyType.Name} for '{key}'.");
-                    continue;
-                }
-                propInfo.SetValue(instance, nestedInstance);
-                continue;
-            }
-            // The whole point of the bean section: values come from configuration. {{key}} and
-            // {{key:default}} resolve through the context's own chain BEFORE type conversion.
-            var resolved = ResolveConfigValue(value, property, ctx);
-            if (resolved is null)
-                continue;
-            var converted = OptionValueConverter.Convert(resolved, propInfo.PropertyType);
-            if (converted is null)
-            {
-                ctx.AddError(property, $"'{resolved}' is not convertible to {propInfo.PropertyType.Name} for '{key}'.");
-                continue;
-            }
-            propInfo.SetValue(instance, converted);
         }
         return instance;
     }
 
     /// <summary>
-    /// Converts the collected constructor arguments to what the static factory method declares:
-    /// a value argument arrives as a string, an object argument as the nested bean's instance.
+    /// The raw form <see cref="BeanFactory"/> binds: text as it is written, a reference as the
+    /// registered object, a nested bean as its instance, a list as its raw items. False after
+    /// recording an error at the element that caused it.
     /// </summary>
-    private static object?[] BindArguments(MethodInfo method, List<object?> args)
+    private static bool TryRaw(BeanValue value, XmlParseContext ctx, out object? raw)
     {
-        var parameters = method.GetParameters();
-        var bound = new object?[parameters.Length];
-        for (var i = 0; i < parameters.Length; i++)
-            bound[i] = args[i] is string text && parameters[i].ParameterType != typeof(string)
-                ? OptionValueConverter.Convert(text, parameters[i].ParameterType)
-                : args[i];
-        return bound;
+        raw = null;
+        switch (value)
+        {
+            case ScalarBeanValue scalar:
+                raw = scalar.Text;
+                return true;
+            case RefBeanValue reference:
+                raw = ctx.RouteContext.GetFromRegistry<object>(reference.Bean);
+                if (raw is null)
+                    ctx.AddError(reference.At,
+                        $"bean reference '{reference.Bean}' names nothing registered so far — beans are built in " +
+                        "document order (the context file first), so declare it above this one, or register it from module code before the XML loads.");
+                return raw is not null;
+            case NestedBeanValue nested:
+                raw = Build(nested.Bean, ctx);
+                return raw is not null;
+            case ListBeanValue list:
+            {
+                Type? elementType = null;
+                if (list.ElementTypeName is not null)
+                {
+                    var resolver = ctx.RouteContext.GetService<IBeanTypeResolver>() ?? DefaultBeanTypeResolver.Instance;
+                    elementType = resolver.Resolve(list.ElementTypeName);
+                    if (elementType is null)
+                    {
+                        ctx.AddError(list.At, $"<list of=\"{list.ElementTypeName}\">: the type was not found in the loaded assemblies.");
+                        return false;
+                    }
+                }
+                var items = new List<object?>(list.Items.Count);
+                var complete = true;
+                foreach (var item in list.Items)
+                {
+                    complete &= TryRaw(item, ctx, out var itemRaw);
+                    items.Add(itemRaw);
+                }
+                raw = new BeanListValue(elementType, items);
+                return complete;
+            }
+            default:
+                throw new InvalidOperationException($"unhandled bean value {value.GetType().Name}.");
+        }
     }
 
     /// <summary>
     /// Bean values may carry <c>{{key}}</c> / <c>{{key:default}}</c> — resolved through the
-    /// context's own placeholder chain before type conversion. Null after recording an error
-    /// (an unresolved key without a default); plain values pass through untouched.
+    /// context's own placeholder chain before type conversion; an unresolved key without a
+    /// default throws, and the caller positions it at the slot.
     /// </summary>
-    private static string? ResolveConfigValue(string value, XElement position, XmlParseContext ctx)
-    {
-        if (!value.Contains("{{", StringComparison.Ordinal))
-            return value;
-        try
-        {
-            return ctx.RouteContext is RouteContext live ? live.ResolvePlaceholders(value) : value;
-        }
-        catch (InvalidOperationException ex)
-        {
-            ctx.AddError(position, ex.Message);
-            return null;
-        }
-    }
+    private static Func<string, string> Placeholders(XmlParseContext ctx)
+        => ctx.RouteContext is RouteContext live
+            ? text => text.Contains("{{", StringComparison.Ordinal) ? live.ResolvePlaceholders(text) : text
+            : text => text;
 
     private sealed class EmptyProvider : IServiceProvider
     {

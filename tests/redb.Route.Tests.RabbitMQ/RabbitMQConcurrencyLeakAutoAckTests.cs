@@ -13,7 +13,7 @@ namespace redb.Route.Tests.RabbitMQ;
 /// <list type="number">
 ///   <item>consumer dispatch concurrency was pinned to 1 (ConcurrentConsumers had no effect);</item>
 ///   <item>a per-route Stop/Start leaked one consume channel each cycle;</item>
-///   <item>the new AutoAck consumer option (broker settles on hand-off, no requeue).</item>
+///   <item>ackMode=auto (broker settles on hand-off, no requeue).</item>
 /// </list>
 /// </summary>
 [Trait("Category", "Integration")]
@@ -171,7 +171,7 @@ public sealed class RabbitMQConcurrencyLeakAutoAckTests
         var queue = $"test-autoack-ok-{Guid.NewGuid():N}";
         await PublishAsync(queue, new[] { "autoack-msg" });
 
-        var epCons = CreateEndpoint(queue, "autoAck=true");
+        var epCons = CreateEndpoint(queue, "ackMode=auto");
         var received = new ConcurrentBag<string>();
         var tcs = new TaskCompletionSource();
 
@@ -201,7 +201,7 @@ public sealed class RabbitMQConcurrencyLeakAutoAckTests
         var queue = $"test-autoack-throw-{Guid.NewGuid():N}";
         await PublishAsync(queue, new[] { "poison" });
 
-        var epCons = CreateEndpoint(queue, "autoAck=true");
+        var epCons = CreateEndpoint(queue, "ackMode=auto");
         var attempts = 0;
         var processor = Substitute.For<IProcessor>();
         processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
@@ -233,7 +233,7 @@ public sealed class RabbitMQConcurrencyLeakAutoAckTests
         var queue = $"test-manual-throw-{Guid.NewGuid():N}";
         await PublishAsync(queue, new[] { "retry-me" });
 
-        var epCons = CreateEndpoint(queue);   // autoAck defaults to false
+        var epCons = CreateEndpoint(queue);   // ackMode defaults to manual
         var attempts = 0;
         var received = new ConcurrentBag<string>();
         var tcs = new TaskCompletionSource();

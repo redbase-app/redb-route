@@ -49,7 +49,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("GET", "/modules");
@@ -68,7 +68,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         // Path with template param — registry resolves {id} from path segments
@@ -86,7 +86,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         // HTTP consumer serializes body as byte[]
@@ -97,6 +97,8 @@ public class HttpControllerDispatcherTests
 
         exchange.Out.Should().NotBeNull();
         exchange.Out!.GetHeader<int>("status.code").Should().Be(200);
+        // The body was bound (the name made it into the action) and the reply is the created object.
+        Encoding.UTF8.GetString((byte[])exchange.Out.Body!).Should().Be("{\"name\":\"test-module\",\"created\":true}");
     }
 
     [Fact]
@@ -105,7 +107,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("DELETE", "/modules/42");
@@ -122,7 +124,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("PUT", "/modules/7",
@@ -142,7 +144,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ContextsController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("GET", "/contexts/myctx/status",
@@ -162,7 +164,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ContextsController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("POST", "/contexts/myctx/start");
@@ -181,7 +183,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("GET", "/nonexistent");
@@ -201,7 +203,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = new Exchange(); // no redbHttp.* headers at all
@@ -218,7 +220,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         // PATCH /modules doesn't exist
@@ -238,7 +240,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         // Simulate raw JSON bytes as HTTP consumer would provide
@@ -259,7 +261,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(NoRouteController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("GET", "/noroute");
@@ -278,7 +280,7 @@ public class HttpControllerDispatcherTests
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
 
-        var context = new RouteContext();
+        await using var context = new RouteContext();
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         // Both /modules and modules should work
@@ -298,7 +300,8 @@ public class HttpControllerDispatcherTests
     {
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
-        var dispatcher = new HttpControllerDispatcher(registry, new RouteContext());
+        await using var context = new RouteContext();
+        var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("GET", "/modules");
         await dispatcher.Process(exchange);
@@ -311,7 +314,8 @@ public class HttpControllerDispatcherTests
     {
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
-        var dispatcher = new HttpControllerDispatcher(registry, new RouteContext());
+        await using var context = new RouteContext();
+        var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("DELETE", "/modules/1");
         await dispatcher.Process(exchange);
@@ -324,7 +328,8 @@ public class HttpControllerDispatcherTests
     {
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
-        var dispatcher = new HttpControllerDispatcher(registry, new RouteContext());
+        await using var context = new RouteContext();
+        var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = CreateHttpExchange("GET", "/nonexistent");
         await dispatcher.Process(exchange);
@@ -337,7 +342,8 @@ public class HttpControllerDispatcherTests
     {
         var registry = new ControllerRegistry();
         registry.RegisterController(typeof(ModulesController));
-        var dispatcher = new HttpControllerDispatcher(registry, new RouteContext());
+        await using var context = new RouteContext();
+        var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var exchange = new Exchange(); // no method/path headers
         await dispatcher.Process(exchange);

@@ -548,3 +548,15 @@ context.AddToRegistry("prod", new S3ConnectionFactory
 });
 // s3://backups?connectionFactory=prod
 ```
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `redb.route.endpoint` and the bucket as
+`messaging.destination.name`:
+
+- **Consumer.** One `Consumer` span, `{bucket} receive`, per routed object. An object carries no trace context, so the
+  span is a root, never a child of the activity the poll loop inherited from whoever started the routes. An empty poll
+  opens none, nor does an object skipped for a missing done file. A failed route marks it an error; our own stop does not.
+- **Producer.** One `Client` span per call, `s3 {operation}`; an error when the call fails, unless our own token
+  cancelled it.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.

@@ -27,6 +27,11 @@
         "name": "completionTimeout",
         "type": "Duration",
         "required": false
+      },
+      {
+        "name": "forceCompletionOnStop",
+        "type": "Bool",
+        "required": false
       }
     ],
     "children": [],

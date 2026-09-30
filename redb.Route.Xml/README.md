@@ -119,6 +119,17 @@ The expression language is the engine's own — `${header.x}`, `count(property.i
 first message. Whitespace around operators is insignificant, so `expr="header.amount>1000"` avoids
 XML escaping entirely (`>` needs no escape in attribute values; `<` does).
 
+Membership is `in` / `not in`, against a list the message carries or a literal in parentheses:
+
+```xml
+<when expr="header.region in ('eu', 'uk')">…</when>
+<filter expr="header.status not in property.closedStatuses">…</filter>
+
+<!-- in a redb query it becomes one SQL IN, for props and base fields alike -->
+<redbQuery type="Hub.Order, Hub" whereRedb="ValueString in header.codes" outputType="List"/>
+<redbQuery type="Hub.Order, Hub" where="Status in ('open', 'held')" whereRedb="Id not in (7, 9)"/>
+```
+
 Type-shaped checks the language cannot express go through the registry:
 `<when predicate="#isStringList">` resolves an `IPredicate` you registered from code.
 
@@ -145,7 +156,8 @@ engine pipeline (endpoint cache, statistics, mock masks, secret redaction) sees 
 
 The rules are generic — **no connector has XML-specific code**:
 
-- the element name is the scheme; every attribute becomes a query option verbatim;
+- the element name is the scheme; every attribute becomes a query option verbatim — except an
+  attribute in a foreign namespace, which is metadata for other tools and never reaches the connector;
 - the path part is the universal `path=` attribute, the component's declared one-line synonym
   (`kafka` → `topic`, `file` → `directory`), or the element's text content for text-path
   components (`sql` — and `path=` on those is refused: the query belongs in CDATA);
@@ -173,8 +185,9 @@ Values resolve `{{key}}` / `{{key:default}}` through the context's configuration
 binds to an `int`. Nested anonymous beans build option graphs inline. Objects with real
 dependencies stay in code; XML references them by `#name`.
 
-A property takes either `value=` or one nested anonymous `<bean>`, so a factory that holds an
-OBJECT - a certificate, a credentials object, a serializer - is declarable too. When the type is
+A `<property>` or `<constructorArg>` takes exactly one of: `value=`, `ref=`, one nested anonymous
+`<bean>`, one `<list>`. So a factory that holds an OBJECT - a certificate, a credentials object, a
+serializer - is declarable too. When the type is
 built by a static creator rather than a constructor, `factoryMethod=` names it and the
 `<constructorArg>` values are its arguments:
 
@@ -191,6 +204,83 @@ built by a static creator rather than a constructor, `factoryMethod=` names it a
   <property key="Sign" value="true"/>
 </bean>
 ```
+
+A constructor or factory method is called the way C# calls it: the parameters after the given
+arguments must be optional and take their defaults (`LoadPkcs12FromFile` has two more), and an
+overload no markup value can reach (a `ReadOnlySpan<char>` password) is not a candidate. When
+several overloads still fit the values, name the parameter types with `type=` on every
+`<constructorArg>`, Spring's `constructor-arg type`; the values are then converted to exactly those
+types. `X509CertificateLoader` exists from .NET 9; on .NET 8 the certificate comes from its own
+`(string, string)` constructor, one of several two-argument ones:
+
+```xml
+<bean name="node-cert" type="System.Security.Cryptography.X509Certificates.X509Certificate2, System.Security.Cryptography">
+  <constructorArg type="System.String" value="{{as4.certificates}}/node.pfx"/>
+  <constructorArg type="System.String" value="{{as4.password}}"/>
+</bean>
+```
+
+`type=` goes on every argument or on none. Without it an ambiguous choice is a load error that
+lists the candidates, never a guess.
+
+A bean can point at another bean and hold a list. `ref="name"` (or `<ref bean="name"/>` inside a
+list) is the registered instance itself, not a copy. A `<list>` holds `<value>` text, `<ref>`,
+anonymous `<bean>` and nested `<list>` items, and builds into the declared type of the property:
+`T[]`, `List<T>`, `IList<T>`, `ICollection<T>`, `IReadOnlyList<T>`, `IReadOnlyCollection<T>` or
+`IEnumerable<T>`. Each item is converted to or checked against `T`:
+
+```xml
+<bean name="acme"   type="Hub.Partner, Hub"><property key="Id" value="{{as4.acme.id}}"/></bean>
+<bean name="globex" type="Hub.Partner, Hub"><property key="Id" value="{{as4.globex.id}}"/></bean>
+
+<bean name="as4-node" type="Hub.Node, Hub">
+  <property key="Partners">
+    <list>
+      <ref bean="acme"/>
+      <ref bean="globex"/>
+      <bean type="Hub.Partner, Hub"><property key="Id" value="{{as4.partner3.id}}"/></bean>
+    </list>
+  </property>
+  <property key="Ports"><list><value>{{as4.port}}</value><value>8443</value></list></property>
+  <property key="Signing" ref="node-cert"/>
+</bean>
+```
+
+Rules:
+
+- **References look back only.** Beans are built in load order: the context file first, then the
+  route files in the order the package manifest lists them, each file from top to bottom. A
+  reference must name a bean declared above it, or one that module code registers before the XML
+  loads. A forward or unknown reference is a load error with its position, never a `null`.
+- **`ref` is the bare name:** `ref="acme"`, not `ref="#acme"`. The `#` belongs to URI options.
+- **`of=` names the element type where nothing else does.** On a property or a `factoryMethod`
+  argument the target type is known, so `of=` may be left out. When `of=` is written, it must equal
+  that element type. A constructor is chosen only after its arguments are built, so a list passed
+  to a constructor needs `<list of="Hub.Partner, Hub">`; it is built as `T[]`, which a constructor
+  taking `T[]`, `IEnumerable<T>` or `IReadOnlyList<T>` accepts.
+- `<value>` appears only inside a `<list>`; a single value is `value=` on the slot.
+
+`redb-route-xml check` reads beans with the loader's grammar. It reports a forward reference as an
+error. A reference the package does not declare is a warning, because module code may register it.
+With `--bin` it also checks every value against its target type: list items, nested beans, and the
+type a `factoryMethod` returns.
+
+Repositories are beans like any other. `repository="#dedup"` on `<idempotentConsumer>` or
+`<claimCheck>`, and a consumer's `idempotentRepository=dedup`, look up the bare name `dedup` and
+check its type:
+
+```xml
+<bean name="dedup" type="redb.Route.Processors.InMemoryIdempotentRepository, redb.Route"/>
+<!-- or, stored in redb, in context.xml: -->
+<redb><idempotentRepository name="dedup" ttl="7.00:00:00"/></redb>
+
+<idempotentConsumer key="${header.messageId}" repository="#dedup">…</idempotentConsumer>
+```
+
+The gate counts `<redb><idempotentRepository name>` as a declaration of `dedup`, the same as a
+`<bean name>`. With `--bin` it also checks that the named object implements what the reference
+needs: `IIdempotentRepository` for `<idempotentConsumer>`, `IClaimCheckRepository` for
+`<claimCheck>`.
 
 Handlers declared at the container level apply to every route of the **context**, not only to the routes of their own file: the engine registers `onException`, `intercept*` and `onCompletion` of every builder globally, so one file of handlers covers the routes of all the other files and the C# routes of the same context. Declare each of them once:
 
@@ -337,7 +427,15 @@ cannot drift. `XmlRouteSchema.Generate(registry)` covers the vocabulary with enu
 (`level=`, `policy=`, `strategy=` complete from a list), required attributes, and rejection of
 unknown elements; foreign-**namespace** attributes are tolerated by design so other tools can
 annotate route files. Pass a `ComponentCatalog` to make structured endpoint children strict and
-typed per connector. Point any XSD-aware editor at it — VS Code with the RedHat XML extension:
+typed per connector. A connector that refuses parameters it has no option for (every connector
+not marked `[LenientProperties]`; `http:`, `sql:` and `bean:` are lenient) gets no room for
+unknown attributes in that schema, so the editor flags `<timer perod="…">` the way the engine
+would refuse it at start. An option only one side of an endpoint reads (`[EndpointRole]`) is
+refused on the other side the same way: `username` / `authScheme` are what an `http:` producer
+sends and are an error inside `<from>` (the editor names the type `producerOnlyOption`), while
+`inboundAuth` and its companions are what an `http:` consumer requires and are an error inside
+`<to>` (`consumerOnlyOption`). `<from>` creates the consumer; every other address-carrying step,
+`pollEnrich` included, creates a producer. Point any XSD-aware editor at it — VS Code with the RedHat XML extension:
 
 ```jsonc
 // .vscode/settings.json
@@ -372,7 +470,16 @@ Packaging checks are **hard errors, not advice**: schema validation with positio
 inside CDATA, files missing from `resources/` (`file=`, and the files package elements name:
 `<payload template=>`, `<transformJson spec=>`), undeclared `#name` references;
 with `--bin`, bean types are verified against the real assemblies — a renamed type, a
-non-public type, a typo in a `<property>` or in `bean:…?method=` refuses the build. A literal
+non-public type, a typo in a `<property>` or in `bean:…?method=` refuses the build. With `--bin`
+the gate also reads the connectors of that output and holds every endpoint's parameters against
+them, in the URI form and the structured form alike: a name a strict connector does not know is
+an error with its position, in the engine's own words (`'perod' is not an option of the Timer
+endpoint. Did you mean 'period'?`), instead of a refusal when the route starts. An option written
+on the side that does not read it is an error too, on any connector (`'username' is read only by
+the producer side of the http endpoint; <from> creates the consumer, which refuses it.`). So is a
+connection parameter written beside the option that names a connection factory (`[ConnectionParameter]`,
+`[ConnectionFactoryReference]`): the factory is the whole connection (`connectionFactory 'main' sets the
+whole connection, so host cannot be given on the URI as well.`). A literal
 secret in a URI is a warning that names the fix (supply it through configuration). Add
 `-p:PackRouteOnBuild=true` to a scaffolded project to pack on every `dotnet build`.
 

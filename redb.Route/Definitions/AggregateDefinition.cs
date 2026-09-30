@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Processors;
 
@@ -44,12 +45,30 @@ public class AggregateDefinition : RouteDefinitionBase<AggregateDefinition>, IRo
     /// </summary>
     public TimeSpan? CompletionTimeout { get; internal set; }
 
+    /// <summary>
+    /// Apache Camel <c>forceCompletionOnStop</c>: a group still open when the context stops completes with what it has,
+    /// once the consumers have stopped and while the producers are still alive. Without it an open group is dropped on
+    /// stop, with a warning naming how many.
+    /// </summary>
+    internal bool? ForceCompletionOnStopEnabled { get; private set; }
+
+    /// <summary>Completes the open groups when the context stops (Apache Camel <c>forceCompletionOnStop</c>).</summary>
+    public AggregateDefinition ForceCompletionOnStop(bool value = true)
+    {
+        ForceCompletionOnStopEnabled = value;
+        return this;
+    }
+
     // ── IProcessorDefinition ───────────────────────────────────────────────────
 
     /// <inheritdoc />
     public override IProcessor CreateProcessor(IRouteContext context)
     {
         IProcessor target = NodePipeline.Body(context, Outputs);
-        return new AggregatorProcessor(_correlationKey, _aggregationStrategy, _completionPredicate, target, CompletionTimeout);
+        return new AggregatorProcessor(_correlationKey, _aggregationStrategy, _completionPredicate, target, CompletionTimeout)
+        {
+            ForceCompletionOnStop = ForceCompletionOnStopEnabled == true,
+            Logger = context.GetService<ILoggerFactory>()?.CreateLogger<AggregatorProcessor>(),
+        };
     }
 }

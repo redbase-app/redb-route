@@ -261,6 +261,9 @@ internal static partial class CoreContributions
                 ctx.Attr(e, "completion"),
                 ctx.Convert<int>(e, "completionSize"),
                 ctx.Convert<TimeSpan>(e, "completionTimeout"));
+            // Apache Camel forceCompletionOnStop: an explicit false is kept, as the fluent call keeps it.
+            if (ctx.Convert<bool>(e, "forceCompletionOnStop") is { } forceCompletion)
+                scope.ForceCompletionOnStop(forceCompletion);
             ctx.ParseSteps(e, scope);
             return scope.EndAggregate();
         }),

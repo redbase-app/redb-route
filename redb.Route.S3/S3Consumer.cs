@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Amazon.S3;
 using Amazon.S3.Model;
@@ -6,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Components;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.S3;
 
@@ -414,11 +416,21 @@ internal sealed class S3Consumer : DrainableConsumer
     /// </summary>
     private async Task<bool> ProcessExchangeAsync(IExchange exchange, string key, CancellationToken ct)
     {
+        // An object carries no trace context: its span is a root, never a child of the activity the poll runs under.
+        using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_endpoint.BucketName} receive", ActivityKind.Consumer, "redb.system", "s3", _endpoint.Uri.NormalizedKey,
+            null, static (_, _) => null, destination: _endpoint.BucketName, operation: "receive");
         IncrementInflight();
         try
         {
             await Processor.Process(exchange, ct).ConfigureAwait(false);
-            return exchange.Exception is null || exchange.ExceptionHandled;
+            if (exchange.Exception is not { } failure || exchange.ExceptionHandled)
+                return true;
+            // Our own stop is not a failure; any other cancellation, a timeout inside the route, is.
+            if (failure is not OperationCanceledException || !ct.IsCancellationRequested)
+                span.Activity.RecordFailure(failure);
+            return false;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -427,6 +439,7 @@ internal sealed class S3Consumer : DrainableConsumer
         catch (Exception ex)
         {
             // Pipeline errors are counted by the core StatisticsProcessor (ownership audit).
+            span.Activity.RecordFailure(ex);
             Logger?.LogError(ex, "S3: processing failed for {Key}; object is kept.", key);
             return false;
         }

@@ -52,4 +52,16 @@ public sealed class RabbitMQEndpointTests
         ep.Uri.Scheme.Should().Be("rabbitmq");
         ep.Uri.Path.Should().Be("my-queue");
     }
+
+    [Theory]
+    [InlineData("amq.gen-JzTY20BRgKO-HjmUJj0wLg", true)]
+    [InlineData("amq.rabbitmq.reply-to.g1h2AA5yZXBseUAxMzA0MDI0NQAAAAAA", true)]
+    [InlineData("amq.rabbitmq.reply-to", true)]
+    [InlineData("orders", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void A_late_reply_to_a_gone_client_is_a_transient_return(string? routingKey, bool transient)
+    {
+        RabbitMQEndpoint.IsTransientReplyTo(routingKey).Should().Be(transient);
+    }
 }

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Telemetry;
 
 namespace redb.Route.Llm.Mcp;
@@ -37,17 +38,32 @@ public sealed class McpProducer : IProducer
     {
         ArgumentNullException.ThrowIfNull(exchange);
 
-        using var activity = RouteActivitySource.Source.StartActivity(
+        // A transport span of this endpoint: redb.route.endpoint, and nothing when the context has tracing off.
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"mcp.tools/call {_endpoint.ServerName}/{_endpoint.ToolName}",
-            ActivityKind.Client);
+            ActivityKind.Client, "rpc.system", "mcp", _endpoint.Uri.NormalizedKey);
 
         if (activity is { IsAllDataRequested: true })
         {
-            activity.SetTag("rpc.system", "mcp");
             activity.SetTag("rpc.service", _endpoint.ServerName);
             activity.SetTag("rpc.method", _endpoint.ToolName);
         }
 
+        try
+        {
+            await CallAsync(exchange, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the call is a stop; any other failure, the call timeout included, marks the span.
+            activity.RecordFailure(ex);
+            throw;
+        }
+    }
+
+    private async Task CallAsync(IExchange exchange, CancellationToken ct)
+    {
         var client = _endpoint.Registry.GetClient(_endpoint.ServerName)
             ?? throw new McpException($"MCP server '{_endpoint.ServerName}' is not registered or has been disposed.");
 

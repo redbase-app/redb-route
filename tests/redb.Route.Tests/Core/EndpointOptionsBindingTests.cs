@@ -19,6 +19,9 @@ public class TestEndpointOptions : EndpointOptions
     }
 }
 
+[LenientProperties]
+public class LenientTestEndpointOptions : TestEndpointOptions;
+
 public class EndpointOptionsBindingTests
 {
     [Fact]
@@ -56,7 +59,7 @@ public class EndpointOptionsBindingTests
     [Fact]
     public void BindFromUri_UnmappedParams_GoToUnmapped()
     {
-        var opts = new TestEndpointOptions();
+        var opts = new LenientTestEndpointOptions(); // strict types refuse unknown names
         opts.BindFromUri(new Dictionary<string, string>
         {
             ["host"] = "server",

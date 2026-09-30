@@ -69,13 +69,7 @@ public static class ControllerRouteExtensions
             controller.Exchange = exchange;
 
             var parameters = ParameterResolver.ResolveParameters(method, exchange, new Dictionary<string, string>());
-            var result = method.Invoke(controller, parameters);
-
-            if (result is Task task)
-            {
-                await task;
-                result = GetTaskResult(task);
-            }
+            var result = await ActionInvoker.InvokeAsync(method, controller, parameters);
 
             if (result is not null)
             {
@@ -123,13 +117,7 @@ public static class ControllerRouteExtensions
             controller.Exchange = exchange;
 
             var parameters = ParameterResolver.ResolveParameters(action.Method, exchange, new Dictionary<string, string>());
-            var result = action.Method.Invoke(controller, parameters);
-
-            if (result is Task task)
-            {
-                await task;
-                result = GetTaskResult(task);
-            }
+            var result = await ActionInvoker.InvokeAsync(action.Method, controller, parameters);
 
             if (result is not null)
             {
@@ -180,13 +168,7 @@ public static class ControllerRouteExtensions
             controller.Exchange = exchange;
 
             var parameters = ParameterResolver.ResolveParameters(action.Method, exchange, new Dictionary<string, string>());
-            var result = action.Method.Invoke(controller, parameters);
-
-            if (result is Task task)
-            {
-                await task;
-                result = GetTaskResult(task);
-            }
+            var result = await ActionInvoker.InvokeAsync(action.Method, controller, parameters);
 
             if (result is not null)
             {
@@ -410,13 +392,5 @@ public static class ControllerRouteExtensions
         ArgumentNullException.ThrowIfNull(registry);
         var types = registry.Actions.Select(a => a.ControllerType).Distinct().ToArray();
         return route.RedbGrpcController(types);
-    }
-
-    private static object? GetTaskResult(Task task)
-    {
-        var type = task.GetType();
-        if (!type.IsGenericType)
-            return null;
-        return type.GetProperty("Result")?.GetValue(task);
     }
 }

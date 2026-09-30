@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.WebSocket;
 
@@ -21,6 +22,7 @@ public sealed class WsConnectionFactory
     public string? SslCertPath { get; set; }
 
     /// <summary>Password for the PFX certificate.</summary>
+    [Sensitive]
     public string? SslCertPassword { get; set; }
 
     /// <summary>Connect timeout in milliseconds.</summary>

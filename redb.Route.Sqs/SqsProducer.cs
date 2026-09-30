@@ -48,6 +48,7 @@ internal sealed class SqsProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"{_endpoint.QueueName} send", ActivityKind.Producer,
             "messaging.system", "sqs",
             _endpoint.Uri.NormalizedKey,
@@ -58,22 +59,34 @@ internal sealed class SqsProducer : ConnectableProducer
         // The requests are built now, from the exchange as it is at this step; only the send itself waits for the
         // commit when the producer joins the enclosing .Transacted() block.
         var send = _options.EnableBatch && exchange.In.Body is IEnumerable and not string and not byte[]
-            ? PrepareBatch(exchange)
-            : PrepareSingle(exchange);
+            ? PrepareBatch(exchange, activity)
+            : PrepareSingle(exchange, activity);
 
         if (TransactedActions.Defers(exchange, _options.Transacted))
+        {
             TransactedActions.RegisterSend(exchange, $"sqs-send-{Guid.NewGuid():N}", send, ProducerName);
-        else
+            return;
+        }
+
+        try
+        {
             await send(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the send is a stop; a timeout or any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
+        }
     }
 
-    private Func<CancellationToken, Task> PrepareSingle(IExchange exchange)
+    private Func<CancellationToken, Task> PrepareSingle(IExchange exchange, Activity? activity)
     {
         var request = new SendMessageRequest
         {
             QueueUrl = _queueUrl,
             MessageBody = AwsClientSupport.ResolveTextBody(exchange.In.Body),
-            MessageAttributes = BuildAttributes(exchange),
+            MessageAttributes = BuildAttributes(exchange, activity),
         };
 
         if (_options.DelaySeconds > 0 && !_endpoint.IsFifo)
@@ -90,7 +103,7 @@ internal sealed class SqsProducer : ConnectableProducer
         };
     }
 
-    private Func<CancellationToken, Task> PrepareBatch(IExchange exchange)
+    private Func<CancellationToken, Task> PrepareBatch(IExchange exchange, Activity? activity)
     {
         var requests = new List<SendMessageBatchRequest>();
         var items = ((IEnumerable)exchange.In.Body!).Cast<object?>().ToList();
@@ -107,7 +120,7 @@ internal sealed class SqsProducer : ConnectableProducer
                 {
                     Id = $"m{index++}",
                     MessageBody = AwsClientSupport.ResolveTextBody(item),
-                    MessageAttributes = BuildAttributes(exchange),
+                    MessageAttributes = BuildAttributes(exchange, activity),
                 };
                 if (_endpoint.IsFifo)
                 {
@@ -153,9 +166,10 @@ internal sealed class SqsProducer : ConnectableProducer
 
     /// <summary>
     /// Maps forwardable headers to SQS message attributes (String values) and injects the current
-    /// trace context so the downstream consumer can continue the distributed trace.
+    /// trace context of <paramref name="activity"/> (the send span; without one, the ambient context) so the
+    /// downstream consumer can continue the distributed trace. A traceparent copied from a received message is replaced.
     /// </summary>
-    private static Dictionary<string, MessageAttributeValue> BuildAttributes(IExchange exchange)
+    private Dictionary<string, MessageAttributeValue> BuildAttributes(IExchange exchange, Activity? activity)
     {
         var attrs = new Dictionary<string, MessageAttributeValue>();
         foreach (var (key, value) in exchange.In.Headers)
@@ -169,17 +183,10 @@ internal sealed class SqsProducer : ConnectableProducer
                 StringValue = Convert.ToString(value, CultureInfo.InvariantCulture) ?? "",
             };
         }
-        InjectTraceContext(attrs);
+        var fromHeaders = attrs.Count;
+        RouteTelemetryExtensions.InjectTraceContext(activity, attrs, static (a, name, value) =>
+            a[name] = new MessageAttributeValue { DataType = "String", StringValue = value });
+        AwsClientSupport.EnsureAttributeLimit(attrs.Count, fromHeaders, ProducerName);
         return attrs;
-    }
-
-    /// <summary>Injects <c>traceparent</c>/<c>tracestate</c> from the current <see cref="Activity"/> as attributes.</summary>
-    private static void InjectTraceContext(Dictionary<string, MessageAttributeValue> attrs)
-    {
-        var activity = Activity.Current;
-        if (activity is null) return;
-        DistributedContextPropagator.Current.Inject(activity, attrs, static (carrier, key, value) =>
-            ((Dictionary<string, MessageAttributeValue>)carrier!)[key] =
-                new MessageAttributeValue { DataType = "String", StringValue = value });
     }
 }

@@ -1,4 +1,3 @@
-using System.Reflection;
 using Confluent.Kafka;
 using redb.Route.Core;
 
@@ -44,8 +43,9 @@ public sealed class KafkaEndpointOptions : EndpointOptions
 
     /// <summary>
     /// SSL endpoint identification: "https" verifies the broker hostname against its certificate,
-    /// "" (empty) disables the check. Unset = librdkafka default. Was factory-only before волна A7,
-    /// so a URI-configured TLS endpoint could not control hostname verification at all.
+    /// "none" (or empty) disables the check; anything else is refused. Unset = librdkafka default
+    /// (verification on). Was factory-only before волна A7, so a URI-configured TLS endpoint could
+    /// not control hostname verification at all.
     /// </summary>
     public string? SslEndpointIdentificationAlgorithm { get; set; }
 
@@ -61,16 +61,22 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     public string AutoOffsetReset { get; set; } = "Latest";
 
     /// <summary>
-    /// Framework-level auto-commit: when <c>true</c> (default), the consumer commits the offset
-    /// inline right after a successful <c>Process</c> — at-least-once settle, mirroring the
-    /// RabbitMQ consumer's post-process ack. When a Kafka-transactional producer of the same cluster
-    /// (<see cref="TransactionalIdPrefix"/>) in the route's <c>.Transacted()</c> block committed the
-    /// offset in its transaction, the inline commit is skipped: exactly-once within Kafka.
-    /// Set <c>false</c> to never commit inline, nor let a transaction commit the offset.
-    /// <para>Note: this is NOT librdkafka's <c>enable.auto.commit</c> (a background timer that can
-    /// commit un-processed offsets); the underlying client stays at manual commit always.</para>
+    /// When the offset is committed (<see cref="Core.AckMode"/>). <c>Manual</c> (default): inline right after a turn
+    /// that ended well — at-least-once, as the RabbitMQ consumer's post-process ack. When a Kafka-transactional
+    /// producer of the same cluster (<see cref="TransactionalIdPrefix"/>) in the route's <c>.Transacted()</c> block
+    /// committed the offset in its transaction, the inline commit is skipped: exactly-once within Kafka. <c>Auto</c>:
+    /// committed on receipt, before the route runs (at-most-once).
+    /// <para>This is not librdkafka's <c>enable.auto.commit</c> (a background timer that can commit un-processed
+    /// offsets); the underlying client stays at manual commit always.</para>
     /// </summary>
-    public bool EnableAutoCommit { get; set; } = true;
+    public AckMode AckMode { get; set; } = AckMode.Manual;
+
+    /// <inheritdoc />
+    protected override string? UnknownParameterHint(string name)
+        => name.Equals("enableAutoCommit", StringComparison.OrdinalIgnoreCase)
+            ? "'enableAutoCommit' is replaced by 'ackMode': ackMode=manual (the default) commits after the route, as " +
+              "enableAutoCommit=true did; ackMode=auto commits on receipt. enableAutoCommit=false never committed at all."
+            : null;
 
     /// <summary>Max messages per batch (0 = single-message mode).</summary>
     public int MaxPollRecords { get; set; }
@@ -133,6 +139,16 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     /// <summary>Header name or expression to extract the partition key from.</summary>
     public string? Key { get; set; }
 
+    /// <summary>
+    /// Without a <see cref="Key"/>, a sent record takes the key of the record the route consumed
+    /// (<see cref="KafkaHeaders.Key"/>), as camel-kafka and Spring Kafka do: a route passing records on keeps their
+    /// partition and compaction. Default <c>true</c>; <c>false</c> sends them without a key.
+    /// </summary>
+    public bool KeyFromHeader { get; set; } = true;
+
+    /// <summary>The producer is made idempotent by the connector (<c>transacted=true</c> or <c>transactionalIdPrefix</c>).</summary>
+    internal bool IsIdempotentProducer => Transacted == true || TransactionalIdPrefix is not null;
+
     /// <summary>Explicit partition number to send to (bypasses partitioner).</summary>
     public int? PartitionNumber { get; set; }
 
@@ -184,6 +200,11 @@ public sealed class KafkaEndpointOptions : EndpointOptions
         if (string.IsNullOrWhiteSpace(Brokers))
             throw new ArgumentException("The 'brokers' parameter is required for Kafka endpoints.", nameof(Brokers));
 
+        if (AckMode == AckMode.Auto && BreakOnFirstError)
+            throw new ArgumentException(
+                "ackMode=auto commits the offset before the route runs, and breakOnFirstError asks to read a failed " +
+                "record again: they contradict each other.");
+
         // Волна A1: every enum-valued option is parsed strictly at endpoint creation. A typo used
         // to fall through Enum.TryParse / a silent `_ =>` arm into the default — for
         // securityProtocol that meant a PLAINTEXT connection with no credentials.
@@ -197,6 +218,8 @@ public sealed class KafkaEndpointOptions : EndpointOptions
         }
 
         KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.AutoOffsetReset>(AutoOffsetReset, "autoOffsetReset");
+        if (SslEndpointIdentificationAlgorithm is not null)
+            KafkaOptionParsers.ParseEndpointIdentification(SslEndpointIdentificationAlgorithm);
         var acks = KafkaOptionParsers.ParseAcks(Acks);
         if (EnableIdempotence == true && acks != Confluent.Kafka.Acks.All)
             throw new ArgumentException(
@@ -219,10 +242,7 @@ public sealed class KafkaEndpointOptions : EndpointOptions
                     "'transactionalIdPrefix' makes the producer transactional, and a transactional producer is " +
                     "idempotent: 'enableIdempotence=false' contradicts it.");
         }
-        if (AdditionalProperties.ContainsKey("transactional.id"))
-            throw new ArgumentException(
-                "'transactional.id' in additionalProperties puts librdkafka into transactional mode without the " +
-                "connector opening transactions, and every send fails with 'Erroneous state'. Use transactionalIdPrefix.");
+        KafkaOptionParsers.RefuseReservedProperties(AdditionalProperties, "additionalProperties", IsIdempotentProducer);
         if (!string.IsNullOrEmpty(IsolationLevel))
             KafkaOptionParsers.ParseOrThrow<Confluent.Kafka.IsolationLevel>(IsolationLevel, "isolationLevel");
         if (!string.IsNullOrEmpty(PartitionAssignmentStrategy))
@@ -247,25 +267,6 @@ public sealed class KafkaEndpointOptions : EndpointOptions
 
         if (Retries < 0)
             throw new ArgumentOutOfRangeException(nameof(Retries), Retries, "Retries cannot be negative.");
-
-        // The core binder leaves a parameter it cannot place — a name no option has, or a value that does not convert to
-        // the option's type — among the unmapped parameters, where nothing reads it: a typo would drop the option without
-        // a word (a misspelt transactionalIdPrefix leaves the producer without transactions). Each one is refused, by name
-        // only: the value may be a secret.
-        if (UnmappedParameters.Count > 0)
-            throw new ArgumentException(
-                string.Join(" ", UnmappedParameters.Keys.Select(DescribeUnmapped)), UnmappedParameters.Keys.First());
-    }
-
-    private static string DescribeUnmapped(string name)
-    {
-        var option = Array.Find(typeof(KafkaEndpointOptions).GetProperties(BindingFlags.Public | BindingFlags.Instance),
-            p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-        if (option is null)
-            return $"'{name}' is not an option of the Kafka endpoint, so it would be dropped without a word.";
-
-        var type = Nullable.GetUnderlyingType(option.PropertyType) ?? option.PropertyType;
-        return $"'{name}': the value is not a {type.Name}, so the option would be dropped without a word.";
     }
 
     // ── Config builders (internal) ──
@@ -339,6 +340,14 @@ public sealed class KafkaEndpointOptions : EndpointOptions
         // as in the Kafka 3 client). Set before the tuning, so additionalProperties still has the last word.
         config.EnableIdempotence = EnableIdempotence ?? config.Acks == Confluent.Kafka.Acks.All;
 
+        // Validate() sees the endpoint's acks only; the effective one may come from the connection factory. Said here in
+        // the connector's words, not left to librdkafka refusing the client.
+        if (EnableIdempotence == true && config.Acks != Confluent.Kafka.Acks.All)
+            throw new ArgumentException(
+                $"'enableIdempotence=true' requires 'acks=all', and the connection factory '{ConnectionFactory}' sets acks " +
+                $"to '{config.Acks}': the broker cannot drop a duplicate it has not confirmed on every replica. Set acks=all " +
+                "on the endpoint or the factory, or leave enableIdempotence unset.");
+
         ApplyProducerTuning(config);
 
         if (Transacted == true || TransactionalIdPrefix is not null)
@@ -385,9 +394,8 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     private void ApplySslEndpointIdentification(ClientConfig config)
     {
         if (SslEndpointIdentificationAlgorithm is null) return;
-        config.SslEndpointIdentificationAlgorithm = SslEndpointIdentificationAlgorithm == string.Empty
-            ? Confluent.Kafka.SslEndpointIdentificationAlgorithm.None
-            : Confluent.Kafka.SslEndpointIdentificationAlgorithm.Https;
+        config.SslEndpointIdentificationAlgorithm =
+            KafkaOptionParsers.ParseEndpointIdentification(SslEndpointIdentificationAlgorithm);
     }
 
     /// <summary>Admin/metadata client config carrying the endpoint's own security (волна A6.2).</summary>

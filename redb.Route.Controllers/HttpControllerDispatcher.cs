@@ -116,25 +116,10 @@ public sealed class HttpControllerDispatcher : IProcessor
             controller.Context = _context;
             controller.Exchange = exchange;
 
-            var result = action.Method.Invoke(controller, parameters);
-
-            if (result is Task task)
-            {
-                await task;
-                result = GetTaskResult(task);
-            }
+            // The action's own exception, one TargetInvocationException removed (see ActionInvoker).
+            var result = await ActionInvoker.InvokeAsync(action.Method, controller, parameters);
 
             WriteResult(exchange, result);
-        }
-        catch (TargetInvocationException tie) when (tie.InnerException is not null)
-        {
-            // Sync controller methods surface user exceptions wrapped in TIE via MethodInfo.Invoke.
-            // Async methods return a faulted Task; `await` re-throws the original exception (no TIE).
-            // Only unwrap TIE — never blindly deref .InnerException on arbitrary exceptions
-            // (that would skip a level and misclassify async errors whose first InnerException
-            // is a deeper transient wrapper like SocketException inside a DbException).
-            WriteError(exchange, 500, ControllerErrorReporting.ErrorCode,
-                ControllerErrorReporting.Report(_logger, tie.InnerException, exchange, $"{method} {path}"));
         }
         catch (Exception ex)
         {
@@ -176,7 +161,7 @@ public sealed class HttpControllerDispatcher : IProcessor
         if (param.GetCustomAttribute<Attributes.FromHeaderAttribute>() is { } headerAttr)
         {
             var raw = exchange.In.getHeader(headerAttr.Name);
-            if (raw is not null) return ParameterResolver.ConvertValue(raw, param.ParameterType);
+            if (raw is not null) return ParameterResolver.ConvertValue(raw, param.ParameterType, headerAttr.Name);
             return param.HasDefaultValue ? param.DefaultValue : ParameterResolver.ConvertValue(null, param.ParameterType);
         }
 
@@ -184,7 +169,7 @@ public sealed class HttpControllerDispatcher : IProcessor
         if (param.GetCustomAttribute<Attributes.FromPropertyAttribute>() is { } propAttr)
         {
             var raw = exchange.getProperty(propAttr.Name);
-            if (raw is not null) return ParameterResolver.ConvertValue(raw, param.ParameterType);
+            if (raw is not null) return ParameterResolver.ConvertValue(raw, param.ParameterType, propAttr.Name);
             return param.HasDefaultValue ? param.DefaultValue : ParameterResolver.ConvertValue(null, param.ParameterType);
         }
 
@@ -192,7 +177,7 @@ public sealed class HttpControllerDispatcher : IProcessor
         if (param.GetCustomAttribute<Attributes.FromQueryAttribute>() is { } queryAttr)
         {
             var raw = exchange.In.getHeader($"{QueryParamPrefix}{queryAttr.Name}");
-            if (raw is not null) return ParameterResolver.ConvertValue(raw, param.ParameterType);
+            if (raw is not null) return ParameterResolver.ConvertValue(raw, param.ParameterType, queryAttr.Name);
             return param.HasDefaultValue ? param.DefaultValue : ParameterResolver.ConvertValue(null, param.ParameterType);
         }
 
@@ -200,13 +185,13 @@ public sealed class HttpControllerDispatcher : IProcessor
         if (param.GetCustomAttribute<Attributes.FromRouteAttribute>() is { } routeAttr)
         {
             routeParams.TryGetValue(routeAttr.Name, out var routeValue);
-            if (routeValue is not null) return ParameterResolver.ConvertValue(routeValue, param.ParameterType);
+            if (routeValue is not null) return ParameterResolver.ConvertValue(routeValue, param.ParameterType, routeAttr.Name);
             return param.HasDefaultValue ? param.DefaultValue : ParameterResolver.ConvertValue(null, param.ParameterType);
         }
 
         // No attribute — try route params by name, then body for complex types
         if (routeParams.TryGetValue(param.Name!, out var implicitRouteValue))
-            return ParameterResolver.ConvertValue(implicitRouteValue, param.ParameterType);
+            return ParameterResolver.ConvertValue(implicitRouteValue, param.ParameterType, param.Name);
 
         if (!IsSimpleType(param.ParameterType))
             return ResolveFromBody(exchange, param.ParameterType);
@@ -262,6 +247,9 @@ public sealed class HttpControllerDispatcher : IProcessor
 
     private void WriteResult(IExchange exchange, object? result)
     {
+        // An Out that already exists was written by the action (or a step before the dispatcher): that is the reply.
+        // Only a clone the dispatcher makes here carries the request body, and only that one is cleared below.
+        var createdHere = exchange.Out is null;
         exchange.Out ??= exchange.In.Clone();
         var defaultCode = result is null ? 204 : 200;
 
@@ -272,7 +260,7 @@ public sealed class HttpControllerDispatcher : IProcessor
                 result = JsonSerializer.SerializeToUtf8Bytes(result, _jsonOptions);
             exchange.Out.Body = result;
         }
-        else
+        else if (createdHere)
         {
             // No response body (controller returned null → 204 No Content). The
             // `exchange.Out ??= exchange.In.Clone()` above carries In.Body into Out,
@@ -290,8 +278,10 @@ public sealed class HttpControllerDispatcher : IProcessor
         // that propagated an inner OnException 5xx). Dispatcher only fills in defaults.
         if (!exchange.Out.Headers.ContainsKey("status.code"))
             exchange.Out.setHeader("status.code", defaultCode);
+        // The consumer reads redbHttp.ResponseCode first: mirror the status that won above, so an action that set only
+        // status.code (404 with its own body) is not answered as a 204.
         if (!exchange.Out.Headers.ContainsKey(HttpResponseCodeHeader))
-            exchange.Out.setHeader(HttpResponseCodeHeader, defaultCode);
+            exchange.Out.setHeader(HttpResponseCodeHeader, exchange.Out.GetHeader<int>("status.code"));
         if (result is not null && !exchange.Out.Headers.ContainsKey("Content-Type"))
             exchange.Out.setHeader("Content-Type", "application/json");
     }
@@ -310,13 +300,6 @@ public sealed class HttpControllerDispatcher : IProcessor
         exchange.Out.setHeader("status.code", statusCode);
         exchange.Out.setHeader(HttpResponseCodeHeader, statusCode);
         exchange.Out.setHeader("Content-Type", "application/json");
-    }
-
-    private static object? GetTaskResult(Task task)
-    {
-        var type = task.GetType();
-        if (!type.IsGenericType) return null;
-        return type.GetProperty("Result")?.GetValue(task);
     }
 
     private static bool IsSimpleType(Type type)

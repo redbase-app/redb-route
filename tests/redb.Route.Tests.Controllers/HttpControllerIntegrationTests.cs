@@ -15,12 +15,12 @@ namespace redb.Route.Tests.Controllers;
 /// No mocked headers — the HTTP consumer sets redbHttp.Method, redbHttp.Path, etc. from the real HTTP request.
 /// Uses raw HttpClient on the producer side for full realism.
 /// </summary>
-[Collection("HttpControllerIntegration")]
 public class HttpControllerIntegrationTests : IAsyncLifetime
 {
     private HttpConsumer? _consumer;
     private HttpClient? _httpClient;
     private int _port;
+    private RouteContext? _context;
     private SharedHttpServerManager? _serverManager;
     private string _baseUrl = "";
 
@@ -35,6 +35,7 @@ public class HttpControllerIntegrationTests : IAsyncLifetime
     {
         _httpClient?.Dispose();
         if (_consumer is not null) await _consumer.Stop();
+        if (_context is not null) await _context.DisposeAsync();
         if (_serverManager is not null) await _serverManager.DisposeAsync();
     }
 
@@ -44,7 +45,8 @@ public class HttpControllerIntegrationTests : IAsyncLifetime
     /// </summary>
     private async Task StartConsumer(ControllerRegistry registry)
     {
-        var context = new RouteContext();
+        _context = new RouteContext();
+        var context = _context;
         var dispatcher = new HttpControllerDispatcher(registry, context);
 
         var component = new HttpComponent();
@@ -161,6 +163,8 @@ public class HttpControllerIntegrationTests : IAsyncLifetime
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
         body.Should().Contain("myctx");
+        // The query value reached the action, not only the path: an unbound bool is false and still answers 200.
+        body.Should().Contain("\"verbose\":true");
     }
 
     // ── 404 for unknown route ───────────────────────────
@@ -202,12 +206,5 @@ public class HttpControllerIntegrationTests : IAsyncLifetime
         contextsBody.Should().Contain("ctx1");
     }
 
-    private static int GetFreePort()
-    {
-        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 }

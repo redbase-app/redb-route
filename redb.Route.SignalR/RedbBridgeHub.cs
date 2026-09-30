@@ -1,8 +1,11 @@
+using System.Diagnostics;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.SignalR;
 
@@ -17,6 +20,8 @@ namespace redb.Route.SignalR;
 /// </summary>
 internal sealed class RedbBridgeHub : Hub
 {
+    private const string HandshakeTraceItem = "__redb_handshake_trace";
+
     /// <summary>
     /// Called by SignalR clients. All client method invocations are routed here.
     /// </summary>
@@ -63,7 +68,7 @@ internal sealed class RedbBridgeHub : Hub
 
         try
         {
-            await consumer.ProcessExchange(exchange, Context.ConnectionAborted).ConfigureAwait(false);
+            await consumer.ProcessExchange(exchange, Context.ConnectionAborted, HandshakeTrace()).ConfigureAwait(false);
 
             // Post-process: group management commands
             await HandleGroupCommands(exchange).ConfigureAwait(false);
@@ -99,6 +104,14 @@ internal sealed class RedbBridgeHub : Hub
         }
         Context.Items["__redb_conn_slot"] = true;
 
+        // The connection request is the only place a client can put trace headers; every message span links it.
+        if (Context.GetHttpContext() is { } http)
+        {
+            var handshake = RouteTelemetryExtensions.ExtractTraceContext(http.Request.Headers, ReadHeader);
+            if (handshake != default)
+                Context.Items[HandshakeTraceItem] = handshake;
+        }
+
         // Auto-add to default group
         if (consumer.EndpointOptions.DefaultGroup is not null)
         {
@@ -120,7 +133,7 @@ internal sealed class RedbBridgeHub : Hub
 
         try
         {
-            await consumer.ProcessExchange(exchange, Context.ConnectionAborted).ConfigureAwait(false);
+            await consumer.ProcessExchange(exchange, Context.ConnectionAborted, HandshakeTrace()).ConfigureAwait(false);
             await HandleGroupCommands(exchange).ConfigureAwait(false);
         }
         finally
@@ -164,7 +177,7 @@ internal sealed class RedbBridgeHub : Hub
 
         try
         {
-            await consumer.ProcessExchange(exchange, default).ConfigureAwait(false);
+            await consumer.ProcessExchange(exchange, default, HandshakeTrace()).ConfigureAwait(false);
         }
         finally
         {
@@ -173,6 +186,15 @@ internal sealed class RedbBridgeHub : Hub
 
         await base.OnDisconnectedAsync(exception);
     }
+
+    /// <summary>The trace context of the connection request, or <c>default</c> when the client sent none.</summary>
+    private ActivityContext HandshakeTrace()
+        => Context.Items.TryGetValue(HandshakeTraceItem, out var value) && value is ActivityContext handshake
+            ? handshake
+            : default;
+
+    private static string? ReadHeader(IHeaderDictionary headers, string name)
+        => headers.TryGetValue(name, out var values) ? values.ToString() : null;
 
     /// <summary>
     /// The caller's principal as the hub's identity gate handed it to SignalR, or null for an anonymous

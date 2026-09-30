@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
 using redb.Route.Abstractions;
@@ -56,7 +57,7 @@ public static class ParameterResolver
         if (param.GetCustomAttribute<FromHeaderAttribute>() is { } headerAttr)
         {
             var raw = exchange.In.getHeader(headerAttr.Name);
-            if (raw is not null) return ConvertValue(raw, param.ParameterType);
+            if (raw is not null) return ConvertValue(raw, param.ParameterType, headerAttr.Name);
             return param.HasDefaultValue ? param.DefaultValue : ConvertValue(null, param.ParameterType);
         }
 
@@ -64,7 +65,7 @@ public static class ParameterResolver
         if (param.GetCustomAttribute<FromPropertyAttribute>() is { } propAttr)
         {
             var raw = exchange.getProperty(propAttr.Name);
-            if (raw is not null) return ConvertValue(raw, param.ParameterType);
+            if (raw is not null) return ConvertValue(raw, param.ParameterType, propAttr.Name);
             return param.HasDefaultValue ? param.DefaultValue : ConvertValue(null, param.ParameterType);
         }
 
@@ -72,7 +73,7 @@ public static class ParameterResolver
         if (param.GetCustomAttribute<FromQueryAttribute>() is { } queryAttr)
         {
             var raw = exchange.In.getHeader($"query.{queryAttr.Name}");
-            if (raw is not null) return ConvertValue(raw, param.ParameterType);
+            if (raw is not null) return ConvertValue(raw, param.ParameterType, queryAttr.Name);
             return param.HasDefaultValue ? param.DefaultValue : ConvertValue(null, param.ParameterType);
         }
 
@@ -80,13 +81,13 @@ public static class ParameterResolver
         if (param.GetCustomAttribute<FromRouteAttribute>() is { } routeAttr)
         {
             routeParams.TryGetValue(routeAttr.Name, out var routeValue);
-            if (routeValue is not null) return ConvertValue(routeValue, param.ParameterType);
+            if (routeValue is not null) return ConvertValue(routeValue, param.ParameterType, routeAttr.Name);
             return param.HasDefaultValue ? param.DefaultValue : ConvertValue(null, param.ParameterType);
         }
 
         // No attribute — try route params by parameter name, then body
         if (routeParams.TryGetValue(param.Name!, out var implicitRouteValue))
-            return ConvertValue(implicitRouteValue, param.ParameterType);
+            return ConvertValue(implicitRouteValue, param.ParameterType, param.Name);
 
         // Default: try to resolve from body if it's a complex type
         if (!IsSimpleType(param.ParameterType))
@@ -124,7 +125,17 @@ public static class ParameterResolver
         return ConvertValue(body, targetType);
     }
 
-    internal static object? ConvertValue(object? value, Type targetType)
+    /// <summary>
+    /// Converts a bound value to the parameter's type. A missing value (<c>null</c>) is the type's default; a value
+    /// that is present but does not convert is an error, as Camel's <c>ParameterBindingException</c>: binding
+    /// <c>page=abc</c> as <c>0</c> answers a question the caller never asked. The dispatchers report it as the
+    /// caller's 400.
+    /// </summary>
+    /// <param name="value">The raw value (header, query, route, property or positional argument).</param>
+    /// <param name="targetType">The parameter type.</param>
+    /// <param name="parameterName">Where the value came from, named in the error (header, query key, parameter).</param>
+    /// <exception cref="FormatException">The value is present and does not convert to <paramref name="targetType"/>.</exception>
+    internal static object? ConvertValue(object? value, Type targetType, string? parameterName = null)
     {
         if (value is null)
             return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
@@ -134,19 +145,29 @@ public static class ParameterResolver
 
         var underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
 
-        if (underlying == typeof(Guid) && value is string gs)
-            return Guid.Parse(gs);
-
-        if (underlying.IsEnum && value is string es)
-            return Enum.Parse(underlying, es, ignoreCase: true);
-
         try
         {
-            return Convert.ChangeType(value, underlying);
+            if (value is string text)
+            {
+                if (underlying == typeof(Guid))
+                    return Guid.Parse(text);
+
+                // Not IConvertible, so Convert.ChangeType below could never produce it.
+                if (underlying == typeof(DateTimeOffset))
+                    return DateTimeOffset.Parse(text, CultureInfo.InvariantCulture);
+
+                if (underlying.IsEnum)
+                    return Enum.Parse(underlying, text, ignoreCase: true);
+            }
+
+            // Header, query, route and property values are wire text: "12.5" is twelve and a half on every
+            // server, not 125 under de-DE or a failed parse under ru-RU.
+            return Convert.ChangeType(value, underlying, CultureInfo.InvariantCulture);
         }
-        catch
+        catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
         {
-            return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
+            var subject = parameterName is null ? string.Empty : $"Parameter '{parameterName}': ";
+            throw new FormatException($"{subject}'{value}' is not a valid {underlying.Name}.", ex);
         }
     }
 
@@ -193,7 +214,7 @@ public static class ParameterResolver
 
             if (argIdx < args.Length)
             {
-                values[i] = ConvertOrDeserialize(args[argIdx], param.ParameterType);
+                values[i] = ConvertOrDeserialize(args[argIdx], param.ParameterType, param.Name);
                 argIdx++;
             }
             else
@@ -239,7 +260,7 @@ public static class ParameterResolver
 
             if (TryGetPropertyIgnoreCase(obj, key, out var element))
             {
-                values[i] = ConvertOrDeserialize(element, p.ParameterType);
+                values[i] = ConvertOrDeserialize(element, p.ParameterType, key);
                 continue;
             }
 
@@ -273,7 +294,7 @@ public static class ParameterResolver
     /// Converts a single argument value to the target type,
     /// using JSON deserialization for complex types when needed.
     /// </summary>
-    private static object? ConvertOrDeserialize(object? value, Type targetType)
+    private static object? ConvertOrDeserialize(object? value, Type targetType, string? parameterName)
     {
         if (value is null)
             return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
@@ -289,7 +310,7 @@ public static class ParameterResolver
         if (value is string str && !IsSimpleType(targetType))
             return JsonSerializer.Deserialize(str, targetType, JsonOptions);
 
-        return ConvertValue(value, targetType);
+        return ConvertValue(value, targetType, parameterName);
     }
 
     private static bool IsSimpleType(Type type)

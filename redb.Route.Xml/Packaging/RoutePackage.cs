@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -88,15 +89,20 @@ public static class RoutePackage
     /// <paramref name="typeResolver"/> — when the built assemblies are at hand (the tool's
     /// <c>--bin</c>) — turns the bean checks DEEP: a renamed type, a non-public type, a typo in
     /// a property or a <c>method=</c> becomes a build error instead of a first-message surprise.
+    /// <paramref name="catalog"/> — the component catalog of the same built output — holds every
+    /// endpoint's parameters against its connector: a name a strict connector does not know
+    /// (<see cref="CatalogComponent.Lenient"/> false) is an error here, in the engine's own words,
+    /// instead of a refusal when the route starts.
     /// </summary>
     public static PackageResult Check(string projectDir, string name, string version,
         Func<string, Type?>? typeResolver = null,
-        IReadOnlyList<IXmlElementContribution>? extensions = null)
+        IReadOnlyList<IXmlElementContribution>? extensions = null,
+        IReadOnlyList<CatalogComponent>? catalog = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectDir);
         var findings = new List<PackageFinding>();
         var artifacts = CollectArtifacts(projectDir, findings);
-        var requiredKeys = RunChecks(projectDir, artifacts, findings, typeResolver, extensions);
+        var requiredKeys = RunChecks(projectDir, artifacts, findings, typeResolver, extensions, catalog);
         var manifest = BuildManifest(projectDir, name, version, artifacts, requiredKeys);
         return new PackageResult(manifest, findings);
     }
@@ -108,9 +114,10 @@ public static class RoutePackage
     /// </summary>
     public static PackageResult Build(string projectDir, string name, string version, string outDir,
         IReadOnlyList<string>? entryPoints = null, Func<string, Type?>? typeResolver = null,
-        IReadOnlyList<IXmlElementContribution>? extensions = null)
+        IReadOnlyList<IXmlElementContribution>? extensions = null,
+        IReadOnlyList<CatalogComponent>? catalog = null)
     {
-        var result = Check(projectDir, name, version, typeResolver, extensions);
+        var result = Check(projectDir, name, version, typeResolver, extensions, catalog);
         if (result.Errors.Any())
             return result;
 
@@ -240,12 +247,13 @@ public static class RoutePackage
 
     private static IReadOnlyList<string> RunChecks(string projectDir, List<string> artifacts, List<PackageFinding> findings,
         Func<string, Type?>? typeResolver,
-        IReadOnlyList<IXmlElementContribution>? extensions = null)
+        IReadOnlyList<IXmlElementContribution>? extensions = null,
+        IReadOnlyList<CatalogComponent>? catalog = null)
     {
         var registry = ElementRegistry.CreateDefault(extensions);
         var requiredKeys = new SortedSet<string>(StringComparer.Ordinal);
         var declaredBeans = new HashSet<string>(StringComparer.Ordinal);
-        var beanTypes = new Dictionary<string, (string File, XElement Element, string TypeName)>(StringComparer.Ordinal);
+        var beanDeclarations = new List<(string File, BeanDeclaration Bean)>();
         var beanMethodCalls = new List<(string File, string Bean, string Method)>();
         var referencedBeans = new List<(string File, string Name)>();
         var documents = new List<(string File, XDocument Document)>();
@@ -274,11 +282,7 @@ public static class RoutePackage
                     ScanPlaceholders(text.Value, requiredKeys);
                 }
                 if (element.Name.LocalName == "bean" && element.Attribute("name")?.Value is { Length: > 0 } beanName)
-                {
                     declaredBeans.Add(beanName);
-                    if (element.Attribute("type")?.Value is { Length: > 0 } beanType)
-                        beanTypes[beanName] = (file, element, beanType);
-                }
 
                 foreach (var attribute in element.Attributes())
                 {
@@ -302,6 +306,19 @@ public static class RoutePackage
             }
         }
 
+        CheckBeanDeclarations(documents, declaredBeans, beanDeclarations, findings);
+
+        // Elements that register objects under a name of their own (<redb><idempotentRepository
+        // name>) declare that name like a <bean> does; references that must name an object of a
+        // given type (<idempotentConsumer repository>) are held against it once types are known.
+        var registered = new Dictionary<string, string>(StringComparer.Ordinal);
+        var typedReferences = new List<TypedReference>();
+        foreach (var (file, document) in documents)
+            foreach (var element in document.Root?.Elements() ?? [])
+                CollectRegistryAttributes(file, element, registry.Find(element.Name.LocalName)?.Spec, registry,
+                    registered, typedReferences);
+        declaredBeans.UnionWith(registered.Keys);
+
         // The registry is one per context (Ф0 §2.1), so a #name may be declared in ANY artifact
         // of the package; what remains unresolved is either external (module code) — a warning —
         // or a typo. Without the module's code we cannot tell, so the finding names both.
@@ -322,10 +339,18 @@ public static class RoutePackage
 
         if (typeResolver is not null)
         {
-            RunDeepBeanChecks(beanTypes, beanMethodCalls, typeResolver, findings);
+            var instanceTypes = RunDeepBeanChecks(beanDeclarations, beanMethodCalls, typeResolver, findings);
+            CheckTypedReferences(typedReferences, instanceTypes, registered, typeResolver, findings);
             foreach (var (file, document) in documents)
                 foreach (var element in document.Root?.Elements() ?? [])
                     CheckTypeAttributes(file, element, registry.Find(element.Name.LocalName)?.Spec, registry, typeResolver, findings);
+            if (catalog is not null)
+            {
+                var parameters = new EndpointParameterChecker(catalog, typeResolver, findings);
+                foreach (var (file, document) in documents)
+                    foreach (var element in document.Root?.Elements() ?? [])
+                        CheckEndpoints(file, element, registry.Find(element.Name.LocalName)?.Spec, registry, parameters);
+            }
         }
 
         return [.. requiredKeys];
@@ -483,45 +508,457 @@ public static class RoutePackage
         }
     }
 
-    private static void RunDeepBeanChecks(
-        Dictionary<string, (string File, XElement Element, string TypeName)> beanTypes,
+    /// <summary>
+    /// Every top-level <c>&lt;bean&gt;</c> read by the loader's own grammar, in LOAD order —
+    /// context.xml, then the artifacts as the manifest lists them, each top to bottom — and each
+    /// reference held against the beans registered before it. A bean declared later is a hard
+    /// error (the load would fail); a bean the package does not declare at all may come from
+    /// module code, so that stays a warning.
+    /// </summary>
+    private static void CheckBeanDeclarations(
+        List<(string File, XDocument Document)> documents,
+        HashSet<string> declaredBeans,
+        List<(string File, BeanDeclaration Bean)> beanDeclarations,
+        List<PackageFinding> findings)
+    {
+        var registeredSoFar = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (file, document) in documents)
+        {
+            foreach (var element in document.Root?.Elements().Where(e => e.Name.LocalName == "bean") ?? [])
+            {
+                var declaration = BeanModel.Parse(element,
+                    (at, message) => findings.Add(new PackageFinding(true, Position(file, at), message)));
+                if (declaration is not null)
+                {
+                    beanDeclarations.Add((file, declaration));
+                    foreach (var reference in BeanModel.References(declaration))
+                    {
+                        if (registeredSoFar.Contains(reference.Bean))
+                            continue;
+                        findings.Add(declaredBeans.Contains(reference.Bean)
+                            ? new PackageFinding(true, Position(file, reference.At),
+                                $"bean reference '{reference.Bean}' points forward — beans are built in load order " +
+                                "(context.xml, then the route files as the manifest lists them, each top to bottom); declare it above.")
+                            : new PackageFinding(false, Position(file, reference.At),
+                                $"bean reference '{reference.Bean}' is not declared by any <bean> of this package — either module code " +
+                                "registers it before the XML loads (fine), or it is a dangling reference."));
+                    }
+                }
+                if (element.Attribute("name")?.Value is { Length: > 0 } registered)
+                    registeredSoFar.Add(registered);
+            }
+        }
+    }
+
+    /// <summary>A reference attribute whose object must be of a given type (<see cref="AttributeSpec.References"/>).</summary>
+    private sealed record TypedReference(string File, XElement Element, string Attribute, string Name, string TypeName);
+
+    /// <summary>
+    /// Walks an element with its spec, as the parser does, and collects the attributes that
+    /// register a name (<see cref="AttributeSpec.Registers"/>) and the references that must name
+    /// an object of a given type (<see cref="AttributeSpec.References"/>).
+    /// </summary>
+    private static void CollectRegistryAttributes(string file, XElement element, ElementSpec? spec, ElementRegistry registry,
+        Dictionary<string, string> registered, List<TypedReference> typedReferences)
+    {
+        foreach (var attributeSpec in spec?.Attributes ?? [])
+        {
+            if (element.Attribute(attributeSpec.Name)?.Value is not { Length: > 0 } value)
+                continue;
+            if (attributeSpec.Registers is { } registeredType)
+                registered[value] = registeredType;
+            if (attributeSpec.References is { } referencedType)
+                typedReferences.Add(new TypedReference(file, element, attributeSpec.Name,
+                    value.StartsWith('#') ? value[1..] : value, referencedType));
+        }
+        foreach (var child in element.Elements())
+        {
+            var childSpec = spec?.Children.FirstOrDefault(c => c.Name == child.Name.LocalName)
+                            ?? registry.Find(child.Name.LocalName)?.Spec;
+            CollectRegistryAttributes(file, child, childSpec, registry, registered, typedReferences);
+        }
+    }
+
+    /// <summary>
+    /// With the built assemblies at hand: every typed reference names an object the engine will
+    /// accept — a <c>&lt;bean&gt;</c> of that type, or an element that registers one. The wording
+    /// follows the engine's refusal (<c>'x' is registered as T, which is not an I…</c>). A name
+    /// nothing in the package declares is the undeclared-reference warning, not repeated here.
+    /// </summary>
+    private static void CheckTypedReferences(
+        List<TypedReference> typedReferences,
+        IReadOnlyDictionary<string, Type> instanceTypes,
+        IReadOnlyDictionary<string, string> registered,
+        Func<string, Type?> typeResolver,
+        List<PackageFinding> findings)
+    {
+        foreach (var reference in typedReferences)
+        {
+            var actual = instanceTypes.TryGetValue(reference.Name, out var beanType) ? beanType
+                : registered.TryGetValue(reference.Name, out var registeredType) ? typeResolver(registeredType)
+                : null;
+            if (actual is null || typeResolver(reference.TypeName) is not { } expected || expected.IsAssignableFrom(actual))
+                continue;
+            findings.Add(new PackageFinding(true, Position(reference.File, reference.Element),
+                $"<{reference.Element.Name.LocalName} {reference.Attribute}=\"#{reference.Name}\">: '{reference.Name}' is registered as " +
+                $"{actual.FullName}, which is not an {expected.Name}."));
+        }
+    }
+
+    private static IReadOnlyDictionary<string, Type> RunDeepBeanChecks(
+        List<(string File, BeanDeclaration Bean)> beanDeclarations,
         List<(string File, string Bean, string Method)> beanMethodCalls,
         Func<string, Type?> typeResolver,
         List<PackageFinding> findings)
     {
-        var resolved = new Dictionary<string, Type>(StringComparer.Ordinal);
-        foreach (var (name, (file, element, typeName)) in beanTypes)
+        // What each registered bean IS: the declared type, or what its factory method returns.
+        var instanceTypes = new Dictionary<string, Type>(StringComparer.Ordinal);
+        foreach (var (file, bean) in beanDeclarations)
         {
-            var type = typeResolver(typeName);
-            if (type is null)
-            {
-                findings.Add(new PackageFinding(true, file,
-                    $"bean '{name}': type '{typeName}' was not found in the built assemblies."));
-                continue;
-            }
-            if (!type.IsPublic && !type.IsNestedPublic)
-            {
-                findings.Add(new PackageFinding(true, file,
-                    $"bean '{name}': type '{typeName}' exists but is not public — bean: needs a public type."));
-                continue;
-            }
-            resolved[name] = type;
-            foreach (var property in element.Elements().Where(p => p.Name.LocalName == "property"))
-            {
-                var key = property.Attribute("key")?.Value;
-                if (key is { Length: > 0 } && type.GetProperty(key) is not { CanWrite: true })
-                    findings.Add(new PackageFinding(true, file,
-                        $"bean '{name}': type '{type.FullName}' has no writable public property '{key}'."));
-            }
+            var checker = new BeanTypeChecker(file, instanceTypes, typeResolver, findings);
+            if (checker.Check(bean) is { } instanceType && bean.Name is { Length: > 0 } name)
+                instanceTypes[name] = instanceType;
         }
         foreach (var (file, bean, method) in beanMethodCalls.DistinctBy(c => (c.Bean, c.Method)))
         {
-            if (!resolved.TryGetValue(bean, out var type))
+            if (!instanceTypes.TryGetValue(bean, out var type))
                 continue; // undeclared bean — already a finding, or module code owns it
             if (!type.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
                     .Any(m => m.Name == method))
                 findings.Add(new PackageFinding(true, file,
                     $"bean '{bean}': type '{type.FullName}' has no public method '{method}' (bean:#{bean}?method={method})."));
+        }
+        return instanceTypes;
+    }
+
+    /// <summary>
+    /// The <c>--bin</c> half of the bean checks: every value of a declaration, nested beans and
+    /// list items included, held against the type it will be bound to — the same rules
+    /// <see cref="BeanFactory"/> applies at load, reported in its words. Text values are left to
+    /// the load: they convert only after their placeholders resolve.
+    /// </summary>
+    private sealed class BeanTypeChecker(
+        string file,
+        IReadOnlyDictionary<string, Type> instanceTypes,
+        Func<string, Type?> typeResolver,
+        List<PackageFinding> findings)
+    {
+        /// <summary>The type the bean's instance will have, or null after a finding.</summary>
+        public Type? Check(BeanDeclaration bean)
+        {
+            var label = bean.Name is { Length: > 0 } name ? $"bean '{name}'" : "nested bean";
+            var type = typeResolver(bean.TypeName);
+            if (type is null)
+                return Error(bean.At, $"{label}: type '{bean.TypeName}' was not found in the built assemblies.");
+            if (!type.IsPublic && !type.IsNestedPublic)
+                return Error(bean.At, $"{label}: type '{bean.TypeName}' exists but is not public — bean: needs a public type.");
+
+            var instanceType = type;
+            List<Type>? argumentTypes = null;
+            if (bean.TypedArguments)
+            {
+                argumentTypes = [];
+                foreach (var argument in bean.ConstructorArgs)
+                {
+                    if (typeResolver(argument.TypeName!) is not { } argumentType)
+                        return Error(argument.Value.At,
+                            $"{label}: <constructorArg type=\"{argument.TypeName}\">: the type was not found in the built assemblies.");
+                    argumentTypes.Add(argumentType);
+                }
+            }
+            if (bean.FactoryMethod is { } factory)
+            {
+                // The loader's own choice (BeanFactory.FactoryMethod): the exact signature, or the
+                // single overload of that arity — several of them are refused, not guessed.
+                MethodInfo method;
+                try
+                {
+                    method = BeanFactory.FactoryMethod(type, factory, bean.ConstructorArgs.Count, argumentTypes);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Error(bean.At, $"{label}: {ex.Message}");
+                }
+                // The parameters after the given arguments are optional and take their defaults.
+                var parameters = method.GetParameters();
+                for (var i = 0; i < bean.ConstructorArgs.Count; i++)
+                    CheckValue(bean.ConstructorArgs[i].Value, parameters[i].ParameterType, $"{factory} argument {i + 1}");
+                instanceType = method.ReturnType;
+            }
+            else if (argumentTypes is not null)
+            {
+                ConstructorInfo constructor;
+                try
+                {
+                    constructor = BeanFactory.Constructor(type, bean.ConstructorArgs.Count, argumentTypes);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Error(bean.At, $"{label}: {ex.Message}");
+                }
+                var parameters = constructor.GetParameters();
+                for (var i = 0; i < bean.ConstructorArgs.Count; i++)
+                    CheckValue(bean.ConstructorArgs[i].Value, parameters[i].ParameterType, $"constructorArg {i + 1}");
+            }
+            else
+            {
+                // The constructor is chosen at load from the built arguments, so no parameter types them.
+                for (var i = 0; i < bean.ConstructorArgs.Count; i++)
+                    CheckValue(bean.ConstructorArgs[i].Value, null, $"constructorArg {i + 1}");
+            }
+
+            foreach (var property in bean.Properties)
+            {
+                if (instanceType.GetProperty(property.Key) is not { CanWrite: true } info)
+                {
+                    Error(property.At, $"{label}: type '{instanceType.FullName}' has no writable public property '{property.Key}'.");
+                    continue;
+                }
+                CheckValue(property.Value, info.PropertyType, property.Key);
+            }
+            return instanceType;
+        }
+
+        private void CheckValue(BeanValue value, Type? target, string slot)
+        {
+            switch (value)
+            {
+                case RefBeanValue reference:
+                    if (target is not null && instanceTypes.TryGetValue(reference.Bean, out var referenced)
+                        && !target.IsAssignableFrom(referenced))
+                        Error(reference.At, BeanFactory.NotAssignable(referenced, target, slot));
+                    break;
+                case NestedBeanValue nested:
+                    if (Check(nested.Bean) is { } nestedType && target is not null && !target.IsAssignableFrom(nestedType))
+                        Error(nested.At, BeanFactory.NotAssignable(nestedType, target, slot));
+                    break;
+                case ListBeanValue list:
+                    CheckList(list, target, slot);
+                    break;
+            }
+        }
+
+        private void CheckList(ListBeanValue list, Type? target, string slot)
+        {
+            Type? element = null;
+            if (target is not null)
+            {
+                element = BeanFactory.ElementTypeOf(target);
+                if (element is null)
+                {
+                    Error(list.At, BeanFactory.NotAListShape(target, slot));
+                    return;
+                }
+            }
+            if (list.ElementTypeName is not null)
+            {
+                var named = typeResolver(list.ElementTypeName);
+                if (named is null)
+                {
+                    Error(list.At, $"<list of=\"{list.ElementTypeName}\">: the type was not found in the built assemblies.");
+                    return;
+                }
+                if (element is not null && named != element)
+                {
+                    Error(list.At, BeanFactory.ElementTypeDiffers(named, element, slot));
+                    return;
+                }
+                element = named;
+            }
+            else if (element is null)
+            {
+                Error(list.At, BeanFactory.ConstructorListNeedsOf(slot));
+                return;
+            }
+            for (var i = 0; i < list.Items.Count; i++)
+                CheckValue(list.Items[i], element, $"{slot}[{i}]");
+        }
+
+        private Type? Error(XElement at, string message)
+        {
+            findings.Add(new PackageFinding(true, Position(file, at), message));
+            return null;
+        }
+    }
+
+    private static string Position(string file, XElement at)
+        => at is IXmlLineInfo line && line.HasLineInfo() ? $"{file}({line.LineNumber},{line.LinePosition})" : file;
+
+    /// <summary>
+    /// Walks a document for endpoints — a <c>uri</c> attribute of an address-carrying element,
+    /// or its structured endpoint child — and hands each one's parameters to the checker.
+    /// <c>interceptFrom</c> / <c>interceptSendToEndpoint</c> carry a PATTERN to match, never an
+    /// endpoint to create, so they bind nothing and are not held against a connector.
+    /// </summary>
+    private static void CheckEndpoints(string file, XElement element, ElementSpec? spec, ElementRegistry registry,
+        EndpointParameterChecker checker)
+    {
+        if (element.Name.LocalName is "interceptFrom" or "interceptSendToEndpoint")
+            return;
+        var takesEndpoint = element.Name.LocalName == "from" || spec?.TakesEndpoint == true;
+        if (takesEndpoint)
+        {
+            // <from> creates the consumer; every other address-carrying step creates a producer
+            // (pollEnrich included — the engine polls through a producer).
+            var side = element.Name.LocalName == "from" ? EndpointRole.Consumer : EndpointRole.Producer;
+            if (element.Attribute("uri")?.Value is { } uri)
+            {
+                checker.CheckUri(file, element, uri, side);
+            }
+            else if (element.Elements().ToList() is [var endpoint])
+            {
+                checker.CheckStructured(file, endpoint, side);
+            }
+            return;
+        }
+        foreach (var child in element.Elements())
+        {
+            var childSpec = spec?.Children.FirstOrDefault(c => c.Name == child.Name.LocalName)
+                            ?? registry.Find(child.Name.LocalName)?.Spec;
+            // Children with an address of their own (a recipient list's <recipient uri=…>) are
+            // specs with a uri attribute of their own.
+            if (childSpec?.Attributes.Any(a => a.Name == "uri" && a.Type == AttributeType.Uri) == true
+                && !childSpec.TakesEndpoint && child.Attribute("uri")?.Value is { } childUri)
+            {
+                checker.CheckUri(file, child, childUri, EndpointRole.Producer);
+                continue;
+            }
+            CheckEndpoints(file, child, childSpec, registry, checker);
+        }
+    }
+
+    /// <summary>
+    /// Holds an endpoint's parameter names against its connector the way
+    /// <c>EndpointOptions.BindFromUri</c> does when the endpoint is created: a name with no
+    /// writable option is refused unless the connector is lenient. The wording is the engine's
+    /// own — the checker binds the unknown names into a fresh options object and reports what
+    /// the engine said, nearest option and connector hint included. Names built at run time
+    /// (<c>${…}</c>, <c>{{…}}</c>) are not knowable here and are left to the engine.
+    /// </summary>
+    private sealed class EndpointParameterChecker(
+        IReadOnlyList<CatalogComponent> catalog,
+        Func<string, Type?> typeResolver,
+        List<PackageFinding> findings)
+    {
+        public void CheckUri(string file, XElement at, string uri, EndpointRole side)
+        {
+            // An address whose scheme itself comes from a placeholder or an expression names no
+            // connector until run time — there is nothing to hold its parameters against here.
+            if (uri.StartsWith("{{", StringComparison.Ordinal) || uri.StartsWith("${", StringComparison.Ordinal))
+                return;
+            var scheme = SchemeOf(uri);
+            if (scheme is null || Find(scheme) is null)
+                return;
+            Check(file, at, at, scheme, EndpointUriParser.Parse(uri).RawParameters.Select(p => (p.Key, p.Value)), side);
+        }
+
+        public void CheckStructured(string file, XElement endpoint, EndpointRole side)
+        {
+            var component = Find(endpoint.Name.LocalName);
+            if (component is null)
+                return;
+            var options = StructuredEndpoint.Options(endpoint, component.PathSynonym,
+                (at, message) => findings.Add(new PackageFinding(true, Position(file, at), message)));
+            if (options is null)
+                return;
+            Check(file, endpoint, endpoint.Parent!, component.Scheme, options.Select(o => (o.Key, o.Value)), side);
+        }
+
+        /// <summary>The scheme the way <see cref="EndpointUriParser"/> reads it, or null when there is none.</summary>
+        private static string? SchemeOf(string uri)
+        {
+            var colon = uri.IndexOf(':');
+            return colon > 0 ? uri[..colon].ToLowerInvariant() : null;
+        }
+
+        private void Check(string file, XElement at, XElement step, string scheme, IEnumerable<(string Key, string Value)> parameters, EndpointRole side)
+        {
+            if (Find(scheme) is not { } component)
+                return;
+            var pairs = parameters.ToList();
+            var written = pairs.Select(p => p.Key)
+                .Where(k => !k.Contains("${", StringComparison.Ordinal) && !k.Contains("{{", StringComparison.Ordinal))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // An option only the other side reads — the declaration the connector refuses it by
+            // (EndpointRole), lenient connector or not.
+            foreach (var key in written)
+            {
+                if (component.Options.FirstOrDefault(o => string.Equals(o.Name, key, StringComparison.OrdinalIgnoreCase))
+                        is { Role: { } role } && role != side)
+                {
+                    findings.Add(new PackageFinding(true, Position(file, at),
+                        $"<{scheme}>: '{key}' is read only by the {Side(role)} side of the {scheme} endpoint; " +
+                        $"<{step.Name.LocalName}> creates the {Side(side)}, which refuses it."));
+                }
+            }
+
+            // Beside the option that names the connection factory a connection parameter is refused,
+            // the factory being the whole connection — the declarations and wording of
+            // EndpointOptions.BindFromUri ([ConnectionFactoryReference], [ConnectionParameter]).
+            if (component.Options.FirstOrDefault(o => o.ConnectionFactoryReference) is { } reference
+                && pairs.FirstOrDefault(p => string.Equals(p.Key, reference.Name, StringComparison.OrdinalIgnoreCase))
+                    is { Value.Length: > 0 } factory)
+            {
+                var beside = written
+                    .Where(k => component.Options.Any(o => o.ConnectionParameter && string.Equals(o.Name, k, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+                if (beside.Count > 0)
+                    findings.Add(new PackageFinding(true, Position(file, at),
+                        $"<{scheme}>: {factory.Key} '{factory.Value}' sets the whole connection, so {string.Join(", ", beside)} " +
+                        $"cannot be given on the URI as well. Set them on the factory, or drop {factory.Key} and give the connection on the URI."));
+            }
+
+            if (component is not { Lenient: false, OptionsType: { } optionsTypeName })
+                return;
+            if (typeResolver(optionsTypeName) is not { } optionsType)
+                return;
+            var writable = optionsType.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(p => p.CanWrite)
+                .Select(p => p.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var unknown = written.Where(k => !writable.Contains(k)).ToList();
+            if (unknown.Count == 0)
+                return;
+            findings.Add(new PackageFinding(true, Position(file, at), $"<{scheme}>: {EngineWording(optionsType, scheme, unknown)}"));
+        }
+
+        private static string Side(EndpointRole role) => role == EndpointRole.Consumer ? "consumer" : "producer";
+
+        private CatalogComponent? Find(string scheme)
+            => catalog.FirstOrDefault(c => string.Equals(c.Scheme, scheme, StringComparison.OrdinalIgnoreCase)
+                                            || c.AlternateSchemes.Contains(scheme, StringComparer.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// The refusal the engine gives for these names. The options type comes from the built
+        /// output, possibly in its own load context, so the call goes through reflection; the
+        /// engine throws <see cref="ArgumentException"/> (a core type, shared by every context).
+        /// </summary>
+        private static string EngineWording(Type optionsType, string scheme, IReadOnlyList<string> unknown)
+        {
+            // Without a parameterless constructor there is no options object to ask; the finding
+            // stands all the same, named plainly.
+            if (optionsType.GetConstructor(Type.EmptyTypes) is null)
+                return string.Join(" ", unknown.Select(k => $"'{k}' is not an option of the {scheme} endpoint."));
+            var options = Activator.CreateInstance(optionsType)!;
+            var bind = optionsType.GetMethod("BindFromUri", [typeof(IReadOnlyDictionary<string, string>)])
+                ?? throw new InvalidOperationException($"{optionsType.FullName} has no BindFromUri — not an endpoint options type.");
+            try
+            {
+                bind.Invoke(options, [unknown.ToDictionary(k => k, _ => string.Empty, StringComparer.OrdinalIgnoreCase)]);
+            }
+            catch (TargetInvocationException ex) when (ex.InnerException is ArgumentException refusal)
+            {
+                // .NET appends " (Parameter 'name')" to the message; the finding names the parameter already.
+                var suffix = refusal.ParamName is { } parameter ? $" (Parameter '{parameter}')" : null;
+                return suffix is not null && refusal.Message.EndsWith(suffix, StringComparison.Ordinal)
+                    ? refusal.Message[..^suffix.Length]
+                    : refusal.Message;
+            }
+            throw new InvalidOperationException(
+                $"{optionsType.FullName} accepted {string.Join(", ", unknown)} although it has no such options and is not lenient — " +
+                "the package gate and EndpointOptions.BindFromUri disagree.");
         }
     }
 

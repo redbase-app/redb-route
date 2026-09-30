@@ -370,7 +370,7 @@ public sealed class GrpcConsumerFeatureTests : IAsyncLifetime
         // the catch-all as Internal — which tells the caller "our fault, retry" about input only they can
         // fix — and put the protobuf parser's own wording into grpc-message. Their mistake, their status.
         await Start(ex => { ex.Out = new Message("never reached"); return Task.CompletedTask; },
-            new Dictionary<string, string> { ["envelope"] = "true" });
+            new Dictionary<string, string> { ["envelope"] = "message" });
 
         // Not a protobuf message: a wire type nothing defines, then trailing junk.
         var garbage = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, 0x7A, 0x7A };
@@ -576,12 +576,5 @@ public sealed class GrpcConsumerFeatureTests : IAsyncLifetime
         return output.ToArray();
     }
 
-    private static int GetFreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 }

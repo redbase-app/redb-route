@@ -84,19 +84,29 @@ public sealed class WsProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"ws send {_options.Mode}", ActivityKind.Producer,
             "messaging.system", "websocket",
             _endpoint.Uri.NormalizedKey,
             destination: _endpoint.ConsumerPath,
             operation: "send");
 
-        // No catch/RecordError here: an exception flies into the core (ToProcessor / the
-        // template), which records it against this endpoint - recording here as well
-        // double-counted it (the statistics-ownership audit).
-        if (_options.Mode == WsMode.Server)
-            await ProcessServerMode(exchange, ct).ConfigureAwait(false);
-        else
-            await ProcessClientMode(exchange, ct).ConfigureAwait(false);
+        // No RecordError here: the exception flies on into the core (ToProcessor / the template), which
+        // records it against this endpoint - recording here as well double-counted it (the
+        // statistics-ownership audit). The span is marked, then the exception is rethrown.
+        try
+        {
+            if (_options.Mode == WsMode.Server)
+                await ProcessServerMode(exchange, ct).ConfigureAwait(false);
+            else
+                await ProcessClientMode(exchange, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the send is a stop; any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
+        }
 
         SetExchangeHeaders(exchange);
     }

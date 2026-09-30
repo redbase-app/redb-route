@@ -24,8 +24,28 @@ public readonly record struct As2Mic(string Digest, string Algorithm)
         return new As2Mic(value[..comma].Trim(), value[(comma + 1)..].Trim());
     }
 
-    /// <summary>Whether this MIC equals <paramref name="other"/> (digest + algorithm, case-insensitive algorithm).</summary>
-    public bool Matches(As2Mic other) =>
-        string.Equals(Digest, other.Digest, StringComparison.Ordinal) &&
-        string.Equals(Algorithm, other.Algorithm, StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// Whether this MIC equals <paramref name="other"/>: the same digest bytes (base64 compared after decoding, so folded
+    /// lines, spaces and missing padding do not matter) and the same algorithm (<c>sha-256</c> and <c>SHA256</c> are one).
+    /// </summary>
+    public bool Matches(As2Mic other)
+    {
+        if (!string.Equals(AlgorithmKey(Algorithm), AlgorithmKey(other.Algorithm), StringComparison.Ordinal))
+            return false;
+        var mine = DigestBytes(Digest);
+        var theirs = DigestBytes(other.Digest);
+        return mine is not null && theirs is not null && mine.AsSpan().SequenceEqual(theirs);
+    }
+
+    private static string AlgorithmKey(string algorithm) =>
+        algorithm.Replace("-", "", StringComparison.Ordinal).Trim().ToLowerInvariant();
+
+    private static byte[]? DigestBytes(string digest)
+    {
+        var compact = string.Concat(digest.Where(c => !char.IsWhiteSpace(c)));
+        if (compact.Length % 4 != 0)
+            compact = compact.PadRight(compact.Length + (4 - compact.Length % 4), '=');
+        var buffer = new byte[compact.Length * 3 / 4];
+        return Convert.TryFromBase64String(compact, buffer, out var written) && written > 0 ? buffer[..written] : null;
+    }
 }

@@ -149,21 +149,20 @@ public sealed class AmqpProducer : ConnectableProducer
 
         EnsureSender();
 
-        using var activity = RouteActivitySource.Source.StartActivity(
-            $"{_endpoint.Address} publish", ActivityKind.Producer);
-
-        if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag("messaging.system", "amqp");
-            activity.SetTag("messaging.operation", "publish");
-            activity.SetTag("messaging.destination.name", _endpoint.Address);
-        }
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_endpoint.Address} publish", ActivityKind.Producer,
+            "messaging.system", "amqp", _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.Address, operation: "publish");
 
         var msg = PrepareMessage(exchange);
 
         if (activity is { IsAllDataRequested: true } && msg.Properties?.Subject is { } subject)
             activity.SetTag("messaging.amqp.subject", subject);
-        InjectTraceContext(activity, msg);
+        // The context of this send, over a traceparent the header bridge copied from a received message; with
+        // tracing off, the context that came in. The application-properties section is created only to hold it.
+        RouteTelemetryExtensions.InjectTraceContext(activity, msg, static (m, name, value) =>
+            (m.ApplicationProperties ??= new ApplicationProperties()).Map[name] = value);
 
         if (!_options.ReplyTo && TransactedActions.Defers(exchange, _options.Transacted))
         {
@@ -176,10 +175,18 @@ public sealed class AmqpProducer : ConnectableProducer
         // and next to a database in the same block it would escalate the transaction to a distributed one.
         using (new TransactionScope(TransactionScopeOption.Suppress, TransactionScopeAsyncFlowOption.Enabled))
         {
-            if (_options.ReplyTo)
-                await ProcessRpcAsync(exchange, msg, ct).ConfigureAwait(false);
-            else
-                await ProcessImmediateAsync(msg, ct).ConfigureAwait(false);
+            try
+            {
+                if (_options.ReplyTo)
+                    await ProcessRpcAsync(exchange, msg, ct).ConfigureAwait(false);
+                else
+                    await ProcessImmediateAsync(msg, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                activity.RecordFailure(ex);
+                throw;
+            }
         }
     }
 
@@ -641,22 +648,6 @@ public sealed class AmqpProducer : ConnectableProducer
         }
         value = null!;
         return false;
-    }
-
-    // ── Trace context ──
-
-    private static void InjectTraceContext(Activity? activity, AmqpMessage msg)
-    {
-        if (activity is null) return;
-
-        msg.ApplicationProperties ??= new ApplicationProperties();
-
-        var propagator = DistributedContextPropagator.Current;
-        propagator.Inject(activity, msg.ApplicationProperties.Map, static (carrier, key, value) =>
-        {
-            if (carrier is global::Amqp.Types.Map map && !string.IsNullOrEmpty(value))
-                map[key] = value;
-        });
     }
 
     // ── Helpers ──

@@ -54,25 +54,35 @@ internal sealed class FcmProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"fcm {_options.Operation}", ActivityKind.Producer,
             "messaging.system", "fcm",
             _endpoint.Uri.NormalizedKey,
             operation: _options.Operation.ToString().ToLowerInvariant());
 
-        switch (_options.Operation)
+        try
         {
-            case FcmOperationType.Send:
-                await ProcessSend(exchange, activity, ct).ConfigureAwait(false);
-                break;
-            case FcmOperationType.Multicast:
-                await ProcessMulticast(exchange, activity, ct).ConfigureAwait(false);
-                break;
-            case FcmOperationType.SubscribeToTopic:
-            case FcmOperationType.UnsubscribeFromTopic:
-                await ProcessTopicManagement(exchange, activity).ConfigureAwait(false);
-                break;
-            default:
-                throw new InvalidOperationException($"Unknown FCM operation: {_options.Operation}");
+            switch (_options.Operation)
+            {
+                case FcmOperationType.Send:
+                    await ProcessSend(exchange, activity, ct).ConfigureAwait(false);
+                    break;
+                case FcmOperationType.Multicast:
+                    await ProcessMulticast(exchange, activity, ct).ConfigureAwait(false);
+                    break;
+                case FcmOperationType.SubscribeToTopic:
+                case FcmOperationType.UnsubscribeFromTopic:
+                    await ProcessTopicManagement(exchange, activity).ConfigureAwait(false);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown FCM operation: {_options.Operation}");
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the call is a stop; any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
         }
     }
 

@@ -95,7 +95,7 @@ public sealed class LdapEndpointOptions : EndpointOptions
     // ── SSL options ──
 
     /// <summary>Skip server certificate validation (development only!).</summary>
-    public bool SkipCertificateValidation { get; set; }
+    public bool TrustAllCertificates { get; set; }
 
     /// <summary>Path to client certificate for mutual TLS.</summary>
     public string? ClientCertPath { get; set; }
@@ -103,6 +103,12 @@ public sealed class LdapEndpointOptions : EndpointOptions
     /// <summary>Password for client certificate.</summary>
     [Sensitive]
     public string? ClientCertPassword { get; set; }
+
+    /// <inheritdoc />
+    protected override string? UnknownParameterHint(string name)
+        => name.Equals("skipCertificateValidation", StringComparison.OrdinalIgnoreCase)
+            ? "'skipCertificateValidation' is renamed 'trustAllCertificates', the name every other connector uses."
+            : null;
 
     /// <inheritdoc />
     public override void Validate()

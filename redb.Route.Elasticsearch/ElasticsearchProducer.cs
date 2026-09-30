@@ -61,13 +61,23 @@ internal sealed class ElasticsearchProducer : ConnectableProducer
         }
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"es {operation}", ActivityKind.Client,
             "db.system", "elasticsearch",
             _endpoint.Uri.NormalizedKey,
             destination: _endpoint.IndexName,
             operation: operation.ToString());
 
-        await DispatchOperationAsync(operation, exchange, ct).ConfigureAwait(false);
+        try
+        {
+            await DispatchOperationAsync(operation, exchange, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the call is a stop; a timeout or any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════

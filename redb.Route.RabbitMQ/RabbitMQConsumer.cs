@@ -12,7 +12,7 @@ namespace redb.Route.RabbitMQ;
 
 /// <summary>
 /// RabbitMQ consumer. Event-driven async consumer using <see cref="AsyncEventingBasicConsumer"/>.
-/// Supports concurrent processing via semaphore, transacted channels (TxSelect/TxCommit/TxRollback),
+/// Supports concurrent processing via semaphore, transacted channels (TxSelect, and a TxCommit after every ack or nack),
 /// and automatic RPC reply when the incoming message has ReplyTo set.
 /// </summary>
 public sealed class RabbitMQConsumer : IConsumer
@@ -39,9 +39,12 @@ public sealed class RabbitMQConsumer : IConsumer
     private string? _consumerTag;
     private string? _actualQueueName;
     private readonly InflightDrainGuard _drain = new();
+    // Set by Stop: from then on a cancelled subscription or a closed channel is ours, not news.
+    private volatile bool _stopping;
 
     /// <summary>Number of messages successfully processed.</summary>
-    public long ProcessedCount { get; private set; }
+    public long ProcessedCount => Interlocked.Read(ref _processedCount);
+    private long _processedCount;
 
     /// <summary>Drain timeout for graceful stop (default 30s).</summary>
     internal TimeSpan DrainTimeout { get => _drain.DrainTimeout; set => _drain.DrainTimeout = value; }
@@ -67,9 +70,10 @@ public sealed class RabbitMQConsumer : IConsumer
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
+        _stopping = false;
         _drain.Start(ct);
         // Consumer channel: no publisher confirms.
-        // We only Ack/Nack/TxCommit/TxRollback here, plus an optional best-effort RPC reply.
+        // We only Ack/Nack (each followed by TxCommit when transacted) here; RPC replies go on a channel of their own.
         // Enabling publisher confirms tracking on this channel adds latency to every reply
         // and creates extra contention in the .NET client's confirm-tracking machinery
         // (each BasicPublishAsync awaits a broker confirm). For RPC replies we explicitly
@@ -83,6 +87,7 @@ public sealed class RabbitMQConsumer : IConsumer
         // 7.x trap this fixes.
         var dispatchConcurrency = (ushort)Math.Clamp(_options.ResolvedConcurrentConsumers, 1, ushort.MaxValue);
         _channel = await _endpoint.CreateChannelAsync(
+            RabbitMQConnectionUse.Consume,
             publisherConfirms: false,
             consumerDispatchConcurrency: dispatchConcurrency,
             ct: ct).ConfigureAwait(false);
@@ -115,13 +120,15 @@ public sealed class RabbitMQConsumer : IConsumer
             // Consumer setup
             _consumer = new AsyncEventingBasicConsumer(_channel);
             _consumer.ReceivedAsync += OnMessageReceivedAsync;
+            _consumer.UnregisteredAsync += OnConsumerUnregisteredAsync;
+            _channel.ChannelShutdownAsync += OnConsumeChannelShutdownAsync;
 
             // autoAck:true settles every delivery at the broker on hand-off (at-most-once) — no manual
             // BasicAck/BasicNack, and a throw in Process does NOT requeue. autoAck:false (default) keeps
-            // the post-process manual ack / nack-requeue path. AutoAck+Transacted is rejected in Validate().
+            // the post-process manual ack / nack-requeue path. ackMode=auto with Transacted is rejected in Validate().
             _consumerTag = await _channel.BasicConsumeAsync(
                 queue: _actualQueueName,
-                autoAck: _options.AutoAck,
+                autoAck: _options.AckMode == AckMode.Auto,
                 consumer: _consumer,
                 cancellationToken: ct).ConfigureAwait(false);
         }
@@ -145,6 +152,7 @@ public sealed class RabbitMQConsumer : IConsumer
     /// <inheritdoc />
     public async Task Stop(CancellationToken ct = default)
     {
+        _stopping = true;
         // Stop accepting new messages
         if (_consumer is not null && _consumerTag is not null && _channel is { IsOpen: true })
         {
@@ -198,50 +206,82 @@ public sealed class RabbitMQConsumer : IConsumer
         _logger?.LogInformation("RabbitMQ consumer stopped: queue={Queue}", _actualQueueName);
     }
 
+    /// <summary>A cancellation this consumer asked for (a stop); any other one, a timeout inside the route included, is a failure.</summary>
+    private static bool IsOurStop(Exception ex, CancellationToken token) => ex is OperationCanceledException && token.IsCancellationRequested;
+
+    // ── Losing the subscription ──
+
+    // AMQP channel-level errors (access refused, not found, resource locked, precondition failed): the broker closes the
+    // channel and keeps the connection, so connection recovery never reopens it.
+    private static bool IsChannelLevelError(ushort replyCode) => replyCode is 403 or 404 or 405 or 406;
+
+    private Task OnConsumeChannelShutdownAsync(object sender, ShutdownEventArgs args)
+    {
+        if (_stopping || args.Initiator == ShutdownInitiator.Application)
+            return Task.CompletedTask;
+
+        if (IsChannelLevelError(args.ReplyCode))
+            _logger?.LogError(
+                "RabbitMQ consumer on queue {Queue} stopped receiving: its channel was closed ({Code} {Reason}) and nothing " +
+                "reopens it. Unacknowledged deliveries return to the queue; restart the route to consume again.",
+                _actualQueueName, args.ReplyCode, args.ReplyText);
+        else
+            _logger?.LogWarning(
+                "RabbitMQ consumer on queue {Queue} lost its channel with the connection ({Code} {Reason}). With automatic " +
+                "recovery (the default) the subscription comes back with the connection; with automaticRecovery=false, " +
+                "restart the route.",
+                _actualQueueName, args.ReplyCode, args.ReplyText);
+        return Task.CompletedTask;
+    }
+
+    private Task OnConsumerUnregisteredAsync(object sender, ConsumerEventArgs args)
+    {
+        // The broker cancels a subscription whose queue was deleted; the consumer would otherwise just go quiet.
+        if (!_stopping)
+            _logger?.LogError(
+                "RabbitMQ consumer on queue {Queue} was cancelled by the broker (the queue was deleted, or its node left): it " +
+                "receives nothing more. Restart the route once the queue is back.",
+                _actualQueueName);
+        return Task.CompletedTask;
+    }
+
     // ── Message handling ──
 
     private async Task OnMessageReceivedAsync(object sender, BasicDeliverEventArgs ea)
     {
-        await _semaphore.WaitAsync().ConfigureAwait(false);
+        // Counted before the wait, so a delivery still waiting for a slot is in flight for Stop's drain too: it must
+        // not start processing after the drain gave up and disposed the processing token.
         _drain.Increment();
+        await _semaphore.WaitAsync().ConfigureAwait(false);
         Exchange? exchange = null;
         var channel = _channel;
-        RabbitMQAckAction? ackAction = null;
-        // Tracks whether we've already settled this delivery (ack OR nack). Prevents
-        // a "double nack" cascade across the inner/outer catch blocks, which the
-        // RabbitMQ broker rejects with PRECONDITION_FAILED — unknown delivery tag,
-        // and which then closes the entire channel.
-        bool acked = false;
+        // In ackMode=auto the broker settled the delivery on hand-off: there is nothing to ack or nack.
+        var settleRequired = _options.AckMode == AckMode.Manual;
+        // One settle per delivery, and the first attempt counts even when it throws: a second ack or nack
+        // of the same tag is rejected with PRECONDITION_FAILED (unknown delivery tag), which closes the whole channel.
+        var settled = false;
+        // This delivery's processing token, taken now: the drain disposes its source when a stop gives up waiting.
+        var token = _drain.ProcessingToken;
         try
         {
             var body = ea.Body.ToArray();
 
-            using var activity = StartConsumerActivity(ea);
+            using var span = StartConsumerSpan(ea);
 
             exchange = CreateExchange(ea, body);
 
-            // Deferred ack action for transacted mode
             if (channel is not { IsOpen: true })
             {
                 _logger?.LogWarning("RabbitMQ: channel closed before message could be processed, deliveryTag={DeliveryTag}", ea.DeliveryTag);
                 return;
             }
 
-            // In autoAck mode the broker already settled this delivery on hand-off — there is nothing
-            // to ack/nack, so we skip the ack action entirely (it stays null and every settle below is
-            // guarded on it). Manual-ack mode (the default) registers the deferred ack action so a
-            // route-level .Transacted() can commit/rollback it, and so we can ack/nack after Process.
-            // The acknowledgement belongs to this consumer, not to the route transaction: the transaction owns the
-            // database and the outgoing sends, and only a unit of work that ended well is acknowledged below.
-            if (!_options.AutoAck)
-                ackAction = new RabbitMQAckAction(channel, ea.DeliveryTag, _options.Transacted == true, _logger);
-
             var pipelineFailed = false;
             try
             {
                 try
                 {
-                    await _processor.Process(exchange, _drain.ProcessingToken).ConfigureAwait(false);
+                    await _processor.Process(exchange, token).ConfigureAwait(false);
                     exchange.ThrowIfUnhandledFailure();
                 }
                 catch
@@ -256,24 +296,28 @@ public sealed class RabbitMQConsumer : IConsumer
                 // past poison/dead-reply messages.
                 if (!string.IsNullOrEmpty(ea.BasicProperties.ReplyTo))
                 {
-                    await SendReplyAsync(exchange, ea.BasicProperties.ReplyTo, ea.BasicProperties.CorrelationId)
+                    await SendReplyAsync(exchange, ea.BasicProperties.ReplyTo, ea.BasicProperties.CorrelationId, span.Activity, token)
                         .ConfigureAwait(false);
                 }
 
-                // Settle the delivery via the ack action — UNLESS a route-level .Transacted()
-                // already committed it during Process (ackAction.Settled). Routing both the
-                // deferred and the inline path through RabbitMQAckAction.Commit keeps the ack
-                // logic in one place; the Settled guard prevents the double-BasicAck on the same
-                // tag that the broker rejects with PRECONDITION_FAILED (unknown delivery tag).
-                // ackAction is null in autoAck mode (broker already settled) — skip the manual ack.
-                if (ackAction is not null && !ackAction.Settled)
-                    await ackAction.Commit().ConfigureAwait(false);
-                acked = true;
+                // The acknowledgement belongs to this consumer, not to a route's .Transacted() block: the block owns
+                // the database and the outgoing sends, and has committed them by the time Process returns, so the
+                // ack comes last and only a unit of work that ended well is acknowledged.
+                if (settleRequired)
+                {
+                    settled = true;
+                    await SettleAsync(channel, ea.DeliveryTag, ack: true).ConfigureAwait(false);
+                }
 
-                ProcessedCount++;
+                Interlocked.Increment(ref _processedCount);
             }
             catch (Exception ex)
             {
+                // The route, the RPC reply or the ack failed: the unit of work did not end well. Only a stop of ours
+                // cancelling it is not a failure; a timeout inside the route (HttpClient: TaskCanceledException) is.
+                if (!IsOurStop(ex, token))
+                    span.Activity.RecordFailure(ex);
+
                 // A pipeline failure is already counted by the core's StatisticsProcessor; an ack
                 // failure AFTER a successful pipeline (channel died at settle) is invisible to the
                 // core, so the transport records it (ревью дуги, M13).
@@ -281,17 +325,14 @@ public sealed class RabbitMQConsumer : IConsumer
                     _endpoint.RecordError(ex);
                 _logger?.LogError(ex, "RabbitMQ message processing error: deliveryTag={DeliveryTag}", ea.DeliveryTag);
 
-                // Nack (with TxRollback when the endpoint is transacted) via the ack action —
-                // only if we haven't already settled this delivery, and not if a route-level
-                // .Transacted() already rolled it back (otherwise the broker rejects the double-nack).
-                // ackAction is null in autoAck mode — the broker already acked on hand-off, so the
-                // message cannot be requeued (at-most-once); the error above is the only signal.
-                if (ackAction is not null && !acked && !ackAction.Settled)
+                // Nack with requeue, unless the ack above was already attempted. In ackMode=auto the broker
+                // took the delivery on hand-off (at-most-once): it cannot be requeued, the error above is the only signal.
+                if (settleRequired && !settled)
                 {
+                    settled = true;
                     try
                     {
-                        await ackAction.Rollback().ConfigureAwait(false);
-                        acked = true;
+                        await SettleAsync(channel, ea.DeliveryTag, ack: false).ConfigureAwait(false);
                     }
                     catch (Exception nackEx) { _logger?.LogWarning(nackEx, "Error nacking RabbitMQ message"); }
                 }
@@ -305,15 +346,14 @@ public sealed class RabbitMQConsumer : IConsumer
             _endpoint.RecordError(ex);
             _logger?.LogError(ex, "Fatal error in RabbitMQ message handler");
 
-            // Last-resort nack — only if neither path above settled the delivery.
-            // Avoids the "unknown delivery tag" cascade when the inner catch already
-            // nacked or when we successfully acked but then threw later. Skipped in autoAck
-            // mode (ackAction null): the broker already settled, there is no tag to nack.
-            if (ackAction is not null && !acked && !ackAction.Settled && channel is { IsOpen: true })
+            // Last-resort nack — only if neither path above attempted a settle. Skipped in ackMode=auto:
+            // the broker already settled, there is no tag to nack.
+            if (settleRequired && !settled && channel is { IsOpen: true })
             {
+                settled = true;
                 try
                 {
-                    await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: true).ConfigureAwait(false);
+                    await SettleAsync(channel, ea.DeliveryTag, ack: false).ConfigureAwait(false);
                 }
                 catch (Exception nackEx) { _logger?.LogWarning(nackEx, "RabbitMQ: last-resort nack failed, channel may be dead"); }
             }
@@ -327,58 +367,81 @@ public sealed class RabbitMQConsumer : IConsumer
         }
     }
 
+    /// <summary>
+    /// Acks the delivery, or nacks it with requeue. On a transacted channel an ack or nack takes effect only at
+    /// <c>tx.commit</c>, so each is followed by a commit — the nack too: <c>tx.rollback</c> would discard it and leave
+    /// the delivery unacknowledged until the channel closes (Spring AMQP commits a transactional reject the same way).
+    /// Concurrent deliveries on the channel need no lock: a commit applies every settle pending on the channel, each
+    /// of them already final, and the commit that follows each settle at worst finds the transaction empty.
+    /// </summary>
+    private async Task SettleAsync(IChannel channel, ulong deliveryTag, bool ack)
+    {
+        if (ack)
+            await channel.BasicAckAsync(deliveryTag, multiple: false).ConfigureAwait(false);
+        else
+            await channel.BasicNackAsync(deliveryTag, multiple: false, requeue: true).ConfigureAwait(false);
+
+        if (_options.Transacted == true)
+            await channel.TxCommitAsync().ConfigureAwait(false);
+
+        _logger?.LogDebug("RabbitMQ {Settle}: deliveryTag={DeliveryTag}", ack ? "ack" : "nack (requeue)", deliveryTag);
+    }
+
     // ── Trace context propagation ──
 
     /// <summary>
-    /// Extracts W3C trace context from AMQP headers and starts a Consumer activity
-    /// linked to the producer's trace.
+    /// Opens the receive span through the core's transport contract: the parent comes from the message's W3C headers
+    /// only (without them the span is a root, never a child of the dispatch thread's ambient activity), the sender's
+    /// baggage is put back, the span names its endpoint, and <c>EnableTelemetry=false</c> opens nothing.
     /// </summary>
-    private Activity? StartConsumerActivity(BasicDeliverEventArgs ea)
+    private TransportSpan StartConsumerSpan(BasicDeliverEventArgs ea)
     {
-        var propagator = DistributedContextPropagator.Current;
+        var span = RouteTelemetryExtensions.StartConsumerSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{ea.Exchange} receive", ActivityKind.Consumer, "messaging.system", "rabbitmq",
+            _endpoint.Uri.NormalizedKey, ea.BasicProperties.Headers, ReadTraceHeader,
+            destination: ea.Exchange, operation: "receive");
 
-        propagator.ExtractTraceIdAndState(ea.BasicProperties.Headers,
-            static (object? carrier, string key, out string? value, out IEnumerable<string>? values) =>
-            {
-                value = null;
-                values = null;
-                if (carrier is not IDictionary<string, object?> h) return;
-                if (!h.TryGetValue(key, out var raw) || raw is null) return;
-
-                value = raw switch
-                {
-                    string s => s,
-                    byte[] bytes => Encoding.UTF8.GetString(bytes),
-                    _ => raw.ToString()
-                };
-            },
-            out var traceParent,
-            out var traceState);
-
-        ActivityContext parentContext = default;
-        if (!string.IsNullOrEmpty(traceParent))
-            ActivityContext.TryParse(traceParent, traceState, out parentContext);
-
-        var activity = RouteActivitySource.Source.StartActivity(
-            $"{ea.Exchange} receive",
-            ActivityKind.Consumer,
-            parentContext);
-
-        if (activity is { IsAllDataRequested: true })
+        if (span.Activity is { IsAllDataRequested: true } activity)
         {
-            activity.SetTag("messaging.system", "rabbitmq");
-            activity.SetTag("messaging.operation", "receive");
-            activity.SetTag("messaging.destination.name", ea.Exchange);
             activity.SetTag("messaging.rabbitmq.destination.routing_key", ea.RoutingKey);
             activity.SetTag("messaging.message.delivery_tag", ea.DeliveryTag);
         }
-
-        return activity;
+        return span;
     }
+
+    /// <summary>A trace header as AMQP carries it: RabbitMQ hands string headers over as UTF-8 bytes.</summary>
+    private static string? ReadTraceHeader(IDictionary<string, object?>? headers, string name)
+        => headers is not null && headers.TryGetValue(name, out var raw)
+            ? raw switch
+            {
+                null => null,
+                string s => s,
+                byte[] bytes => Encoding.UTF8.GetString(bytes),
+                _ => raw.ToString(),
+            }
+            : null;
 
     // ── Exchange creation ──
 
     private Exchange CreateExchange(BasicDeliverEventArgs ea, byte[] body)
+    {
+        var message = MessageFrom(ea, body);
+
+        var pattern = string.IsNullOrEmpty(ea.BasicProperties.ReplyTo)
+            ? ExchangePattern.InOnly
+            : ExchangePattern.InOut;
+
+        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
+        exchange.Pattern = pattern;
+        return exchange;
+    }
+
+    /// <summary>
+    /// A delivery as a message: the body as bytes, the AMQP headers, the <c>redbRmq.*</c> delivery metadata and the
+    /// basic properties by name. One mapping for every inbound path — a consumed message and an RPC reply alike.
+    /// </summary>
+    internal static Message MessageFrom(BasicDeliverEventArgs ea, byte[] body)
     {
         var message = new Message(body);
 
@@ -432,14 +495,7 @@ public sealed class RabbitMQConsumer : IConsumer
         if (ea.BasicProperties.Timestamp.UnixTime != 0)
             message.Headers[RmqHeaders.Timestamp] = ea.BasicProperties.Timestamp.UnixTime;
         message.Headers["Persistent"] = ea.BasicProperties.Persistent;
-
-        var pattern = string.IsNullOrEmpty(ea.BasicProperties.ReplyTo)
-            ? ExchangePattern.InOnly
-            : ExchangePattern.InOut;
-
-        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
-        exchange.Pattern = pattern;
-        return exchange;
+        return message;
     }
 
     /// <summary>
@@ -464,15 +520,17 @@ public sealed class RabbitMQConsumer : IConsumer
 
     // ── RPC reply ──
 
-    private async Task SendReplyAsync(IExchange exchange, string replyTo, string? correlationId)
+    private async Task SendReplyAsync(IExchange exchange, string replyTo, string? correlationId, Activity? span, CancellationToken token)
     {
         IChannel? replyChannel;
         try
         {
-            replyChannel = await GetOrCreateReplyChannelAsync(_drain.ProcessingToken).ConfigureAwait(false);
+            replyChannel = await GetOrCreateReplyChannelAsync(token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
+            if (!IsOurStop(ex, token))
+                span.RecordFailure(ex);
             _logger?.LogWarning(ex,
                 "RabbitMQ: failed to open reply channel for {ReplyTo} — original message will still be acked", replyTo);
             return;
@@ -486,9 +544,8 @@ public sealed class RabbitMQConsumer : IConsumer
 
         try
         {
-            var responseObj = exchange.HasOut
-                ? exchange.Out!.Body
-                : exchange.In.Body;
+            var response = exchange.HasOut ? exchange.Out! : exchange.In;
+            var responseObj = response.Body;
 
             var body = responseObj switch
             {
@@ -500,7 +557,8 @@ public sealed class RabbitMQConsumer : IConsumer
 
             var properties = new BasicProperties
             {
-                ContentType = exchange.In.ContentType ?? _options.ContentType,
+                // The reply's own type, not the request's: a JSON request may well be answered with a PDF.
+                ContentType = response.ContentType ?? _options.ContentType,
                 Persistent = false
             };
 
@@ -508,10 +566,9 @@ public sealed class RabbitMQConsumer : IConsumer
                 properties.CorrelationId = correlationId;
 
             // Copy response headers (skip rabbitmq.* internal and AMQP basic property names)
-            var responseHeaders = exchange.HasOut ? exchange.Out!.Headers : exchange.In.Headers;
             var headers = new Dictionary<string, object?>();
 
-            foreach (var (key, value) in responseHeaders)
+            foreach (var (key, value) in response.Headers)
             {
                 if (RmqHeaders.IsRedbHeader(key)) continue;
                 if (BasicPropertyNames.Contains(key)) continue;
@@ -541,7 +598,7 @@ public sealed class RabbitMQConsumer : IConsumer
                 mandatory: false,
                 basicProperties: properties,
                 body: body,
-                cancellationToken: _drain.ProcessingToken).ConfigureAwait(false);
+                cancellationToken: token).ConfigureAwait(false);
 
             _logger?.LogDebug("RabbitMQ RPC reply sent: replyTo={ReplyTo}, correlationId={CorrelationId}",
                 replyTo, correlationId);
@@ -550,6 +607,9 @@ public sealed class RabbitMQConsumer : IConsumer
         {
             // Swallow: a failed reply must NOT prevent acking the original message.
             // The client will detect failure via its own RPC timeout.
+            // It is still a failure of this delivery, so its span says so.
+            if (!IsOurStop(ex, token))
+                span.RecordFailure(ex);
             _logger?.LogWarning(ex, "RabbitMQ: failed to send RPC reply to {ReplyTo} (correlationId={CorrelationId}) — original message will still be acked",
                 replyTo, correlationId);
         }
@@ -580,7 +640,7 @@ public sealed class RabbitMQConsumer : IConsumer
                 catch (Exception ex) { _logger?.LogDebug(ex, "RabbitMQ: error disposing closed reply channel"); }
             }
 
-            _replyChannel = await _endpoint.CreateChannelAsync(publisherConfirms: false, ct: ct).ConfigureAwait(false);
+            _replyChannel = await _endpoint.CreateChannelAsync(RabbitMQConnectionUse.Publish, publisherConfirms: false, ct: ct).ConfigureAwait(false);
             _logger?.LogDebug("RabbitMQ: dedicated RPC reply channel opened for queue {Queue}", _actualQueueName);
             return _replyChannel;
         }
@@ -590,59 +650,4 @@ public sealed class RabbitMQConsumer : IConsumer
         }
     }
 
-}
-
-/// <summary>
-/// Deferred RabbitMQ acknowledgement action. Commits ack or rolls back with nack.
-/// For transacted channels, uses TxCommit/TxRollback.
-/// </summary>
-internal sealed class RabbitMQAckAction : ITransactedAction
-{
-    private readonly IChannel _channel;
-    private readonly ulong _deliveryTag;
-    private readonly bool _transacted;
-    private readonly ILogger? _logger;
-    private int _settled;
-
-    public RabbitMQAckAction(IChannel channel, ulong deliveryTag, bool transacted, ILogger? logger)
-    {
-        _channel = channel;
-        _deliveryTag = deliveryTag;
-        _transacted = transacted;
-        _logger = logger;
-    }
-
-    /// <summary>True once this delivery has been settled (ack via <see cref="Commit"/> OR nack via <see cref="Rollback"/>).</summary>
-    public bool Settled => Volatile.Read(ref _settled) == 1;
-
-    public async Task Commit(CancellationToken ct = default)
-    {
-        // First settle wins. Guards against the deferred (route-.Transacted()) commit and the
-        // consumer's inline settle both reaching the broker — a second BasicAck on the same
-        // delivery tag is rejected with PRECONDITION_FAILED and tears down the whole channel.
-        if (Interlocked.Exchange(ref _settled, 1) != 0)
-            return;
-
-        if (_transacted)
-        {
-            await _channel.TxCommitAsync(ct).ConfigureAwait(false);
-        }
-
-        await _channel.BasicAckAsync(_deliveryTag, multiple: false, ct).ConfigureAwait(false);
-        _logger?.LogDebug("RabbitMQ ack committed: deliveryTag={DeliveryTag}", _deliveryTag);
-    }
-
-    public async Task Rollback(CancellationToken ct = default)
-    {
-        if (Interlocked.Exchange(ref _settled, 1) != 0)
-            return;
-
-        if (_transacted)
-        {
-            await _channel.TxRollbackAsync(ct).ConfigureAwait(false);
-        }
-
-        await _channel.BasicNackAsync(_deliveryTag, multiple: false, requeue: true, ct).ConfigureAwait(false);
-        _logger?.LogDebug("RabbitMQ nack (rollback): deliveryTag={DeliveryTag}", _deliveryTag);
-    }
 }

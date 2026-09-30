@@ -11,6 +11,7 @@ using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Http;
 using redb.Route.Telemetry;
+using redb.Route.Tests.Telemetry;
 
 namespace redb.Route.Tests.Http;
 
@@ -81,12 +82,5 @@ public sealed class HttpTelemetrySmokeTests : IAsyncLifetime
         activity.GetTagItem("redb.route.endpoint").Should().NotBeNull();
     }
 
-    private static int GetFreePort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 }

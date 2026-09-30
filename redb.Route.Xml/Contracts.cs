@@ -92,6 +92,23 @@ public sealed record AttributeSpec(
     /// against this record keeps working, it only goes unchecked until it opts in.
     /// </summary>
     public bool Resource { get; init; }
+
+    /// <summary>
+    /// For a <see cref="AttributeType.Reference"/>: the CLR type (<c>Full.Name, Assembly</c>) the
+    /// registry object it names must be assignable to — <c>&lt;idempotentConsumer repository&gt;</c>
+    /// names an <c>IIdempotentRepository</c>. The pack gate with the built assemblies at hand
+    /// holds the declared object against it, so a bean of the wrong type is a build error, not a
+    /// start-up refusal. An init property: a released contribution keeps working unchecked.
+    /// </summary>
+    public string? References { get; init; }
+
+    /// <summary>
+    /// The attribute's value is a registry NAME this element registers an object under, of the
+    /// CLR type given here (<c>&lt;redb&gt;&lt;idempotentRepository name&gt;</c> registers a redb
+    /// idempotent repository). The pack gate counts it as a declaration, exactly like a
+    /// <c>&lt;bean name&gt;</c>, and knows the object's type for <see cref="References"/> checks.
+    /// </summary>
+    public string? Registers { get; init; }
 }
 
 /// <summary>

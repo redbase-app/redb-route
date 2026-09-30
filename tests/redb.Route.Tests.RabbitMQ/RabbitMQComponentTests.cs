@@ -69,4 +69,34 @@ public sealed class RabbitMQComponentTests
         var endpoint = (RabbitMQEndpoint)_sut.CreateEndpoint(uri);
         endpoint.QueueName.Should().BeEmpty();
     }
+
+    [Theory]
+    [InlineData("host=other-broker", "host")]
+    [InlineData("port=5671", "port")]
+    [InlineData("username=bob&password=x", "username")]
+    [InlineData("VirtualHost=/other", "VirtualHost")]
+    [InlineData("ssl=true", "ssl")]
+    [InlineData("heartbeat=10", "heartbeat")]
+    [InlineData("clientName=svc", "clientName")]
+    public void A_named_factory_with_connection_parameters_on_the_uri_is_refused(string connectionParams, string named)
+    {
+        // The factory is the whole connection, as in Camel; a URI parameter next to it would be ignored, so it is refused
+        // instead of sending the route to another broker than the one written.
+        var uri = EndpointUriParser.Parse($"rabbitmq://orders?connectionFactory=prod&{connectionParams}");
+
+        var act = () => _sut.CreateEndpoint(uri);
+
+        act.Should().Throw<ArgumentException>()
+            .Which.Message.Should().Contain("'prod'").And.Contain(named);
+    }
+
+    [Fact]
+    public void A_named_factory_with_only_routing_parameters_is_accepted()
+    {
+        var uri = EndpointUriParser.Parse("rabbitmq://orders?connectionFactory=prod&exchange=ex&routingKey=k&prefetchCount=5");
+
+        var act = () => _sut.CreateEndpoint(uri);
+
+        act.Should().NotThrow();
+    }
 }

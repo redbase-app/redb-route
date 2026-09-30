@@ -21,7 +21,8 @@ public class GrpcMethodAttributeTests
 
     private static async Task<string> Dispatch(string method)
     {
-        var dispatcher = new GrpcControllerDispatcher(new RouteContext(), typeof(PinnedController));
+        await using var context = new RouteContext();
+        var dispatcher = new GrpcControllerDispatcher(context, typeof(PinnedController));
         var exchange = new Exchange(new Message(Array.Empty<byte>()));
         exchange.In.Headers[GrpcControllerDispatcher.MethodHeader] = method;
 
@@ -49,7 +50,8 @@ public class GrpcMethodAttributeTests
         var exchange = new Exchange(new Message(Array.Empty<byte>()));
         exchange.In.Headers[GrpcControllerDispatcher.MethodHeader] = "ListUsersV2";
 
-        await new GrpcControllerDispatcher(new RouteContext(), typeof(PinnedController)).Process(exchange);
+        await using var context = new RouteContext();
+        await new GrpcControllerDispatcher(context, typeof(PinnedController)).Process(exchange);
 
         exchange.Out!.GetHeader<int>("status.code").Should().Be(404);
     }

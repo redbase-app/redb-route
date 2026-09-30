@@ -316,14 +316,7 @@ public class GrpcProducerTests : IAsyncLifetime
         exchange.Out.Should().NotBeNull();
     }
 
-    private static int GetFreePort()
-    {
-        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     [Fact]
     public void Asking_a_producer_for_tls_does_not_leave_it_in_cleartext()

@@ -1,13 +1,16 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Text;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using MQTTnet;
+using MQTTnet.Formatter;
 using MQTTnet.Packets;
 using MQTTnet.Protocol;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.MqttNet.Connection;
+using redb.Route.Telemetry;
 
 namespace redb.Route.MqttNet;
 
@@ -154,15 +157,18 @@ internal sealed class MqttConsumer : IConsumer
         // Serial (default): process inline; MQTTnet auto-acknowledges on handler return (after processing).
         if (_queue is null)
         {
+            using var span = StartReceiveSpan(args.ApplicationMessage);
             _drain.Increment();
             try
             {
                 await _processor.Process(exchange, _drain.ProcessingToken).ConfigureAwait(false);
                 exchange.ThrowIfUnhandledFailure();
             }
-            catch (OperationCanceledException) { }
+            // Our own stop is not a failure; any other cancellation, a timeout inside the route, is.
+            catch (OperationCanceledException) when (_drain.ProcessingToken.IsCancellationRequested) { }
             catch (Exception ex)
             {
+                span.Activity.RecordFailure(ex);
                 _logger?.LogError(ex, "MQTT message processing failed: topic={Topic}",
                     args.ApplicationMessage.Topic);
             }
@@ -202,6 +208,7 @@ internal sealed class MqttConsumer : IConsumer
 
     private async Task ProcessAndAck(IExchange exchange, MqttApplicationMessageReceivedEventArgs args, CancellationToken ct)
     {
+        using var span = StartReceiveSpan(args.ApplicationMessage);
         try
         {
             await _processor.Process(exchange, ct).ConfigureAwait(false);
@@ -215,10 +222,12 @@ internal sealed class MqttConsumer : IConsumer
                     args.ApplicationMessage.Topic);
             }
         }
-        catch (OperationCanceledException) { }
+        // Our own stop is not a failure; any other cancellation, a timeout inside the route, is.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex)
         {
             // Do NOT acknowledge on failure — the broker redelivers on reconnect (QoS 1/2).
+            span.Activity.RecordFailure(ex);
             _logger?.LogError(ex, "MQTT message processing failed: topic={Topic}",
                 args.ApplicationMessage.Topic);
         }
@@ -228,6 +237,28 @@ internal sealed class MqttConsumer : IConsumer
             await exchange.DisposeAsync().ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// The span of one message. The trace context travels in MQTT 5 user properties and is read only when this
+    /// connection speaks v5; without it (or under 3.1.1) the span is a root, never a child of the activity the
+    /// client's receive loop holds.
+    /// </summary>
+    private TransportSpan StartReceiveSpan(MqttApplicationMessage message)
+    {
+        TraceHeaderReader<MqttApplicationMessage> read = _client?.Options?.ProtocolVersion == MqttProtocolVersion.V500
+            ? ReadUserProperty
+            : static (_, _) => null;
+        return RouteTelemetryExtensions.StartConsumerSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{message.Topic} receive", ActivityKind.Consumer, "messaging.system", "mqtt",
+            _endpoint.Uri.NormalizedKey, message, read,
+            destination: message.Topic, operation: "receive");
+    }
+
+#pragma warning disable CS0618 // MQTTnet marks Value as obsolete in favor of ValueBuffer
+    private static string? ReadUserProperty(MqttApplicationMessage message, string name)
+        => message.UserProperties?.FirstOrDefault(p => p.Name == name)?.Value;
+#pragma warning restore CS0618
 
     private Exchange CreateExchange(MqttApplicationMessage message)
     {

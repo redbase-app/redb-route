@@ -289,7 +289,7 @@ public class XmlContextLoaderTests : IAsyncDisposable
             """);
 
         act.Should().Throw<XmlRouteException>()
-            .WithMessage("*either value= or exactly one nested anonymous <bean*");
+            .WithMessage("*takes exactly one of: value=, ref=, one nested anonymous <bean type=…>, one <list>*");
     }
 
     [Fact]
@@ -306,7 +306,7 @@ public class XmlContextLoaderTests : IAsyncDisposable
             """);
 
         act.Should().Throw<XmlRouteException>()
-            .WithMessage("*either value= or exactly one nested anonymous <bean*");
+            .WithMessage("*takes exactly one of: value=, ref=, one nested anonymous <bean type=…>, one <list>*");
     }
 
     [Fact]

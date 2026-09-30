@@ -84,7 +84,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
     /// <inheritdoc />
     protected override async Task ConnectAsync(CancellationToken ct)
     {
-        _channel = await _endpoint.CreateChannelAsync(ct: ct).ConfigureAwait(false);
+        _channel = await _endpoint.CreateChannelAsync(RabbitMQConnectionUse.Publish, ct: ct).ConfigureAwait(false);
 
         try
         {
@@ -142,37 +142,46 @@ public sealed class RabbitMQProducer : ConnectableProducer
     {
         EnsureStarted();
 
-        EnsureChannel();
+        await EnsureChannelAsync(ct).ConfigureAwait(false);
 
-        using var activity = RouteActivitySource.Source.StartActivity(
-            $"{_options.Exchange} publish", ActivityKind.Producer);
-
+        // The send span through the core's transport contract: it names its endpoint and honours EnableTelemetry.
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_options.Exchange} publish", ActivityKind.Producer, "messaging.system", "rabbitmq",
+            _endpoint.Uri.NormalizedKey,
+            destination: _options.ResolveOption(_options.Exchange, exchange) ?? _options.Exchange,
+            operation: "publish");
         if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag("messaging.system", "rabbitmq");
-            activity.SetTag("messaging.operation", "publish");
-            activity.SetTag("messaging.destination.name",
-                _options.ResolveOption(_options.Exchange, exchange) ?? _options.Exchange);
             activity.SetTag("messaging.rabbitmq.destination.routing_key",
                 _options.ResolveOption(_options.RoutingKey, exchange) ?? _options.RoutingKey);
-        }
 
         var (properties, body) = PrepareMessage(exchange);
 
-        // Inject W3C trace context into AMQP headers
-        InjectTraceContext(activity, properties);
+        // The context of this send, over a traceparent copied from the incoming message: that one names the previous hop.
+        RouteTelemetryExtensions.InjectTraceContext(activity, properties,
+            static (p, name, value) => (p.Headers ??= new Dictionary<string, object?>())[name] = value);
 
-        if (_options.ReplyTo)
+        try
         {
-            await ProcessRpcAsync(exchange, properties, body, ct).ConfigureAwait(false);
+            if (_options.ReplyTo)
+            {
+                await ProcessRpcAsync(exchange, properties, body, ct).ConfigureAwait(false);
+            }
+            else if (TransactedActions.Defers(exchange, _options.Transacted))
+            {
+                ProcessTransactional(exchange, properties, body);
+            }
+            else
+            {
+                await ProcessImmediateAsync(exchange, properties, body, ct).ConfigureAwait(false);
+            }
         }
-        else if (TransactedActions.Defers(exchange, _options.Transacted))
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
-            ProcessTransactional(exchange, properties, body);
-        }
-        else
-        {
-            await ProcessImmediateAsync(exchange, properties, body, ct).ConfigureAwait(false);
+            // A refused or unconfirmed publish, a returned message, a failed request-reply call. Only a cancellation
+            // through the caller's own token is not a failure; any other one (a client-side timeout) is.
+            activity.RecordFailure(ex);
+            throw;
         }
     }
 
@@ -204,6 +213,10 @@ public sealed class RabbitMQProducer : ConnectableProducer
 
             Logger?.LogDebug("RabbitMQ immediate publish: exchange={Exchange}, routingKey={RoutingKey}, bodySize={Size}",
                 resolvedExchange, resolvedRoutingKey, body.Length);
+        }
+        catch (global::RabbitMQ.Client.Exceptions.PublishReturnException returned)
+        {
+            throw RabbitMQUnroutableException.From(returned);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -241,7 +254,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
             return open;
 
         _txChannel?.Dispose();
-        var channel = await _endpoint.CreateChannelAsync(publisherConfirms: false, ct: ct).ConfigureAwait(false);
+        var channel = await _endpoint.CreateChannelAsync(RabbitMQConnectionUse.Publish, publisherConfirms: false, ct: ct).ConfigureAwait(false);
         await channel.TxSelectAsync(ct).ConfigureAwait(false);
         _txChannel = channel;
         return channel;
@@ -263,6 +276,11 @@ public sealed class RabbitMQProducer : ConnectableProducer
             await PublishRpcOnceAsync(exchange, properties, body, ct).ConfigureAwait(false);
             return;
         }
+        catch (global::RabbitMQ.Client.Exceptions.PublishReturnException returned)
+        {
+            // No queue takes the request, so no reply can come; a new reply queue would not change that.
+            throw RabbitMQUnroutableException.From(returned);
+        }
         catch (Exception ex) when (IsRecoverableRpcFailure(ex))
         {
             Logger?.LogWarning(ex,
@@ -273,7 +291,14 @@ public sealed class RabbitMQProducer : ConnectableProducer
             // Properties.ReplyTo was set to the OLD queue inside PublishRpcOnceAsync; clear so
             // the second attempt picks up the NEW _replyQueueName.
             properties.ReplyTo = null;
-            await PublishRpcOnceAsync(exchange, properties, body, ct).ConfigureAwait(false);
+            try
+            {
+                await PublishRpcOnceAsync(exchange, properties, body, ct).ConfigureAwait(false);
+            }
+            catch (global::RabbitMQ.Client.Exceptions.PublishReturnException returned)
+            {
+                throw RabbitMQUnroutableException.From(returned);
+            }
         }
     }
 
@@ -415,7 +440,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
                 try { _channel?.Dispose(); }
                 catch (Exception ex) { Logger?.LogDebug(ex, "RabbitMQ: error disposing dead producer channel during recreate"); }
 
-                _channel = await _endpoint.CreateChannelAsync(ct: ct).ConfigureAwait(false);
+                _channel = await _endpoint.CreateChannelAsync(RabbitMQConnectionUse.Publish, ct: ct).ConfigureAwait(false);
                 Logger?.LogInformation("RabbitMQ producer channel recreated after RPC failure");
             }
 
@@ -467,27 +492,9 @@ public sealed class RabbitMQProducer : ConnectableProducer
             {
                 try
                 {
-                    var body = ea.Body.ToArray();
-                    var message = new Message(Encoding.UTF8.GetString(body));
-
-                    // Copy response headers
-                    if (ea.BasicProperties.Headers is not null)
-                    {
-                        foreach (var header in ea.BasicProperties.Headers)
-                        {
-                            object? value = header.Value switch
-                            {
-                                byte[] bytes => Encoding.UTF8.GetString(bytes),
-                                string str => str,
-                                _ => header.Value
-                            };
-
-                            if (value is not null)
-                                message.Headers[header.Key] = value;
-                        }
-                    }
-
-                    tcs.TrySetResult(message);
+                    // The reply is mapped as a consumed message is: the body stays bytes (a binary reply is not
+                    // decoded as text), and ContentType and the other basic properties come along.
+                    tcs.TrySetResult(RabbitMQConsumer.MessageFrom(ea, ea.Body.ToArray()));
                 }
                 catch (Exception ex)
                 {
@@ -503,26 +510,6 @@ public sealed class RabbitMQProducer : ConnectableProducer
             try { await _channel!.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false).ConfigureAwait(false); }
             catch (Exception nackEx) { Logger?.LogWarning(nackEx, "RabbitMQ: error nacking RPC response"); }
         }
-    }
-
-    /// <summary>
-    /// Injects W3C trace context (traceparent/tracestate) into AMQP BasicProperties headers
-    /// using the .NET built-in DistributedContextPropagator.
-    /// </summary>
-    private static void InjectTraceContext(Activity? activity, BasicProperties properties)
-    {
-        if (activity is null) return;
-
-        properties.Headers ??= new Dictionary<string, object?>();
-
-        var propagator = DistributedContextPropagator.Current;
-        propagator.Inject(activity, properties.Headers, static (carrier, key, value) =>
-        {
-            if (carrier is IDictionary<string, object?> h && !string.IsNullOrEmpty(value))
-            {
-                h[key] = value;
-            }
-        });
     }
 
     // ── Message preparation ──
@@ -625,10 +612,40 @@ public sealed class RabbitMQProducer : ConnectableProducer
 
     // ── Helpers ──
 
-    private void EnsureChannel()
+    /// <summary>
+    /// Reopens the producer's channel when the broker closed it. A channel-level error — a publish to an exchange that
+    /// does not exist (404), a failed precondition — closes the channel but not the connection, so connection recovery
+    /// never reopens it, and every later send would fail until the route was restarted.
+    /// </summary>
+    private async Task EnsureChannelAsync(CancellationToken ct)
     {
-        if (_channel is null or { IsOpen: false })
-            throw new InvalidOperationException("RabbitMQ channel is not available. The producer might need restart.");
+        if (_channel is { IsOpen: true })
+            return;
+
+        if (_options.ReplyTo)
+        {
+            // The reply consumer lived on the closed channel: the channel and the reply queue are recreated together.
+            await RecreateResponseQueueAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
+        await _publishLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_channel is { IsOpen: true })
+                return;
+
+            var closed = _channel;
+            _channel = await _endpoint.CreateChannelAsync(RabbitMQConnectionUse.Publish, ct: ct).ConfigureAwait(false);
+            await _endpoint.ReleaseChannelAsync(closed, ct).ConfigureAwait(false);
+            await _endpoint.DeclareTopologyAsync(_channel, ct).ConfigureAwait(false);
+            Logger?.LogWarning("RabbitMQ producer '{Producer}': the broker had closed its channel ({Reason}); a new one is open",
+                ProducerName, closed?.CloseReason?.ReplyText ?? "unknown reason");
+        }
+        finally
+        {
+            _publishLock.Release();
+        }
     }
 
     private static BasicProperties CloneProperties(BasicProperties source)
@@ -753,6 +770,17 @@ internal sealed class RabbitMQSendBatch : ITransactedAction
         try
         {
             var channel = await _transactedChannel(ct).ConfigureAwait(false);
+
+            // A mandatory publish that no queue takes comes back as basic.return, which the broker sends while it
+            // routes the batch at tx.commit, before commit-ok. The batches take turns on this channel, so every return
+            // seen until the commit completes belongs to this batch.
+            var returned = new ConcurrentQueue<BasicReturnEventArgs>();
+            AsyncEventHandler<BasicReturnEventArgs> onReturn = (_, args) =>
+            {
+                returned.Enqueue(args);
+                return Task.CompletedTask;
+            };
+            channel.BasicReturnAsync += onReturn;
             try
             {
                 foreach (var p in _publishes)
@@ -778,6 +806,23 @@ internal sealed class RabbitMQSendBatch : ITransactedAction
                     "exchange={Exchange}, routingKey={RoutingKey}",
                     _publishes.Count, _publishes.FirstOrDefault()?.Exchange, _publishes.FirstOrDefault()?.RoutingKey);
                 throw;
+            }
+            finally
+            {
+                channel.BasicReturnAsync -= onReturn;
+            }
+
+            // The transaction is committed: the routed messages are delivered and cannot be taken back. A returned one
+            // is lost unless the route learns of it, so the send fails as an immediate publish of it fails.
+            if (returned.TryPeek(out var first))
+            {
+                var message =
+                    $"RabbitMQ: {returned.Count} of the {_publishes.Count} messages of a transactional batch came back " +
+                    $"unroutable (no queue takes them) and were not delivered; the other {_publishes.Count - returned.Count} " +
+                    $"were committed. First returned: {first.ReplyCode} {first.ReplyText}, exchange='{first.Exchange}', " +
+                    $"routingKey='{first.RoutingKey}'.";
+                _logger?.LogError("{Message}", message);
+                throw new RabbitMQUnroutableException(message, first.Exchange, first.RoutingKey, first.ReplyCode, first.ReplyText);
             }
 
             _logger?.LogDebug("RabbitMQ transactional batch committed: messages={Count}", _publishes.Count);

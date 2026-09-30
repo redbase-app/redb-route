@@ -39,8 +39,20 @@ public sealed class SqsEndpointOptions : AwsEndpointOptions
     /// </summary>
     public bool ExtendMessageVisibility { get; set; }
 
-    /// <summary>Delete a message after it is processed successfully (acknowledge). Default true.</summary>
-    public bool DeleteAfterRead { get; set; } = true;
+    /// <summary>
+    /// When a message is deleted from the queue (<see cref="Core.AckMode"/>). <c>Manual</c> (default): after a turn that
+    /// ended well; a failed one becomes visible again (at-least-once). <c>Auto</c>: on receipt, before the route runs
+    /// (at-most-once).
+    /// </summary>
+    public AckMode AckMode { get; set; } = AckMode.Manual;
+
+    /// <inheritdoc />
+    protected override string? UnknownParameterHint(string name)
+        => name.Equals("deleteAfterRead", StringComparison.OrdinalIgnoreCase)
+            ? "'deleteAfterRead' is replaced by 'ackMode': ackMode=manual (the default) deletes after the route, as " +
+              "deleteAfterRead=true did; ackMode=auto deletes on receipt. deleteAfterRead=false never deleted a message, " +
+              "so every message came back after its visibility timeout."
+            : null;
 
     /// <summary>
     /// On processing failure, immediately reset visibility to 0 so the message is redelivered at once
@@ -98,6 +110,10 @@ public sealed class SqsEndpointOptions : AwsEndpointOptions
             throw new ArgumentException($"visibilityTimeout cannot be negative. Got: {VisibilityTimeout}");
         if (ExtendMessageVisibility && VisibilityTimeout <= 0)
             throw new ArgumentException("extendMessageVisibility requires visibilityTimeout > 0.");
+        if (AckMode == AckMode.Auto && (ExtendMessageVisibility || ResetVisibilityOnFailure))
+            throw new ArgumentException(
+                "ackMode=auto deletes a message on receipt, so there is no visibility left to extend or reset: " +
+                "extendMessageVisibility and resetVisibilityOnFailure need ackMode=manual.");
         if (DelaySeconds is < 0 or > 900)
             throw new ArgumentException($"delaySeconds must be 0–900. Got: {DelaySeconds}");
         if (BatchMaxMessages is < 1 or > 10)

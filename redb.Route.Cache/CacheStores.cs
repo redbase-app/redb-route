@@ -27,6 +27,20 @@ internal static class CacheStores
         }
     }
 
+    /// <summary>The computations in progress on the store <see cref="Resolve"/> returns for the same provider.</summary>
+    public static System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<CacheEntry?>> Flights(IRouteContext context, CacheProvider provider)
+    {
+        lock (Sync)
+        {
+            if (context.GetService<CacheFlights>() is not { } flights)
+            {
+                flights = new CacheFlights();
+                context.AddService(typeof(CacheFlights), flights);
+            }
+            return flights.For(provider);
+        }
+    }
+
     private static ICacheStore Memory(IRouteContext context)
     {
         if (context.GetService<MemoryCacheStore>() is { } existing) return existing;

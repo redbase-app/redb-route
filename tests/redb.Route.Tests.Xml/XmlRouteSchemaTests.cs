@@ -30,9 +30,9 @@ public class XmlRouteSchemaTests
         var component = new CatalogComponent(
             "seda", [], "redb.Route", "redb.Route.Components.SedaEndpointOptions", "queue", false,
             [
-                new CatalogOption("Queue", "string", null, false, null),
-                new CatalogOption("Size", "int", "1000", false, null),
-            ]);
+                new CatalogOption("Queue", "string", null, false, null, Role: null, ConnectionParameter: false, ConnectionFactoryReference: false),
+                new CatalogOption("Size", "int", "1000", false, null, Role: null, ConnectionParameter: false, ConnectionFactoryReference: false),
+            ], Lenient: false);
 
         var schema = XmlRouteSchema.Generate(Registry, [component]).ToString();
 

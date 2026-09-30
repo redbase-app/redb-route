@@ -1,6 +1,7 @@
 using System.Xml;
 using System.Xml.Linq;
 using System.Xml.Schema;
+using redb.Route.Core;
 
 namespace redb.Route.Xml;
 
@@ -122,6 +123,9 @@ public static class XmlRouteSchema
             schema.Add(GlobalElement(contribution.Spec, catalog));
 
         schema.Add(BeanElement());
+        schema.Add(BeanListType());
+        if (catalog is not null)
+            schema.Add(OtherSideTypes());
         schema.Add(RouteElement(catalog));
         schema.Add(RoutesElement(contributions));
         schema.Add(ContextElement(contributions));
@@ -174,23 +178,14 @@ public static class XmlRouteSchema
             new XElement(Xs + "complexType",
                 new XElement(Xs + "choice",
                     new XAttribute("minOccurs", "0"), new XAttribute("maxOccurs", "unbounded"),
-                    // value= for a scalar, one nested anonymous <bean> for a property that holds
-                    // an object (a certificate, credentials); the parser rejects both at once.
+                    // A slot holds exactly one of value=, ref=, a nested <bean>, a <list>; the
+                    // schema offers all four and the parser (BeanModel) rejects a second one.
                     new XElement(Xs + "element", new XAttribute("name", "property"),
-                        new XElement(Xs + "complexType",
-                            new XElement(Xs + "choice",
-                                new XAttribute("minOccurs", "0"),
-                                new XElement(Xs + "element", new XAttribute("ref", "r:bean"))),
-                            Attribute(new AttributeSpec("key", AttributeType.String, Required: true)),
-                            Attribute(new AttributeSpec("value", AttributeType.String)),
-                            ForeignAttributes())),
+                        BeanSlot(Attribute(new AttributeSpec("key", AttributeType.String, Required: true)))),
                     new XElement(Xs + "element", new XAttribute("name", "constructorArg"),
-                        new XElement(Xs + "complexType",
-                            new XElement(Xs + "choice",
-                                new XAttribute("minOccurs", "0"),
-                                new XElement(Xs + "element", new XAttribute("ref", "r:bean"))),
-                            Attribute(new AttributeSpec("value", AttributeType.String)),
-                            ForeignAttributes()))),
+                        // type= names the parameter the value binds to (Spring constructor-arg type):
+                        // the constructor or factory method is then the one with exactly that signature.
+                        BeanSlot(Attribute(new AttributeSpec("type", AttributeType.TypeName))))),
                 // name is required on a registered bean and absent on a nested anonymous one —
                 // context-dependent, so the parser enforces it and the schema stays permissive.
                 Attribute(new AttributeSpec("name", AttributeType.String)),
@@ -200,13 +195,43 @@ public static class XmlRouteSchema
                 Attribute(new AttributeSpec("factoryMethod", AttributeType.String)),
                 ForeignAttributes()));
 
+    private static XElement BeanSlot(params XElement[] attributes)
+        => new(Xs + "complexType",
+            new XElement(Xs + "choice",
+                new XAttribute("minOccurs", "0"),
+                new XElement(Xs + "element", new XAttribute("ref", "r:bean")),
+                new XElement(Xs + "element", new XAttribute("name", "list"), new XAttribute("type", "r:beanList"))),
+            attributes,
+            Attribute(new AttributeSpec("value", AttributeType.String)),
+            // A bean registered earlier, by its bare name (no '#': the attribute already says it).
+            Attribute(new AttributeSpec("ref", AttributeType.String)),
+            ForeignAttributes());
+
+    /// <summary>
+    /// A named type because a list nests: its items are text values, references, anonymous beans
+    /// and further lists. of= names the element type where the target does not (a constructor).
+    /// </summary>
+    private static XElement BeanListType()
+        => new(Xs + "complexType", new XAttribute("name", "beanList"),
+            new XElement(Xs + "choice",
+                new XAttribute("minOccurs", "0"), new XAttribute("maxOccurs", "unbounded"),
+                new XElement(Xs + "element", new XAttribute("name", "value"), new XAttribute("type", "xs:string")),
+                new XElement(Xs + "element", new XAttribute("name", "ref"),
+                    new XElement(Xs + "complexType",
+                        Attribute(new AttributeSpec("bean", AttributeType.String, Required: true)),
+                        ForeignAttributes())),
+                new XElement(Xs + "element", new XAttribute("ref", "r:bean")),
+                new XElement(Xs + "element", new XAttribute("name", "list"), new XAttribute("type", "r:beanList"))),
+            Attribute(new AttributeSpec("of", AttributeType.TypeName)),
+            ForeignAttributes());
+
     private static XElement RouteElement(IReadOnlyList<CatalogComponent>? catalog)
         => new(Xs + "element", new XAttribute("name", "route"),
             new XElement(Xs + "complexType",
                 new XElement(Xs + "sequence",
                     new XElement(Xs + "element", new XAttribute("name", "from"),
                         new XElement(Xs + "complexType",
-                            EndpointContent(catalog),
+                            EndpointContent(catalog, EndpointRole.Consumer),
                             Attribute(new AttributeSpec("uri", AttributeType.Uri)),
                             ForeignAttributes())),
                     StepGroup()),
@@ -238,7 +263,7 @@ public static class XmlRouteSchema
         if (spec.AllowsSteps)
             contentParticles.Add(new XElement(Xs + "group", new XAttribute("ref", "r:step")));
         if (spec.TakesEndpoint)
-            contentParticles.AddRange(EndpointParticles(catalog));
+            contentParticles.AddRange(EndpointParticles(catalog, EndpointRole.Producer));
 
         if (contentParticles.Count > 0)
         {
@@ -267,7 +292,7 @@ public static class XmlRouteSchema
     /// set of scheme elements, each with its typed options, path/synonym attributes and open
     /// family/text-option children.
     /// </summary>
-    private static IReadOnlyList<XElement> EndpointParticles(IReadOnlyList<CatalogComponent>? catalog)
+    private static IReadOnlyList<XElement> EndpointParticles(IReadOnlyList<CatalogComponent>? catalog, EndpointRole side)
     {
         if (catalog is null)
         {
@@ -277,15 +302,15 @@ public static class XmlRouteSchema
         }
         return [.. catalog
             .OrderBy(c => c.Scheme, StringComparer.Ordinal)
-            .Select(SchemeElement)];
+            .Select(c => SchemeElement(c, side))];
     }
 
-    private static XElement EndpointContent(IReadOnlyList<CatalogComponent>? catalog)
+    private static XElement EndpointContent(IReadOnlyList<CatalogComponent>? catalog, EndpointRole side)
         => new(Xs + "choice",
             new XAttribute("minOccurs", "0"),
-            EndpointParticles(catalog));
+            EndpointParticles(catalog, side));
 
-    private static XElement SchemeElement(CatalogComponent component)
+    private static XElement SchemeElement(CatalogComponent component, EndpointRole side)
     {
         var type = new XElement(Xs + "complexType",
             new XAttribute("mixed", "true"),
@@ -309,6 +334,24 @@ public static class XmlRouteSchema
         }
         foreach (var option in component.Options)
         {
+            // An option only the other side reads is refused by the connector (EndpointRole). A
+            // strict connector simply does not declare it here, so the editor flags it as unknown;
+            // a lenient one takes any attribute through its wildcard, so the option is declared
+            // with a type no value satisfies — the editor's message names it (producerOnlyOption).
+            if (option.Role is { } role && role != side)
+            {
+                if (component.Lenient)
+                    type.Add(new XElement(Xs + "attribute",
+                        new XAttribute("name", CamelCase(option.Name)),
+                        new XAttribute("type", "r:" + OtherSideType(role))));
+                continue;
+            }
+            if (option.Type is "enum" or "flags" && option.EnumValues is { Count: > 0 } members)
+            {
+                type.Add(new XElement(Xs + "attribute", new XAttribute("name", CamelCase(option.Name)),
+                    EnumOptionType(members, flags: option.Type == "flags")));
+                continue;
+            }
             type.Add(Attribute(new AttributeSpec(
                 CamelCase(option.Name),
                 option.Type switch
@@ -323,12 +366,59 @@ public static class XmlRouteSchema
                 },
                 EnumValues: option.EnumValues)));
         }
-        // Unknown unqualified attributes stay legal — the URI form's UnmappedParameters rule.
+        // The engine's own rule for an unknown parameter: a lenient connector takes it (http passes
+        // it on, sql reads it), a strict one refuses the endpoint — so the editor refuses the
+        // attribute too. A foreign-namespace attribute is never an option (Р9) and stays legal.
         type.Add(new XElement(Xs + "anyAttribute",
-            new XAttribute("namespace", "##any"),
+            new XAttribute("namespace", component.Lenient ? "##any" : "##other"),
             new XAttribute("processContents", "lax")));
         return new XElement(Xs + "element", new XAttribute("name", component.Scheme), type);
     }
+
+    /// <summary>
+    /// A connector's enum option as the engine reads it: member names in any case (the option
+    /// converter parses with ignoreCase, and the engine's own messages write them lowercase —
+    /// <c>ackMode=manual</c>). A union of the lowercase list, which the editor offers as
+    /// completion, and a case-insensitive pattern, which accepts <c>Manual</c> as the engine does.
+    /// A [Flags] enum takes several members joined by commas (<c>Tls12,Tls13</c>).
+    /// </summary>
+    private static XElement EnumOptionType(IReadOnlyList<string> members, bool flags)
+    {
+        var member = "(" + string.Join("|", members.Select(AnyCase)) + ")";
+        var pattern = flags ? $@"{member}(\s*,\s*{member})*" : member;
+        return new XElement(Xs + "simpleType",
+            new XElement(Xs + "union",
+                new XElement(Xs + "simpleType",
+                    new XElement(Xs + "restriction", new XAttribute("base", "xs:string"),
+                        members.Select(m => new XElement(Xs + "enumeration", new XAttribute("value", m.ToLowerInvariant()))))),
+                new XElement(Xs + "simpleType",
+                    new XElement(Xs + "restriction", new XAttribute("base", "xs:string"),
+                        new XElement(Xs + "pattern", new XAttribute("value", pattern))))));
+    }
+
+    /// <summary>A member name as a case-insensitive XSD regex (<c>Tls12</c> → <c>[tT][lL][sS]12</c>).</summary>
+    private static string AnyCase(string name)
+        => string.Concat(name.Select(c => char.IsLetter(c)
+            ? $"[{char.ToLowerInvariant(c)}{char.ToUpperInvariant(c)}]"
+            : c.ToString()));
+
+    private static string OtherSideType(EndpointRole role)
+        => role == EndpointRole.Producer ? "producerOnlyOption" : "consumerOnlyOption";
+
+    /// <summary>
+    /// The types of an option written on the side that does not read it: an empty character class
+    /// admits no value, so any use is a validation error, and the type name is the explanation.
+    /// </summary>
+    private static IEnumerable<XElement> OtherSideTypes()
+        => new[] { EndpointRole.Producer, EndpointRole.Consumer }.Select(role =>
+            new XElement(Xs + "simpleType", new XAttribute("name", OtherSideType(role)),
+                new XElement(Xs + "annotation",
+                    new XElement(Xs + "documentation",
+                        role == EndpointRole.Producer
+                            ? "Read only by the producer (<to>): the consumer (<from>) refuses it."
+                            : "Read only by the consumer (<from>): the producer (<to>) refuses it.")),
+                new XElement(Xs + "restriction", new XAttribute("base", "xs:string"),
+                    new XElement(Xs + "pattern", new XAttribute("value", "[a-[a]]")))));
 
     private static string CamelCase(string name)
         => name.Length > 0 && char.IsUpper(name[0]) ? char.ToLowerInvariant(name[0]) + name[1..] : name;

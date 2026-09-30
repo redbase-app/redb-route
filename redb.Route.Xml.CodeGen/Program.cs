@@ -187,11 +187,18 @@ try
                 : null;
             if (extensions is not null)
                 Console.Error.WriteLine($"--bin contributions: {extensions.Count} ({string.Join(", ", extensions.Select(e => e.Name))})");
+            // The connectors of the same output: every endpoint's parameters are held against
+            // them, so a name a strict connector refuses at start is a gate error instead.
+            var catalog = Option("--bin") is { } catalogDir
+                ? redb.Route.Xml.ComponentCatalog.Build(LoadComponents(Path.GetFullPath(catalogDir)))
+                : null;
+            if (catalog is not null)
+                Console.Error.WriteLine($"--bin connectors: {catalog.Count} ({string.Join(", ", catalog.Select(c => c.Scheme + (c.Lenient ? "" : "*")))}; * strict)");
             var result = command == "check"
-                ? redb.Route.Xml.Packaging.RoutePackage.Check(projectDir, name, version, resolver, extensions)
+                ? redb.Route.Xml.Packaging.RoutePackage.Check(projectDir, name, version, resolver, extensions, catalog)
                 : redb.Route.Xml.Packaging.RoutePackage.Build(projectDir, name, version,
                     outDir ?? Path.Combine(projectDir, "pkg"),
-                    args.Where((a, i) => i > 0 && args[i - 1] == "--entry").ToList(), resolver, extensions);
+                    args.Where((a, i) => i > 0 && args[i - 1] == "--entry").ToList(), resolver, extensions, catalog);
             foreach (var finding in result.Findings)
                 (finding.IsError ? Console.Error : Console.Out).WriteLine(finding.ToString());
             if (result.Errors.Any())
@@ -421,16 +428,23 @@ static IEnumerable<redb.Route.Abstractions.IComponent> LoadComponents(string bin
             Console.Error.WriteLine($"warning: {Path.GetFileName(dll)}: some types did not load ({ex.LoaderExceptions.FirstOrDefault()?.Message}); using the rest.");
             types = [.. ex.Types.Where(t => t is not null)!];
         }
+        // A constructor the engine can call without arguments: none at all, or only optional ones
+        // (HttpComponent(string scheme = "http") — requiring a strictly parameterless one left
+        // http: out of the catalog and made every structured <http> an error in the editor).
+        static System.Reflection.ConstructorInfo? DefaultConstructor(Type type)
+            => type.GetConstructors().FirstOrDefault(c => c.GetParameters().All(p => p.IsOptional));
         var componentTypes = types
             .Where(t => !t.IsAbstract && !t.IsInterface
                         && typeof(redb.Route.Abstractions.IComponent).IsAssignableFrom(t)
-                        && t.GetConstructor(Type.EmptyTypes) is not null);
+                        && DefaultConstructor(t) is not null);
         foreach (var type in componentTypes)
         {
             redb.Route.Abstractions.IComponent component;
             try
             {
-                component = (redb.Route.Abstractions.IComponent)Activator.CreateInstance(type)!;
+                var constructor = DefaultConstructor(type)!;
+                component = (redb.Route.Abstractions.IComponent)constructor.Invoke(
+                    [.. constructor.GetParameters().Select(p => p.DefaultValue)]);
             }
             catch (Exception ex) when (ex is System.Reflection.TargetInvocationException or MissingMethodException)
             {

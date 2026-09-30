@@ -81,27 +81,9 @@ public sealed class SoapControllerDispatcher : IProcessor
             throw;
         }
 
-        object? result;
-        try { result = entry.Method.Invoke(controller, args); }
-        catch (TargetInvocationException tie) { throw tie.InnerException ?? tie; }
-
-        // Await Task / Task<T> and ValueTask / ValueTask<T> (the latter is a struct, so `is Task` misses it).
-        if (result is Task task)
-        {
-            await task.ConfigureAwait(false);
-            result = GetTaskResult(task);
-        }
-        else if (result is ValueTask valueTask)
-        {
-            await valueTask.ConfigureAwait(false);
-            result = null;
-        }
-        else if (result?.GetType() is { IsGenericType: true } rt && rt.GetGenericTypeDefinition() == typeof(ValueTask<>))
-        {
-            var asTask = (Task)rt.GetMethod("AsTask")!.Invoke(result, null)!;
-            await asTask.ConfigureAwait(false);
-            result = GetTaskResult(asTask);
-        }
+        // Task, ValueTask and their results are read from the declared return type, and a sync throw reaches the
+        // consumer as the action's own exception (see ActionInvoker).
+        var result = await ActionInvoker.InvokeAsync(entry.Method, controller, args).ConfigureAwait(false);
 
         exchange.Out ??= exchange.In.Clone();
         exchange.Out.Body = SerializeResult(result);
@@ -237,12 +219,6 @@ public sealed class SoapControllerDispatcher : IProcessor
         var t = Nullable.GetUnderlyingType(type) ?? type;
         return t.IsPrimitive || t == typeof(string) || t == typeof(decimal)
             || t == typeof(DateTime) || t == typeof(DateTimeOffset) || t == typeof(Guid) || t.IsEnum;
-    }
-
-    private static object? GetTaskResult(Task task)
-    {
-        var type = task.GetType();
-        return type.IsGenericType ? type.GetProperty("Result")?.GetValue(task) : null;
     }
 
     internal sealed record MethodEntry(Type ControllerType, MethodInfo Method);

@@ -167,15 +167,14 @@ public class ResolveOptionTests
     }
 
     [Fact]
-    public void BindFromUri_IntPropertyWithExpression_GoesToUnmapped()
+    public void BindFromUri_IntPropertyWithExpression_IsRefused()
     {
-        // Plain int property (not DynamicValue<int>) can't hold ${...}
+        // Plain int property (not DynamicValue<int>) can't hold ${...}. It used to land among the
+        // unmapped parameters and leave the port at its default without a word.
         var opts = new TestEndpointOptions();
-        opts.BindFromUri(new Dictionary<string, string> { ["port"] = "${header.port}" });
+        var act = () => opts.BindFromUri(new Dictionary<string, string> { ["port"] = "${header.port}" });
 
-        // int.Parse("${header.port}") fails → goes to unmapped
-        opts.Port.Should().Be(5672); // default unchanged
-        opts.UnmappedParameters.Should().ContainKey("port");
+        act.Should().Throw<ArgumentException>().WithMessage("*'port=${header.port}'*does not accept ${...} expressions*");
     }
 
     // --- DynamicValue<T>.FromExpression(IExpression) ---

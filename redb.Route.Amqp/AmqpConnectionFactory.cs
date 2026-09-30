@@ -1,4 +1,5 @@
 using System.Security.Authentication;
+using redb.Route.Core;
 
 namespace redb.Route.Amqp;
 
@@ -23,6 +24,7 @@ public sealed class AmqpConnectionFactory
     public string? User { get; set; }
 
     /// <summary>Password for SASL PLAIN authentication.</summary>
+    [Sensitive]
     public string? Password { get; set; }
 
     /// <summary>Container ID sent during AMQP Open. Identifies this client to the broker.</summary>
@@ -77,13 +79,14 @@ public sealed class AmqpConnectionFactory
     public string? SslCertPath { get; set; }
 
     /// <summary>Password for client certificate.</summary>
+    [Sensitive]
     public string? SslCertPassword { get; set; }
 
     /// <summary>Check certificate revocation. (default: false)</summary>
     public bool CheckCertRevocation { get; set; }
 
     /// <summary>Skip server certificate validation (DANGEROUS — dev only). (default: false)</summary>
-    public bool SkipServerCertValidation { get; set; }
+    public bool TrustAllCertificates { get; set; }
 
     // ── SASL ──
 
@@ -187,7 +190,7 @@ public sealed class AmqpConnectionFactory
             factory.SSL.ClientCertificates.Add(cert);
         }
 
-        if (SkipServerCertValidation)
+        if (TrustAllCertificates)
         {
             factory.SSL.RemoteCertificateValidationCallback = (_, _, _, _) => true;
         }

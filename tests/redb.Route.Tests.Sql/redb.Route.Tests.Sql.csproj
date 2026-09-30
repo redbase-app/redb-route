@@ -26,5 +26,9 @@
     <PackageReference Include="Microsoft.Data.SqlClient" Version="$(RouteSqlClientVersion)" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="../redb.Route.Tests/Telemetry/RouteTelemetryProbe.cs" Link="Shared/RouteTelemetryProbe.cs" />
+  </ItemGroup>
+
 </Project>
 

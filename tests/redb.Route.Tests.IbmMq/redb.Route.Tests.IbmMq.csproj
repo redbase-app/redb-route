@@ -5,5 +5,9 @@
     <ProjectReference Include="..\..\redb.Route.IbmMq\redb.Route.IbmMq.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="../redb.Route.Tests/Telemetry/RouteTelemetryProbe.cs" Link="Shared/RouteTelemetryProbe.cs" />
+  </ItemGroup>
+
 </Project>
 

@@ -105,7 +105,7 @@ The consumer uses `ServiceBusProcessor` with callback-based message delivery.
 ```csharp
 .From(Asb.Queue("orders")
     .ConnectionString("...")
-    .ReceiveMode("PeekLock")          // default
+    .AckMode(AckMode.Manual)          // default: PeekLock
     .MaxConcurrentCalls(10)
     .PrefetchCount(20)
     .MaxAutoLockRenewalDuration(300))  // 5 min
@@ -134,7 +134,7 @@ Messages are removed from the queue immediately upon receipt. No acknowledgement
 ```csharp
 .From(Asb.Queue("orders")
     .ConnectionString("...")
-    .ReceiveMode("ReceiveAndDelete"))
+    .AckMode(AckMode.Auto))          // ReceiveAndDelete
 ```
 
 ### Sub-Queues
@@ -294,7 +294,7 @@ services.AddRedbRouteAzureServiceBus();
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `receiveMode` | `PeekLock` | `PeekLock` or `ReceiveAndDelete` |
+| `ackMode` | `manual` | `manual` (PeekLock: completed after the route) or `auto` (ReceiveAndDelete) |
 | `maxConcurrentCalls` | `1` | Max concurrent handler invocations |
 | `prefetchCount` | `0` | Messages to pre-fetch |
 | `maxAutoLockRenewalDuration` | `300` | Auto lock renewal (seconds) |
@@ -389,3 +389,18 @@ Anything else — `0`, a negative, a typo — fails at endpoint creation naming 
 int-typed option silently fell back to 1). Raising the value trades ordering for throughput:
 messages from the same queue are processed out of order, and your processors must be safe to
 run in parallel.
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`). The trace context travels in the application
+properties: the `traceparent` value under Azure's own name for it, `Diagnostic-Id`; `tracestate` and `baggage` under
+their own names.
+
+- **Consumer.** One `Consumer` span per message, named `{entity} receive`, over the whole unit of work, settlement
+  included, for the session consumer too. Its parent is the sender's `Diagnostic-Id`; without one it is a root, never a
+  child of whatever activity the processor thread holds. The sender's baggage is back on it, and the route's spans are
+  its children. It carries `redb.route.endpoint` and `messaging.message.id`, and is an error when the route fails.
+- **Producer.** One `Producer` span per send, named `{entity} send`; an error when the send fails. Every message, each
+  message of a batch included, carries the context of this span: a `Diagnostic-Id` the header bridge copied from a
+  received message is replaced, as it names the previous hop.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span. A context that came in still goes out.

@@ -55,7 +55,7 @@ public class MailEndpointOptions : EndpointOptions
     // ── TLS/SSL ───────────────────────────────────────────────────────
 
     /// <summary>Skip server certificate validation (development only!).</summary>
-    public bool SkipCertificateValidation { get; set; }
+    public bool TrustAllCertificates { get; set; }
 
     /// <summary>Client certificate path for mutual TLS.</summary>
     public string ClientCertPath { get; set; } = "";
@@ -173,6 +173,12 @@ public class MailEndpointOptions : EndpointOptions
 
     /// <summary>Whether to disconnect after each operation (default: maintain persistent connection).</summary>
     public bool Disconnect { get; set; }
+
+    /// <inheritdoc />
+    protected override string? UnknownParameterHint(string name)
+        => name.Equals("skipCertificateValidation", StringComparison.OrdinalIgnoreCase)
+            ? "'skipCertificateValidation' is renamed 'trustAllCertificates', the name every other connector uses."
+            : null;
 
     /// <inheritdoc />
     public override void Validate()

@@ -66,6 +66,19 @@ public sealed class As2Component : ComponentBase
         if (string.Equals(uri.Scheme, "as2s", StringComparison.OrdinalIgnoreCase))
             options.UseTls = true;
 
+        // With a connection factory named, the factory is the agreement: an agreement option on the URI would be ignored
+        // (or win) without a word, so it is refused, naming the parameters and never their values.
+        if (!string.IsNullOrEmpty(options.ConnectionFactory))
+        {
+            var inline = uri.RawParameters.Keys
+                .Where(k => As2Profile.AgreementOptions.Contains(k, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+            if (inline.Count > 0)
+                throw new ArgumentException(
+                    $"AS2 endpoint names connection factory '{options.ConnectionFactory}' and also sets {string.Join(", ", inline)}: " +
+                    "the agreement comes from the connection factory alone; set it there.", inline[0]);
+        }
+
         options.Validate();
 
         return new As2Endpoint(uri, this, options);

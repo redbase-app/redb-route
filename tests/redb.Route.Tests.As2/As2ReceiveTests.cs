@@ -22,7 +22,7 @@ namespace redb.Route.Tests.As2;
 /// </summary>
 public class As2ReceiveTests
 {
-    private static readonly X509Certificate2 Cert = MakeCert("as2-loopback");
+    private static readonly X509Certificate2 Cert = As2TestKit.Cert;
 
     [Fact]
     public async Task Loopback_ProducerToConsumer_DeliversPayload()
@@ -31,6 +31,7 @@ public class As2ReceiveTests
         await using var context = new RouteContext();
         context.AddComponent(new As2Component());
         context.AddToRegistry("me", Factory());
+        context.AddToRegistry("them", As2TestKit.Sender());
 
         var received = new List<string>();
         context.AddRoutes(r =>
@@ -39,7 +40,7 @@ public class As2ReceiveTests
 
         await context.Start();
 
-        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("me")).CreateProducer();
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("them")).CreateProducer();
         await producer.Start();
         await producer.Process(new Exchange(new Message("ISA*00*...EDI~") { ContentType = "application/edi-x12" }));
 
@@ -54,6 +55,7 @@ public class As2ReceiveTests
         await using var context = new RouteContext();
         context.AddComponent(new As2Component());
         context.AddToRegistry("me", Factory());
+        context.AddToRegistry("them", As2TestKit.Sender());
         context.AddRoutes(r =>
             r.From(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).ConnectionFactory("me")).Process(_ => { }));
         await context.Start();
@@ -70,6 +72,10 @@ public class As2ReceiveTests
         request.Headers.TryAddWithoutValidation("AS2-From", "THEM");
         request.Headers.TryAddWithoutValidation("AS2-To", "US");
         request.Headers.TryAddWithoutValidation("Message-ID", messageId);
+        // RFC 4130 §7.3: the sender asks for the receipt, and for it to be signed.
+        request.Headers.TryAddWithoutValidation("Disposition-Notification-To", "them@example.com");
+        request.Headers.TryAddWithoutValidation("Disposition-Notification-Options",
+            "signed-receipt-protocol=optional, pkcs7-signature; signed-receipt-micalg=optional, sha-256");
 
         var response = await client.SendAsync(request);
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -92,11 +98,12 @@ public class As2ReceiveTests
         await using var context = new RouteContext();
         context.AddComponent(new As2Component());
         context.AddToRegistry("me", Factory());
+        context.AddToRegistry("them", As2TestKit.Sender());
         context.AddRoutes(r =>
             r.From(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).ConnectionFactory("me")).Process(_ => { }));
         await context.Start();
 
-        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("me")).CreateProducer();
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("them")).CreateProducer();
         await producer.Start();
         var exchange = new Exchange(new Message("PO*4200~") { ContentType = "application/edi-x12" });
         await producer.Process(exchange);
@@ -106,6 +113,8 @@ public class As2ReceiveTests
         exchange.Out!.GetHeader<string>(As2Headers.MdnDisposition).Should().Contain("processed");
         exchange.Out!.GetHeader<bool>(As2Headers.SignatureValid).Should().BeTrue();
         exchange.Out!.GetHeader<bool>(As2Headers.MdnMicMatch).Should().BeTrue();
+        exchange.Out!.GetHeader<string>(As2Headers.MdnMicStatus).Should().Be("matched");
+        exchange.Out!.GetHeader<bool>(As2Headers.MdnConfirmed).Should().BeTrue();
     }
 
     [Fact]
@@ -114,32 +123,34 @@ public class As2ReceiveTests
         var port = FreePort();
         await using var context = new RouteContext();
         context.AddComponent(new As2Component());
-        context.AddToRegistry("me", new As2ConnectionFactory
-        {
-            OurCertificate = Cert, PartnerCertificate = Cert, As2From = "US", As2To = "THEM",
-            Sign = true, Encrypt = true, SignedMdn = true,
-            MdnMode = As2MdnMode.Async, AsyncMdnUrl = $"http://127.0.0.1:{port}/mdn",
-        });
+        context.AddToRegistry("me", As2TestKit.Receiver(f => { f.MdnMode = As2MdnMode.Async; f.AsyncMdnAllowedHosts = ["127.0.0.1"]; }));
+        context.AddToRegistry("them", As2TestKit.Sender(f => { f.MdnMode = As2MdnMode.Async; f.AsyncMdnUrl = $"http://127.0.0.1:{port}/mdn"; }));
 
         var received = new List<string>();
-        var mdns = new List<(string? original, string? disposition, bool micMatch)>();
+        var mdns = new List<(string? original, string? disposition, bool micMatch, bool confirmed)>();
         context.AddRoutes(r =>
         {
             r.From(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).ConnectionFactory("me"))
                 .Process(e => received.Add(Encoding.UTF8.GetString((byte[])e.In.Body!)));
-            r.From(As2Dsl.ReceiveMdn("/mdn").Host("127.0.0.1").Port(port).ConnectionFactory("me"))
+            r.From(As2Dsl.ReceiveMdn("/mdn").Host("127.0.0.1").Port(port).ConnectionFactory("them"))
                 .Process(e => mdns.Add((
                     e.In.GetHeader<string>(As2Headers.MessageId),
                     e.In.GetHeader<string>(As2Headers.MdnDisposition),
-                    e.In.GetHeader<bool>(As2Headers.MdnMicMatch))));
+                    e.In.GetHeader<bool>(As2Headers.MdnMicMatch),
+                    e.In.GetHeader<bool>(As2Headers.MdnConfirmed))));
         });
         await context.Start();
 
-        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("me")).CreateProducer();
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("them")).CreateProducer();
         await producer.Start();
         var exchange = new Exchange(new Message("PO*ASYNC~") { ContentType = "application/edi-x12" });
         await producer.Process(exchange);
         var sentId = exchange.In.GetHeader<string>(As2Headers.MessageId);
+
+        // The receipt is posted after the partner answered 200, so it arrives a moment after Process returns.
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (mdns.Count == 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(20);
 
         // Payload delivered to the business route; the async MDN came back, correlated by Original-Message-ID.
         received.Should().ContainSingle().Which.Should().Be("PO*ASYNC~");
@@ -147,6 +158,7 @@ public class As2ReceiveTests
         mdns[0].original.Should().Be(sentId);
         mdns[0].disposition.Should().Contain("processed");
         mdns[0].micMatch.Should().BeTrue();
+        mdns[0].confirmed.Should().BeTrue();
     }
 
     [Fact]
@@ -188,11 +200,12 @@ public class As2ReceiveTests
         await using var context = new RouteContext();
         context.AddComponent(new As2Component());
         context.AddToRegistry("me", Factory());
+        context.AddToRegistry("them", As2TestKit.Sender());
         context.AddRoutes(r =>
             r.From(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).ConnectionFactory("me")).Process(_ => { }));
         await context.Start();
 
-        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("me")).CreateProducer();
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("them")).CreateProducer();
         await producer.Start();
         await producer.Process(new Exchange(new Message("stats~") { ContentType = "application/edi-x12" }));
 
@@ -217,16 +230,37 @@ public class As2ReceiveTests
         await using var context = new RouteContext();
         context.AddComponent(new As2Component());
         context.AddToRegistry("me", Factory());
+        context.AddToRegistry("them", As2TestKit.Sender());
         context.AddRoutes(r =>
             r.From(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).ConnectionFactory("me")).Process(_ => { }));
         await context.Start();
 
-        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("me")).CreateProducer();
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("them")).CreateProducer();
         await producer.Start();
         await producer.Process(new Exchange(new Message("trace~") { ContentType = "application/edi-x12" }));
 
-        var producerSpan = spans.FirstOrDefault(a => a.OperationName == "AS2 POST");
-        var consumerSpan = spans.FirstOrDefault(a => a.OperationName == "AS2 receive");
+        // The receive span ends when the handler returns, just after the response the send has already read.
+        var spanDeadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < spanDeadline)
+        {
+            lock (spans)
+                if (spans.Any(a => a.OperationName == "/inbound receive" && a.Kind == ActivityKind.Consumer
+                    && spans.Any(p => p.OperationName == "US send" && p.TraceId == a.TraceId
+                        && (p.GetTagItem("messaging.destination.name") as string)?.Contains($":{port}/") == true)))
+                    break;
+            await Task.Delay(20);
+        }
+
+        // The listener is process-wide and other tests run alongside: this test's send is the one to its own port.
+        Activity? producerSpan, consumerSpan;
+        lock (spans)
+        {
+            producerSpan = spans.FirstOrDefault(a => a.OperationName == "US send"
+                && (a.GetTagItem("messaging.destination.name") as string)?.Contains($":{port}/") == true);
+            // Linked: the receive span of this send is in its trace.
+            consumerSpan = producerSpan is null ? null
+                : spans.FirstOrDefault(a => a.OperationName == "/inbound receive" && a.TraceId == producerSpan.TraceId);
+        }
         producerSpan.Should().NotBeNull();
         consumerSpan.Should().NotBeNull();
         producerSpan!.Kind.Should().Be(ActivityKind.Client);
@@ -249,6 +283,7 @@ public class As2ReceiveTests
         await using var context = new RouteContext();
         context.AddComponent(new As2Component { ServerManager = manager });
         context.AddToRegistry("me", Factory());
+        context.AddToRegistry("them", As2TestKit.Sender());
 
         var callers = new List<string?>();
         context.AddRoutes(r =>
@@ -257,7 +292,7 @@ public class As2ReceiveTests
                     ExchangePrincipal.Get(e)?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value)));
         await context.Start();
 
-        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("me")).CreateProducer();
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("them")).CreateProducer();
         await producer.Start();
         await producer.Process(new Exchange(new Message("PO*WHO~") { ContentType = "application/edi-x12" }));
 
@@ -279,12 +314,8 @@ public class As2ReceiveTests
         });
         await using var context = new RouteContext();
         context.AddComponent(new As2Component { ServerManager = manager });
-        context.AddToRegistry("me", new As2ConnectionFactory
-        {
-            OurCertificate = Cert, PartnerCertificate = Cert, As2From = "US", As2To = "THEM",
-            Sign = true, Encrypt = true, SignedMdn = true,
-            MdnMode = As2MdnMode.Async, AsyncMdnUrl = $"http://127.0.0.1:{port}/mdn",
-        });
+        context.AddToRegistry("me", As2TestKit.Receiver(f => { f.MdnMode = As2MdnMode.Async; f.AsyncMdnAllowedHosts = ["127.0.0.1"]; }));
+        context.AddToRegistry("them", As2TestKit.Sender(f => { f.MdnMode = As2MdnMode.Async; f.AsyncMdnUrl = $"http://127.0.0.1:{port}/mdn"; }));
 
         var messageCallers = new System.Collections.Concurrent.ConcurrentQueue<string?>();
         var receiptCallers = new System.Collections.Concurrent.ConcurrentQueue<string?>();
@@ -292,12 +323,12 @@ public class As2ReceiveTests
         {
             r.From(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).ConnectionFactory("me"))
                 .Process(e => messageCallers.Enqueue(CallerId(e)));
-            r.From(As2Dsl.ReceiveMdn("/mdn").Host("127.0.0.1").Port(port).ConnectionFactory("me"))
+            r.From(As2Dsl.ReceiveMdn("/mdn").Host("127.0.0.1").Port(port).ConnectionFactory("them"))
                 .Process(e => receiptCallers.Enqueue(CallerId(e)));
         });
         await context.Start();
 
-        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("me")).CreateProducer();
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("them")).CreateProducer();
         await producer.Start();
         await producer.Process(new Exchange(new Message("PO*RECEIPT~") { ContentType = "application/edi-x12" }));
 
@@ -325,6 +356,11 @@ public class As2ReceiveTests
             OurCertificate = Cert, PartnerCertificate = Cert, As2From = "US", As2To = "THEM",
             Sign = false, Encrypt = false, MdnMode = As2MdnMode.Sync, SignedMdn = false,
         });
+        context.AddToRegistry("plain-send", new As2ConnectionFactory
+        {
+            OurCertificate = Cert, PartnerCertificate = Cert, As2From = "THEM", As2To = "US",
+            Sign = false, Encrypt = false, MdnMode = As2MdnMode.Sync, SignedMdn = false,
+        });
 
         var reported = new System.Collections.Concurrent.ConcurrentQueue<bool>();
         context.AddRoutes(r =>
@@ -332,7 +368,7 @@ public class As2ReceiveTests
                 .Process(e => reported.Enqueue(e.In.GetHeader<bool>(As2Headers.SignatureValid))));
         await context.Start();
 
-        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/in").ConnectionFactory("plain")).CreateProducer();
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/in").ConnectionFactory("plain-send")).CreateProducer();
         await producer.Start();
         await producer.Process(new Exchange(new Message("PO*PLAIN~") { ContentType = "application/edi-x12" }));
 
@@ -346,6 +382,7 @@ public class As2ReceiveTests
         await using var context = new RouteContext();
         context.AddComponent(new As2Component());
         context.AddToRegistry("me", Factory());
+        context.AddToRegistry("them", As2TestKit.Sender());
 
         var reported = new System.Collections.Concurrent.ConcurrentQueue<bool>();
         context.AddRoutes(r =>
@@ -353,7 +390,7 @@ public class As2ReceiveTests
                 .Process(e => reported.Enqueue(e.In.GetHeader<bool>(As2Headers.SignatureValid))));
         await context.Start();
 
-        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("me")).CreateProducer();
+        var producer = context.GetEndpoint(As2Dsl.Send($"http://127.0.0.1:{port}/inbound").ConnectionFactory("them")).CreateProducer();
         await producer.Start();
         await producer.Process(new Exchange(new Message("PO*SIGNED~") { ContentType = "application/edi-x12" }));
 
@@ -396,14 +433,7 @@ public class As2ReceiveTests
         return (encrypted.Headers[HeaderId.ContentType]!, encrypted.Headers[HeaderId.ContentTransferEncoding]!, body);
     }
 
-    private static int FreePort()
-    {
-        var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int FreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     private static X509Certificate2 MakeCert(string cn)
     {

@@ -14,15 +14,14 @@ namespace redb.Route.Tests.Idempotent;
 public class NamedIdempotentRegistryTests
 {
     [Fact]
-    public void AddIdempotentRepository_RegistersUnderPrefixedKey()
+    public void AddIdempotentRepository_RegistersUnderTheBareName()
     {
         var ctx = new RouteContext();
         var repo = new InMemoryIdempotentRepository();
 
         ctx.AddIdempotentRepository("orders", repo);
 
-        var stored = ctx.GetFromRegistry<IIdempotentRepository>(
-            RegistryIdempotentRepositoryProvider.KeyPrefix + "orders");
+        var stored = ctx.GetFromRegistry<IIdempotentRepository>("orders");
         stored.Should().BeSameAs(repo);
     }
 
@@ -49,7 +48,7 @@ public class NamedIdempotentRegistryTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*'missing'*")
-            .WithMessage("*idempotent:missing*");
+            .WithMessage("*AddIdempotentRepository(\"missing\"*");
     }
 
     [Fact]

@@ -101,16 +101,25 @@ public class SmtpProducer : IProducer
     {
         ArgumentNullException.ThrowIfNull(exchange);
 
-        using var activity = RouteActivitySource.Source.StartActivity(
-            $"{_endpoint.Host} send", ActivityKind.Producer);
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_endpoint.Host} send", ActivityKind.Producer, "messaging.system", "smtp", _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.Host, operation: "send");
 
-        if (activity is { IsAllDataRequested: true })
+        try
         {
-            activity.SetTag("messaging.system", "smtp");
-            activity.SetTag("messaging.operation", "send");
-            activity.SetTag("messaging.destination.name", _endpoint.Host);
+            await SendAsync(exchange, activity, ct).ConfigureAwait(false);
         }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the send is a stop; any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
+        }
+    }
 
+    private async Task SendAsync(IExchange exchange, Activity? activity, CancellationToken ct)
+    {
         var message = BuildMimeMessage(exchange);
 
         if (activity is { IsAllDataRequested: true })
@@ -272,7 +281,7 @@ public class SmtpProducer : IProducer
         var client = new SmtpClient();
         client.Timeout = _options.Timeout;
 
-        if (_options.SkipCertificateValidation)
+        if (_options.TrustAllCertificates)
             client.ServerCertificateValidationCallback = (_, _, _, _) => true;
 
         await client.ConnectAsync(

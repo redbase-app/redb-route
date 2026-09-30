@@ -1,6 +1,7 @@
 using Amazon;
 using Amazon.Runtime;
 using Amazon.S3;
+using redb.Route.Core;
 
 namespace redb.Route.S3;
 
@@ -23,12 +24,15 @@ public sealed class S3ConnectionFactory
     public string Region { get; set; } = "us-east-1";
 
     /// <summary>AWS access key ID.</summary>
+    [Sensitive]
     public string AccessKey { get; set; } = "";
 
     /// <summary>AWS secret access key.</summary>
+    [Sensitive]
     public string SecretKey { get; set; } = "";
 
     /// <summary>AWS session token (for temporary STS credentials).</summary>
+    [Sensitive]
     public string SessionToken { get; set; } = "";
 
     /// <summary>AWS named profile from ~/.aws/credentials.</summary>

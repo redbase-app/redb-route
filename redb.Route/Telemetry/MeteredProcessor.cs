@@ -48,7 +48,11 @@ public sealed class MeteredProcessor : IProcessor
         try
         {
             await _inner.Process(exchange, ct).ConfigureAwait(false);
-            RouteMetrics.ExchangesProcessed.Add(1, _tags);
+            // An error handler that gives up leaves the failure on the exchange rather than throwing it.
+            if (exchange.Exception is not null && !exchange.ExceptionHandled)
+                RouteMetrics.ExchangesFailed.Add(1, _tags);
+            else
+                RouteMetrics.ExchangesProcessed.Add(1, _tags);
         }
         catch (OperationCanceledException)
         {

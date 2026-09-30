@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.RegularExpressions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Exec;
 
@@ -98,11 +99,10 @@ public sealed class ExecConsumer : IConsumer
                 await FireOnceAsync(ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { return; }
-            catch (Exception ex)
+            catch (Exception)
             {
+                // The tick's own span carries the failure. Continue — one failed tick must not kill the consumer.
                 _endpoint.RecordError();
-                Activity.Current?.AddTag("exec.consumer.error", ex.GetType().Name);
-                // Continue — one failed tick must not kill the consumer.
             }
         }
     }
@@ -116,6 +116,13 @@ public sealed class ExecConsumer : IConsumer
 
         var exchange = Exchange.Create(new Message(string.Empty), scopeFactory);
 
+        // A tick carries no trace context: its span is a root, never a child of the activity the timer loop holds. The
+        // run of the command (the producer's client span) and the route sit under it.
+        using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+            ctx, $"exec {Path.GetFileName(_options.Command ?? string.Empty)} receive", ActivityKind.Consumer,
+            "process.executable.name", Path.GetFileName(_options.Command ?? string.Empty), _endpoint.Uri.NormalizedKey,
+            null, static (_, _) => null, operation: "receive");
+
         // The scheduler owns this exchange for the whole tick: dispose it in finally so its
         // per-exchange DI scope (and any redb connection resolved downstream) is released every
         // tick — otherwise each scheduled fire would leak a scope and drain the connection pool.
@@ -128,6 +135,16 @@ public sealed class ExecConsumer : IConsumer
 
             await _producer!.Process(exchange, ct).ConfigureAwait(false);
             await _processor.Process(exchange, ct).ConfigureAwait(false);
+
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+                && (failure is not OperationCanceledException || !ct.IsCancellationRequested))
+                span.Activity.RecordFailure(failure);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Our own stop is not a failure of the tick; any other cancellation is.
+            span.Activity.RecordFailure(ex);
+            throw;
         }
         finally
         {

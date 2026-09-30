@@ -577,3 +577,15 @@ context.AddToRegistry("prod", new TelegramConnectionFactory
 });
 // telegram://bot?connectionFactory=prod
 ```
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `messaging.system` = `telegram` and
+`redb.route.endpoint`:
+
+- **Consumer.** One `Consumer` span per routed update, `telegram.{type} receive`, with the chat and message ids. An
+  update carries no trace context, so the span is a root, never a child of the activity the polling loop holds. A
+  failed route marks it an error, whether the failure stays on the exchange or escapes it; our own stop does not.
+- **Producer.** One `Producer` span per send, `telegram.{mode} publish`; an error when the send fails, the per-request
+  timeout included, unless our own token cancelled it.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.

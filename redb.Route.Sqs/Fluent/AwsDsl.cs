@@ -1,3 +1,5 @@
+using redb.Route.Core;
+
 namespace redb.Route.Sqs.Fluent;
 
 /// <summary>
@@ -57,8 +59,8 @@ public sealed class SqsBuilder
     public SqsBuilder ConcurrentConsumers(string count) => Set("concurrentConsumers", count);
     /// <summary>Keep extending visibility while a message is processing (requires visibilityTimeout &gt; 0).</summary>
     public SqsBuilder ExtendMessageVisibility(bool value = true) => Set("extendMessageVisibility", value ? "true" : "false");
-    /// <summary>Delete a message after successful processing.</summary>
-    public SqsBuilder DeleteAfterRead(bool value = true) => Set("deleteAfterRead", value ? "true" : "false");
+    /// <summary>When a message is deleted: after the route (<see cref="Core.AckMode.Manual"/>, default) or on receipt (<see cref="Core.AckMode.Auto"/>).</summary>
+    public SqsBuilder AckMode(AckMode mode) => Set("ackMode", mode.ToString().ToLowerInvariant());
     /// <summary>Reset visibility to 0 on failure for immediate redelivery.</summary>
     public SqsBuilder ResetVisibilityOnFailure(bool value = true) => Set("resetVisibilityOnFailure", value ? "true" : "false");
     /// <summary>

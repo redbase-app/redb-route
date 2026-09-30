@@ -171,3 +171,16 @@ context.AddToRegistry("prod", new TcpConnectionFactory
 });
 // tcp://gateway.internal:7000?connectionFactory=prod
 ```
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `network.transport` = `tcp` and
+`redb.route.endpoint`:
+
+- **Consumer.** One `Consumer` span, `tcp {host}:{port} receive`, per routed message, the InOut reply included. A framed
+  message carries no trace context, so the span is a root, never a child of the activity the listener inherited from
+  whoever started the routes; a connection that sends nothing opens none. A failed route marks it an error; our own stop
+  does not.
+- **Producer.** One `Client` span per send, `tcp {host}:{port}`; an error when the send fails, unless our own token
+  cancelled it.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.

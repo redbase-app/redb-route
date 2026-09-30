@@ -173,21 +173,26 @@ public class Pop3Consumer : DrainableConsumer
                     if (_options.KeepRawMessage)
                         exchange.Properties["RawMimeMessage"] = mime;
 
-                    using var activity = StartConsumerActivity(mime);
+                    using var span = StartConsumerSpan(mime);
 
                     IncrementInflight();
                     try
                     {
                         await Processor.Process(exchange, processingCt).ConfigureAwait(false);
+                        if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+                            && (failure is not OperationCanceledException || !processingCt.IsCancellationRequested))
+                            span.Activity.RecordFailure(failure);
                         Interlocked.Increment(ref _processedCount);
 
                         // POP3 post-processing: only delete or none
                         if (_options.PostProcess == PostProcessAction.Delete)
                             await client.DeleteMessageAsync(i, processingCt).ConfigureAwait(false);
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        activity?.SetStatus(ActivityStatusCode.Error);
+                        // Our own stop is not a failure of the message; any other cancellation is.
+                        if (ex is not OperationCanceledException || !processingCt.IsCancellationRequested)
+                            span.Activity.RecordFailure(ex);
                         throw;
                     }
                     finally
@@ -245,7 +250,7 @@ public class Pop3Consumer : DrainableConsumer
         var client = new Pop3Client();
         client.Timeout = _options.Timeout;
 
-        if (_options.SkipCertificateValidation)
+        if (_options.TrustAllCertificates)
             client.ServerCertificateValidationCallback = (_, _, _, _) => true;
 
         await client.ConnectAsync(
@@ -278,22 +283,25 @@ public class Pop3Consumer : DrainableConsumer
         }
     }
 
-    private Activity? StartConsumerActivity(MimeMessage mime)
+    /// <summary>
+    /// The span of one message. A mailbox message carries no trace context the connector reads, so the span is a root,
+    /// never a child of the activity the poll loop holds.
+    /// </summary>
+    private TransportSpan StartConsumerSpan(MimeMessage mime)
     {
-        var activity = RouteActivitySource.Source.StartActivity(
-            $"{_endpoint.Host} receive", ActivityKind.Consumer);
+        var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_endpoint.Host} receive", ActivityKind.Consumer, "messaging.system", "pop3", _endpoint.Uri.NormalizedKey,
+            null, static (_, _) => null, destination: _endpoint.Host, operation: "receive");
 
-        if (activity is { IsAllDataRequested: true })
+        if (span.Activity is { IsAllDataRequested: true } activity)
         {
-            activity.SetTag("messaging.system", "pop3");
-            activity.SetTag("messaging.operation", "receive");
-            activity.SetTag("messaging.destination.name", _endpoint.Host);
             if (!string.IsNullOrEmpty(mime.MessageId))
                 activity.SetTag("messaging.message.id", mime.MessageId);
             if (!string.IsNullOrEmpty(mime.Subject))
                 activity.SetTag("messaging.pop3.subject", mime.Subject);
         }
 
-        return activity;
+        return span;
     }
 }

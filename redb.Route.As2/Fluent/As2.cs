@@ -57,6 +57,10 @@ public sealed class As2Builder
     private int _requestQueueLimit;
     private int? _rejectStatusCode;
     private int? _retryAfterSeconds;
+    private long? _maxRequestBodySize;
+    private string? _idempotentRepository;
+    private bool _streamBody;
+    private long? _maxResponseBodySize;
 
     /// <summary>When set, this receive endpoint accepts async MDN receipts (<c>mode=mdn</c>).</summary>
     internal bool AsMdnReceiver { get; init; }
@@ -108,6 +112,18 @@ public sealed class As2Builder
     /// <summary>Retry-After value for a shed request in seconds; 0 = do not send (default 1).</summary>
     public As2Builder RetryAfterSeconds(int seconds) { _retryAfterSeconds = seconds; return this; }
 
+    /// <summary>Receive endpoint: a named IIdempotentRepository that remembers received Message-IDs, so a resend is not delivered twice.</summary>
+    public As2Builder IdempotentRepository(string name) { _idempotentRepository = name; return this; }
+
+    /// <summary>Receive endpoint: hand the payload to the route as a spooled <c>Stream</c> instead of <c>byte[]</c>.</summary>
+    public As2Builder StreamBody(bool streamBody = true) { _streamBody = streamBody; return this; }
+
+    /// <summary>Receive endpoint: the largest request body accepted, in bytes (default 100 MB); larger is answered 413.</summary>
+    public As2Builder MaxRequestBodySize(long bytes) { _maxRequestBodySize = bytes; return this; }
+
+    /// <summary>Send endpoint: the largest response (synchronous MDN) read, in bytes (default 4 MB).</summary>
+    public As2Builder MaxResponseBodySize(long bytes) { _maxResponseBodySize = bytes; return this; }
+
     /// <summary>Builds the AS2 URI string.</summary>
     public string Build() => _mode == As2Mode.Receive ? BuildReceive() : BuildSend();
 
@@ -130,6 +146,9 @@ public sealed class As2Builder
         if (_requestQueueLimit > 0) Add("requestQueueLimit", _requestQueueLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (_rejectStatusCode is { } rsc) Add("rejectStatusCode", rsc.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (_retryAfterSeconds is { } ras) Add("retryAfterSeconds", ras.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (_maxRequestBodySize is { } mrb) Add("maxRequestBodySize", mrb.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (_streamBody) Add("streamBody", "true");
+        if (_idempotentRepository is not null) Add("idempotentRepository", _idempotentRepository);
         if (AsMdnReceiver) Add("mode", "mdn");
         return sb.ToString();
     }
@@ -149,6 +168,7 @@ public sealed class As2Builder
         void Add(string k, string v) { sb.Append(sep).Append(k).Append('=').Append(Uri.EscapeDataString(v)); sep = '&'; }
 
         if (_connectionFactory is not null) Add("connectionFactory", _connectionFactory);
+        if (_maxResponseBodySize is { } mrs) Add("maxResponseBodySize", mrs.ToString(System.Globalization.CultureInfo.InvariantCulture));
         return sb.ToString();
     }
 

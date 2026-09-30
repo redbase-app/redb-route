@@ -45,46 +45,56 @@ internal sealed class FirebaseStorageProducer : ConnectableProducer
         // redb.system: house attribute for object storage — OTel defines no db.system value
         // for GCS/S3, and the S3 sibling already ships "redb.system" (решение В1, Ф11).
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"gcs {_options.Operation}", ActivityKind.Client,
             "redb.system", "gcs",
             _endpoint.Uri.NormalizedKey,
             destination: _endpoint.BucketName,
             operation: _options.Operation.ToString());
 
-        switch (_options.Operation)
+        try
         {
-            case FirebaseStorageOperationType.Upload:
-                await ProcessUpload(exchange, ct).ConfigureAwait(false);
-                break;
-            case FirebaseStorageOperationType.Download:
-                await ProcessDownload(exchange, ct).ConfigureAwait(false);
-                break;
-            case FirebaseStorageOperationType.Delete:
-                await ProcessDelete(exchange, ct).ConfigureAwait(false);
-                break;
-            case FirebaseStorageOperationType.List:
-                await ProcessList(exchange, ct).ConfigureAwait(false);
-                break;
-            case FirebaseStorageOperationType.GetMetadata:
-                await ProcessGetMetadata(exchange, ct).ConfigureAwait(false);
-                break;
-            case FirebaseStorageOperationType.Copy:
-                await ProcessCopy(exchange, ct).ConfigureAwait(false);
-                break;
-            case FirebaseStorageOperationType.CreateDownloadLink:
-                ProcessCreateDownloadLink(exchange);
-                break;
-            case FirebaseStorageOperationType.CreateBucket:
-                await ProcessCreateBucket(exchange, ct).ConfigureAwait(false);
-                break;
-            case FirebaseStorageOperationType.DeleteBucket:
-                await ProcessDeleteBucket(exchange, ct).ConfigureAwait(false);
-                break;
-            case FirebaseStorageOperationType.ListBuckets:
-                await ProcessListBuckets(exchange, ct).ConfigureAwait(false);
-                break;
-            default:
-                throw new InvalidOperationException($"Unknown Storage operation: {_options.Operation}");
+            switch (_options.Operation)
+            {
+                case FirebaseStorageOperationType.Upload:
+                    await ProcessUpload(exchange, ct).ConfigureAwait(false);
+                    break;
+                case FirebaseStorageOperationType.Download:
+                    await ProcessDownload(exchange, ct).ConfigureAwait(false);
+                    break;
+                case FirebaseStorageOperationType.Delete:
+                    await ProcessDelete(exchange, ct).ConfigureAwait(false);
+                    break;
+                case FirebaseStorageOperationType.List:
+                    await ProcessList(exchange, ct).ConfigureAwait(false);
+                    break;
+                case FirebaseStorageOperationType.GetMetadata:
+                    await ProcessGetMetadata(exchange, ct).ConfigureAwait(false);
+                    break;
+                case FirebaseStorageOperationType.Copy:
+                    await ProcessCopy(exchange, ct).ConfigureAwait(false);
+                    break;
+                case FirebaseStorageOperationType.CreateDownloadLink:
+                    ProcessCreateDownloadLink(exchange);
+                    break;
+                case FirebaseStorageOperationType.CreateBucket:
+                    await ProcessCreateBucket(exchange, ct).ConfigureAwait(false);
+                    break;
+                case FirebaseStorageOperationType.DeleteBucket:
+                    await ProcessDeleteBucket(exchange, ct).ConfigureAwait(false);
+                    break;
+                case FirebaseStorageOperationType.ListBuckets:
+                    await ProcessListBuckets(exchange, ct).ConfigureAwait(false);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown Storage operation: {_options.Operation}");
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the call is a stop; any other failure marks the span.
+            activity.RecordFailure(ex);
+            throw;
         }
     }
 

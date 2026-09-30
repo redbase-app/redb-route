@@ -34,7 +34,11 @@ public interface IExchange : IAsyncDisposable
     /// <summary>Gets a property value with type conversion.</summary>
     /// <typeparam name="T">Target type for the property value.</typeparam>
     /// <param name="key">Property key.</param>
-    /// <returns>Converted value or default if not found.</returns>
+    /// <returns>
+    /// The converted value; default when the property is missing or has no conversion to <typeparamref name="T"/>
+    /// (as Camel's <c>getProperty(name, type)</c>).
+    /// </returns>
+    /// <exception cref="FormatException">The value cannot be parsed as <typeparamref name="T"/>.</exception>
     T? GetProperty<T>(string key);
 
     /// <summary>Current exception if processing failed.</summary>

@@ -17,7 +17,10 @@ namespace redb.Route.Kafka;
 /// </summary>
 public sealed class KafkaProducer : ConnectableProducer
 {
-    /// <summary>How long a transactional call (init, commit, abort, offsets) may take before it fails.</summary>
+    /// <summary>
+    /// How long InitTransactions and SendOffsetsToTransaction may take before they fail. Commit and abort take no
+    /// timeout of ours (see <c>CommitWithRetries</c>).
+    /// </summary>
     private static readonly TimeSpan TransactionTimeout = TimeSpan.FromSeconds(30);
 
     private static int s_transactionalProducers;
@@ -34,6 +37,8 @@ public sealed class KafkaProducer : ConnectableProducer
     private string? _transactionalId;
     private string _cluster = "";
     private bool _rebuild;
+    private int _warnedForeignOffsets;
+    private int _warnedClosedOffsets;
 
     /// <summary>Creates a Kafka producer.</summary>
     public KafkaProducer(KafkaEndpoint endpoint, KafkaEndpointOptions options)
@@ -52,7 +57,7 @@ public sealed class KafkaProducer : ConnectableProducer
     protected override async Task ConnectAsync(CancellationToken ct)
     {
         var config = _options.BuildProducerConfig(_endpoint.ResolvedFactory, _endpoint.Uri.RawParameters);
-        _cluster = KafkaConsumedOffsets.ClusterOf(config.BootstrapServers);
+        KafkaOptionParsers.WarnIfPasswordInClear(config, Logger, ProducerName);
 
         if (_options.TransactionalIdPrefix is { } prefix)
         {
@@ -73,8 +78,11 @@ public sealed class KafkaProducer : ConnectableProducer
         {
             var producer = _producer;
             await Task.Run(() => producer.InitTransactions(TransactionTimeout), ct).ConfigureAwait(false);
-            Logger?.LogInformation("Kafka producer uses transactions: topic={Topic}, transactional.id={TransactionalId}",
-                _endpoint.TopicName, _transactionalId);
+            // The cluster whose consumed offsets this producer's transactions may take; the broker has just answered.
+            _cluster = await KafkaConsumedOffsets.ClusterIdOf(producer.Handle, TransactionTimeout).ConfigureAwait(false);
+            Logger?.LogInformation(
+                "Kafka producer uses transactions: topic={Topic}, transactional.id={TransactionalId}, cluster={Cluster}",
+                _endpoint.TopicName, _transactionalId, _cluster);
         }
     }
 
@@ -96,21 +104,48 @@ public sealed class KafkaProducer : ConnectableProducer
     {
         EnsureStarted();
 
-        using var activity = RouteActivitySource.Source.StartActivity(
-            $"{_endpoint.TopicName} publish", ActivityKind.Producer);
-
-        if (activity is { IsAllDataRequested: true })
-        {
-            activity.SetTag("messaging.system", "kafka");
-            activity.SetTag("messaging.operation", "publish");
-            activity.SetTag("messaging.destination.name", _endpoint.TopicName);
-        }
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_endpoint.TopicName} publish", ActivityKind.Producer,
+            "messaging.system", "kafka", _endpoint.Uri.NormalizedKey,
+            destination: _endpoint.TopicName, operation: "publish");
 
         var message = PrepareMessage(exchange);
 
-        // Inject W3C trace context into Kafka headers
-        InjectTraceContext(activity, message.Headers);
+        // The context of this send, over a traceparent copied from a consumed record's headers: that one names the
+        // previous hop.
+        RouteTelemetryExtensions.InjectTraceContext(activity, message.Headers, WriteTraceHeader);
 
+        try
+        {
+            await SendAsync(exchange, message, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only a cancellation by the caller's own token is not a failure; any other (a client timeout) is.
+            // A send deferred to the block's commit fails later, outside this span; the route's span shows that one.
+            activity.RecordFailure(ex);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Writes a trace field to Kafka headers as UTF-8, replacing every value already there under that name in any case:
+    /// the consumer reads the name without case and takes the first, so a <c>Traceparent</c> bridged from an HTTP caller
+    /// would otherwise win over this send's <c>traceparent</c>. <see cref="Headers.Remove"/> compares the name exactly.
+    /// </summary>
+    private static readonly TraceHeaderWriter<Headers> WriteTraceHeader = static (headers, name, value) =>
+    {
+        foreach (var key in headers.Select(h => h.Key)
+                     .Where(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase))
+                     .Distinct(StringComparer.Ordinal)
+                     .ToList())
+            headers.Remove(key);
+        headers.Add(name, Encoding.UTF8.GetBytes(value));
+    };
+
+    private async Task SendAsync(IExchange exchange, Message<string, byte[]> message, CancellationToken ct)
+    {
         if (_transactionalId is not null)
         {
             var send = new KafkaTransactionalSend(KafkaSendAction.CloneMessage(message), exchange);
@@ -119,7 +154,7 @@ public sealed class KafkaProducer : ConnectableProducer
                 // The block's sends through this producer commit as one Kafka transaction when the block commits,
                 // with the consumed offset when the route started from a Kafka consumer of this cluster.
                 TransactedActions.JoinBatch(exchange, _batchKey,
-                        () => new KafkaTransactionBatch(this, KafkaConsumedOffsets.OfferedOn(exchange, _cluster)),
+                        () => new KafkaTransactionBatch(this, OffsetsOfThisCluster(exchange)),
                         ProducerName)
                     .Add(send);
             }
@@ -189,6 +224,12 @@ public sealed class KafkaProducer : ConnectableProducer
         {
             var producer = await TransactionalProducerAsync(ct).ConfigureAwait(false);
             var claimed = offsets?.TryClaim() == true;
+            if (offsets is { IsClosed: true })
+                WarnOnce(ref _warnedClosedOffsets,
+                    "Kafka transaction on topic {Topic} commits after the route returned to its Kafka consumer (an " +
+                    "asynchronous step inside the .Transacted() block?): the consumed offsets are not in the transaction, " +
+                    "the consumer settled them itself, and the route is not exactly-once. Keep the block synchronous.",
+                    _endpoint.TopicName);
             var delivered = new DeliveryResult<string, byte[]>[sends.Count];
 
             try
@@ -198,7 +239,32 @@ public sealed class KafkaProducer : ConnectableProducer
                     delivered[i] = await ProduceAsync(producer, sends[i].Message, ct).ConfigureAwait(false);
                 if (claimed)
                     producer.SendOffsetsToTransaction(offsets!.Offsets, offsets.GroupMetadata, TransactionTimeout);
+            }
+            catch (Exception ex)
+            {
+                if (claimed)
+                    offsets!.Release();
+                Abort(producer, ex);
+                throw;
+            }
+
+            try
+            {
                 CommitWithRetries(producer);
+            }
+            catch (KafkaRetriableException ex)
+            {
+                // The commit may have reached the coordinator and succeeded: aborting now is not the transaction's
+                // undo, only a call librdkafka refuses. The next incarnation's InitTransactions settles it (the
+                // coordinator completes a prepared commit, aborts an open transaction).
+                if (claimed)
+                    offsets!.Release();
+                _rebuild = true;
+                Logger?.LogError(ex,
+                    "Kafka transaction of producer {TransactionalId} on topic {Topic}: the commit did not answer, so its " +
+                    "outcome is unknown. The producer is rebuilt before the next transaction; if this one did commit, a " +
+                    "redelivery of the exchange writes its records again.", _transactionalId, _endpoint.TopicName);
+                throw;
             }
             catch (Exception ex)
             {
@@ -225,6 +291,36 @@ public sealed class KafkaProducer : ConnectableProducer
         }
     }
 
+    /// <summary>
+    /// The offsets the route's Kafka consumer offered, when it reads the cluster this producer writes to: only that
+    /// cluster's transaction can commit them. Clusters are compared by the id their brokers report, however the brokers
+    /// are listed on the two endpoints. Another cluster (or one the consumer could not identify) leaves the offsets to the
+    /// consumer, and the route is at-least-once; that is said out loud.
+    /// </summary>
+    private KafkaConsumedOffsets? OffsetsOfThisCluster(IExchange exchange)
+    {
+        var offered = KafkaConsumedOffsets.OfferedOn(exchange);
+        if (offered is null || offered.Cluster == _cluster)
+            return offered;
+
+        WarnOnce(ref _warnedForeignOffsets,
+            "Kafka transaction on topic {Topic} cannot take the consumed offsets: the route's consumer reads cluster " +
+            "'{ConsumerCluster}', this producer writes to cluster '{ProducerCluster}'. The consumer commits them itself, " +
+            "and the route is at-least-once, not exactly-once.",
+            _endpoint.TopicName, offered.Cluster ?? "(not identified)", _cluster);
+        return null;
+    }
+
+    /// <summary>
+    /// Warns the first time a producer meets a condition that holds for every exchange of its route (its configuration or
+    /// shape), then at Debug: a warning per message would bury the log without saying more.
+    /// </summary>
+    private void WarnOnce(ref int warned, string message, params object?[] args)
+    {
+        var level = Interlocked.Exchange(ref warned, 1) == 0 ? LogLevel.Warning : LogLevel.Debug;
+        Logger?.Log(level, message, args);
+    }
+
     private async Task<IProducer<string, byte[]>> TransactionalProducerAsync(CancellationToken ct)
     {
         if (_rebuild)
@@ -236,6 +332,16 @@ public sealed class KafkaProducer : ConnectableProducer
             _producer = null;
             await ConnectAsync(ct).ConfigureAwait(false);
             _rebuild = false;
+
+            // The rebuild goes round Start: a Stop that ran meanwhile found no client to close, and the new one would
+            // outlive the producer. Transactions never race a rebuild (they take turns); Stop does.
+            if (!IsStarted)
+            {
+                Interlocked.Exchange(ref _producer, null)?.Dispose();
+                throw new InvalidOperationException(
+                    $"Kafka producer for topic '{_endpoint.TopicName}' was stopped while it was rebuilt: the transaction " +
+                    "cannot be committed.");
+            }
         }
         return _producer ?? throw new InvalidOperationException(
             $"Kafka producer for topic '{_endpoint.TopicName}' is stopped: the transaction cannot be committed.");
@@ -253,12 +359,15 @@ public sealed class KafkaProducer : ConnectableProducer
         {
             try
             {
-                producer.CommitTransaction(TransactionTimeout);
+                // No timeout of ours: librdkafka strongly recommends it (its API timeouts do not match the protocol
+                // requests); the call blocks up to transaction.timeout.ms instead.
+                producer.CommitTransaction();
                 return;
             }
             catch (KafkaRetriableException ex) when (attempt < 3)
             {
-                // A retriable commit failure (a timeout, say) leaves the transaction open: the commit may be retried.
+                // A retriable commit failure (a timeout, say) leaves the transaction open: the commit may be called
+                // again, and it resumes the same commit.
                 Logger?.LogWarning(ex, "Kafka transaction commit failed with a retriable error; retrying (attempt {Attempt})",
                     attempt);
             }
@@ -278,7 +387,7 @@ public sealed class KafkaProducer : ConnectableProducer
 
         try
         {
-            producer.AbortTransaction(TransactionTimeout);
+            producer.AbortTransaction(); // no timeout of ours, as for the commit
         }
         catch (KafkaException abortFailure)
         {
@@ -311,15 +420,19 @@ public sealed class KafkaProducer : ConnectableProducer
         };
 
         // Propagate ContentType as Kafka header if set
-        if (!string.IsNullOrEmpty(exchange.In.ContentType))
+        var hasContentType = !string.IsNullOrEmpty(exchange.In.ContentType);
+        if (hasContentType)
         {
-            msg.Headers.Add("content-type", Encoding.UTF8.GetBytes(exchange.In.ContentType));
+            msg.Headers.Add("content-type", Encoding.UTF8.GetBytes(exchange.In.ContentType!));
         }
 
         // Propagate headers (skip kafka.* internal ones)
         foreach (var (key, value) in exchange.In.Headers)
         {
             if (KafkaHeaders.IsRedbHeader(key))
+                continue;
+            // A consumed record keeps its content-type header next to ContentType: one on the wire, ContentType's.
+            if (hasContentType && string.Equals(key, "content-type", StringComparison.OrdinalIgnoreCase))
                 continue;
 
             try
@@ -336,25 +449,6 @@ public sealed class KafkaProducer : ConnectableProducer
         return msg;
     }
 
-    /// <summary>
-    /// Injects W3C trace context (traceparent/tracestate) into Kafka message headers
-    /// using the .NET built-in DistributedContextPropagator.
-    /// </summary>
-    private static void InjectTraceContext(Activity? activity, Headers headers)
-    {
-        if (activity is null) return;
-
-        var propagator = DistributedContextPropagator.Current;
-        propagator.Inject(activity, headers, static (carrier, key, value) =>
-        {
-            if (carrier is Headers h && !string.IsNullOrEmpty(value))
-            {
-                h.Remove(key);
-                h.Add(key, Encoding.UTF8.GetBytes(value));
-            }
-        });
-    }
-
     private string? DetermineKey(IExchange exchange)
     {
         // Explicit partition → no key (partitioner is bypassed)
@@ -368,6 +462,11 @@ public sealed class KafkaProducer : ConnectableProducer
             if (!string.IsNullOrEmpty(resolved))
                 return resolved;
         }
+
+        // The consumed record's key, when the route passes the record on.
+        if (_options.KeyFromHeader && exchange.In.Headers.TryGetValue(KafkaHeaders.Key, out var header)
+                                   && header?.ToString() is { Length: > 0 } consumedKey)
+            return consumedKey;
 
         return null;
     }
@@ -440,6 +539,7 @@ internal sealed class KafkaSendAction : ITransactedAction
             _exchange.In.Headers[KafkaHeaders.SentTopic] = result.Topic;
             _exchange.In.Headers[KafkaHeaders.SentPartition] = result.Partition.Value;
             _exchange.In.Headers[KafkaHeaders.SentOffset] = result.Offset.Value;
+            _exchange.In.Headers[KafkaHeaders.SentTimestamp] = DateTimeOffset.UtcNow;
         }
     }
 

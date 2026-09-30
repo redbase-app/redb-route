@@ -1,0 +1,6 @@
+{
+  "Name": "As4Module",
+  "Version": "1.0.0",
+  "EntryPoints": ["As4Module.dll"],
+  "Dependencies": []
+}

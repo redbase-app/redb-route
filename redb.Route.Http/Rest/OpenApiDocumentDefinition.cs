@@ -65,12 +65,15 @@ public sealed class OpenApiDocumentDefinition : ProcessorDefinition
         if (verb.Summary is not null) operation["summary"] = verb.Summary;
 
         var parameters = new JsonArray();
+        // Template segments first, typed by their declaration when there is one; then the declared
+        // query and header parameters in declaration order.
         foreach (var name in verb.PathParameters)
-            parameters.Add(new JsonObject
-            {
-                ["name"] = name, ["in"] = "path", ["required"] = true,
-                ["schema"] = new JsonObject { ["type"] = "string" },
-            });
+        {
+            var declared = verb.Parameters.FirstOrDefault(p => p.Type == RestParamType.Path && p.Name == name);
+            parameters.Add(Parameter(declared ?? new RestParamDefinition(name, RestParamType.Path, true, RestParamDataType.String, null)));
+        }
+        foreach (var declared in verb.Parameters.Where(p => p.Type != RestParamType.Path))
+            parameters.Add(Parameter(declared));
         if (parameters.Count > 0) operation["parameters"] = parameters;
 
         var consumes = verb.EffectiveConsumes(options);
@@ -93,6 +96,33 @@ public sealed class OpenApiDocumentDefinition : ProcessorDefinition
         }
         operation["responses"] = new JsonObject { ["200"] = ok };
         return operation;
+    }
+
+    private static JsonObject Parameter(RestParamDefinition parameter)
+    {
+        var node = new JsonObject
+        {
+            ["name"] = parameter.Name,
+            ["in"] = parameter.Type switch
+            {
+                RestParamType.Path => "path",
+                RestParamType.Query => "query",
+                _ => "header",
+            },
+            ["required"] = parameter.Required,
+            ["schema"] = new JsonObject
+            {
+                ["type"] = parameter.DataType switch
+                {
+                    RestParamDataType.Integer => "integer",
+                    RestParamDataType.Number => "number",
+                    RestParamDataType.Boolean => "boolean",
+                    _ => "string",
+                },
+            },
+        };
+        if (parameter.Description is not null) node["description"] = parameter.Description;
+        return node;
     }
 
     private static JsonNode SchemaRef(Type type, JsonObject schemas)

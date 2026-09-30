@@ -83,10 +83,10 @@ public class AmqpBuilderTests
     }
 
     [Fact]
-    public void AutoAccept_False_SetsParam()
+    public void AckModeAuto_SetsParam()
     {
-        var uri = AmqpDsl.Address("q").AutoAccept(false).Build();
-        uri.Should().Contain("autoAccept=false");
+        var uri = AmqpDsl.Address("q").AckMode(AckMode.Auto).Build();
+        uri.Should().Contain("ackMode=auto");
     }
 
     // ── Producer ────────────────────────────────────────────────────

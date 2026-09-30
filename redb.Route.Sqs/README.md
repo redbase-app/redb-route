@@ -79,7 +79,7 @@ Raw URIs work too: `sqs://orders?waitTimeSeconds=20&concurrentConsumers=4`,
 |---|---|---|
 | `region`, `serviceUrl`, `accessKey`/`secretKey`, `sessionToken`, `profileName`, `useDefaultCredentialsProvider` | both | `serviceUrl` targets LocalStack/ElasticMQ |
 | `waitTimeSeconds` (0–20), `maxNumberOfMessages` (1–10), `visibilityTimeout` | SQS consumer | long-poll + batch + hide time |
-| `concurrentConsumers`, `extendMessageVisibility`, `deleteAfterRead`, `resetVisibilityOnFailure` | SQS consumer | concurrency + ack |
+| `concurrentConsumers`, `extendMessageVisibility`, `ackMode`, `resetVisibilityOnFailure` | SQS consumer | concurrency + ack |
 | `delaySeconds`, `messageGroupId`, `messageDeduplicationId`, `enableBatch` | SQS producer | FIFO + batch send |
 | `transacted` | SQS and SNS producer | unset follows an enclosing `.Transacted()` block, `false` sends at once, `true` requires a block |
 | `autoCreateQueue` / `autoCreateTopic`, `topicArn`, `subject`, `messageStructure` | both | topology + SNS payload |
@@ -121,3 +121,18 @@ Anything else — `0`, a negative, a typo — fails at endpoint creation naming 
 int-typed option silently fell back to 1). Raising the value trades ordering for throughput:
 messages from the same queue are processed out of order, and your processors must be safe to
 run in parallel.
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`). The W3C context travels in the message attributes
+`traceparent`, `tracestate` and `baggage`; SNS attributes reach SQS with `rawMessageDelivery`.
+
+- **SQS consumer.** One `Consumer` span per message, `{queue} receive`, over the whole unit of work. Its parent is the
+  sender's `traceparent`; without one it is a root, never a child of the activity the receive loop inherited from
+  whoever started the routes. The sender's baggage is back on it, the route's spans are its children. A failed route,
+  a timeout inside it included, marks it an error; the consumer's own stop does not.
+- **SQS and SNS producers.** One `Producer` span per send or publish; an error when it fails, unless our own token
+  cancelled it. The message carries the context of this span: a `traceparent` copied from a received message is
+  replaced. A message may carry at most 10 attributes: when the headers and the trace context together exceed that,
+  the send fails naming both counts, and nothing is dropped to make it fit.
+- `RouteEngineOptions.EnableTelemetry = false` opens none of these spans. A context that came in still goes out.

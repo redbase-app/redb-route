@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.GenericFile;
 
@@ -20,6 +21,7 @@ public abstract class RemoteFileConnectionFactory
     public string Username { get; set; } = "";
 
     /// <summary>Password for authentication.</summary>
+    [Sensitive]
     public string Password { get; set; } = "";
 
     /// <summary>Connection timeout in milliseconds.</summary>

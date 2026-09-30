@@ -66,15 +66,13 @@ public sealed class KafkaTransactionOptionsTests
     [Fact]
     public void A_misspelt_option_is_refused_by_name_without_its_value()
     {
-        var options = new KafkaEndpointOptions();
-        options.BindFromUri(new Dictionary<string, string>
+        // Refused while binding, in the core, before Validate runs.
+        var act = () => new KafkaEndpointOptions().BindFromUri(new Dictionary<string, string>
         {
             ["brokers"] = "localhost:9092",
             ["transactionalIdPrefx"] = "orders",
             ["saslPasword"] = "s3cr3t",
         });
-
-        var act = () => options.Validate();
 
         act.Should().Throw<ArgumentException>()
             .WithMessage("*'transactionalIdPrefx' is not an option*'saslPasword' is not an option*")
@@ -84,12 +82,10 @@ public sealed class KafkaTransactionOptionsTests
     [Fact]
     public void An_option_whose_value_does_not_convert_is_refused()
     {
-        var options = new KafkaEndpointOptions();
-        options.BindFromUri(new Dictionary<string, string> { ["brokers"] = "localhost:9092", ["retries"] = "three" });
+        var act = () => new KafkaEndpointOptions()
+            .BindFromUri(new Dictionary<string, string> { ["brokers"] = "localhost:9092", ["retries"] = "three" });
 
-        var act = () => options.Validate();
-
-        act.Should().Throw<ArgumentException>().WithMessage("*'retries'*not a Int32*");
+        act.Should().Throw<ArgumentException>().WithMessage("*'retries=three'*whole number*");
     }
 
     [Fact]
@@ -98,11 +94,4 @@ public sealed class KafkaTransactionOptionsTests
         KafkaDsl.Topic("t").TransactionalIdPrefix("orders").Build().Should().Contain("transactionalIdPrefix=orders");
         KafkaDsl.Topic("t").Build().Should().NotContain("transactionalIdPrefix");
     }
-
-    [Theory]
-    [InlineData("b:2, a:1", "a:1,b:2")]
-    [InlineData("A:1,a:1,b:2", "a:1,b:2")]
-    [InlineData(" a:1 ", "a:1")]
-    public void A_cluster_is_its_brokers_in_any_order(string servers, string cluster) =>
-        KafkaConsumedOffsets.ClusterOf(servers).Should().Be(cluster);
 }

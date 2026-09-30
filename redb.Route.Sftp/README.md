@@ -84,3 +84,9 @@ context.AddToRegistry("prod", new SftpConnectionFactory
 });
 // sftp://outbox?connectionFactory=prod
 ```
+
+## Tracing
+
+As every connector built on `redb.Route.GenericFile` (see the `redb.Route.File` README): a root `Consumer` span,
+`file read sftp`, per routed file, none for an empty poll, an error when the route fails; a `Producer` span per upload,
+`file write sftp`, an error when it fails. `RouteEngineOptions.EnableTelemetry = false` opens neither.

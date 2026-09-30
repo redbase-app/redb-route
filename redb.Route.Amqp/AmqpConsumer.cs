@@ -201,7 +201,7 @@ public sealed class AmqpConsumer : IConsumer
 
     private async Task ProcessMessageAsync(Worker worker, AmqpMessage msg, CancellationToken ct)
     {
-        using var activity = StartConsumerActivity(msg);
+        using var span = StartConsumerSpan(msg);
 
         var exchange = CreateExchange(msg);
 
@@ -215,6 +215,10 @@ public sealed class AmqpConsumer : IConsumer
         // The delivery is settled by this consumer once the whole unit of work ended well, not by the route
         // transaction: the transaction owns the database and the outgoing sends.
         var ackAction = new AmqpAckAction(receiver, msg, _logger);
+
+        // ackMode=auto: settled on receipt, before the route runs; a failure below does not bring it back.
+        if (_options.AckMode == AckMode.Auto)
+            await ackAction.Commit(ct).ConfigureAwait(false);
 
         var pipelineFailed = false;
         try
@@ -239,7 +243,7 @@ public sealed class AmqpConsumer : IConsumer
 
             // Accept (settle) the message
             // Settle through the ack action: a route-level .Transacted() may already have accepted it (Settled).
-            if (_options.AutoAccept && !ackAction.Settled && receiver is { IsClosed: false })
+            if (_options.AckMode == AckMode.Manual && !ackAction.Settled && receiver is { IsClosed: false })
             {
                 await ackAction.Commit(ct).ConfigureAwait(false);
             }
@@ -248,6 +252,9 @@ public sealed class AmqpConsumer : IConsumer
         }
         catch (Exception ex)
         {
+            // Our own stop (the processing token) is not a failure; any other cancellation is.
+            if (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                span.Activity.RecordFailure(ex);
             // A pipeline failure is already counted by the core's StatisticsProcessor; a settle
             // failure AFTER a successful pipeline is invisible to the core, so the transport
             // records it (ревью дуги, M13).
@@ -270,44 +277,25 @@ public sealed class AmqpConsumer : IConsumer
 
     // ── Trace context propagation ──
 
-    private Activity? StartConsumerActivity(AmqpMessage msg)
+    private TransportSpan StartConsumerSpan(AmqpMessage msg)
     {
-        var propagator = DistributedContextPropagator.Current;
-        var appProps = msg.ApplicationProperties?.Map;
+        var span = RouteTelemetryExtensions.StartConsumerSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_endpoint.Address} receive", ActivityKind.Consumer,
+            "messaging.system", "amqp", _endpoint.Uri.NormalizedKey,
+            msg.ApplicationProperties?.Map,
+            static (map, name) => map is not null && map.TryGetValue(name, out var raw) ? raw?.ToString() : null,
+            destination: _endpoint.Address, operation: "receive");
 
-        propagator.ExtractTraceIdAndState(appProps,
-            static (object? carrier, string key, out string? value, out IEnumerable<string>? values) =>
-            {
-                value = null;
-                values = null;
-                if (carrier is not global::Amqp.Types.Map map) return;
-                if (!map.TryGetValue(key, out var raw) || raw is null) return;
-                value = raw.ToString();
-            },
-            out var traceParent,
-            out var traceState);
-
-        ActivityContext parentContext = default;
-        if (!string.IsNullOrEmpty(traceParent))
-            ActivityContext.TryParse(traceParent, traceState, out parentContext);
-
-        var activity = RouteActivitySource.Source.StartActivity(
-            $"{_endpoint.Address} receive",
-            ActivityKind.Consumer,
-            parentContext);
-
-        if (activity is { IsAllDataRequested: true })
+        if (span.Activity is { IsAllDataRequested: true } activity)
         {
-            activity.SetTag("messaging.system", "amqp");
-            activity.SetTag("messaging.operation", "receive");
-            activity.SetTag("messaging.destination.name", _endpoint.Address);
             if (msg.Properties?.MessageId is { } msgId)
                 activity.SetTag("messaging.message.id", msgId);
             if (msg.Properties?.Subject is { } subject)
                 activity.SetTag("messaging.amqp.subject", subject);
         }
 
-        return activity;
+        return span;
     }
 
     // ── Exchange creation ──

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using redb.Core;
 using redb.Route.Components;
+using redb.Route.Configuration;
 using redb.Route.Http;
 using redb.Route.Llm.Extensions;
 using redb.Route.Llm.Engine.Governance;
@@ -73,6 +74,7 @@ public sealed class LiveLlmHost : IAsyncDisposable
     /// that a caller identified by the transport reaches the engine's governance without a test hook.
     /// </param>
     /// <param name="httpPort">Port for the HTTP entry point; required together with <paramref name="httpHosting"/>.</param>
+    /// <param name="options">Engine options of the route context; tracing tests turn <c>EnableTelemetry</c> off.</param>
     public static LiveLlmHost Build(
         IAgentObserver? observer = null,
         IToolIdempotencyStore? idempotency = null,
@@ -86,7 +88,8 @@ public sealed class LiveLlmHost : IAsyncDisposable
         IRedbService? redb = null,
         bool engineFromDi = false,
         HttpHostingOptions? httpHosting = null,
-        int? httpPort = null)
+        int? httpPort = null,
+        RouteEngineOptions? options = null)
     {
         // Closure trick: register IRouteContext as a factory that returns the
         // context we are about to construct. This lets the inline `.Llm(...)`
@@ -98,7 +101,7 @@ public sealed class LiveLlmHost : IAsyncDisposable
         if (engineFromDi) services.AddRedbRouteLlm();
         var sp = services.BuildServiceProvider();
 
-        ctx = new RouteContext(sp, contextId: "llm-test-ctx");
+        ctx = new RouteContext(sp, contextId: "llm-test-ctx", options: options);
 
         ctx.AddComponent(new LlmComponent());
 

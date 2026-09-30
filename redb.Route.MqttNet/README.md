@@ -110,3 +110,19 @@ Anything else — `0`, a negative, a typo — fails at endpoint creation naming 
 int-typed option silently fell back to 1). Raising the value trades ordering for throughput:
 messages from the same queue are processed out of order, and your processors must be safe to
 run in parallel.
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `messaging.system` = `mqtt` and
+`redb.route.endpoint`:
+
+- **Context.** The W3C context (`traceparent`, `tracestate`, `baggage`) travels in MQTT 5 user properties, and only when
+  the connection speaks v5 (the MQTTnet default). Under 3.1.1 nothing is written — MQTTnet refuses user properties
+  there — and nothing is read.
+- **Producer.** One `Producer` span per publish, `{topic} publish`, whose context is written to the message. The write
+  replaces a `traceparent` already in `redbMqtt.userProperties` (copied from an earlier hop); the exchange's header is
+  left as it was. An error when the publish fails, unless our own token cancelled it.
+- **Consumer.** One `Consumer` span per routed message, `{topic} receive`, a child of the sender's context when the
+  message carries one; otherwise a root, never a child of the activity the client's receive loop holds. Nothing
+  arriving opens none. A failed route marks it an error; our own stop does not.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span; a context the route received is still passed on.

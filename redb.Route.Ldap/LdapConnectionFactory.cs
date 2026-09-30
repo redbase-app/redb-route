@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Ldap;
 
@@ -52,6 +53,7 @@ public sealed class LdapConnectionFactory
     public string? BindDn { get; set; }
 
     /// <summary>Password for service account authentication.</summary>
+    [Sensitive]
     public string? BindPassword { get; set; }
 
     // ── Protocol / pool ──
@@ -68,12 +70,13 @@ public sealed class LdapConnectionFactory
     // ── TLS ──
 
     /// <summary>Skip server certificate validation (development only!).</summary>
-    public bool SkipCertificateValidation { get; set; }
+    public bool TrustAllCertificates { get; set; }
 
     /// <summary>Path to client certificate for mutual TLS.</summary>
     public string? ClientCertPath { get; set; }
 
     /// <summary>Password for client certificate.</summary>
+    [Sensitive]
     public string? ClientCertPassword { get; set; }
 
     /// <summary>
@@ -101,8 +104,8 @@ public sealed class LdapConnectionFactory
         if (!supplied.ContainsKey(nameof(options.FollowReferrals))) options.FollowReferrals = FollowReferrals;
         if (!supplied.ContainsKey(nameof(options.MaxConnections))) options.MaxConnections = MaxConnections;
 
-        if (!supplied.ContainsKey(nameof(options.SkipCertificateValidation)))
-            options.SkipCertificateValidation = SkipCertificateValidation;
+        if (!supplied.ContainsKey(nameof(options.TrustAllCertificates)))
+            options.TrustAllCertificates = TrustAllCertificates;
         if (!supplied.ContainsKey(nameof(options.ClientCertPath))) options.ClientCertPath = ClientCertPath;
         if (!supplied.ContainsKey(nameof(options.ClientCertPassword)))
             options.ClientCertPassword = ClientCertPassword;

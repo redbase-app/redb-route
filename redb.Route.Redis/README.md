@@ -64,7 +64,7 @@ From("direct://enqueue")
 | **Connection** | `.Connection()`, `.Database()`, `.Password()`, `.ConnectionFactory()` |
 | **Key-Value** | `Redis.Set()`, `Redis.Get()`, `Redis.Del()`, `Redis.Exists()`, `Redis.Expire()`, `Redis.Incr()`, `Redis.Decr()`, `Redis.SetNx()` |
 | **Pub/Sub** | `Redis.Publish()`, `Redis.Subscribe()`, `Redis.PSubscribe()` |
-| **Streams** | `Redis.XAdd()`, `Redis.XRead()`, `Redis.XGroup()`, `.ConsumerGroup()`, `.ConsumerName()`, `.StreamMaxLength()`, `.StreamReadCount()`, `.StreamBlockTime()`, `.StreamStartPosition()`, `.StreamNoAck()`, `.StreamClaimMinIdle()` |
+| **Streams** | `Redis.XAdd()`, `Redis.XRead()`, `Redis.XGroup()`, `.ConsumerGroup()`, `.ConsumerName()`, `.StreamMaxLength()`, `.StreamReadCount()`, `.StreamBlockTime()`, `.StreamStartPosition()`, `.AckMode()`, `.StreamClaimMinIdle()` |
 | **Lists** | `Redis.LPush()`, `Redis.RPush()`, `Redis.LPop()`, `Redis.RPop()`, `Redis.LLen()`, `Redis.LRange()`, `.ProcessingList()` |
 | **Any operation** | `Redis.Command(operation, key)` — the factories above cover keys, Pub/Sub, streams and lists; every other operation (`HSET`, `ZADD`, `GEOADD`, `BLPOP`, …) is built with it |
 | **Options** | `.Ttl()`, `.Transacted()`, `.PollDelay()`, `.UsePattern()`, `.CustomCommand()` |
@@ -81,7 +81,7 @@ a raw Redis command, named with `.CustomCommand("PING")` (or the `redbRedis.Comm
 |---|---|---|
 | `SUBSCRIBE` / `PSUBSCRIBE` | Pub/Sub; `PSUBSCRIBE` subscribes to a pattern (`events.*`), `usePattern` makes `SUBSCRIBE` do so too | lost: Pub/Sub keeps nothing |
 | `XREAD` / `XGROUP` with `consumerGroup` | `XREADGROUP`, acknowledged (`XACK`) after the route succeeded | stays pending; `streamClaimMinIdleMs` claims it again (`XAUTOCLAIM`) once it idled that long — a dead consumer's entries too |
-| the same with `streamNoAck=true` | `XREADGROUP NOACK`: delivered when read | not read again (at-most-once) |
+| the same with `ackMode=auto` | `XREADGROUP NOACK`: delivered when read | not read again (at-most-once) |
 | `XREAD` without a group | a position of its own, moved past every entry read; starts at the entries added from now on, or at `streamStartPosition` (`0` = from the beginning) | moved past, like a Kafka consumer without `breakOnFirstError` |
 | `BLPOP` / `BRPOP` | polls `LPOP` / `RPOP` every `pollDelayMs` (a blocking pop would hold the connection the whole process shares) | lost (at-most-once) |
 | the same with `processingList` | `LMOVE` into that list, removed after the route succeeded | back to the head of the queue and processed again; what a previous run left there is returned at start. One consumer per processing list |
@@ -123,3 +123,16 @@ context.AddToRegistry("prod", new RedisConnectionFactory
 });
 // redis:GET:cache?connectionFactory=prod
 ```
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `redb.route.endpoint`:
+
+- **Consumer.** One `Consumer` span, `redis {operation} receive`, per routed pub/sub message, stream entry or list item,
+  with `messaging.system` = `redis` and the channel, stream or list as `messaging.destination.name`.
+  A Redis value carries no trace context (a stream entry's fields are its body), so the span is a root, never a child of
+  the activity the consumer loop inherited from whoever started the routes; nothing arriving opens none. A failed route
+  marks it an error; our own stop does not.
+- **Producer.** One `Client` span per command, `redis {operation}`, with `db.system` = `redis`; an error when the
+  command fails, unless our own token cancelled it.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.

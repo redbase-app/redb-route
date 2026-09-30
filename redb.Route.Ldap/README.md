@@ -78,7 +78,7 @@ From("direct://authenticate")
 | **Consumer** | `.PollInterval()`, `.ChangeTracking()`, `.InitialLoad()` |
 | **Protocol** | `.ProtocolVersion()`, `.Referrals()` |
 | **Pool** | `.MaxConnections()` |
-| **TLS** | `.SkipCertificateValidation()`, `.ClientCert()` |
+| **TLS** | `.TrustAllCertificates()`, `.ClientCert()` |
 
 > Most builder methods accept both constant values and `IExpression` for runtime resolution via the expression engine.
 
@@ -139,3 +139,16 @@ context.AddToRegistry("prod", new LdapConnectionFactory
 });
 // ldap:SEARCH:dc=corp,dc=local?connectionFactory=prod
 ```
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `network.protocol.name` = `ldap` and
+`redb.route.endpoint`:
+
+- **Consumer (WATCH).** One `Consumer` span, `ldap {baseDn} receive`, per routed entry. An entry carries no trace
+  context, so the span is a root, never a child of the activity the poll loop inherited from whoever started the
+  routes; a poll that finds nothing opens none. A failed route marks it an error, whether the failure stays on the
+  exchange or escapes the pipeline; our own stop does not.
+- **Producer.** One `Client` span per operation, `ldap.{operation}`, with the `ldap.*` tags; an error when the operation
+  fails, unless our own token cancelled it. A rejected `BIND` is an answer, not a failure: it is on `ldap.bind_result`.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.

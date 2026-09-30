@@ -252,6 +252,145 @@ public sealed class KafkaIntegrationTests
         processedMessages.Should().NotBeEmpty();
     }
 
+    /// <summary>Starts a consumer on <paramref name="topic"/> and returns the first exchange it hands the route.</summary>
+    private async Task<IExchange> FirstExchange(string topic, string consumerParams)
+    {
+        var ep = CreateEndpoint(topic, $"groupId=grp-{Guid.NewGuid():N}&autoOffsetReset=Earliest&{consumerParams}");
+        var first = new TaskCompletionSource<IExchange>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                first.TrySetResult(callInfo.Arg<IExchange>());
+                return Task.CompletedTask;
+            });
+
+        var consumer = (KafkaConsumer)ep.CreateConsumer(processor);
+        await consumer.Start();
+        try
+        {
+            return await first.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            await consumer.Stop();
+        }
+    }
+
+    /// <summary>Reads the first record of <paramref name="topic"/> as it is on the wire: key, value, headers.</summary>
+    private static Message<string, byte[]>? ReadOneRecord(string topic)
+    {
+        var config = new ConsumerConfig
+        {
+            BootstrapServers = BootstrapServers,
+            GroupId = $"verify-{Guid.NewGuid():N}",
+            AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Earliest,
+        };
+        using var consumer = new ConsumerBuilder<string, byte[]>(config).Build();
+        consumer.Subscribe(topic);
+        try
+        {
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    if (consumer.Consume(TimeSpan.FromMilliseconds(250))?.Message is { } message)
+                        return message;
+                }
+                catch (ConsumeException ex) when (ex.Error.Code == ErrorCode.UnknownTopicOrPart)
+                {
+                }
+            }
+            return null;
+        }
+        finally
+        {
+            consumer.Close();
+        }
+    }
+
+    /// <summary>Sends one exchange as a consumed record would reach the producer: with the headers the consumer set.</summary>
+    private async Task<Message<string, byte[]>?> PassOn(string topic, string? producerParams, Action<IMessage> consumed)
+    {
+        var producer = (KafkaProducer)CreateEndpoint(topic, producerParams).CreateProducer();
+        await producer.Start();
+        var exchange = new Exchange(new Message("passed-on"));
+        consumed(exchange.In);
+        await producer.Process(exchange);
+        await producer.Stop();
+        return ReadOneRecord(topic);
+    }
+
+    [Fact]
+    public async Task Producer_PassingARecordOn_KeepsItsKey()
+    {
+        // Review R3 (docs/kafka/REVIEW-2026-09-28.md): the consumer put the record's key on the exchange and the
+        // producer dropped it with the other redbKafka.* headers: a passthrough changed partition and compaction.
+        var topic = $"test-key-carry-{Guid.NewGuid():N}";
+
+        var record = await PassOn(topic, null, m => m.Headers[KafkaHeaders.Key] = "order-7");
+
+        record.Should().NotBeNull();
+        record!.Key.Should().Be("order-7");
+    }
+
+    [Fact]
+    public async Task Producer_KeyOption_WinsOverTheConsumedKey()
+    {
+        var topic = $"test-key-option-{Guid.NewGuid():N}";
+
+        var record = await PassOn(topic, "key=explicit", m => m.Headers[KafkaHeaders.Key] = "order-7");
+
+        record!.Key.Should().Be("explicit");
+    }
+
+    [Fact]
+    public async Task Producer_KeyFromHeaderFalse_SendsWithoutAKey()
+    {
+        var topic = $"test-key-off-{Guid.NewGuid():N}";
+
+        var record = await PassOn(topic, "keyFromHeader=false", m => m.Headers[KafkaHeaders.Key] = "order-7");
+
+        record.Should().NotBeNull();
+        record!.Key.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Producer_PassingARecordOn_SendsOneContentType()
+    {
+        // Review R7: the consumer keeps the record's content-type header next to ContentType; the producer wrote both.
+        var topic = $"test-content-type-{Guid.NewGuid():N}";
+
+        var record = await PassOn(topic, null, m =>
+        {
+            m.ContentType = "application/json";
+            m.Headers["content-type"] = "application/json";
+        });
+
+        record.Should().NotBeNull();
+        record!.Headers.Where(h => h.Key == "content-type").Should().ContainSingle()
+            .Which.GetValueBytes().Should().Equal(Encoding.UTF8.GetBytes("application/json"));
+    }
+
+    [Fact]
+    public async Task Consumer_BatchMode_GivesARecordTheSameHeadersAsSingleMode()
+    {
+        // Review R4 (docs/kafka/REVIEW-2026-09-28.md): the batch path left out redbKafka.Key and redbKafka.Timestamp,
+        // so a route reading the key worked record by record and got null once maxPollRecords was set.
+        var topic = $"test-batch-shape-{Guid.NewGuid():N}";
+        await ProduceMessage(topic, "shape-test", key: "order-42");
+
+        var single = (await FirstExchange(topic, "pollTimeoutMs=5000")).In;
+        var batch = await FirstExchange(topic, "maxPollRecords=10&pollTimeoutMs=5000");
+        var inBatch = batch.In.Body.Should().BeAssignableTo<IReadOnlyList<IMessage>>().Subject[0];
+
+        inBatch.Headers.Keys.Should().BeEquivalentTo(single.Headers.Keys);
+        inBatch.Headers[KafkaHeaders.Key].Should().Be("order-42");
+        inBatch.Headers[KafkaHeaders.Timestamp].Should().Be(single.Headers[KafkaHeaders.Timestamp]);
+    }
+
     /// <summary>Runs <paramref name="body"/> inside a transacted block, as <c>.Transacted()</c> on a route does.</summary>
     private static Task InTransaction(IExchange exchange, Func<IExchange, CancellationToken, Task> body) =>
         new TransactedProcessor(new DelegateProcessor(body), new TransactionPolicy()).Process(exchange);
@@ -276,6 +415,26 @@ public sealed class KafkaIntegrationTests
 
         var received = await ConsumeOneMessage(topic, $"verify-{Guid.NewGuid():N}");
         received.Should().Be("tx-real-msg");
+    }
+
+    [Fact]
+    public async Task TransactedProducer_DeferredCommit_RecordsTheSameMetadataAsAnImmediateSend()
+    {
+        // Review R6 (docs/kafka/REVIEW-2026-09-28.md): the deferred send wrote three of the four redbKafka.Sent.*
+        // headers; redbKafka.Sent.Timestamp was there outside .Transacted() and null inside it.
+        var topic = $"test-tx-metadata-{Guid.NewGuid():N}";
+        var ep = CreateEndpoint(topic, "transacted=true&recordMetadata=true");
+        var producer = (KafkaProducer)ep.CreateProducer();
+        await producer.Start();
+
+        var exchange = new Exchange(new Message("tx-meta"));
+        await InTransaction(exchange, (ex, ct) => producer.Process(ex, ct));
+        await producer.Stop();
+
+        exchange.In.Headers.Should().ContainKey(KafkaHeaders.SentTopic);
+        exchange.In.Headers.Should().ContainKey(KafkaHeaders.SentPartition);
+        exchange.In.Headers.Should().ContainKey(KafkaHeaders.SentOffset);
+        exchange.In.Headers.Should().ContainKey(KafkaHeaders.SentTimestamp);
     }
 
     [Fact]
@@ -461,7 +620,7 @@ public sealed class KafkaIntegrationTests
         received.Count.Should().Be(20);
     }
 
-    // ───── EnableAutoCommit (framework-level) ─────
+    // ───── ackMode (framework-level offset commit) ─────
 
     /// <summary>
     /// Reads the total committed offset for a group across all partitions of a topic via the
@@ -491,7 +650,7 @@ public sealed class KafkaIntegrationTests
     [Fact]
     public async Task Consumer_AutoCommitDefault_CommitsOffsetInline_BeforeStop()
     {
-        // Default EnableAutoCommit=true: the consumer must commit the offset inline right after a
+        // Default ackMode=manual: the consumer must commit the offset inline right after a
         // successful Process — i.e. BEFORE any graceful stop (the PartitionsRevokedHandler that
         // commits on stop is intentionally not exercised here, so a committed offset can only come
         // from the inline auto-commit path).
@@ -528,7 +687,7 @@ public sealed class KafkaIntegrationTests
             }
 
             committed.Should().BeGreaterThanOrEqualTo(n,
-                "EnableAutoCommit=true must commit the offset inline after Process, before any stop");
+                "ackMode=manual must commit the offset inline after Process, before any stop");
         }
         finally
         {
@@ -537,27 +696,25 @@ public sealed class KafkaIntegrationTests
     }
 
     [Fact]
-    public async Task Consumer_AutoCommitDisabled_NoTransaction_DoesNotCommitInline()
+    public async Task Consumer_AckModeAuto_CommitsOnReceipt_EvenWhenTheRouteFails()
     {
-        // EnableAutoCommit=false and no transactional route: nothing commits the deferred
-        // KafkaCommitAction during processing, so the committed offset stays unset while the
-        // consumer is running (it would only advance on a graceful stop via the revoke handler,
-        // which we assert BEFORE stopping).
-        var topic = $"test-autocommit-off-{Guid.NewGuid():N}";
-        var groupId = $"ac-off-{Guid.NewGuid():N}";
+        // ackMode=auto (at-most-once): the offset is committed before the route runs, so records whose route
+        // failed are not read again. The committed offset advances while the consumer still runs.
+        var topic = $"test-ackmode-auto-{Guid.NewGuid():N}";
+        var groupId = $"ack-auto-{Guid.NewGuid():N}";
         const int n = 3;
         for (int i = 0; i < n; i++) await ProduceMessage(topic, $"msg-{i}");
 
-        var ep = CreateEndpoint(topic, $"groupId={groupId}&autoOffsetReset=Earliest&enableAutoCommit=false");
+        var ep = CreateEndpoint(topic, $"groupId={groupId}&autoOffsetReset=Earliest&ackMode=auto");
         var received = new ConcurrentBag<string>();
         var allReceived = new TaskCompletionSource();
         var processor = Substitute.For<IProcessor>();
         processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
-            .Returns(ci =>
+            .Returns<Task>(ci =>
             {
                 received.Add(Encoding.UTF8.GetString((byte[])ci.Arg<IExchange>().In.Body!));
                 if (received.Count >= n) allReceived.TrySetResult();
-                return Task.CompletedTask;
+                throw new InvalidOperationException("the route fails");
             });
 
         var consumer = (KafkaConsumer)ep.CreateConsumer(processor);
@@ -567,10 +724,15 @@ public sealed class KafkaIntegrationTests
             await Task.WhenAny(allReceived.Task, Task.Delay(30_000));
             received.Count.Should().BeGreaterThanOrEqualTo(n);
 
-            // Give any (unexpected) commit a chance to surface, then assert NOTHING was committed.
-            await Task.Delay(3_000);
-            GetCommittedTotal(topic, groupId).Should().Be(0,
-                "without auto-commit and without a transaction, the offset must not advance during processing");
+            long committed = 0;
+            for (int i = 0; i < 20 && committed < n; i++)
+            {
+                await Task.Delay(500);
+                committed = GetCommittedTotal(topic, groupId);
+            }
+
+            committed.Should().BeGreaterThanOrEqualTo(n,
+                "ackMode=auto commits on receipt, whatever the route then does");
         }
         finally
         {

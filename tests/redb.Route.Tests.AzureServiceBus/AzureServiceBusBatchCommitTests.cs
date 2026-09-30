@@ -42,7 +42,7 @@ public sealed class AzureServiceBusBatchCommitTests
     /// <summary>Everything that reaches the queue during the window, taken off it for good.</summary>
     private static async Task<IReadOnlyCollection<string>> ReceiveFor(TimeSpan window)
     {
-        var endpoint = CreateEndpoint("receiveMode=ReceiveAndDelete&maxConcurrentCalls=10");
+        var endpoint = CreateEndpoint("ackMode=auto&maxConcurrentCalls=10");
         var received = new ConcurrentBag<string>();
         var processor = Substitute.For<IProcessor>();
         processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())

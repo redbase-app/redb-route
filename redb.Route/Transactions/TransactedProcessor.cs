@@ -173,18 +173,4 @@ public sealed class TransactedProcessor : IProcessor
             throw;
         }
     }
-
-    /// <summary>[Diag-TX-SCOPE] — best-effort RouteId lookup from the exchange.</summary>
-    private static string GetRouteIdSafe(IExchange exchange)
-    {
-        try
-        {
-            if (exchange.Properties != null
-                && exchange.Properties.TryGetValue("CamelRouteId", out var rid) && rid is string s)
-                return s;
-            return exchange.In?.Headers?.GetType().GetProperty("RouteId")?.GetValue(exchange.In.Headers) as string
-                ?? "<unknown>";
-        }
-        catch { return "<error>"; }
-    }
 }

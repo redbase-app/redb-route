@@ -89,6 +89,7 @@
       <xs:attribute name="completion" type="xs:string" />
       <xs:attribute name="completionSize" type="xs:int" />
       <xs:attribute name="completionTimeout" type="xs:string" />
+      <xs:attribute name="forceCompletionOnStop" type="xs:boolean" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -762,6 +763,18 @@
       <xs:attribute name="filter" type="xs:string" />
       <xs:attribute name="storage" type="xs:string" />
       <xs:attribute name="target" type="xs:string" />
+      <xs:attribute name="whereRedb" type="xs:string" />
+      <xs:attribute name="orderByRedb" type="xs:string" />
+      <xs:attribute name="outputType">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="List" />
+            <xs:enumeration value="First" />
+            <xs:enumeration value="Count" />
+            <xs:enumeration value="Any" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -849,6 +862,34 @@
         <xs:element name="get">
           <xs:complexType>
             <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="param">
+                <xs:complexType>
+                  <xs:attribute name="name" use="required" type="xs:string" />
+                  <xs:attribute name="type">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="path" />
+                        <xs:enumeration value="query" />
+                        <xs:enumeration value="header" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="required" type="xs:boolean" />
+                  <xs:attribute name="dataType">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="string" />
+                        <xs:enumeration value="integer" />
+                        <xs:enumeration value="number" />
+                        <xs:enumeration value="boolean" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="description" type="xs:string" />
+                  <xs:attribute name="id" type="xs:string" />
+                  <xs:anyAttribute namespace="##other" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
               <xs:group ref="r:step" />
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
@@ -865,6 +906,7 @@
                 </xs:restriction>
               </xs:simpleType>
             </xs:attribute>
+            <xs:attribute name="clientRequestValidation" type="xs:boolean" />
             <xs:attribute name="id" type="xs:string" />
             <xs:attribute name="description" type="xs:string" />
             <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -873,6 +915,34 @@
         <xs:element name="post">
           <xs:complexType>
             <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="param">
+                <xs:complexType>
+                  <xs:attribute name="name" use="required" type="xs:string" />
+                  <xs:attribute name="type">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="path" />
+                        <xs:enumeration value="query" />
+                        <xs:enumeration value="header" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="required" type="xs:boolean" />
+                  <xs:attribute name="dataType">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="string" />
+                        <xs:enumeration value="integer" />
+                        <xs:enumeration value="number" />
+                        <xs:enumeration value="boolean" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="description" type="xs:string" />
+                  <xs:attribute name="id" type="xs:string" />
+                  <xs:anyAttribute namespace="##other" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
               <xs:group ref="r:step" />
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
@@ -889,6 +959,7 @@
                 </xs:restriction>
               </xs:simpleType>
             </xs:attribute>
+            <xs:attribute name="clientRequestValidation" type="xs:boolean" />
             <xs:attribute name="id" type="xs:string" />
             <xs:attribute name="description" type="xs:string" />
             <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -897,6 +968,34 @@
         <xs:element name="put">
           <xs:complexType>
             <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="param">
+                <xs:complexType>
+                  <xs:attribute name="name" use="required" type="xs:string" />
+                  <xs:attribute name="type">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="path" />
+                        <xs:enumeration value="query" />
+                        <xs:enumeration value="header" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="required" type="xs:boolean" />
+                  <xs:attribute name="dataType">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="string" />
+                        <xs:enumeration value="integer" />
+                        <xs:enumeration value="number" />
+                        <xs:enumeration value="boolean" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="description" type="xs:string" />
+                  <xs:attribute name="id" type="xs:string" />
+                  <xs:anyAttribute namespace="##other" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
               <xs:group ref="r:step" />
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
@@ -913,6 +1012,7 @@
                 </xs:restriction>
               </xs:simpleType>
             </xs:attribute>
+            <xs:attribute name="clientRequestValidation" type="xs:boolean" />
             <xs:attribute name="id" type="xs:string" />
             <xs:attribute name="description" type="xs:string" />
             <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -921,6 +1021,34 @@
         <xs:element name="delete">
           <xs:complexType>
             <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="param">
+                <xs:complexType>
+                  <xs:attribute name="name" use="required" type="xs:string" />
+                  <xs:attribute name="type">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="path" />
+                        <xs:enumeration value="query" />
+                        <xs:enumeration value="header" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="required" type="xs:boolean" />
+                  <xs:attribute name="dataType">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="string" />
+                        <xs:enumeration value="integer" />
+                        <xs:enumeration value="number" />
+                        <xs:enumeration value="boolean" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="description" type="xs:string" />
+                  <xs:attribute name="id" type="xs:string" />
+                  <xs:anyAttribute namespace="##other" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
               <xs:group ref="r:step" />
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
@@ -937,6 +1065,7 @@
                 </xs:restriction>
               </xs:simpleType>
             </xs:attribute>
+            <xs:attribute name="clientRequestValidation" type="xs:boolean" />
             <xs:attribute name="id" type="xs:string" />
             <xs:attribute name="description" type="xs:string" />
             <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -945,6 +1074,34 @@
         <xs:element name="patch">
           <xs:complexType>
             <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="param">
+                <xs:complexType>
+                  <xs:attribute name="name" use="required" type="xs:string" />
+                  <xs:attribute name="type">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="path" />
+                        <xs:enumeration value="query" />
+                        <xs:enumeration value="header" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="required" type="xs:boolean" />
+                  <xs:attribute name="dataType">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="string" />
+                        <xs:enumeration value="integer" />
+                        <xs:enumeration value="number" />
+                        <xs:enumeration value="boolean" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="description" type="xs:string" />
+                  <xs:attribute name="id" type="xs:string" />
+                  <xs:anyAttribute namespace="##other" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
               <xs:group ref="r:step" />
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
@@ -961,6 +1118,7 @@
                 </xs:restriction>
               </xs:simpleType>
             </xs:attribute>
+            <xs:attribute name="clientRequestValidation" type="xs:boolean" />
             <xs:attribute name="id" type="xs:string" />
             <xs:attribute name="description" type="xs:string" />
             <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -969,6 +1127,34 @@
         <xs:element name="head">
           <xs:complexType>
             <xs:choice minOccurs="0" maxOccurs="unbounded">
+              <xs:element name="param">
+                <xs:complexType>
+                  <xs:attribute name="name" use="required" type="xs:string" />
+                  <xs:attribute name="type">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="path" />
+                        <xs:enumeration value="query" />
+                        <xs:enumeration value="header" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="required" type="xs:boolean" />
+                  <xs:attribute name="dataType">
+                    <xs:simpleType>
+                      <xs:restriction base="xs:string">
+                        <xs:enumeration value="string" />
+                        <xs:enumeration value="integer" />
+                        <xs:enumeration value="number" />
+                        <xs:enumeration value="boolean" />
+                      </xs:restriction>
+                    </xs:simpleType>
+                  </xs:attribute>
+                  <xs:attribute name="description" type="xs:string" />
+                  <xs:attribute name="id" type="xs:string" />
+                  <xs:anyAttribute namespace="##other" processContents="lax" />
+                </xs:complexType>
+              </xs:element>
               <xs:group ref="r:step" />
             </xs:choice>
             <xs:attribute name="path" type="xs:string" />
@@ -985,6 +1171,7 @@
                 </xs:restriction>
               </xs:simpleType>
             </xs:attribute>
+            <xs:attribute name="clientRequestValidation" type="xs:boolean" />
             <xs:attribute name="id" type="xs:string" />
             <xs:attribute name="description" type="xs:string" />
             <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -1008,6 +1195,21 @@
       <xs:attribute name="openApiPath" type="xs:string" />
       <xs:attribute name="title" type="xs:string" />
       <xs:attribute name="version" type="xs:string" />
+      <xs:attribute name="clientRequestValidation" type="xs:boolean" />
+      <xs:attribute name="errorHandler" type="xs:string" />
+      <xs:attribute name="inboundAuth">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="none" />
+            <xs:enumeration value="basic" />
+            <xs:enumeration value="bearer" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="inboundUsername" type="xs:string" />
+      <xs:attribute name="inboundPassword" type="xs:string" />
+      <xs:attribute name="inboundRealm" type="xs:string" />
+      <xs:attribute name="tokenValidator" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -1457,9 +1659,11 @@
           <xs:complexType>
             <xs:choice minOccurs="0">
               <xs:element ref="r:bean" />
+              <xs:element name="list" type="r:beanList" />
             </xs:choice>
             <xs:attribute name="key" use="required" type="xs:string" />
             <xs:attribute name="value" type="xs:string" />
+            <xs:attribute name="ref" type="xs:string" />
             <xs:anyAttribute namespace="##other" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -1467,8 +1671,11 @@
           <xs:complexType>
             <xs:choice minOccurs="0">
               <xs:element ref="r:bean" />
+              <xs:element name="list" type="r:beanList" />
             </xs:choice>
+            <xs:attribute name="type" type="xs:string" />
             <xs:attribute name="value" type="xs:string" />
+            <xs:attribute name="ref" type="xs:string" />
             <xs:anyAttribute namespace="##other" processContents="lax" />
           </xs:complexType>
         </xs:element>
@@ -1479,6 +1686,21 @@
       <xs:anyAttribute namespace="##other" processContents="lax" />
     </xs:complexType>
   </xs:element>
+  <xs:complexType name="beanList">
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="value" type="xs:string" />
+      <xs:element name="ref">
+        <xs:complexType>
+          <xs:attribute name="bean" use="required" type="xs:string" />
+          <xs:anyAttribute namespace="##other" processContents="lax" />
+        </xs:complexType>
+      </xs:element>
+      <xs:element ref="r:bean" />
+      <xs:element name="list" type="r:beanList" />
+    </xs:choice>
+    <xs:attribute name="of" type="xs:string" />
+    <xs:anyAttribute namespace="##other" processContents="lax" />
+  </xs:complexType>
   <xs:element name="route">
     <xs:complexType>
       <xs:sequence>

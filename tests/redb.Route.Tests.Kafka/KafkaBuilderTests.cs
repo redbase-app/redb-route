@@ -144,6 +144,21 @@ public class KafkaBuilderTests
     }
 
     [Fact]
+    public void SslVerifyHostname_SetsTheIdentificationAlgorithm()
+    {
+        KafkaDsl.Topic("t").SslVerifyHostname(false).Build().Should().Contain("sslEndpointIdentificationAlgorithm=none");
+        KafkaDsl.Topic("t").SslVerifyHostname().Build().Should().Contain("sslEndpointIdentificationAlgorithm=https");
+        KafkaDsl.Topic("t").Build().Should().NotContain("sslEndpointIdentificationAlgorithm");
+    }
+
+    [Fact]
+    public void KeyFromHeader_SetsParamOnlyWhenCalled()
+    {
+        KafkaDsl.Topic("t").KeyFromHeader(false).Build().Should().Contain("keyFromHeader=false");
+        KafkaDsl.Topic("t").Build().Should().NotContain("keyFromHeader");
+    }
+
+    [Fact]
     public void Key_SetsParam()
     {
         var uri = KafkaDsl.Topic("t").Key(C("userId")).Build();

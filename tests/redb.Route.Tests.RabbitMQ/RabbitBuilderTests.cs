@@ -33,6 +33,32 @@ public class RabbitBuilderTests
     }
 
     [Fact]
+    public void PublisherConnection_SetsParam_and_is_off_unless_asked()
+    {
+        Rabbit.Queue("q").PublisherConnection().Build().Should().Contain("publisherConnection=true");
+        Rabbit.Queue("q").Build().Should().NotContain("publisherConnection");
+    }
+
+    [Fact]
+    public void Tls_and_login_settings_round_trip_through_the_uri()
+    {
+        var uri = Rabbit.Queue("q").Host(C("h")).Ssl(certPath: C("client.pfx"), certPassphrase: C("pw"))
+            .SslCaCertPath(C("ca.pem"))
+            .SslProtocols(System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13)
+            .RevocationMode(System.Security.Cryptography.X509Certificates.X509RevocationMode.Online, softFail: true)
+            .AuthMechanism(RabbitMQAuthMechanism.External)
+            .Build();
+
+        var options = ((RabbitMQEndpoint)new RabbitMQComponent().CreateEndpoint(EndpointUriParser.Parse(uri))).EndpointOptions;
+
+        options.SslCaCertPath.Should().Be("ca.pem");
+        options.SslProtocols.Should().Be(System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13);
+        options.RevocationMode.Should().Be(System.Security.Cryptography.X509Certificates.X509RevocationMode.Online);
+        options.RevocationSoftFail.Should().BeTrue();
+        options.AuthMechanism.Should().Be(RabbitMQAuthMechanism.External);
+    }
+
+    [Fact]
     public void Port_SetsParam()
     {
         var uri = Rabbit.Queue("q").Port(5673).Build();
@@ -138,17 +164,17 @@ public class RabbitBuilderTests
     }
 
     [Fact]
-    public void AutoAck_SetsParam()
+    public void AckModeAuto_SetsParam()
     {
-        var uri = Rabbit.Queue("q").AutoAck().Build();
-        uri.Should().Contain("autoAck=true");
+        var uri = Rabbit.Queue("q").AckMode(AckMode.Auto).Build();
+        uri.Should().Contain("ackMode=auto");
     }
 
     [Fact]
-    public void AutoAck_OmittedByDefault()
+    public void AckMode_OmittedByDefault()
     {
         var uri = Rabbit.Queue("q").Build();
-        uri.Should().NotContain("autoAck");
+        uri.Should().NotContain("ackMode");
     }
 
     // ── Queue limits ────────────────────────────────────────────────

@@ -15,17 +15,11 @@ namespace redb.Route.Tests.Controllers;
 public class SignalRControllerIntegrationTests : IAsyncLifetime
 {
     private int _port;
+    private RouteContext? _context;
     private SignalRConsumer? _consumer;
     private SignalRProducer? _producer;
 
-    private static int GetFreePort()
-    {
-        using var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     public Task InitializeAsync()
     {
@@ -37,6 +31,7 @@ public class SignalRControllerIntegrationTests : IAsyncLifetime
     {
         if (_producer is not null) await _producer.Stop();
         if (_consumer is not null) await _consumer.Stop();
+        if (_context is not null) await _context.DisposeAsync();
     }
 
     /// <summary>
@@ -45,7 +40,8 @@ public class SignalRControllerIntegrationTests : IAsyncLifetime
     /// </summary>
     private async Task StartPair(params Type[] controllerTypes)
     {
-        var context = new RouteContext();
+        _context = new RouteContext();
+        var context = _context;
         var dispatcher = new SignalRControllerDispatcher(context, controllerTypes);
 
         var component = new SignalRComponent();
@@ -70,9 +66,8 @@ public class SignalRControllerIntegrationTests : IAsyncLifetime
         var pEndpoint = (SignalREndpoint)component.CreateEndpoint(pUri);
         _producer = (SignalRProducer)pEndpoint.CreateProducer();
         await _producer.Start();
-
-        // Wait for connection to be established
-        await Task.Delay(300);
+        // No wait after this: Start() returns once HubConnection.StartAsync has reached Connected, and a call on a
+        // connection that is not connected fails instead of queueing.
     }
 
     // ── Basic method dispatch ──────────────────────────

@@ -32,6 +32,13 @@ services.AddMcpServer("serena", McpTransport.Stdio(
 
 The agent now sees Serena's full tool catalogue (`serena__find_symbol`, `serena__get_symbols_overview`, …) alongside any native redb tools.
 
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`): one `Client` span per `tools/call`,
+`mcp.tools/call {server}/{tool}`, with `rpc.system` = `mcp`, `rpc.service`, `rpc.method` and `redb.route.endpoint`. An
+error when the call fails (an unknown or dead server, a tool error, the call timeout), unless our own token cancelled
+it. `RouteEngineOptions.EnableTelemetry = false` opens none.
+
 ## Out of scope (Wave 2+)
 
 - MCP `resources` and `prompts`.

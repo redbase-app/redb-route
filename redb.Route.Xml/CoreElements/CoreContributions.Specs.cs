@@ -16,6 +16,8 @@ internal static partial class CoreContributions
         => new(name, AttributeType.Expression, required) { Condition = true };
     private static AttributeSpec U(string name, bool required = false) => new(name, AttributeType.Uri, required);
     private static AttributeSpec R(string name, bool required = false) => new(name, AttributeType.Reference, required);
+    /// <summary>A CLR type as the markup names it: <c>Full.Name, Assembly</c>.</summary>
+    private static string Named<TType>() => $"{typeof(TType).FullName}, {typeof(TType).Assembly.GetName().Name}";
     private static AttributeSpec T(string name, bool required = false) => new(name, AttributeType.TypeName, required);
     private static AttributeSpec TL(string name, bool required = false) => new(name, AttributeType.TypeNameList, required);
     private static AttributeSpec B(string name) => new(name, AttributeType.Bool);
@@ -103,7 +105,7 @@ internal static partial class CoreContributions
                 E("expr", required: true), S("delimiter"), B("ignoreInvalidEndpoints")),
             ["claimCheck"] = ElementSpec.Leaf("claimCheck",
                 En("operation", Enum.GetNames<redb.Route.Abstractions.ClaimCheckOperation>(), required: true),
-                E("key"), D("ttl"), R("repository")),
+                E("key"), D("ttl"), R("repository") with { References = Named<redb.Route.Abstractions.IClaimCheckRepository>() }),
             ["beginTransaction"] = ElementSpec.Leaf("beginTransaction", En("policy", TransactionPolicies)),
             ["commitTransaction"] = ElementSpec.Leaf("commitTransaction"),
             ["rollbackTransaction"] = ElementSpec.Leaf("rollbackTransaction"),
@@ -125,13 +127,13 @@ internal static partial class CoreContributions
             ["multicast"] = ElementSpec.Scope("multicast", B("parallel"), I("maxParallelism"), B("stopOnException")),
             ["aggregate"] = ElementSpec.Scope("aggregate",
                 E("correlation", required: true), S("strategy", required: true),
-                E("completion"), I("completionSize"), D("completionTimeout")),
+                E("completion"), I("completionSize"), D("completionTimeout"), B("forceCompletionOnStop")),
             ["loop"] = ElementSpec.Scope("loop", I("count"), E("expr"), C("while"), B("copy"), B("shareScope")),
             ["throttle"] = ElementSpec.Scope("throttle",
                 E("maxPerPeriod", required: true), D("period"), E("key"), B("rejectOnOverflow")),
             ["debounce"] = ElementSpec.Scope("debounce", E("key", required: true), D("quietPeriod", required: true)),
             ["idempotentConsumer"] = ElementSpec.Scope("idempotentConsumer",
-                E("key", required: true), R("repository", required: true), B("skipDuplicate")),
+                E("key", required: true), R("repository", required: true) with { References = Named<redb.Route.Abstractions.IIdempotentRepository>() }, B("skipDuplicate")),
             ["resequence"] = ElementSpec.Scope("resequence", E("key", required: true), I("batchSize"), D("timeout")),
             ["transaction"] = ElementSpec.Scope("transaction", En("policy", TransactionPolicies),
                 U("deadLetterChannel"), I("retryAttempts"), D("retryDelay")),

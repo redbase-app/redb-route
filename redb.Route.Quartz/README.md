@@ -58,3 +58,10 @@ Both schemes are consumer-only — they generate messages on schedule.
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `redb.system` = the scheme (`cron`, `qtimer`) and
+`redb.route.endpoint`: one `Consumer` span per fire, `{scheme} receive`. A fire carries no trace context, so the span is
+a root, never a child of the activity the scheduler thread holds; the route is its child. A failed route marks it an
+error; our own stop does not. `RouteEngineOptions.EnableTelemetry = false` opens none.

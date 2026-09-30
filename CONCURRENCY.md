@@ -59,6 +59,26 @@ Options:
 | **Errors** | **InOnly** routes the fault to the route's error handling (`OnException` / dead-letter) on the pool thread — not swallowed. **InOut** lets the fault propagate up the pipeline to the same outer `OnException` wrapper as an un-threaded route; if unhandled it surfaces to the awaiting caller. |
 | **Graceful drain** | On route/context stop the pool stops accepting, finishes every in-flight and queued exchange, and only force-cancels if a drain timeout is exceeded. In-flight work is not dropped. |
 
+### An asynchronous step settles the message before the work is done
+
+A broker consumer with `ackMode=manual` (the default on RabbitMQ, AMQP, Kafka, SQS, Service Bus and Redis Streams)
+settles the message when the route **returns**: acknowledges it, commits the offset, deletes it. An asynchronous step
+— an InOnly `.Threads(N)`, a `.To("seda://...")` — returns the route as soon as the exchange is handed off, so the
+message is settled **before** the work behind the step has run. A crash or a failure there loses the message: the
+broker will not deliver it again (at-most-once, whatever `ackMode` says).
+
+The same goes for a Kafka transaction: the consumed offset no longer rides in it, because the route returned before
+the transaction committed (the producer logs a warning).
+
+- Keep the part of the route that must be settled with the message **synchronous**: no InOnly `.Threads()` or
+  `seda:` hand-off between the consumer and the last step that has to succeed.
+- For processing concurrency on a broker, use the transport's own knob (next section): it keeps acknowledging after
+  each message is processed.
+- An asynchronous step is right for work whose loss the route accepts — notifications, copies, metrics — or which is
+  made durable on its own (the step writes to a queue that settles separately).
+
+InOut `.Threads(N)` runs inline and is not affected: the route returns after the body.
+
 ### When to reach for it
 
 - A **polling** consumer is your bottleneck (File/SQL/S3/IMAP poll one batch at a time, then process serially).

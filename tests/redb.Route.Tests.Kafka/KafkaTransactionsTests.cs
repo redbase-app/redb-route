@@ -1,5 +1,7 @@
+using System.Reflection;
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Kafka;
@@ -218,5 +220,197 @@ public sealed class KafkaTransactionsTests
 
         Read(topicA, expected: 2).Should().Equal("a1", "a2");
         Read(topicB, expected: 1).Should().Equal("b1");
+    }
+
+    [Fact]
+    public async Task A_producer_stopped_while_marked_for_rebuild_does_not_come_back()
+    {
+        // Review R9 (docs/kafka/REVIEW-2026-09-28.md): the rebuild after a fatal error called ConnectAsync round Start.
+        // Stopped meanwhile, the producer got a fresh client nobody closed, and committed a transaction while stopped.
+        // The fatal error itself cannot be provoked on demand; the flag it sets is set here.
+        var topic = await CreateTopic("eos-rebuild-stop");
+        var producer = await StartProducer(topic, "transactionalIdPrefix=eos-rebuild-stop");
+        await producer.Stop();
+        typeof(KafkaProducer).GetField("_rebuild", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(producer, true);
+
+        var send = new KafkaTransactionalSend(
+            new Message<string, byte[]> { Value = "late"u8.ToArray(), Headers = new Headers() },
+            new Exchange(new Message("late")));
+        var commit = () => producer.CommitTransactionAsync([send], offsets: null, CancellationToken.None);
+
+        await commit.Should().ThrowAsync<InvalidOperationException>().WithMessage("*stopped*");
+        typeof(KafkaProducer).GetField("_producer", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(producer)
+            .Should().BeNull("the client built after the stop is closed, not left to the finalizer");
+        Read(topic, expected: 0).Should().BeEmpty();
+    }
+
+    /// <summary>A producer whose component logs through <paramref name="context"/>'s logger factory.</summary>
+    private static async Task<KafkaProducer> StartLoggedProducer(
+        RouteContext context, string topic, string parameters)
+    {
+        var component = new KafkaComponent();
+        context.AddComponent(component);
+        var uri = EndpointUriParser.Parse($"kafka://{topic}?brokers={BootstrapServers}&{parameters}");
+        var producer = (KafkaProducer)((KafkaEndpoint)component.CreateEndpoint(uri)).CreateProducer();
+        await producer.Start();
+        return producer;
+    }
+
+    /// <summary>An exchange carrying the offsets a consumer of <paramref name="cluster"/> offered for it.</summary>
+    private static (Exchange Exchange, KafkaCommitAction Commit, KafkaConsumedOffsets Offsets) FromConsumerOf(
+        string cluster, string topic)
+    {
+        var consumer = Substitute.For<IConsumer<string, byte[]>>();
+        var record = new ConsumeResult<string, byte[]>
+        {
+            TopicPartitionOffset = new TopicPartitionOffset(topic, 0, 0),
+            Message = new Message<string, byte[]> { Value = [] },
+        };
+        var commit = new KafkaCommitAction(consumer, record, logger: null);
+        var offsets = new KafkaConsumedOffsets(consumer, commit, cluster);
+        var exchange = new Exchange(new Message("from-kafka"));
+        exchange.Properties[KafkaConsumedOffsets.PropertyKey] = offsets;
+        return (exchange, commit, offsets);
+    }
+
+    /// <summary>The id the stand's brokers report.</summary>
+    private static async Task<string> ClusterId()
+    {
+        using var admin = new AdminClientBuilder(new AdminClientConfig { BootstrapServers = BootstrapServers }).Build();
+        return (await admin.DescribeClusterAsync()).ClusterId;
+    }
+
+    [Fact]
+    public async Task One_cluster_listed_by_other_brokers_on_the_two_ends_is_still_exactly_once()
+    {
+        // Review §6.4: the cluster used to be the bootstrap list as written, so a consumer on one broker and a producer
+        // on three were two clusters and the offset stayed out of the transaction. It is the cluster id now.
+        var input = await CreateTopic("eos-id-in");
+        var output = await CreateTopic("eos-id-out");
+        var group = $"eos-{Guid.NewGuid():N}";
+        await Produce(input, "order-1");
+
+        var outcome = new ExchangeOutcome();
+        await using var context = new RouteContext();
+        context.AddComponent(new KafkaComponent());
+        context.AddLifecycleListener(outcome);
+        context.AddRoutes(r => r
+            .From($"kafka://{input}?brokers=localhost:29092&groupId={group}&autoOffsetReset=earliest")
+            .Transacted()
+                .To($"kafka://{output}?brokers={BootstrapServers}&transactionalIdPrefix=eos-id")
+                .Process(ex => TransactedActions.Register(ex, "after-kafka", new FailsOnCommit(), "test"))
+            .End());
+        await context.Start();
+
+        (await outcome.Done.Task.WaitAsync(TimeSpan.FromSeconds(60))).Should().NotBeNull();
+        await context.Stop();
+
+        // As in A_route_from_kafka_commits_the_consumed_offset_in_the_producers_transaction: the consumer commits
+        // nothing for a failed exchange, so an advanced offset is the transaction's.
+        (await CommittedOffset(group, input)).Should().Be(1);
+        Read(output, expected: 1).Should().Equal("order-1");
+    }
+
+    [Fact]
+    public async Task A_consumer_losing_its_partition_mid_transaction_writes_nothing_twice()
+    {
+        // Review §6.5: consumer A is still in its route when its group moves the partition to consumer B (A exceeded
+        // max.poll.interval.ms). B reads the record again and commits it with the offset; A's transaction then carries
+        // an old group generation, which the broker refuses, and A's output is aborted. One record out, not two.
+        var input = await CreateTopic("eos-rebalance-in");
+        var output = await CreateTopic("eos-rebalance-out");
+        var group = $"eos-{Guid.NewGuid():N}";
+        await Produce(input, "order-1");
+
+        var aInRoute = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var outcomeA = new ExchangeOutcome();
+        await using var contextA = new RouteContext();
+        contextA.AddComponent(new KafkaComponent());
+        contextA.AddLifecycleListener(outcomeA);
+        contextA.AddRoutes(r => r
+            .From($"kafka://{input}?brokers={BootstrapServers}&groupId={group}&autoOffsetReset=earliest" +
+                  "&sessionTimeoutMs=6000&maxPollIntervalMs=10000")
+            .Transacted()
+                .Process(async (_, ct) =>
+                {
+                    aInRoute.TrySetResult();
+                    await releaseA.Task.WaitAsync(TimeSpan.FromSeconds(90), ct);
+                })
+                .To($"kafka://{output}?brokers={BootstrapServers}&transactionalIdPrefix=eos-rebalance-a")
+            .End());
+        await contextA.Start();
+        await aInRoute.Task.WaitAsync(TimeSpan.FromSeconds(60));
+
+        var outcomeB = new ExchangeOutcome();
+        await using var contextB = new RouteContext();
+        contextB.AddComponent(new KafkaComponent());
+        contextB.AddLifecycleListener(outcomeB);
+        contextB.AddRoutes(r => r
+            .From($"kafka://{input}?brokers={BootstrapServers}&groupId={group}&autoOffsetReset=earliest")
+            .Transacted()
+                .To($"kafka://{output}?brokers={BootstrapServers}&transactionalIdPrefix=eos-rebalance-b")
+            .End());
+        await contextB.Start();
+
+        (await outcomeB.Done.Task.WaitAsync(TimeSpan.FromSeconds(90))).Should().BeNull("B takes the partition and commits");
+        releaseA.TrySetResult();
+        (await outcomeA.Done.Task.WaitAsync(TimeSpan.FromSeconds(60))).Should().NotBeNull(
+            "A's transaction carries a group generation that is no longer current");
+        await contextA.Stop();
+        await contextB.Stop();
+
+        Read(output, expected: 2).Should().Equal(["order-1"], "read_committed sees B's record only");
+        (await CommittedOffset(group, input)).Should().Be(1);
+    }
+
+    private static (CapturingLoggerProvider Capture, RouteContext Context) LoggedContext()
+    {
+        var capture = new CapturingLoggerProvider();
+        var factory = LoggerFactory.Create(b => b.AddProvider(capture).SetMinimumLevel(LogLevel.Debug));
+        return (capture, new RouteContext(loggerFactory: factory));
+    }
+
+    [Fact]
+    public async Task Offsets_of_another_cluster_are_left_to_the_consumer_and_the_producer_says_so_once()
+    {
+        // Review R2 (docs/kafka/REVIEW-2026-09-28.md): offsets of another cluster cannot ride in this producer's
+        // transaction; that went without a word but a Debug line.
+        var topic = await CreateTopic("eos-foreign");
+        var (capture, context) = LoggedContext();
+        await using var _ = context;
+        var producer = await StartLoggedProducer(context, topic, "transactionalIdPrefix=eos-foreign");
+
+        var first = FromConsumerOf("another-cluster", "input");
+        var second = FromConsumerOf("another-cluster", "input");
+        await InTransaction(first.Exchange, (ex, ct) => producer.Process(ex, ct));
+        await InTransaction(second.Exchange, (ex, ct) => producer.Process(ex, ct));
+        await producer.Stop();
+
+        first.Commit.Committed.Should().BeFalse("the offsets stay the consumer's to commit");
+        Read(topic, expected: 2).Should().HaveCount(2, "the sends themselves commit");
+        capture.Entries.Where(e => e.Level == LogLevel.Warning && e.Message.Contains("cannot take the consumed offsets"))
+            .Should().ContainSingle("the cause holds for every exchange of the route: said once, not per message")
+            .Which.Message.Should().Contain("another-cluster").And.Contain("at-least-once");
+    }
+
+    [Fact]
+    public async Task A_transaction_committing_after_the_route_returned_says_it_is_not_exactly_once()
+    {
+        // Review R2/R12: an asynchronous step inside the block commits the transaction after the consumer closed the
+        // offer; the offsets correctly stay out of it, and that was silent.
+        var topic = await CreateTopic("eos-closed");
+        var (capture, context) = LoggedContext();
+        await using var _ = context;
+        var producer = await StartLoggedProducer(context, topic, "transactionalIdPrefix=eos-closed");
+
+        var late = FromConsumerOf(await ClusterId(), "input");
+        late.Offsets.Close();
+        await InTransaction(late.Exchange, (ex, ct) => producer.Process(ex, ct));
+        await producer.Stop();
+
+        late.Commit.Committed.Should().BeFalse();
+        capture.Entries.Should().ContainSingle(e => e.Level == LogLevel.Warning
+                                                    && e.Message.Contains("after the route returned to its Kafka consumer"));
     }
 }

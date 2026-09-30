@@ -48,6 +48,11 @@ public sealed partial class KafkaComponent : ComponentBase
                 options.SaslPassword = factory.SaslPassword;
             if (string.IsNullOrWhiteSpace(options.GroupId))
                 options.GroupId = factory.GroupId;
+
+            // The factory's additionalProperties are applied last too: the same properties are refused there.
+            KafkaOptionParsers.RefuseReservedProperties(factory.AdditionalProperties,
+                $"the additionalProperties of connection factory '{options.ConnectionFactory}'",
+                options.IsIdempotentProducer);
         }
 
         options.Validate();

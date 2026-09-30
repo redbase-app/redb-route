@@ -31,14 +31,7 @@ public sealed class SignalRLifecycleTests : IAsyncLifetime
         await _manager.DisposeAsync();
     }
 
-    private static int GetFreePort()
-    {
-        using var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     private static SignalREndpoint Endpoint(SignalRComponent component, string path)
         => (SignalREndpoint)component.CreateEndpoint(EndpointUriParser.Parse($"signalr://{path}?inOut=true"));

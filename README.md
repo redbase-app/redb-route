@@ -1563,6 +1563,7 @@ of every version; install it with `Extensions: Install from VSIX...`.
 | `sqs:` / `sns:` | redb.Route.Sqs | `Sqs.Queue("name")` / `Sns.Topic("name")` |
 | `telegram:` | redb.Route.Telegram | `Tg.Receive(token)` / `Tg.Send(token)` |
 | `signalr:` | redb.Route.SignalR | `SignalR.Hub("/hub")` |
+| `cache:` | redb.Route.Cache | `.Cache("key", ttl) … .EndCache()` (scope) / `To("cache:region?action=get&key=…")` |
 
 > **Note.** There is no `quartz:` URI scheme by design. Quartz scheduling integrates via the
 > Worker host (`ConfigureQuartz`) and triggers routes through `cron:` (Cron expressions) or
@@ -1631,6 +1632,7 @@ For transports that support transactions, combine with `.Transacted()` to wrap p
 | `redb.Route.Http.Hosting` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Http.Hosting?label=)](https://www.nuget.org/packages/redb.Route.Http.Hosting) | Shared Kestrel host (`SharedHttpServerManager`) reused by HTTP-based transports |
 | `redb.Route.As2` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.As2?label=)](https://www.nuget.org/packages/redb.Route.As2) | AS2 (RFC 4130) B2B/EDI — signed/encrypted S/MIME + MDN (sync/async/signed), interop-validated vs OpenAS2 |
 | `redb.Route.Grpc` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Grpc?label=)](https://www.nuget.org/packages/redb.Route.Grpc) | gRPC — client and Kestrel server |
+| `redb.Route.Soap` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Soap?label=)](https://www.nuget.org/packages/redb.Route.Soap) | SOAP 1.1/1.2 — WS-Security, MTOM attachments, WSDL-first services |
 | `redb.Route.File` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.File?label=)](https://www.nuget.org/packages/redb.Route.File) | File system — polling, atomic writes, locking |
 | `redb.Route.Sftp` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Sftp?label=)](https://www.nuget.org/packages/redb.Route.Sftp) | SFTP (SSH.NET) |
 | `redb.Route.MqttNet` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.MqttNet?label=)](https://www.nuget.org/packages/redb.Route.MqttNet) | MQTT 5.0 (MQTTnet) |
@@ -1658,8 +1660,19 @@ For transports that support transactions, combine with `.Transacted()` to wrap p
 | `redb.Route.Exec` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Exec?label=)](https://www.nuget.org/packages/redb.Route.Exec) | Local-process execution — `exec://run` producer + scheduled consumer, allowlist, working-directory pin, timeout, output caps |
 | `redb.Route.Controllers` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Controllers?label=)](https://www.nuget.org/packages/redb.Route.Controllers) | Controller dispatch — attribute routing, DI, InOut |
 | `redb.Route.Validation.Adapters` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Validation.Adapters?label=)](https://www.nuget.org/packages/redb.Route.Validation.Adapters) | Validation adapters — FluentValidation + DataAnnotations |
+| `redb.Route.Cache` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Cache?label=)](https://www.nuget.org/packages/redb.Route.Cache) | Caching as an EIP — a `.Cache(key, ttl)` scope and the `cache:` component over `IMemoryCache` / `IDistributedCache` |
+| `redb.Route.JsonTransform` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.JsonTransform?label=)](https://www.nuget.org/packages/redb.Route.JsonTransform) | Declarative JSON-to-JSON transformation (JSONata) |
+| `redb.Route.Templates` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Templates?label=)](https://www.nuget.org/packages/redb.Route.Templates) | Payload templates (Scriban) — the PayloadFactory analog |
+| `redb.Route.Xml` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Xml?label=)](https://www.nuget.org/packages/redb.Route.Xml) | Declarative XML routes — `.route.xml` files load into the same fluent DSL |
+| `redb.Route.XPath2` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.XPath2?label=)](https://www.nuget.org/packages/redb.Route.XPath2) | XPath 2.0 expressions (regex, sequences, dates, `for`/`some`/`every`) on XPath2.Net |
+| `redb.Route.DataFormats.Avro` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.DataFormats.Avro?label=)](https://www.nuget.org/packages/redb.Route.DataFormats.Avro) | Apache Avro data format (Chr.Avro) — binary marshal/unmarshal |
+| `redb.Route.DataFormats.Csv` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.DataFormats.Csv?label=)](https://www.nuget.org/packages/redb.Route.DataFormats.Csv) | CSV data format (CsvHelper) — POCO collections, dictionaries, raw rows |
+| `redb.Route.DataFormats.Protobuf` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.DataFormats.Protobuf?label=)](https://www.nuget.org/packages/redb.Route.DataFormats.Protobuf) | Protocol Buffers data format (Google.Protobuf), optional Confluent Schema Registry |
+| `redb.Route.DataFormats.Yaml` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.DataFormats.Yaml?label=)](https://www.nuget.org/packages/redb.Route.DataFormats.Yaml) | YAML data format (YamlDotNet) — POCOs and dynamic documents |
+| `redb.Route.TestKit` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.TestKit?label=)](https://www.nuget.org/packages/redb.Route.TestKit) | Test kit — AdviceWith, mock expectations, NotifyBuilder |
+| `redb.Route.Xml.CodeGen` | [![NuGet](https://img.shields.io/nuget/v/redb.Route.Xml.CodeGen?label=)](https://www.nuget.org/packages/redb.Route.Xml.CodeGen) | `redb-route-xml` .NET tool — fluent C#, Mermaid diagrams and the XSD from `.route.xml`; not part of the runtime |
 
-37 packages total: core engine + 29 transports (incl. `llm:` and `mcp:`) + 7 support libraries (Core, Controllers, GenericFile, Http.Hosting, Validation.Adapters, Llm.Abstractions, Llm.Tools).
+47 packages total: core engine + 29 transports (incl. `llm:` and `mcp:`) + 17 support libraries (Core, Controllers, GenericFile, Http.Hosting, Validation.Adapters, Llm.Abstractions, Llm.Tools, Cache, JsonTransform, Templates, Xml, XPath2, the four DataFormats, TestKit), plus the `redb-route-xml` .NET tool.
 
 ---
 

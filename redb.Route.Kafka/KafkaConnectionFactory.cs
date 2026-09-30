@@ -43,7 +43,10 @@ public sealed class KafkaConnectionFactory
     [redb.Route.Core.Sensitive]
     public string? SslKeyPassword { get; set; }
 
-    /// <summary>SSL endpoint identification algorithm (e.g., "https" for hostname verification). Empty = disabled.</summary>
+    /// <summary>
+    /// SSL endpoint identification: "https" verifies the broker hostname against its certificate, "none" (or empty)
+    /// disables the check; anything else is refused. Unset = librdkafka default (verification on).
+    /// </summary>
     public string? SslEndpointIdentificationAlgorithm { get; set; }
 
     // ── Producer defaults ──
@@ -81,8 +84,8 @@ public sealed class KafkaConnectionFactory
 
     /// <summary>
     /// Isolation level: ReadUncommitted, ReadCommitted. ReadCommitted hides records of aborted
-    /// transactions written by EOS producers elsewhere; this connector itself is at-least-once
-    /// (see docs/KAFKA_TRANSACTIONS_TODO.md).
+    /// transactions, including those of this connector's transactional producers
+    /// (transactionalIdPrefix; see docs/KAFKA_EOS_2026_09_19.md).
     /// </summary>
     public string? IsolationLevel { get; set; }
 
@@ -248,9 +251,8 @@ public sealed class KafkaConnectionFactory
         if (!string.IsNullOrEmpty(SslKeyLocation)) config.SslKeyLocation = SslKeyLocation;
         if (!string.IsNullOrEmpty(SslKeyPassword)) config.SslKeyPassword = SslKeyPassword;
         if (SslEndpointIdentificationAlgorithm is not null)
-            config.SslEndpointIdentificationAlgorithm = SslEndpointIdentificationAlgorithm == string.Empty
-                ? Confluent.Kafka.SslEndpointIdentificationAlgorithm.None
-                : Confluent.Kafka.SslEndpointIdentificationAlgorithm.Https;
+            config.SslEndpointIdentificationAlgorithm =
+                KafkaOptionParsers.ParseEndpointIdentification(SslEndpointIdentificationAlgorithm);
     }
 
     private void ApplyAdditionalProperties(ClientConfig config)

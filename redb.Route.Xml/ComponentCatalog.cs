@@ -1,20 +1,43 @@
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 
 namespace redb.Route.Xml;
 
-/// <summary>One endpoint option in the catalog: name, kind, default, secrecy, enum hints.</summary>
+/// <summary>One endpoint option in the catalog: name, kind, default, secrecy, enum hints, the side that reads it.</summary>
+/// <param name="Name">The option's property name (PascalCase; the URI and the markup take it case-insensitively).</param>
+/// <param name="Type">The value kind: bool, int, long, double, duration, enum (one member), flags (members joined by commas) or string.</param>
+/// <param name="Default">The default rendered invariantly, or null when unknown.</param>
+/// <param name="Sensitive">A secret (<c>[Sensitive]</c>): redacted wherever the URI is shown.</param>
+/// <param name="EnumValues">The member names of an enum option, else null.</param>
+/// <param name="Role">The only side of the endpoint that reads the option (<see cref="EndpointOptions.RoleOf"/>):
+/// a producer-only option on a <c>&lt;from&gt;</c> is refused, and the other way round. Null — both sides read it.</param>
+/// <param name="ConnectionParameter">The connection factory sets it (<c>[ConnectionParameter]</c>): beside the option that names
+/// the factory it is refused, the factory being the whole connection.</param>
+/// <param name="ConnectionFactoryReference">This option names the connection factory (<c>[ConnectionFactoryReference]</c>).</param>
 public sealed record CatalogOption(
     string Name,
     string Type,
     string? Default,
     bool Sensitive,
-    IReadOnlyList<string>? EnumValues);
+    IReadOnlyList<string>? EnumValues,
+    EndpointRole? Role,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool ConnectionParameter,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool ConnectionFactoryReference);
 
 /// <summary>One component in the catalog — everything the editor's property panel shows (Ф4 §4).</summary>
+/// <param name="Scheme">The URI scheme and the structured-form element name.</param>
+/// <param name="AlternateSchemes">Other schemes the component answers to.</param>
+/// <param name="Package">The assembly the component lives in.</param>
+/// <param name="OptionsType">The full name of its options class, or null when it has none.</param>
+/// <param name="PathSynonym">The attribute the structured form accepts for the path (kafka: topic), or null.</param>
+/// <param name="PathIsText">The path is the element's text content (the SQL-style connectors).</param>
+/// <param name="Options">Its options, by name.</param>
+/// <param name="Lenient">The connector takes parameters it has no option for (<see cref="EndpointOptions.IsLenient"/>):
+/// false = an unknown name is refused when the endpoint is created, so the schema and the package gate refuse it too.</param>
 public sealed record CatalogComponent(
     string Scheme,
     IReadOnlyList<string> AlternateSchemes,
@@ -22,7 +45,8 @@ public sealed record CatalogComponent(
     string? OptionsType,
     string? PathSynonym,
     bool PathIsText,
-    IReadOnlyList<CatalogOption> Options);
+    IReadOnlyList<CatalogOption> Options,
+    bool Lenient);
 
 /// <summary>
 /// The component catalog (Ф4 §4): built by REFLECTION from what already exists — the
@@ -50,7 +74,9 @@ public static class ComponentCatalog
                 optionsType?.FullName,
                 (component as ComponentBase)?.StructuredPathSynonym,
                 (component as ComponentBase)?.PathIsText ?? false,
-                optionsType is null ? [] : HarvestOptions(optionsType)));
+                optionsType is null ? [] : HarvestOptions(optionsType),
+                // No options class: nothing binds the parameters, so nothing refuses them either.
+                optionsType is null || EndpointOptions.IsLenient(optionsType)));
         }
         return [.. records.OrderBy(r => r.Scheme, StringComparer.Ordinal)];
     }
@@ -64,6 +90,7 @@ public static class ComponentCatalog
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     /// <summary>
@@ -71,6 +98,17 @@ public static class ComponentCatalog
     /// <c>XOptions</c>) in the component's assembly, else the assembly's single
     /// <see cref="EndpointOptions"/> subclass, else none (an options-less component is honest).
     /// </summary>
+    /// <summary>The TOptions of an endpoint type deriving from <c>EndpointBase&lt;TOptions&gt;</c>, or null.</summary>
+    private static Type? DeclaredOptions(Type endpointType)
+    {
+        for (var type = endpointType; type is not null && type != typeof(object); type = type.BaseType)
+        {
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(EndpointBase<>))
+                return type.GetGenericArguments()[0];
+        }
+        return null;
+    }
+
     private static Type? FindOptionsType(Type componentType)
     {
         var candidates = componentType.Assembly.GetTypes()
@@ -85,6 +123,12 @@ public static class ComponentCatalog
             var stem = type.Name.EndsWith("Component", StringComparison.Ordinal)
                 ? type.Name[..^"Component".Length]
                 : type.Name;
+            // The endpoint the component creates declares its options as a type argument
+            // (ImapEndpoint : EndpointBase<MailEndpointOptions>) — the code says it, no name to
+            // match. Three mail components share one options class, which naming never found.
+            if (componentType.Assembly.GetType($"{type.Namespace}.{stem}Endpoint") is { } endpoint
+                && DeclaredOptions(endpoint) is { } declared)
+                return declared;
             var byName = candidates.FirstOrDefault(t => t.Name == stem + "EndpointOptions")
                 ?? candidates.FirstOrDefault(t => t.Name == stem + "Options");
             if (byName is not null)
@@ -122,14 +166,18 @@ public static class ComponentCatalog
                 TypeLabel(underlying),
                 Render(defaults is null ? null : property.GetValue(defaults)),
                 property.GetCustomAttribute<SensitiveAttribute>() is not null,
-                underlying.IsEnum ? Enum.GetNames(underlying) : null));
+                underlying.IsEnum ? Enum.GetNames(underlying) : null,
+                EndpointOptions.RoleOf(property),
+                property.IsDefined(typeof(ConnectionParameterAttribute), inherit: true),
+                property.IsDefined(typeof(ConnectionFactoryReferenceAttribute), inherit: true)));
         }
         return [.. options.OrderBy(o => o.Name, StringComparer.Ordinal)];
     }
 
     private static string TypeLabel(Type type)
     {
-        if (type.IsEnum) return "enum";
+        // A [Flags] enum takes several members at once ("Tls12,Tls13"), so it is not a pick-one list.
+        if (type.IsEnum) return type.IsDefined(typeof(FlagsAttribute), inherit: false) ? "flags" : "enum";
         if (type == typeof(bool)) return "bool";
         if (type == typeof(int)) return "int";
         if (type == typeof(long)) return "long";

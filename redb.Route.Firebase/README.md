@@ -529,3 +529,16 @@ All builders support `implicit operator string` — pass directly to `.From()` /
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `redb.route.endpoint`:
+
+- **Consumers.** Firestore, realtime and polling alike: one `Consumer` span per routed change,
+  `firestore {collection} receive`. Storage: one per routed object, `gcs {bucket} receive`. A change or an object
+  carries no trace context, so the span is a root, never a child of the activity the consumer inherited from whoever
+  started the routes; nothing arriving opens none. A failed route marks it an error, whether the failure stays on the
+  exchange or escapes it; our own stop does not. A Storage object whose route failed is not deleted either way.
+- **Producers.** FCM (`fcm {operation}`), Firestore (`firestore {operation}`) and Storage (`gcs {operation}`) open one
+  span per call; an error when the call fails, unless our own token cancelled it.
+- `RouteEngineOptions.EnableTelemetry = false` opens none of these spans.

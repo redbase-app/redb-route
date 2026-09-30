@@ -151,7 +151,7 @@ public sealed class RedisConsumerReviewTests
     }
 
     [Fact]
-    public async Task StreamNoAck_reads_with_NOACK_and_leaves_nothing_pending()
+    public async Task AckModeAuto_reads_with_NOACK_and_leaves_nothing_pending()
     {
         var stream = $"noack-{Guid.NewGuid():N}";
         var group = $"g-{Guid.NewGuid():N}";
@@ -159,7 +159,7 @@ public sealed class RedisConsumerReviewTests
         await db.StreamAddAsync(stream, "n", "x");
 
         var (consumer, recorder) = await Consume($"XGROUP:{stream}",
-            $"consumerGroup={group}&streamStartPosition=0&streamBlockTimeMs=50&streamNoAck=true", (_, _) => false);
+            $"consumerGroup={group}&streamStartPosition=0&streamBlockTimeMs=50&ackMode=auto", (_, _) => false);
         await Until(() => recorder.Calls > 0);
         await Task.Delay(300);
         await consumer.Stop();
@@ -173,17 +173,17 @@ public sealed class RedisConsumerReviewTests
     {
         var act = () => Endpoint($"XGROUP:s-{Guid.NewGuid():N}", "consumerGroup=g&streamAutoAck=false");
 
-        act.Should().Throw<ArgumentException>().WithMessage("*streamAutoAck*streamNoAck*");
+        act.Should().Throw<ArgumentException>().WithMessage("*streamAutoAck*ackMode=auto*");
     }
 
     [Fact]
     public void The_builder_writes_the_new_consumer_options_out()
     {
-        var uri = redb.Route.Redis.Redis.XGroup("s").ConsumerGroup("g").StreamNoAck().Build();
-        uri.Should().Contain("streamNoAck=true");
+        var uri = redb.Route.Redis.Redis.XGroup("s").ConsumerGroup("g").AckMode(AckMode.Auto).Build();
+        uri.Should().Contain("ackMode=auto");
 
         redb.Route.Redis.Redis.XGroup("s").ConsumerGroup("g").StreamClaimMinIdle(500).Build()
-            .Should().Contain("streamClaimMinIdleMs=500").And.NotContain("streamNoAck");
+            .Should().Contain("streamClaimMinIdleMs=500").And.NotContain("ackMode");
         var list = redb.Route.Redis.Redis.Command("BLPOP", "q").ProcessingList("q:processing").Build();
         ((RedisEndpoint)new RedisComponent().CreateEndpoint(EndpointUriParser.Parse(list)))
             .EndpointOptions.ProcessingList.Should().Be("q:processing");

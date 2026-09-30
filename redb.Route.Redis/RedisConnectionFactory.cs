@@ -1,4 +1,5 @@
 using StackExchange.Redis;
+using redb.Route.Core;
 
 namespace redb.Route.Redis;
 
@@ -9,12 +10,14 @@ namespace redb.Route.Redis;
 public sealed class RedisConnectionFactory
 {
     /// <summary>Redis connection string (e.g., "localhost:6379" or "host1:6379,host2:6379").</summary>
+    [Sensitive]
     public string ConnectionString { get; set; } = "localhost:6379";
 
     /// <summary>Default database index (default: 0).</summary>
     public int Database { get; set; }
 
     /// <summary>Redis password (optional).</summary>
+    [Sensitive]
     public string? Password { get; set; }
 
     /// <summary>Redis ACL username (Redis 6+). Use together with Password for ACL authentication.</summary>

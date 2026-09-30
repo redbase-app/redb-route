@@ -26,14 +26,11 @@ public sealed class As2TransportSecurityTests : IDisposable
         foreach (var f in _tempFiles) if (File.Exists(f)) File.Delete(f);
     }
 
-    private static int FreePort()
-    {
-        using var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int FreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
+
+    // A receiver needs an agreement to start; these tests are about its TLS, so the agreement is the smallest one.
+    private static string Agreed(string receiveUri) =>
+        receiveUri + "&as2From=us&as2To=them&sign=false&encrypt=false&signedMdn=false";
 
     [Fact]
     public async Task TlsReceiver_WithoutCertificate_RefusesToStart()
@@ -41,7 +38,7 @@ public sealed class As2TransportSecurityTests : IDisposable
         var port = FreePort();
         var component = new As2Component();
         var endpoint = component.CreateEndpoint(
-            EndpointUriParser.Parse(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).Tls()));
+            EndpointUriParser.Parse(Agreed(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).Tls())));
         var consumer = endpoint.CreateConsumer(Substitute.For<IProcessor>());
 
         var act = () => consumer.Start();
@@ -58,7 +55,7 @@ public sealed class As2TransportSecurityTests : IDisposable
         await using var context = new RouteContext();
         context.AddComponent(new As2Component());
         context.AddRoutes(r =>
-            r.From(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).Tls()).Process(_ => { }));
+            r.From(Agreed(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).Tls())).Process(_ => { }));
 
         // The context does not propagate a consumer's start failure — one bad route must not stop
         // the rest — so the observable security property is the one that matters: the port that a
@@ -80,7 +77,7 @@ public sealed class As2TransportSecurityTests : IDisposable
         await using var context = new RouteContext();
         context.AddComponent(new As2Component());
         context.AddRoutes(r =>
-            r.From(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).Tls(certPath)).Process(_ => { }));
+            r.From(Agreed(As2Dsl.Receive("/inbound").Host("127.0.0.1").Port(port).Tls(certPath))).Process(_ => { }));
         await context.Start();
 
         using var handler = new HttpClientHandler
@@ -109,6 +106,7 @@ public sealed class As2TransportSecurityTests : IDisposable
             As2To = "them",
             Sign = false,
             Encrypt = false,
+            SignedMdn = false,
             SslCertPath = WritePfx(),
         });
 

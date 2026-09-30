@@ -997,8 +997,10 @@ public static partial class ExpressionResolver
     /// Arithmetic is deliberately absent: the value path already handles + - * / without
     /// requiring whitespace, and a bare literal must not be mistaken for a subtraction.
     /// </summary>
+    // "in" / "not in" need whitespace before them and whitespace or "(" after: an operator stands
+    // between operands, while "header.in" is a header called "in" and must keep its compilation path.
     private static readonly Regex ComparisonOrWordLogicRegex =
-        new(@"==|!=|>=|<=|>|<|\b(AND|OR|XOR)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        new(@"==|!=|>=|<=|>|<|\b(AND|OR|XOR)\b|(?<=\s)IN(?=[\s(])", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     /// <summary>
     /// Reports whether the expression contains a comparison or word-logic operator that is not

@@ -267,3 +267,16 @@ context.AddToRegistry("prod", new ElasticsearchConnectionFactory
 });
 // es://logs?connectionFactory=prod
 ```
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `db.system` = `elasticsearch`,
+`redb.route.endpoint` and the index as `messaging.destination.name`:
+
+- **Consumer.** One `Consumer` span, `es {index} receive`, per routed hit. A document carries no trace context, so the
+  span is a root, never a child of the activity the poll loop inherited from whoever started the routes. An empty poll
+  opens none. A failed route marks it an error, whether the failure stays on the exchange or escapes the pipeline; our
+  own stop does not.
+- **Producer.** One `Client` span per call, `es {operation}`; an error when the call fails, unless our own token
+  cancelled it.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.

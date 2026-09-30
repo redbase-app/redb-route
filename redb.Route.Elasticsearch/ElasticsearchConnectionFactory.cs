@@ -1,5 +1,6 @@
 using Elastic.Clients.Elasticsearch;
 using Elastic.Transport;
+using redb.Route.Core;
 
 namespace redb.Route.Elasticsearch;
 
@@ -13,12 +14,14 @@ public sealed class ElasticsearchConnectionFactory
     public string Nodes { get; set; } = "http://localhost:9200";
 
     /// <summary>API key authentication (base64-encoded).</summary>
+    [Sensitive]
     public string ApiKey { get; set; } = "";
 
     /// <summary>Basic auth username.</summary>
     public string Username { get; set; } = "";
 
     /// <summary>Basic auth password.</summary>
+    [Sensitive]
     public string Password { get; set; } = "";
 
     /// <summary>SHA-256 certificate fingerprint for TLS verification.</summary>

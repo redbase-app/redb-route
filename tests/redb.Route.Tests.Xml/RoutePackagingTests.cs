@@ -513,6 +513,101 @@ public class RoutePackagingTests : IDisposable
                 "without the assemblies at hand the check cannot claim the type is missing");
     }
 
+    // ── bean lists and references ────────────────────────────────────────────
+
+    private static string Q<TType>() => $"{typeof(TType).FullName}, x";
+
+    [Fact]
+    public void BeanReferences_FollowTheLoadOrder_AcrossFiles()
+    {
+        // Route files load in manifest order (by name): a.route.xml before b.route.xml.
+        var dir = NewProject("Refs");
+        File.Delete(Path.Combine(dir, "routes", "main.route.xml"));
+        File.WriteAllText(Path.Combine(dir, "routes", "a.route.xml"), $"""
+            <routes xmlns="urn:redb:route:1.0">
+              <bean name="early" type="{Q<ProbePartner>()}"/>
+              <bean name="node" type="{Q<ProbeNode>()}">
+                <property key="Signing" ref="late"/>
+                <property key="Partners"><list><ref bean="early"/><ref bean="external"/></list></property>
+              </bean>
+            </routes>
+            """);
+        File.WriteAllText(Path.Combine(dir, "routes", "b.route.xml"), $"""
+            <routes xmlns="urn:redb:route:1.0">
+              <bean name="late" type="{Q<ProbePartner>()}"/>
+              <bean name="back" type="{Q<ProbeNode>()}"><property key="Signing" ref="early"/></bean>
+            </routes>
+            """);
+
+        var result = RoutePackage.Check(dir, "refs", "1.0.0");
+
+        result.Errors.Should().ContainSingle(e => e.Message.Contains("'late' points forward"))
+            .Which.File.Should().StartWith("routes/a.route.xml(4,");
+        result.Warnings.Should().Contain(w => w.Message.Contains("'external' is not declared by any <bean>"),
+            "module code may register it — the gate cannot know");
+        result.Errors.Should().NotContain(e => e.Message.Contains("'early'"), "a later file may look back");
+    }
+
+    [Fact]
+    public void BeanGrammar_IsTheLoadersGrammar_InTheGate()
+    {
+        var dir = ProjectWithBean($"""
+            <bean name="b" type="{Q<ProbeNode>()}"><property key="Signing" ref="#acme"/></bean>
+            """);
+
+        RoutePackage.Check(dir, "p", "1.0.0").Errors
+            .Should().Contain(e => e.Message.Contains("a bean reference is the bare name"));
+    }
+
+    [Fact]
+    public void DeepChecks_HoldListItemsAndReferences_AgainstTheirTargets()
+    {
+        var dir = ProjectWithBean($"""
+            <bean name="opts" type="{Q<ProbeOptions>()}"/>
+            <bean name="roster" type="{Q<ProbeRoster>()}" factoryMethod="Of">
+              <constructorArg><list><bean type="{Q<ProbePartner>()}"/></list></constructorArg>
+            </bean>
+            <bean name="node" type="{Q<ProbeNode>()}">
+              <property key="Partners"><list><ref bean="opts"/><bean type="{Q<ProbeOptions>()}"/></list></property>
+              <property key="Title"><list><value>x</value></list></property>
+              <property key="Signing" ref="roster"/>
+            </bean>
+            <bean name="bare" type="{Q<ProbeRoster>()}">
+              <constructorArg><list><ref bean="opts"/></list></constructorArg>
+            </bean>
+            """);
+
+        var errors = RoutePackage.Check(dir, "p", "1.0.0", TestResolver).Errors.Select(e => e.Message).ToList();
+
+        errors.Should().Contain(m => m.Contains($"'{typeof(ProbeOptions).FullName}' is not assignable to ProbePartner for 'Partners[0]'"),
+            "a referenced bean's type is known from its declaration");
+        errors.Should().Contain(m => m.Contains("for 'Partners[1]'"), "a nested bean inside a list is checked too");
+        errors.Should().Contain(m => m.Contains("'Title' is String, which a <list> does not build into"));
+        errors.Should().Contain(m => m.Contains($"'{typeof(ProbeRoster).FullName}' is not assignable to ProbePartner for 'Signing'"),
+            "a factory bean is what its method returns");
+        errors.Should().Contain(m => m.Contains("'constructorArg 1': a <list> passed to a constructor names its element type with of="));
+        errors.Should().HaveCount(5, "the factory argument is typed by the parameter and is right");
+    }
+
+    [Fact]
+    public void DeepChecks_PassAWellTypedNode()
+    {
+        var dir = ProjectWithBean($"""
+            <bean name="acme" type="{Q<ProbePartner>()}"/>
+            <bean name="node" type="{Q<ProbeNode>()}">
+              <property key="Partners"><list><ref bean="acme"/><bean type="{Q<ProbePartner>()}"/></list></property>
+              <property key="ReadOnlyPartners"><list of="{Q<ProbePartner>()}"><ref bean="acme"/></list></property>
+              <property key="Ports"><list><value>{"{{"}port{"}}"}</value></list></property>
+              <property key="Signing" ref="acme"/>
+            </bean>
+            <bean name="roster" type="{Q<ProbeRoster>()}">
+              <constructorArg><list of="{Q<ProbePartner>()}"><ref bean="acme"/></list></constructorArg>
+            </bean>
+            """);
+
+        RoutePackage.Check(dir, "p", "1.0.0", TestResolver).Errors.Should().BeEmpty();
+    }
+
     [Fact]
     public void PlaceholderSecret_DoesNotTriggerTheWarning()
     {
@@ -528,5 +623,29 @@ public class RoutePackagingTests : IDisposable
 
         RoutePackage.Check(dir, "secok", "1.0.0").Warnings
             .Should().NotContain(w => w.Message.Contains("literal secret"));
+    }
+
+    [Fact]
+    public void Aggregate_ForceCompletionOnStop_IsKnownToTheGate()
+    {
+        // Apache Camel forceCompletionOnStop (04edaf35): the attribute is part of the format, typed bool.
+        string Routes(string value) => $"""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="agg">
+                <from uri="direct://in"/>
+                <aggregate correlation="${"{"}header.batch{"}"}" strategy="concat: + " completionSize="3" forceCompletionOnStop="{value}">
+                  <log>batch</log>
+                </aggregate>
+              </route>
+            </routes>
+            """;
+        var good = NewProject("AggGood");
+        File.WriteAllText(Path.Combine(good, "routes", "main.route.xml"), Routes("true"));
+        var bad = NewProject("AggBad");
+        File.WriteAllText(Path.Combine(bad, "routes", "main.route.xml"), Routes("sometimes"));
+
+        RoutePackage.Check(good, "agg", "1.0.0").Errors.Should().BeEmpty();
+        RoutePackage.Check(bad, "agg", "1.0.0").Errors
+            .Should().Contain(e => e.Message.Contains("forceCompletionOnStop"));
     }
 }

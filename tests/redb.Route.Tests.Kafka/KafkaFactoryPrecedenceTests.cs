@@ -122,4 +122,33 @@ public sealed class KafkaFactoryPrecedenceTests
         var act = () => endpoint.CreateConsumer(Substitute.For<IProcessor>());
         act.Should().NotThrow("фабричный GroupId обязан работать как дефолт");
     }
+
+    [Fact]
+    public void UriIdempotence_WithFactoryAcksLeader_FailsInTheConnectorsWords()
+    {
+        // Review R5 (docs/kafka/REVIEW-2026-09-28.md): Validate() checks enableIdempotence against the endpoint's
+        // acks only, so a factory's acks=leader reached librdkafka, which refused the client with its own error.
+        var options = BindOptions("connectionFactory=cf&enableIdempotence=true", out var supplied);
+        var factory = Factory();
+        factory.Acks = "Leader";
+
+        var act = () => options.BuildProducerConfig(factory, supplied);
+
+        act.Should().Throw<ArgumentException>()
+            .WithMessage("*'enableIdempotence=true' requires 'acks=all'*connection factory 'cf'*Leader*");
+    }
+
+    [Fact]
+    public void FactoryAcksLeader_WithoutExplicitIdempotence_StaysNonIdempotent()
+    {
+        // The check above is for an explicit enableIdempotence=true only: unset, idempotence follows the effective acks.
+        var options = BindOptions("connectionFactory=cf", out var supplied);
+        var factory = Factory();
+        factory.Acks = "Leader";
+
+        var config = options.BuildProducerConfig(factory, supplied);
+
+        config.Acks.Should().Be(Confluent.Kafka.Acks.Leader);
+        config.EnableIdempotence.Should().BeFalse();
+    }
 }

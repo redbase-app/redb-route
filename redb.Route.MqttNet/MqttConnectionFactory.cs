@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.MqttNet;
 
@@ -38,6 +39,7 @@ public sealed class MqttConnectionFactory
     public string? Username { get; set; }
 
     /// <summary>Password for broker authentication.</summary>
+    [Sensitive]
     public string? Password { get; set; }
 
     /// <summary>MQTT client identifier.</summary>

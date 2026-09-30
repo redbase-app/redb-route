@@ -13,7 +13,7 @@ namespace redb.Route.Core;
 /// to <see cref="IRouteContext"/> which uses concurrent collections.
 /// Caches producers per endpoint for performance (avoids CreateProducer on every call).
 /// </summary>
-public class ProducerTemplate : IProducerTemplate, IDisposable
+public class ProducerTemplate : IProducerTemplate, IDisposable, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, IProducer> _producerCache = new(StringComparer.OrdinalIgnoreCase);
     private volatile bool _started;
@@ -342,22 +342,61 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
         _started = true;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Stops the template and the producers it created — they flush and close, as a Camel template stops its producer
+    /// cache. A later <see cref="Start"/> creates new ones.
+    /// </summary>
     public void Stop()
     {
         if (!_started)
             throw new InvalidOperationException("ProducerTemplate is not started.");
         _started = false;
+        StopProducersAsync().GetAwaiter().GetResult();
     }
 
-    /// <summary>Disposes cached producers and releases resources.</summary>
+    /// <summary>Stops the producers the template created (they flush and close) and releases them.</summary>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         _started = false;
-        _producerCache.Clear();
         GC.SuppressFinalize(this);
+        StopProducersAsync().GetAwaiter().GetResult();
+    }
+
+    /// <summary>Stops the producers the template created (they flush and close) and releases them.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _started = false;
+        GC.SuppressFinalize(this);
+        await StopProducersAsync().ConfigureAwait(false);
+    }
+
+    // A producer is on the context's shutdown list from its creation, so the host stopping flushes it even with the
+    // template left open; whoever stops it first takes it off, so it is stopped once.
+    private async Task StopProducersAsync()
+    {
+        var producers = _producerCache.Values.ToArray();
+        _producerCache.Clear();
+        var context = Context as RouteContext;
+        List<Exception>? failures = null;
+        foreach (var producer in producers)
+        {
+            if (context is not null && !context.UntrackProducer(producer))
+                continue; // the context stopped it already
+            try
+            {
+                await producer.Stop().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                (failures ??= []).Add(ex);
+            }
+        }
+        if (failures is not null)
+            throw new AggregateException("Stopping the producers of a ProducerTemplate failed.", failures);
     }
 
     // ── Private helpers ──
@@ -365,7 +404,14 @@ public class ProducerTemplate : IProducerTemplate, IDisposable
     private IProducer GetOrCreateProducer(IEndpoint endpoint)
     {
         var key = endpoint.Uri.NormalizedKey;
-        return _producerCache.GetOrAdd(key, _ => endpoint.CreateProducer());
+        if (_producerCache.TryGetValue(key, out var cached))
+            return cached;
+        var created = endpoint.CreateProducer();
+        var producer = _producerCache.GetOrAdd(key, created);
+        // Only the instance that won the race is used, so only it goes on the context's shutdown list.
+        if (ReferenceEquals(producer, created))
+            (Context as RouteContext)?.TrackProducer(created);
+        return producer;
     }
 
     private Exchange CreateExchange(object? body)

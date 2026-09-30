@@ -1,4 +1,5 @@
 using Confluent.Kafka;
+using Microsoft.Extensions.Logging;
 
 namespace redb.Route.Kafka;
 
@@ -51,6 +52,69 @@ internal static class KafkaOptionParsers
     /// a mechanism without them used to produce an anonymous connection. Gssapi and OAuthBearer
     /// authenticate through other channels and are exempt.
     /// </summary>
+    /// <summary>
+    /// <c>sslEndpointIdentificationAlgorithm</c>: <c>https</c> verifies the broker's hostname against its certificate,
+    /// <c>none</c> (or empty) does not. Anything else used to mean <c>https</c>, so <c>none</c> itself turned the check
+    /// on; now it is refused by name.
+    /// </summary>
+    internal static SslEndpointIdentificationAlgorithm ParseEndpointIdentification(string value) =>
+        value.Trim().ToLowerInvariant() switch
+        {
+            "https" => SslEndpointIdentificationAlgorithm.Https,
+            "none" or "" => SslEndpointIdentificationAlgorithm.None,
+            _ => throw new ArgumentException(
+                $"sslEndpointIdentificationAlgorithm='{value}' is not a value: use 'https' (verify the broker's " +
+                "hostname against its certificate) or 'none'."),
+        };
+
+    /// <summary>
+    /// SASL PLAIN over <c>SASL_PLAINTEXT</c> sends the password as it is, unencrypted. Legal (a closed network, a test
+    /// stand), so it is said, not refused.
+    /// </summary>
+    internal static void WarnIfPasswordInClear(ClientConfig config, ILogger? logger, string clientName)
+    {
+        if (config.SecurityProtocol == SecurityProtocol.SaslPlaintext && config.SaslMechanism == SaslMechanism.Plain)
+            logger?.LogWarning(
+                "{Client}: SASL PLAIN over SASL_PLAINTEXT sends the password unencrypted. Use securityProtocol=SaslSsl, " +
+                "or a SCRAM mechanism.", clientName);
+    }
+
+    /// <summary>
+    /// Refuses the librdkafka properties that would break a guarantee the connector gives, whichever of the two
+    /// additionalProperties (the endpoint's or the connection factory's, both applied last) carries them:
+    /// <c>transactional.id</c> (transactional mode with nobody opening transactions), <c>enable.auto.commit=true</c>
+    /// (a background timer commits records read but not yet processed, under ackMode), and, for an idempotent or
+    /// transactional producer (<c>transacted=true</c>, <c>transactionalIdPrefix</c>), <c>enable.idempotence</c> or
+    /// <c>acks</c> contradicting it. A value that agrees with the connector is left alone.
+    /// </summary>
+    internal static void RefuseReservedProperties(
+        IEnumerable<KeyValuePair<string, string>> properties, string source, bool idempotentProducer)
+    {
+        foreach (var (key, raw) in properties)
+        {
+            var name = key.Trim().ToLowerInvariant();
+            var value = (raw ?? "").Trim().ToLowerInvariant();
+
+            if (name == "transactional.id")
+                throw new ArgumentException(
+                    $"'transactional.id' in {source} puts librdkafka into transactional mode without the connector " +
+                    "opening transactions, and every send fails with 'Erroneous state'. Use transactionalIdPrefix.");
+            if (name == "enable.auto.commit" && value != "false")
+                throw new ArgumentException(
+                    $"'enable.auto.commit={raw}' in {source} lets librdkafka commit, on a timer, records read but not " +
+                    "yet processed: a crash loses them, whatever ackMode says. The connector commits itself; choose " +
+                    "when with ackMode (manual or auto).");
+            if (idempotentProducer && name == "enable.idempotence" && value != "true")
+                throw new ArgumentException(
+                    $"'enable.idempotence={raw}' in {source} contradicts transacted=true / transactionalIdPrefix, " +
+                    "which make the producer idempotent.");
+            if (idempotentProducer && name == "acks" && value is not ("all" or "-1"))
+                throw new ArgumentException(
+                    $"'acks={raw}' in {source} contradicts transacted=true / transactionalIdPrefix, which require " +
+                    "acks=all.");
+        }
+    }
+
     internal static void RequireSaslCredentials(SaslMechanism mechanism, string? username, string? password)
     {
         if (mechanism is SaslMechanism.Gssapi or SaslMechanism.OAuthBearer) return;

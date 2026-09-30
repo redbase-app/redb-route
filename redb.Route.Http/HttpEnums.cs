@@ -25,7 +25,7 @@ public enum HttpMethod
 // between the Kestrel host and the HTTP connector options.
 
 /// <summary>
-/// Authentication scheme for producer HTTP requests.
+/// Authentication scheme: what a producer sends (<c>authScheme</c>) or what a consumer requires (<c>inboundAuth</c>).
 /// </summary>
 public enum HttpAuthScheme
 {

@@ -41,6 +41,10 @@ public class GrpcConsumer : IConsumer
     private RouteRegistration? _healthRegistration;
     private long _processedCount;
 
+    // Unregistering the routes stops new calls; the ones already in the pipeline still have to
+    // finish, and the listener stays up while another route holds the port.
+    private readonly InflightDrainGuard _drain = new();
+
     /// <summary>Creates a gRPC consumer.</summary>
     public GrpcConsumer(GrpcEndpoint endpoint, IProcessor processor, GrpcEndpointOptions options)
     {
@@ -64,6 +68,8 @@ public class GrpcConsumer : IConsumer
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
+        _drain.Start(ct);
+
         var host = _options.Host;
         var port = _options.Port;
 
@@ -157,6 +163,8 @@ public class GrpcConsumer : IConsumer
             _healthRegistration = null;
         }
 
+        await _drain.DrainAsync(ct, _logger, $"grpc://{_options.Host}:{_options.Port}").ConfigureAwait(false);
+
         await Server.StopIfEmpty(_options.Host, _options.Port, ct).ConfigureAwait(false);
 
         _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
@@ -168,8 +176,27 @@ public class GrpcConsumer : IConsumer
 
     private async Task HandleRequest(HttpContext http, bool streaming)
     {
-        using var span = RouteTelemetryExtensions.StartTransportSpan(
-            "grpc receive", ActivityKind.Server, "rpc.system", "grpc", _endpoint.Uri.NormalizedKey);
+        // Counted for the drain: a call inside the pipeline must finish before Stop returns.
+        _drain.Increment();
+        try
+        {
+            await HandleRequestCore(http, streaming).ConfigureAwait(false);
+        }
+        finally
+        {
+            _drain.Decrement();
+        }
+    }
+
+    private async Task HandleRequestCore(HttpContext http, bool streaming)
+    {
+        // The caller's trace goes on from the host's span of this request when ASP.NET Core instrumentation opened
+        // one, else from the traceparent the call carries; without either the span is a root.
+        using var span = RouteTelemetryExtensions.StartConsumerSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            "grpc receive", ActivityKind.Server, "rpc.system", "grpc", _endpoint.Uri.NormalizedKey,
+            http.Request.Headers, static (headers, name) => headers.TryGetValue(name, out var value) ? value.ToString() : null,
+            InboundParent.HostRequest);
         // MessagesIn is counted by the core StatisticsProcessor around the routed pipeline.
 
         // Content type must be on the response before anything is written, otherwise a client sees a
@@ -246,6 +273,9 @@ public class GrpcConsumer : IConsumer
             var deadlineHit = deadline is { IsCancellationRequested: true }
                               && !http.RequestAborted.IsCancellationRequested;
             (status, detail) = GrpcWire.FromException(ex, deadlineHit, exchange?.ExchangeId);
+            // Only the caller going away is a stop; an exceeded deadline or any other cancellation is a failure.
+            if (ex is not OperationCanceledException || !http.RequestAborted.IsCancellationRequested)
+                span.Activity.RecordFailure(ex);
 
             // Pipeline failures are already counted by the core; everything else here - a failure
             // before the exchange existed (wire read, deserialization) or after the pipeline

@@ -242,13 +242,10 @@ public sealed class TelegramConsumer : DrainableConsumer
         UpdateType updateType,
         CancellationToken ct)
     {
-        using var activity = RouteActivitySource.Source.StartActivity(
-            $"telegram.{updateType} receive", ActivityKind.Consumer);
-        if (activity is { IsAllDataRequested: true })
+        // An update carries no trace context: its span is a root, never a child of the activity the polling loop holds.
+        using var span = StartReceiveSpan($"telegram.{updateType} receive", updateType.ToString());
+        if (span.Activity is { IsAllDataRequested: true } activity)
         {
-            activity.SetTag("messaging.system", "telegram");
-            activity.SetTag("messaging.operation", "receive");
-            activity.SetTag("messaging.destination.name", updateType.ToString());
             activity.SetTag("messaging.telegram.chat.id", msg.Chat.Id);
             activity.SetTag("messaging.telegram.chat.type", msg.Chat.Type.ToString());
             activity.SetTag("messaging.telegram.message.id", msg.MessageId);
@@ -262,6 +259,9 @@ public sealed class TelegramConsumer : DrainableConsumer
             // framework's StatisticsProcessor which wraps Processor. Matches the
             // Kafka/RabbitMQ pattern — no explicit Record* calls here.
             await Processor.Process(exchange, ct).ConfigureAwait(false);
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+                && (failure is not OperationCanceledException || !ct.IsCancellationRequested))
+                span.Activity.RecordFailure(failure);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -273,7 +273,7 @@ public sealed class TelegramConsumer : DrainableConsumer
             // so there is no redelivery. Route-level error handling (OnException / dead-letter) already
             // ran inside Processor.Process; anything reaching here is terminal. Log it as a dropped
             // message rather than re-throwing into the polling loop (which would only re-log the same error).
-            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            span.Activity.RecordFailure(ex);
             Logger?.LogError(ex,
                 "Telegram consumer: unhandled processor error for message {MessageId} in chat {ChatId} — " +
                 "message dropped (at-most-once, no redelivery).",
@@ -295,13 +295,9 @@ public sealed class TelegramConsumer : DrainableConsumer
         var exchange = CreateUpdateExchange(update);
         if (exchange is null) return;
 
-        using var activity = RouteActivitySource.Source.StartActivity(
-            $"telegram.{update.Type} receive", ActivityKind.Consumer);
-        if (activity is { IsAllDataRequested: true })
+        using var span = StartReceiveSpan($"telegram.{update.Type} receive", update.Type.ToString());
+        if (span.Activity is { IsAllDataRequested: true } activity)
         {
-            activity.SetTag("messaging.system", "telegram");
-            activity.SetTag("messaging.operation", "receive");
-            activity.SetTag("messaging.destination.name", update.Type.ToString());
             activity.SetTag("messaging.telegram.update.id", update.Id);
 
             if (update.CallbackQuery is { } cb)
@@ -319,6 +315,9 @@ public sealed class TelegramConsumer : DrainableConsumer
         try
         {
             await Processor.Process(exchange, ct).ConfigureAwait(false);
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+                && (failure is not OperationCanceledException || !ct.IsCancellationRequested))
+                span.Activity.RecordFailure(failure);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -327,7 +326,7 @@ public sealed class TelegramConsumer : DrainableConsumer
         catch (Exception ex)
         {
             // At-most-once (see HandleMessageAsync): terminal error, message dropped, no redelivery.
-            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            span.Activity.RecordFailure(ex);
             Logger?.LogError(ex,
                 "Telegram consumer: unhandled processor error for update {UpdateId} — " +
                 "message dropped (at-most-once, no redelivery).", update.Id);
@@ -338,6 +337,13 @@ public sealed class TelegramConsumer : DrainableConsumer
             DecrementInflight();
         }
     }
+
+    /// <summary>The root span of one update; the Bot API carries no trace context.</summary>
+    private TransportSpan StartReceiveSpan(string name, string destination) =>
+        RouteTelemetryExtensions.StartConsumerSpan<object?>(
+            (_endpoint.Component as ComponentBase)?.Context,
+            name, ActivityKind.Consumer, "messaging.system", "telegram", _endpoint.Uri.NormalizedKey,
+            null, static (_, _) => null, destination: destination, operation: "receive");
 
     // ── Exchange factories ────────────────────────────────────────────────────
 

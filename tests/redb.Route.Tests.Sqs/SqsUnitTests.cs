@@ -27,7 +27,7 @@ public class SqsUnitTests
     {
         var o = BindSqs("accessKey=k&secretKey=s&region=eu-west-1&serviceUrl=http://localhost:4566"
             + "&waitTimeSeconds=15&maxNumberOfMessages=5&visibilityTimeout=45&concurrentConsumers=4"
-            + "&extendMessageVisibility=true&deleteAfterRead=false&transacted=true&autoCreateQueue=true");
+            + "&extendMessageVisibility=true&transacted=true&autoCreateQueue=true");
 
         o.AccessKey.Should().Be("k");
         o.SecretKey.Should().Be("s");
@@ -38,7 +38,7 @@ public class SqsUnitTests
         o.VisibilityTimeout.Should().Be(45);
         o.ResolvedConcurrentConsumers.Should().Be(4);
         o.ExtendMessageVisibility.Should().BeTrue();
-        o.DeleteAfterRead.Should().BeFalse();
+        o.AckMode.Should().Be(AckMode.Manual);
         o.Transacted.Should().BeTrue();
         o.AutoCreateQueue.Should().BeTrue();
     }
@@ -50,7 +50,7 @@ public class SqsUnitTests
         o.WaitTimeSeconds.Should().Be(20);
         o.MaxNumberOfMessages.Should().Be(10);
         o.ResolvedConcurrentConsumers.Should().Be(1);
-        o.DeleteAfterRead.Should().BeTrue();
+        o.AckMode.Should().Be(AckMode.Manual);
         o.Region.Should().Be("us-east-1");
     }
 

@@ -1,3 +1,5 @@
+using redb.Route.Core;
+
 namespace redb.Route.AzureServiceBus.Fluent;
 
 /// <summary>
@@ -54,8 +56,8 @@ public sealed class AzureServiceBusBuilder
 
     // ── Consumer ──
 
-    /// <summary>Sets receive mode: "PeekLock" or "ReceiveAndDelete".</summary>
-    public AzureServiceBusBuilder ReceiveMode(string mode) => Set("receiveMode", mode);
+    /// <summary>When a message is settled: after the route with PeekLock (<see cref="Core.AckMode.Manual"/>, default) or on hand-off with ReceiveAndDelete (<see cref="Core.AckMode.Auto"/>).</summary>
+    public AzureServiceBusBuilder AckMode(AckMode mode) => Set("ackMode", mode.ToString().ToLowerInvariant());
 
     /// <summary>Sets maximum concurrent message handler calls.</summary>
     public AzureServiceBusBuilder MaxConcurrentCalls(int n) => Set("maxConcurrentCalls", n);

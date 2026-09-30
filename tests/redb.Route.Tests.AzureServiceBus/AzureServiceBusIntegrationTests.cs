@@ -51,7 +51,7 @@ public sealed class AzureServiceBusIntegrationTests
     private async Task DrainAsync(string entity, string? extraParams = null)
     {
         var ep = CreateEndpoint(entity,
-            $"receiveMode=ReceiveAndDelete&maxConcurrentCalls=10{(extraParams is not null ? $"&{extraParams}" : "")}");
+            $"ackMode=auto&maxConcurrentCalls=10{(extraParams is not null ? $"&{extraParams}" : "")}");
         var processor = Substitute.For<IProcessor>();
         processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
@@ -220,7 +220,7 @@ public sealed class AzureServiceBusIntegrationTests
         await producer.Stop();
         await epProd.Stop();
 
-        var epCons = CreateEndpoint(Queue, "receiveMode=ReceiveAndDelete");
+        var epCons = CreateEndpoint(Queue, "ackMode=auto");
         var tcs = new TaskCompletionSource<string>();
 
         var processor = Substitute.For<IProcessor>();
@@ -356,7 +356,7 @@ public sealed class AzureServiceBusIntegrationTests
         await epCons.Stop();
 
         // Verify our specific message is gone (no re-delivery)
-        var epVerify = CreateEndpoint(Queue, "receiveMode=ReceiveAndDelete");
+        var epVerify = CreateEndpoint(Queue, "ackMode=auto");
         var foundOurs = false;
 
         var verifyProcessor = Substitute.For<IProcessor>();
@@ -651,7 +651,7 @@ public sealed class AzureServiceBusIntegrationTests
         tcs.Task.IsCompletedSuccessfully.Should().BeTrue("message should be processed");
 
         // Verify our specific message is not re-delivered
-        var epVerify = CreateEndpoint(Queue, "receiveMode=ReceiveAndDelete");
+        var epVerify = CreateEndpoint(Queue, "ackMode=auto");
         var foundOurs = false;
 
         var verifyProcessor = Substitute.For<IProcessor>();
@@ -712,7 +712,7 @@ public sealed class AzureServiceBusIntegrationTests
         await epCons.Stop();
 
         // Message should be re-delivered (abandoned, not completed)
-        var epRetry = CreateEndpoint(Queue, "receiveMode=ReceiveAndDelete");
+        var epRetry = CreateEndpoint(Queue, "ackMode=auto");
         var retryTcs = new TaskCompletionSource<string>();
 
         var retryProcessor = Substitute.For<IProcessor>();

@@ -242,7 +242,7 @@ public class VmComponentTests : IAsyncDisposable
     {
         var opts = new VmEndpointOptions();
         opts.ResolvedConcurrentConsumers.Should().Be(1, "дефолт остаётся 1 (В-7)");
-        opts.Size.Should().Be(0);
+        opts.Size.Should().Be(1000, "bounded by default, as Camel's vm: an unbounded queue is an explicit size=0");
     }
 
     [Fact]

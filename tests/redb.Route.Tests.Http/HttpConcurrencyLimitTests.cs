@@ -152,12 +152,5 @@ public class HttpConcurrencyLimitTests : IAsyncLifetime
         act.Should().Throw<ArgumentException>().WithMessage("*requestQueueLimit*maxConcurrentRequests*");
     }
 
-    private static int GetFreePort()
-    {
-        using var l = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((System.Net.IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 }

@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Google.Cloud.Storage.V1;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Components;
 using redb.Route.Core;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Firebase;
 
@@ -164,7 +166,7 @@ internal sealed class FirebaseStorageConsumer : DrainableConsumer
             try
             {
                 var exchange = await CreateExchange(obj, ct).ConfigureAwait(false);
-                success = await ProcessExchangeAsync(exchange, obj.Name, ct).ConfigureAwait(false);
+                success = await ProcessExchangeAsync(exchange, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -213,35 +215,19 @@ internal sealed class FirebaseStorageConsumer : DrainableConsumer
     }
 
     /// <summary>
-    /// Runs the exchange through the processor with inflight tracking and reports whether it
-    /// succeeded. A processing failure must not delete/move the object (data loss), so unlike
-    /// <see cref="DrainableConsumer.ProcessWithTracking"/> the outcome is observed here:
-    /// both a raw throw (no error handler took the exchange) and an unhandled
-    /// <c>exchange.Exception</c> set by the pipeline count as failure.
+    /// Runs the exchange through the processor, inside the root span of the object (an object carries no trace
+    /// context), and reports whether it succeeded. A processing failure must not delete/move the object (data loss):
+    /// <see cref="DrainableConsumer.ProcessWithTracking(IExchange, TransportSpan, CancellationToken)"/> leaves a failure
+    /// that escaped the pipeline on the exchange too, so an unhandled <c>exchange.Exception</c> is the failure either way.
     /// </summary>
-    private async Task<bool> ProcessExchangeAsync(Exchange exchange, string objectName, CancellationToken ct)
+    private async Task<bool> ProcessExchangeAsync(Exchange exchange, CancellationToken ct)
     {
-        IncrementInflight();
-        try
-        {
-            await Processor.Process(exchange, ct).ConfigureAwait(false);
-            return exchange.Exception is null || exchange.ExceptionHandled;
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw; // shutdown — let the poll loop exit
-        }
-        catch (Exception ex)
-        {
-            // Pipeline errors are counted by the core StatisticsProcessor (ownership audit).
-            Logger?.LogError(ex, "Firebase Storage: processing failed for {Object}; object is kept.", objectName);
-            return false;
-        }
-        finally
-        {
-            DecrementInflight();
-            await exchange.DisposeAsync().ConfigureAwait(false);
-        }
+        using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"gcs {_endpoint.BucketName} receive", ActivityKind.Consumer, "redb.system", "gcs", _endpoint.Uri.NormalizedKey,
+            null, static (_, _) => null, destination: _endpoint.BucketName, operation: "receive");
+        await ProcessWithTracking(exchange, span, ct).ConfigureAwait(false);
+        return exchange.Exception is null || exchange.ExceptionHandled;
     }
 
     private async Task<Exchange> CreateExchange(Google.Apis.Storage.v1.Data.Object obj, CancellationToken ct)

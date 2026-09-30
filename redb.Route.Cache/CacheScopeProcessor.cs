@@ -10,28 +10,34 @@ internal sealed class CacheScopeProcessor : IProcessor
     public const string HitHeader = "cache.hit";
 
     private readonly ICacheStore _store;
+    // Single flight per key: while one exchange computes a missing entry, the others arriving for the
+    // same key wait for its result instead of each running the inner steps (a stampede on a hot key
+    // the moment it expires is exactly what a cache is there to prevent). The map belongs to the
+    // store's context, not to this node: two nodes on one region and key are one flight.
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<CacheEntry?>> _inFlight;
     private readonly Func<IExchange, string> _key;
-    private readonly string _region;
     private readonly TimeSpan? _ttl;
     private readonly TimeSpan? _sliding;
     private readonly bool _cacheHeaders;
     private readonly IProcessor _inner;
 
-    public CacheScopeProcessor(ICacheStore store, Func<IExchange, string> key, string region, TimeSpan? ttl, TimeSpan? sliding, bool cacheHeaders, IProcessor inner)
+    public CacheScopeProcessor(
+        ICacheStore store,
+        ConcurrentDictionary<string, TaskCompletionSource<CacheEntry?>> inFlight,
+        Func<IExchange, string> key,
+        TimeSpan? ttl,
+        TimeSpan? sliding,
+        bool cacheHeaders,
+        IProcessor inner)
     {
         _store = store;
+        _inFlight = inFlight;
         _key = key;
-        _region = region;
         _ttl = ttl;
         _sliding = sliding;
         _cacheHeaders = cacheHeaders;
         _inner = inner;
     }
-
-    // Single flight per key: while one exchange computes a missing entry, the others arriving for the
-    // same key wait for its result instead of each running the inner steps (a stampede on a hot key
-    // the moment it expires is exactly what a cache is there to prevent).
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<CacheEntry?>> _inFlight = new(StringComparer.Ordinal);
 
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
@@ -88,14 +94,15 @@ internal sealed class CacheScopeProcessor : IProcessor
     private async Task<CacheEntry?> ComputeAsync(IExchange exchange, string key, CancellationToken ct)
     {
         exchange.In.Headers[HitHeader] = false;
+        // With CacheHeaders(): the headers the exchange came in with, so the entry can keep what the
+        // inner steps did to them and nothing of what arrived (another exchange gets the entry on a hit).
+        var before = _cacheHeaders ? CacheHeaderPolicy.Snapshot(exchange.In) : null;
         await _inner.Process(exchange, ct).ConfigureAwait(false);
 
         if (exchange.IsStopped || exchange.Exception is not null)
             return null;
 
-        var fromOut = exchange.Out is not null;
-        var result = fromOut ? exchange.Out! : exchange.In;
-        var entry = CacheEntry.From(result, _cacheHeaders, fromOut);
+        var entry = CacheEntry.FromResult(exchange, before);
         await _store.SetAsync(key, entry, _ttl, _sliding, ct).ConfigureAwait(false);
         return entry;
     }

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
+using RabbitMQ.Client.OAuth2;
 using redb.Route.Abstractions;
 using redb.Route.Extensions;
 using redb.Route.Core;
@@ -20,7 +21,8 @@ namespace redb.Route.RabbitMQ;
 ///   <item>If <c>connectionFactory=name</c> is set on the URI — key is <c>"factory:{name}"</c>.
 ///     Two factories with identical parameters but different names produce two distinct
 ///     connections (the factory name is the connection identity).</item>
-///   <item>Otherwise — key is <c>"inline:{host}:{port}/{vhost}@{user}#{ssl}"</c>. Endpoints
+///   <item>Otherwise — key is <c>"inline:{host}:{port}/{vhost}@{user}#ssl:sni={sslServerName}:cert={sslCertPath}"</c>
+///     (the TLS part only with <c>ssl=true</c>, each of its fields only when set). Endpoints
 ///     with identical inline connection parameters share one connection automatically.</item>
 /// </list>
 /// Connections are created lazily on first endpoint use and released only when the component
@@ -47,6 +49,10 @@ public sealed partial class RabbitMQComponent : ComponentBase
 
         var options = new RabbitMQEndpointOptions();
         options.BindFromUri(uri.RawParameters);
+
+        // A connection parameter next to connectionFactory is refused by the core while binding: the options declare
+        // them ([ConnectionParameter]), as a factory is the whole connection in Camel.
+
         options.Validate();
 
         return new RabbitMQEndpoint(uri, this, options);
@@ -57,11 +63,14 @@ public sealed partial class RabbitMQComponent : ComponentBase
     /// request. Self-healing: if the cached connection has been closed (auto-recovery gave up,
     /// broker permanently rejected, etc.) it is evicted and recreated on the next call.
     /// </summary>
-    internal async Task<IConnection> GetOrCreateConnectionAsync(RabbitMQEndpoint endpoint, CancellationToken ct)
+    internal async Task<IConnection> GetOrCreateConnectionAsync(RabbitMQEndpoint endpoint, RabbitMQConnectionUse use, CancellationToken ct)
     {
-        var key = ResolveConnectionKey(endpoint.EndpointOptions);
+        // publisherConnection=true: publishing gets a second connection with the same settings, so the broker's flow
+        // control or an alarm on it cannot stop the consumers of the first from acking.
+        var publisher = use == RabbitMQConnectionUse.Publish && endpoint.EndpointOptions.PublisherConnection;
+        var key = ResolveConnectionKey(endpoint.EndpointOptions) + (publisher ? PublisherKeySuffix : string.Empty);
         var lazy = _connections.GetOrAdd(key, k =>
-            new Lazy<Task<IConnection>>(() => CreateConnectionAsync(k, endpoint, ct)));
+            new Lazy<Task<IConnection>>(() => CreateConnectionAsync(k, endpoint, publisher, ct)));
 
         IConnection conn;
         try
@@ -73,6 +82,7 @@ public sealed partial class RabbitMQComponent : ComponentBase
             // Failed initialization must not poison the slot — evict so the next caller retries.
             ((ICollection<KeyValuePair<string, Lazy<Task<IConnection>>>>)_connections)
                 .Remove(new KeyValuePair<string, Lazy<Task<IConnection>>>(key, lazy));
+            StopTokenRenewal(key);
             throw;
         }
 
@@ -82,15 +92,18 @@ public sealed partial class RabbitMQComponent : ComponentBase
             // Evict only if our entry is still the cached one (avoid racing another caller).
             ((ICollection<KeyValuePair<string, Lazy<Task<IConnection>>>>)_connections)
                 .Remove(new KeyValuePair<string, Lazy<Task<IConnection>>>(key, lazy));
+            StopTokenRenewal(key);
 
             try { await conn.DisposeAsync().ConfigureAwait(false); }
             catch (Exception ex) { Logger?.LogDebug(ex, "RabbitMQ: error disposing dead connection [{Key}]", key); }
 
-            return await GetOrCreateConnectionAsync(endpoint, ct).ConfigureAwait(false);
+            return await GetOrCreateConnectionAsync(endpoint, use, ct).ConfigureAwait(false);
         }
 
         return conn;
     }
+
+    private const string PublisherKeySuffix = "|publisher";
 
     /// <summary>Number of currently pooled connections (for diagnostics and tests).</summary>
     internal int PooledConnectionCount => _connections.Count;
@@ -116,39 +129,158 @@ public sealed partial class RabbitMQComponent : ComponentBase
         if (!string.IsNullOrEmpty(opts.ConnectionFactory))
             return "factory:" + opts.ConnectionFactory;
 
+        // A pooled connection is one TLS identity: another server name or client certificate is another connection.
         return string.Concat(
             "inline:",
             opts.Host, ":", opts.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
             "/", opts.VirtualHost,
             "@", opts.Username,
-            opts.Ssl ? "#ssl" : string.Empty);
+            opts.Ssl ? "#ssl" : string.Empty,
+            opts.Ssl && !string.IsNullOrEmpty(opts.SslServerName) ? ":sni=" + opts.SslServerName : string.Empty,
+            opts.Ssl && !string.IsNullOrEmpty(opts.SslCertPath) ? ":cert=" + opts.SslCertPath : string.Empty,
+            ConnectionSettingsSuffix(opts));
+    }
+
+    private static readonly RabbitMQEndpointOptions DefaultOptions = new();
+
+    /// <summary>
+    /// The connection settings that differ from the defaults. A shared connection has one set of them, so an endpoint
+    /// with another heartbeat, timeout, recovery policy, client name or password gets a connection of its own rather than
+    /// the first endpoint's. The password enters only as a short hash: the key is written to the log.
+    /// </summary>
+    private static string ConnectionSettingsSuffix(RabbitMQEndpointOptions o)
+    {
+        var d = DefaultOptions;
+        var sb = new System.Text.StringBuilder();
+        void Add<T>(string name, T value, T fallback)
+        {
+            if (!EqualityComparer<T>.Default.Equals(value, fallback))
+                sb.Append('|').Append(name).Append('=').Append(Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        Add("heartbeat", o.Heartbeat, d.Heartbeat);
+        Add("connectionTimeout", o.ConnectionTimeout, d.ConnectionTimeout);
+        Add("socketReadTimeout", o.SocketReadTimeout, d.SocketReadTimeout);
+        Add("socketWriteTimeout", o.SocketWriteTimeout, d.SocketWriteTimeout);
+        Add("continuationTimeout", o.ContinuationTimeout, d.ContinuationTimeout);
+        Add("automaticRecovery", o.AutomaticRecovery, d.AutomaticRecovery);
+        Add("topologyRecoveryEnabled", o.TopologyRecoveryEnabled, d.TopologyRecoveryEnabled);
+        Add("recoveryInterval", o.RecoveryInterval, d.RecoveryInterval);
+        Add("consumerDispatchConcurrency", o.ConsumerDispatchConcurrency, d.ConsumerDispatchConcurrency);
+        Add("clientName", o.ClientName, d.ClientName);
+        Add("sslCaCertPath", o.SslCaCertPath, d.SslCaCertPath);
+        Add("sslProtocols", o.SslProtocols, d.SslProtocols);
+        Add("revocationMode", o.RevocationMode, d.RevocationMode);
+        Add("revocationSoftFail", o.RevocationSoftFail, d.RevocationSoftFail);
+        Add("authMechanism", o.AuthMechanism, d.AuthMechanism);
+        if (o.Password != d.Password)
+        {
+            var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(o.Password));
+            sb.Append("|pw=").Append(Convert.ToHexString(hash, 0, 4));
+        }
+        return sb.ToString();
     }
 
     /// <summary>
     /// Builds the underlying <see cref="ConnectionFactory"/> and opens the physical connection.
-    /// Honours <see cref="RabbitMQEndpointOptions.ConnectionFactory"/> registry lookup with
-    /// fallback to inline parameters; supports comma-separated host lists for cluster mode.
+    /// Honours <see cref="RabbitMQEndpointOptions.ConnectionFactory"/> registry lookup;
+    /// supports comma-separated host lists for cluster mode.
     /// </summary>
-    private async Task<IConnection> CreateConnectionAsync(string key, RabbitMQEndpoint endpoint, CancellationToken ct)
+    private async Task<IConnection> CreateConnectionAsync(string key, RabbitMQEndpoint endpoint, bool publisher, CancellationToken ct)
     {
-        var options = endpoint.EndpointOptions;
-        var factory = BuildConnectionFactory(options);
-        var hosts = ParseEndpoints(options);
+        var (factory, hosts, oauth2) = ResolveConnectionTarget(endpoint.EndpointOptions);
+        if (publisher)
+            factory.ClientProvidedName = $"{factory.ClientProvidedName} (publisher)";
 
-        var connection = hosts.Count > 1
-            ? await factory.CreateConnectionAsync(hosts, ct).ConfigureAwait(false)
-            : await factory.CreateConnectionAsync(ct).ConfigureAwait(false);
+        OAuth2ClientCredentialsProvider? tokens = null;
+        if (oauth2 is not null)
+        {
+            var builder = new OAuth2ClientBuilder(oauth2.OAuth2ClientId!, oauth2.OAuth2ClientSecret!, new Uri(oauth2.OAuth2TokenEndpoint!), null);
+            if (!string.IsNullOrEmpty(oauth2.OAuth2Scope))
+                builder.SetScope(oauth2.OAuth2Scope);
+            tokens = new OAuth2ClientCredentialsProvider(key, await builder.BuildAsync(ct).ConfigureAwait(false));
+            factory.CredentialsProvider = tokens;
+        }
+
+        // Always over the endpoint list, even for one host: that overload takes TLS from each endpoint,
+        // and the same list serves failover on the first connect and on recovery.
+        IConnection connection;
+        try
+        {
+            connection = await factory.CreateConnectionAsync(hosts, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            tokens?.Dispose();
+            throw;
+        }
 
         endpoint.AttachConnectionLifecycleHandlers(connection);
 
+        if (tokens is not null)
+            _tokenRenewals[key] = new TokenRenewal(tokens, new CredentialsRefresher(tokens,
+                (credentials, exception, token) => RenewSecretAsync(key, connection, credentials, exception, token),
+                CancellationToken.None));
+
         Logger?.LogInformation(
-            "RabbitMQ connection opened [{Key}]: host={Host}, vHost={VHost}, user={User}",
-            key, options.Host, options.VirtualHost, options.Username);
+            "RabbitMQ connection opened [{Key}]: host={Host}:{Port}, tls={Tls}, vHost={VHost}, login={Login}",
+            key, connection.Endpoint.HostName, connection.Endpoint.Port, connection.Endpoint.Ssl.Enabled,
+            factory.VirtualHost, LoginOf(factory, oauth2));
 
         return connection;
     }
 
-    private ConnectionFactory BuildConnectionFactory(RabbitMQEndpointOptions options)
+    private static string LoginOf(ConnectionFactory factory, RabbitMQConnectionFactory? oauth2) =>
+        oauth2 is not null ? $"oauth2 ({oauth2.OAuth2ClientId})"
+        : factory.AuthMechanisms.Any(m => m is ExternalMechanismFactory) ? "client certificate (EXTERNAL)"
+        : factory.CredentialsProvider is { } provider && provider is not BasicCredentialsProvider ? $"credentials provider ({provider.Name})"
+        : factory.UserName;
+
+    /// <summary>
+    /// Puts a renewed access token on the open connection (<c>connection.update-secret</c>), before the old one expires.
+    /// A failed renewal is logged: the broker closes the connection once the old token expires, and recovery then logs in
+    /// with a fresh token.
+    /// </summary>
+    private async Task RenewSecretAsync(string key, IConnection connection, Credentials? credentials, Exception? exception, CancellationToken ct)
+    {
+        if (exception is not null || credentials is null)
+        {
+            Logger?.LogError(exception, "RabbitMQ [{Key}]: the OAuth2 access token could not be renewed", key);
+            return;
+        }
+
+        if (!connection.IsOpen)
+            return;
+
+        await connection.UpdateSecretAsync(credentials.Password, "OAuth2 access token renewed", ct).ConfigureAwait(false);
+        Logger?.LogDebug("RabbitMQ [{Key}]: OAuth2 access token renewed on the open connection", key);
+    }
+
+    /// <summary>The token source of an OAuth2 connection and the timer that renews its token.</summary>
+    private sealed record TokenRenewal(OAuth2ClientCredentialsProvider Tokens, CredentialsRefresher Refresher) : IDisposable
+    {
+        public void Dispose()
+        {
+            Refresher.Dispose();
+            Tokens.Dispose();
+        }
+    }
+
+    private readonly ConcurrentDictionary<string, TokenRenewal> _tokenRenewals = new(StringComparer.Ordinal);
+
+    private void StopTokenRenewal(string key)
+    {
+        if (_tokenRenewals.TryRemove(key, out var renewal))
+            renewal.Dispose();
+    }
+
+    /// <summary>
+    /// The factory and the hosts it connects to, from one source: the named factory's own settings and host list,
+    /// or the endpoint URI's. Every host carries the TLS settings. The named factory comes back too when it logs in
+    /// with OAuth2, which is set up asynchronously when the connection opens.
+    /// </summary>
+    private (ConnectionFactory Factory, IReadOnlyList<AmqpTcpEndpoint> Hosts, RabbitMQConnectionFactory? OAuth2)
+        ResolveConnectionTarget(RabbitMQEndpointOptions options)
     {
         // Named factory from registry — its settings are authoritative; inline overrides are not
         // applied (matches the historical contract of RabbitMQConnectionFactory.Build()).
@@ -156,17 +288,17 @@ public sealed partial class RabbitMQComponent : ComponentBase
         {
             // A set-but-unknown name fails loud — never a silent fallback to URI params (Ф11 Ж-1).
             var registryFactory = Context.GetRequiredFromRegistry<RabbitMQConnectionFactory>(options.ConnectionFactory);
+            registryFactory.Validate(options.ConnectionFactory);
             Logger?.LogDebug("RabbitMQ: using ConnectionFactory '{Name}' from registry", options.ConnectionFactory);
-            return registryFactory.Build();
+            var factoryHosts = registryFactory.GetEndpoints($"RabbitMQ connection factory '{options.ConnectionFactory}'", Logger);
+            return (registryFactory.Build(factoryHosts), factoryHosts, registryFactory.UsesOAuth2 ? registryFactory : null);
         }
 
-        var hostList = options.Host.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var primaryHost = hostList.Length > 0 ? hostList[0] : "localhost";
+        var hosts = RabbitMQConnectionFactory.BuildEndpoints(
+            options.Host, options.Port, options.ResolveTls("RabbitMQ endpoint"), Logger);
 
-        return new ConnectionFactory
+        var factory = new ConnectionFactory
         {
-            HostName = primaryHost,
-            Port = options.Port,
             UserName = options.Username,
             Password = options.Password,
             VirtualHost = options.VirtualHost,
@@ -180,24 +312,13 @@ public sealed partial class RabbitMQComponent : ComponentBase
             ContinuationTimeout = TimeSpan.FromSeconds(options.ContinuationTimeout),
             ConsumerDispatchConcurrency = options.ConsumerDispatchConcurrency,
             ClientProvidedName = options.ClientName,
-            Ssl = options.Ssl
-                ? new SslOption
-                {
-                    Enabled = true,
-                    ServerName = options.SslServerName,
-                    CertPath = options.SslCertPath,
-                    CertPassphrase = options.SslCertPassphrase,
-                }
-                : new SslOption(),
         };
-    }
+        if (options.AuthMechanism == RabbitMQAuthMechanism.External)
+            factory.AuthMechanisms = [new ExternalMechanismFactory()];
 
-    private static List<AmqpTcpEndpoint> ParseEndpoints(RabbitMQEndpointOptions options)
-    {
-        return options.Host
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(h => new AmqpTcpEndpoint(h, options.Port))
-            .ToList();
+        // The Endpoint setter also sets factory.Ssl from the endpoint, so TLS is never set apart from the hosts.
+        factory.Endpoint = hosts[0];
+        return (factory, hosts, null);
     }
 
     /// <summary>
@@ -207,6 +328,9 @@ public sealed partial class RabbitMQComponent : ComponentBase
     /// </summary>
     public override async ValueTask DisposeAsync()
     {
+        foreach (var key in _tokenRenewals.Keys)
+            StopTokenRenewal(key);
+
         foreach (var (key, lazy) in _connections.ToArray())
         {
             if (!lazy.IsValueCreated) continue;

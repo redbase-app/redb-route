@@ -51,6 +51,19 @@ public class MessageProps
     public int OutputTokens { get; set; }
 
     /// <summary>
+    /// Prompt tokens written to the provider's cache by this turn, billed at a premium over normal input
+    /// (<c>LlmUsage.CacheCreationInputTokens</c>). Zero where the provider does not bill cache creation, as DeepSeek.
+    /// </summary>
+    public int CacheCreationInputTokens { get; set; }
+
+    /// <summary>
+    /// Prompt tokens this turn read back from the provider's cache, billed at a fraction of normal input
+    /// (<c>LlmUsage.CacheReadInputTokens</c>). <see cref="InputTokens"/> is the remainder billed at full price, so the
+    /// turn's prompt is the sum of the three.
+    /// </summary>
+    public int CacheReadInputTokens { get; set; }
+
+    /// <summary>
     /// Effective sampling temperature passed to the provider for the call that
     /// produced this assistant message; null on user / tool-result rows.
     /// </summary>

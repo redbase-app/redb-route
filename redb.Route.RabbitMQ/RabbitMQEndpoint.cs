@@ -54,6 +54,7 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
     /// Publisher confirms are enabled by default but must be disabled for transacted channels
     /// (RabbitMQ does not allow confirm + tx mode on the same channel).
     /// </summary>
+    /// <param name="use">What the channel is for: with <c>publisherConnection=true</c> publishing goes over a connection of its own.</param>
     /// <param name="publisherConfirms">Enable publisher confirms (default true). Set to false for transacted channels.</param>
     /// <param name="consumerDispatchConcurrency">
     /// Per-channel consumer dispatch concurrency. When <c>null</c> the channel inherits the value from the
@@ -67,11 +68,12 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     internal async Task<IChannel> CreateChannelAsync(
+        RabbitMQConnectionUse use,
         bool publisherConfirms = true,
         ushort? consumerDispatchConcurrency = null,
         CancellationToken ct = default)
     {
-        var connection = await _component.GetOrCreateConnectionAsync(this, ct).ConfigureAwait(false);
+        var connection = await _component.GetOrCreateConnectionAsync(this, use, ct).ConfigureAwait(false);
 
         // For confirm-tracking channels we MUST supply an explicit ThrottlingRateLimiter sized
         // to MaxOutstandingConfirms. RabbitMQ.Client 7.x defaults to a tiny built-in limiter
@@ -136,6 +138,16 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
     /// failures like "message not routed" (BasicReturn), broker-side channel shutdown,
     /// and callback exceptions are silently swallowed by the .NET client.
     /// </summary>
+    /// <summary>
+    /// A returned reply whose client is gone: <c>amq.gen-*</c> is an auto-generated exclusive reply queue, and
+    /// <c>amq.rabbitmq.reply-to.*</c> the direct reply-to pseudo-queue. Once the client timed out, its reply address
+    /// is gone and a late reply comes back — normal, not a problem worth a Warning.
+    /// </summary>
+    internal static bool IsTransientReplyTo(string? routingKey)
+        => !string.IsNullOrEmpty(routingKey)
+           && (routingKey.StartsWith("amq.gen-", StringComparison.Ordinal)
+               || routingKey.StartsWith("amq.rabbitmq.reply-to", StringComparison.Ordinal));
+
     private void AttachChannelLifecycleHandlers(IChannel channel)
     {
         channel.ChannelShutdownAsync += (sender, args) =>
@@ -161,13 +173,7 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
 
         channel.BasicReturnAsync += (sender, args) =>
         {
-            // amq.gen-* are auto-generated, exclusive RPC reply queues. After a client
-            // times out, its reply queue vanishes and any in-flight reply targeting it
-            // gets returned by the broker — this is normal, not a problem worth a Warning.
-            var isTransientReplyTo = !string.IsNullOrEmpty(args.RoutingKey)
-                && args.RoutingKey.StartsWith("amq.gen-", StringComparison.Ordinal);
-
-            if (isTransientReplyTo)
+            if (IsTransientReplyTo(args.RoutingKey))
             {
                 Logger?.LogDebug(
                     "RabbitMQ BasicReturn (transient reply-to): routingKey={RoutingKey}, code={Code}, reason={Reason}",
@@ -313,4 +319,14 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
 
         Logger?.LogInformation("RabbitMQ endpoint stopped: {Uri}", Uri);
     }
+}
+
+/// <summary>What a channel is opened for, which decides its connection when <c>publisherConnection=true</c>.</summary>
+internal enum RabbitMQConnectionUse
+{
+    /// <summary>Consuming and acknowledging.</summary>
+    Consume,
+
+    /// <summary>Publishing: producer sends, RPC requests with their reply queue, and a consumer's RPC replies.</summary>
+    Publish,
 }

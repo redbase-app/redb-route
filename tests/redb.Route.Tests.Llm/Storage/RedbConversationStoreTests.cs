@@ -152,4 +152,28 @@ public sealed class RedbConversationStoreTests
         goldRows.Should().NotBeEmpty();
         goldRows.Should().OnlyContain(r => r.Props.AuditTags!["tier"] == "gold");
     }
+
+    /// <summary>
+    /// The cache counters of a turn survive the store: a cached prefix read back as zero would make every stored turn
+    /// look like a full-price prompt to an audit or a cost report built on the history (issue #11, second half).
+    /// </summary>
+    [Fact]
+    public async Task Append_LoadPath_KeepsTheCacheCounters()
+    {
+        var store = new RedbConversationStore(_fx.RouteContext);
+        var convId = $"c-{Guid.NewGuid():N}";
+        var usage = new LlmUsage(InputTokens: 63, OutputTokens: 11, CacheCreationInputTokens: 5, CacheReadInputTokens: 172032);
+
+        var user = await store.AppendAsync(convId, null, LlmMessage.User("hi"), Meta(0));
+        await store.AppendAsync(convId, user, LlmMessage.Assistant("hello"), new ConversationMessageMeta
+        {
+            CreatedAtUtc = DateTime.UtcNow.AddSeconds(1),
+            Iteration = 1,
+            Usage = usage
+        });
+
+        var path = await store.LoadPathAsync(convId);
+
+        path.Last().Meta.Usage.Should().Be(usage, "the whole usage of the turn comes back, cache counters included");
+    }
 }

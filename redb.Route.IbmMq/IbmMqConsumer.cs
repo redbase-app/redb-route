@@ -307,7 +307,7 @@ public sealed class IbmMqConsumer : IConsumer
 
     private async Task ProcessMessageAsync(Worker worker, MQMessage mqMsg, CancellationToken ct)
     {
-        using var activity = StartConsumerActivity(mqMsg);
+        using var span = StartConsumerSpan(mqMsg);
 
         _logger?.LogDebug(
             "IBM MQ consumer: GOT message destination={Destination}, msgId={MsgId}, replyTo={ReplyTo}, msgType={MsgType}",
@@ -359,6 +359,9 @@ public sealed class IbmMqConsumer : IConsumer
         }
         catch (Exception ex)
         {
+            // Our own stop (the processing token) is not a failure; any other cancellation is.
+            if (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                span.Activity.RecordFailure(ex);
             _logger?.LogError(ex, "IBM MQ message processing error: destination={Destination}, msgId={MsgId}",
                 _endpoint.Destination, IbmMqMessageHelper.BytesToHex(mqMsg.MessageId));
 
@@ -384,36 +387,31 @@ public sealed class IbmMqConsumer : IConsumer
 
     // ── Trace context propagation ──
 
-    private Activity? StartConsumerActivity(MQMessage mqMsg)
+    private TransportSpan StartConsumerSpan(MQMessage mqMsg)
     {
-        // Extract W3C trace context from MQ message properties (RFH2 usr folder)
-        string? traceParent = null;
-        string? traceState = null;
+        // The W3C context rides in the MQ message properties (RFH2 usr folder).
+        var span = RouteTelemetryExtensions.StartConsumerSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_endpoint.Destination} receive", ActivityKind.Consumer,
+            "messaging.system", "wmq", _endpoint.Uri.NormalizedKey,
+            mqMsg, ReadProperty,
+            destination: _endpoint.Destination, operation: "receive");
 
-        try { traceParent = mqMsg.GetStringProperty("traceparent"); } catch { /* not present */ }
-        try { traceState = mqMsg.GetStringProperty("tracestate"); } catch { /* not present */ }
-
-        ActivityContext parentContext = default;
-        if (!string.IsNullOrEmpty(traceParent))
-            ActivityContext.TryParse(traceParent, traceState, out parentContext);
-
-        var activity = RouteActivitySource.Source.StartActivity(
-            $"{_endpoint.Destination} receive",
-            ActivityKind.Consumer,
-            parentContext);
-
-        if (activity is { IsAllDataRequested: true })
+        if (span.Activity is { IsAllDataRequested: true } activity)
         {
-            activity.SetTag("messaging.system", "wmq");
-            activity.SetTag("messaging.operation", "receive");
-            activity.SetTag("messaging.destination.name", _endpoint.Destination);
             activity.SetTag("messaging.ibmmq.queue_manager", _options.QueueManager);
-
             if (mqMsg.MessageId is { Length: > 0 })
                 activity.SetTag("messaging.message.id", IbmMqMessageHelper.BytesToHex(mqMsg.MessageId));
         }
 
-        return activity;
+        return span;
+    }
+
+    /// <summary>One message property, or <c>null</c>: MQ reports a property the message does not hold as MQRC 2471.</summary>
+    private static string? ReadProperty(MQMessage message, string name)
+    {
+        try { return message.GetStringProperty(name); }
+        catch (MQException ex) when (ex.ReasonCode == MQC.MQRC_PROPERTY_NOT_AVAILABLE) { return null; }
     }
 
     // ── Exchange creation ──

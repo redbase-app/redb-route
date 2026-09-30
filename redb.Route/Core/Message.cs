@@ -29,22 +29,7 @@ public class Message : IMessage
 
     /// <inheritdoc />
     public T? GetHeader<T>(string key)
-    {
-        if (!_headers.TryGetValue(key, out var value) || value is null)
-            return default;
-
-        if (value is T typed)
-            return typed;
-
-        try
-        {
-            return (T)Convert.ChangeType(value, typeof(T));
-        }
-        catch
-        {
-            return default;
-        }
-    }
+        => _headers.TryGetValue(key, out var value) ? TypedValue.Convert<T>(value, $"header '{key}'") : default;
 
     /// <inheritdoc />
     public IMessage Clone()

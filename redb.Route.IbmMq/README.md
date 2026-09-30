@@ -219,13 +219,19 @@ All IBM MQ metadata headers are prefixed with `redbIbmMq.`:
 
 ## Telemetry
 
-W3C distributed tracing is automatically propagated via MQRFH2 user properties (`traceparent`, `tracestate`). OpenTelemetry tags:
+On the `redb.Route` activity source (`AddSource("redb.Route")`). The W3C context travels in the MQRFH2 user properties
+`traceparent`, `tracestate` and `baggage` (not with `targetClient=Mq`, which sends no properties).
 
-- `messaging.system` = `ibmmq`
-- `messaging.operation` = `receive` / `publish`
-- `messaging.destination.name` = queue/topic name
-- `messaging.ibmmq.queue_manager` = QM name
-- `messaging.message.id` = MQMD MsgId
+- **Consumer**, poll and listener alike. One `Consumer` span per message, `{destination} receive`, over the whole unit
+  of work. Its parent is the sender's `traceparent`; without one — a message with no properties included — it is a
+  root, never a child of the activity the receive loop inherited from whoever started the routes. The sender's baggage
+  is back on it, the route's spans are its children, and a failed route marks it an error.
+- **Producer.** One `Producer` span per send, `{destination} publish`; an error when the send fails. The message
+  carries the context of this span.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span. A context that came in still goes out.
+
+Tags: `messaging.system` = `wmq`, `messaging.operation` = `receive` / `publish`, `messaging.destination.name`,
+`messaging.ibmmq.queue_manager`, `messaging.message.id` (MQMD MsgId, poll path), `redb.route.endpoint`.
 
 ## Docker (Dev/Test)
 

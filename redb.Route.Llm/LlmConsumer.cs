@@ -9,6 +9,7 @@ using redb.Route.Llm.Engine.Storage;
 using redb.Route.Llm.Providers;
 using redb.Route.Llm.Telemetry;
 using redb.Route.Llm.Tools;
+using redb.Route.Telemetry;
 
 namespace redb.Route.Llm;
 
@@ -102,9 +103,15 @@ public sealed class LlmConsumer : IConsumer
             }
             catch (OperationCanceledException) { return; }
 
+            // A tick has no sender: its span is a root, never a child of the activity that started the routes. The
+            // model call and the route run under it.
+            using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+                (_endpoint.Component as ComponentBase)?.Context,
+                $"llm {_endpoint.ConnectionFactoryName} receive", ActivityKind.Consumer, "messaging.system", "llm",
+                _endpoint.Uri.NormalizedKey, null, static (_, _) => null, operation: "receive");
             try
             {
-                await FireOnceAsync(ct).ConfigureAwait(false);
+                await FireOnceAsync(span.Activity, ct).ConfigureAwait(false);
             }
             // Only real shutdown stops the loop. An HttpClient timeout also throws OperationCanceledException
             // (TaskCanceledException) but on a different token — that must fall through to the transient catch,
@@ -117,22 +124,22 @@ public sealed class LlmConsumer : IConsumer
                 // exchange reached the pipeline (factory/engine/prompt resolution, the LLM call).
                 if (!_tickFailedInPipeline)
                     _endpoint.RecordError();
-                Activity.Current?.AddTag("llm.consumer.error", ex.GetType().Name);
+                span.Activity.RecordFailure(ex);
                 // Continue — one failed tick must not kill the consumer.
             }
         }
     }
 
-    private Task FireOnceAsync(CancellationToken ct)
+    private Task FireOnceAsync(Activity? span, CancellationToken ct)
     {
         // No RecordMessageOut / RecordProcessingTime: the pipeline leg is wrapped by the core's
         // StatisticsProcessor (MessagesIn, Errors, time), and MessagesOut is a producer-side
         // counter a scheduler tick never is - self-recording doubled both (ownership audit).
         _tickFailedInPipeline = false;
-        return FireOnceCoreAsync(ct);
+        return FireOnceCoreAsync(span, ct);
     }
 
-    private async Task FireOnceCoreAsync(CancellationToken ct)
+    private async Task FireOnceCoreAsync(Activity? span, CancellationToken ct)
     {
         var ctx = (_endpoint.Component as ComponentBase)?.Context;
         var factory = _endpoint.ResolvedFactory
@@ -220,6 +227,11 @@ public sealed class LlmConsumer : IConsumer
                 _tickFailedInPipeline = true;
                 throw;
             }
+
+            // A failed route need not throw: the failure stays on the exchange. Our own stop is not a failure.
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+                && (failure is not OperationCanceledException || !ct.IsCancellationRequested))
+                span.RecordFailure(failure);
         }
         finally
         {

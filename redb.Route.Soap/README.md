@@ -313,8 +313,22 @@ you on (camel-cxf `?wsdl` parity). Without a WSDL, GET is not an allowed method 
 
 ## Telemetry & statistics
 
-Like every redb.Route connector: a `Client` span on the producer and a `Server` span on the consumer
-(`rpc.system = soap`, with the operation/action), and `IEndpointStatistics` counters
+Spans on the `redb.Route` activity source (`AddSource("redb.Route")`), both with `rpc.system = soap` and
+`redb.route.endpoint`:
+
+- **Consumer.** One `Server` span per request, `soap receive`, over the whole request, the ones refused before the
+  envelope is read included. Its parent is the host's ASP.NET Core span when the application instruments ASP.NET Core,
+  otherwise the caller's `traceparent`; without one it is a root. The caller's baggage is back on it, and the route's
+  spans are its children. As a 5xx against a 4xx: a Receiver/Server fault, thrown or declared on the reply, and any
+  other failure of the route mark it an error, a cancellation included unless the caller went away; a malformed request
+  or a Sender/Client fault is an answer to the caller and does not.
+  Only a `Client` (SOAP 1.1) or `Sender` (SOAP 1.2) code counts as the caller's: any other code, `wst:FailedAuthentication`
+  included, marks the span; in SOAP 1.2 a caller fault is `Sender` with a subcode.
+- **Producer.** One `Client` span per call, `soap {action}`, with `rpc.method` = the action; an error for a failed call
+  or a `soap:Fault` reply. The request carries the context of this span.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span.
+
+And `IEndpointStatistics` counters
 (`MessagesIn/Out`, `Errors`, bytes). `[Sensitive]` fields (the UsernameToken password) are redacted in logs
 and the TSAK dashboard, and endpoint URIs are sanitized.
 

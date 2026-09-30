@@ -28,7 +28,11 @@ public interface IMessage
     /// <summary>Gets a header value with type conversion.</summary>
     /// <typeparam name="T">Target type for the header value.</typeparam>
     /// <param name="key">Header key.</param>
-    /// <returns>Converted value or default if not found.</returns>
+    /// <returns>
+    /// The converted value; default when the header is missing or has no conversion to <typeparamref name="T"/>
+    /// (as Camel's <c>getHeader(name, type)</c>).
+    /// </returns>
+    /// <exception cref="FormatException">The value cannot be parsed as <typeparamref name="T"/>.</exception>
     T? GetHeader<T>(string key);
 
     /// <summary>

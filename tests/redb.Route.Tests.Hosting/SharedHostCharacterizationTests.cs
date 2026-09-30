@@ -26,14 +26,7 @@ public sealed class SharedHostCharacterizationTests : IAsyncLifetime
         await _manager.DisposeAsync();
     }
 
-    private static int GetFreePort()
-    {
-        using var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     // ── Multiplexing: the whole point of the shared host ──
 

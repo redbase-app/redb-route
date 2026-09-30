@@ -262,4 +262,48 @@ public class XmlContainerAndLoadingTests : IAsyncDisposable
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // ── in / not in in markup conditions ─────────────────────────────
+
+    [Fact]
+    public async Task InAndNotIn_WorkInMarkupConditions_WithALiteralAndAMessageList()
+    {
+        _context.AddXmlRoutesFromContent("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="in-markup">
+                <from uri="direct://in-markup"/>
+                <choice>
+                  <when expr="header.region in ('eu', 'uk')">
+                    <setHeader name="zone" value="europe"/>
+                  </when>
+                  <otherwise>
+                    <setHeader name="zone" value="other"/>
+                  </otherwise>
+                </choice>
+                <filter expr="header.status not in property.closedStatuses">
+                  <setHeader name="open" value="yes"/>
+                </filter>
+              </route>
+            </routes>
+            """);
+        var producer = await StartAndProducer("direct://in-markup");
+
+        async Task<IExchange> Send(string region, string status)
+        {
+            var exchange = new Exchange(new Message("x"));
+            exchange.In.Headers["region"] = region;
+            exchange.In.Headers["status"] = status;
+            exchange.Properties["closedStatuses"] = new[] { "closed", "void" };
+            await producer.Process(exchange);
+            return exchange;
+        }
+
+        var eu = await Send("uk", "open");
+        var us = await Send("us", "closed");
+
+        eu.In.Headers["zone"].Should().Be("europe");
+        eu.In.Headers["open"].Should().Be("yes");
+        us.In.Headers["zone"].Should().Be("other");
+        us.In.Headers.ContainsKey("open").Should().BeFalse("closed is in the closed list");
+    }
 }

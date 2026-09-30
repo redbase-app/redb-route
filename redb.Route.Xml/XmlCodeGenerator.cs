@@ -101,29 +101,43 @@ public static class XmlCodeGenerator
     private static void PrintBean(XElement bean, XmlCodeWriter writer)
     {
         var name = bean.Attribute("name")?.Value ?? "";
+        var problems = new List<string>();
+        var declaration = BeanModel.Parse(bean, (at, message) =>
+            problems.Add(at is System.Xml.IXmlLineInfo line && line.HasLineInfo() ? $"({line.LineNumber},{line.LinePosition}): {message}" : message));
+        if (declaration is null)
+            throw new InvalidOperationException($"bean '{name}': {string.Join("; ", problems)}");
         writer.MapTo(bean);
-        writer.Line($"Context!.AddToRegistry({XmlCodeWriter.Str(name)}, {BeanExpression(bean)});");
+        writer.Line($"Context!.AddToRegistry({XmlCodeWriter.Str(name)}, {BeanExpression(declaration)});");
     }
 
-    /// <summary>A bean as a <c>XmlBeans.Create(...)</c> expression; nested anonymous beans recurse.</summary>
-    private static string BeanExpression(XElement bean)
+    /// <summary>
+    /// A bean as a <c>XmlBeans.Create(...)</c> expression. Registrations print in document order,
+    /// so an <c>XmlBeans.Ref</c> finds what the XML section would have found at the same point.
+    /// </summary>
+    private static string BeanExpression(BeanDeclaration bean)
     {
         var args = new StringBuilder();
-        args.Append("XmlBeans.Create(Context!, ").Append(XmlCodeWriter.Str(bean.Attribute("type")?.Value ?? ""));
-        var ctorArgs = bean.Elements().Where(e => e.Name.LocalName == "constructorArg")
-            .Select(a => a.Elements().FirstOrDefault(c => c.Name.LocalName == "bean") is { } nested
-                ? BeanExpression(nested)
-                : XmlCodeWriter.Str(a.Attribute("value")?.Value ?? ""));
-        args.Append(", [").Append(string.Join(", ", ctorArgs)).Append(']');
-        var properties = bean.Elements().Where(e => e.Name.LocalName == "property")
-            .Select(p => p.Elements().FirstOrDefault(c => c.Name.LocalName == "bean") is { } nestedValue
-                ? $"({XmlCodeWriter.Str(p.Attribute("key")?.Value ?? "")}, {BeanExpression(nestedValue)})"
-                : $"({XmlCodeWriter.Str(p.Attribute("key")?.Value ?? "")}, {XmlCodeWriter.Str(p.Attribute("value")?.Value ?? "")})");
+        args.Append("XmlBeans.Create(Context!, ").Append(XmlCodeWriter.Str(bean.TypeName));
+        args.Append(", [").Append(string.Join(", ", bean.ConstructorArgs.Select(a => ValueExpression(a.Value)))).Append(']');
+        var properties = bean.Properties.Select(p => $"({XmlCodeWriter.Str(p.Key)}, {ValueExpression(p.Value)})");
         args.Append(", [").Append(string.Join(", ", properties)).Append(']');
-        if (bean.Attribute("factoryMethod")?.Value is { Length: > 0 } factoryMethod)
-            args.Append(", ").Append(XmlCodeWriter.Str(factoryMethod));
+        if (bean.FactoryMethod is not null)
+            args.Append(", ").Append(XmlCodeWriter.Str(bean.FactoryMethod));
+        if (bean.TypedArguments)
+            args.Append(", argumentTypes: [").Append(string.Join(", ", bean.ConstructorArgs.Select(a => XmlCodeWriter.Str(a.TypeName!)))).Append(']');
         return args.Append(')').ToString();
     }
+
+    private static string ValueExpression(BeanValue value) => value switch
+    {
+        ScalarBeanValue scalar => XmlCodeWriter.Str(scalar.Text),
+        RefBeanValue reference => $"XmlBeans.Ref(Context!, {XmlCodeWriter.Str(reference.Bean)})",
+        NestedBeanValue nested => BeanExpression(nested.Bean),
+        ListBeanValue list =>
+            $"XmlBeans.List(Context!, {(list.ElementTypeName is null ? "null" : XmlCodeWriter.Str(list.ElementTypeName))}, " +
+            $"[{string.Join(", ", list.Items.Select(ValueExpression))}])",
+        _ => throw new InvalidOperationException($"unhandled bean value {value.GetType().Name}."),
+    };
 
     private static void PrintContainerHandler(XElement handler, XmlCodeWriter writer)
     {
@@ -221,68 +235,69 @@ public static class XmlCodeGenerator
 /// <summary>
 /// The runtime half of generated bean registrations: builds an instance the same way the
 /// <c>&lt;bean&gt;</c> section does — the registered <c>IBeanTypeResolver</c> decides what the
-/// type name means, constructor args and property values bind through the shared converter.
+/// type name means, and every value binds through the same factory as the XML section.
 /// </summary>
 public static class XmlBeans
 {
     /// <summary>
-    /// Creates a bean instance for a generated registration. A property value is either a string,
-    /// converted to the property type the way a URI option is, or an object built by a nested
-    /// anonymous bean and assigned as it is. <paramref name="factoryMethod"/> names a public static
-    /// creator to call instead of a constructor, with the constructor arguments as its parameters.
+    /// Creates a bean instance for a generated registration. A value is a string (placeholders
+    /// resolved, then converted to the target type the way a URI option is), an object built by a
+    /// nested bean or taken by <see cref="Ref"/> (assigned as it is), or a <see cref="List"/>
+    /// (built into the target's collection shape). <paramref name="factoryMethod"/> names a public
+    /// static creator to call instead of a constructor, with the constructor arguments as its parameters.
+    /// <paramref name="argumentTypes"/> — <c>&lt;constructorArg type=…&gt;</c> — names the parameter types:
+    /// the constructor or factory method is then the one with exactly that signature.
     /// </summary>
     public static object Create(
         IRouteContext context,
         string typeName,
         object?[] constructorArgs,
         (string Key, object? Value)[] properties,
-        string? factoryMethod = null)
+        string? factoryMethod = null,
+        string[]? argumentTypes = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         var resolver = context.GetService<IBeanTypeResolver>() ?? DefaultBeanTypeResolver.Instance;
         var type = resolver.Resolve(typeName)
             ?? throw new InvalidOperationException($"bean type '{typeName}' was not found in the loaded assemblies.");
-        var provider = context.GetServiceProvider();
-        object instance;
-        if (!string.IsNullOrEmpty(factoryMethod))
-        {
-            var method = type.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
-                .FirstOrDefault(m => m.Name == factoryMethod && m.GetParameters().Length == constructorArgs.Length)
-                ?? throw new InvalidOperationException(
-                    $"type '{type.FullName}' has no public static method '{factoryMethod}' taking {constructorArgs.Length} argument(s).");
-            var parameters = method.GetParameters();
-            var bound = new object?[parameters.Length];
-            for (var i = 0; i < parameters.Length; i++)
-                bound[i] = constructorArgs[i] is string text && parameters[i].ParameterType != typeof(string)
-                    ? OptionValueConverter.Convert(text, parameters[i].ParameterType)
-                    : constructorArgs[i];
-            instance = method.Invoke(null, bound)
-                ?? throw new InvalidOperationException($"'{type.FullName}.{factoryMethod}' returned null.");
-        }
-        else
-        {
-            instance = constructorArgs.Length > 0
-                ? ActivatorUtilities.CreateInstance(provider ?? EmptyProvider.Instance, type, constructorArgs!)
-                : ActivatorUtilities.CreateInstance(provider ?? EmptyProvider.Instance, type);
-        }
+        var parameterTypes = argumentTypes?.Select(name => resolver.Resolve(name)
+            ?? throw new InvalidOperationException($"constructor argument type '{name}' was not found in the loaded assemblies.")).ToList();
+        Func<string, string> resolve = context is RouteContext live ? live.ResolvePlaceholders : text => text;
+        var instance = BeanFactory.Instantiate(
+            type, constructorArgs, parameterTypes, factoryMethod, context.GetServiceProvider() ?? EmptyProvider.Instance, resolve);
         foreach (var (key, value) in properties)
-        {
-            var property = type.GetProperty(key)
-                ?? throw new InvalidOperationException($"type '{type.FullName}' has no property '{key}'.");
-            if (value is not string text)
-            {
-                if (value is not null && !property.PropertyType.IsInstanceOfType(value))
-                    throw new InvalidOperationException(
-                        $"'{value.GetType().FullName}' is not assignable to {property.PropertyType.Name} for '{key}'.");
-                property.SetValue(instance, value);
-                continue;
-            }
-            var resolved = context is RouteContext live ? live.ResolvePlaceholders(text) : text;
-            var converted = OptionValueConverter.Convert(resolved, property.PropertyType)
-                ?? throw new InvalidOperationException($"'{resolved}' is not convertible to {property.PropertyType.Name} for '{key}'.");
-            property.SetValue(instance, converted);
-        }
+            BeanFactory.Assign(instance, key, value, resolve);
         return instance;
+    }
+
+    /// <summary>
+    /// A registered bean for a <c>ref</c>: it must already be in the registry — generated
+    /// registrations run in document order, exactly as the XML section builds them.
+    /// </summary>
+    public static object Ref(IRouteContext context, string name)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return context.GetFromRegistry<object>(name)
+            ?? throw new InvalidOperationException(
+                $"bean reference '{name}' names nothing registered so far — declare it before the bean that refers to it.");
+    }
+
+    /// <summary>
+    /// A <c>&lt;list&gt;</c> for <see cref="Create"/>: the items as raw values, the element type
+    /// named by <c>of=</c> (null when the target property or parameter supplies it).
+    /// </summary>
+    public static object List(IRouteContext context, string? elementType, object?[] items)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(items);
+        Type? type = null;
+        if (elementType is not null)
+        {
+            var resolver = context.GetService<IBeanTypeResolver>() ?? DefaultBeanTypeResolver.Instance;
+            type = resolver.Resolve(elementType)
+                ?? throw new InvalidOperationException($"list element type '{elementType}' was not found in the loaded assemblies.");
+        }
+        return new BeanListValue(type, items);
     }
 
     private sealed class EmptyProvider : IServiceProvider

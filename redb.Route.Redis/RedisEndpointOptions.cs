@@ -113,11 +113,12 @@ public sealed class RedisEndpointOptions : EndpointOptions
     public int StreamBlockTimeMs { get; set; } = 1000;
 
     /// <summary>
-    /// A group consumer reads with NOACK: an entry counts as delivered when it is read and never enters the group's
-    /// pending list, so an entry whose route failed is not read again (at-most-once). Default <c>false</c>: the consumer
-    /// acknowledges (XACK) an entry after its route succeeded, and a failed one stays pending (at-least-once).
+    /// When a stream entry read through a consumer group is settled (<see cref="Core.AckMode"/>). <c>Manual</c>
+    /// (default): acknowledged (XACK) after its route succeeded; a failed one stays pending (at-least-once).
+    /// <c>Auto</c>: read with NOACK, it counts as delivered when it is read and never enters the group's pending list,
+    /// so an entry whose route failed is not read again (at-most-once).
     /// </summary>
-    public bool StreamNoAck { get; set; }
+    public AckMode AckMode { get; set; } = AckMode.Manual;
 
     /// <summary>
     /// Where a stream consumer starts. Unset: at the entries added from now on — for a group, the group is created at the
@@ -130,7 +131,7 @@ public sealed class RedisEndpointOptions : EndpointOptions
     /// A group consumer claims (XAUTOCLAIM) entries of its group that have stayed pending for at least this many
     /// milliseconds — a failed entry of its own, or one a consumer that died left behind — and processes them again.
     /// Unset: pending entries are not claimed. Must exceed the longest time a route takes: a slower one would have its
-    /// entry claimed while it still works on it. Not with <see cref="StreamNoAck"/>, which leaves nothing pending.
+    /// entry claimed while it still works on it. Not with <c>ackMode=auto</c>, which leaves nothing pending.
     /// </summary>
     public int? StreamClaimMinIdleMs { get; set; }
 
@@ -164,34 +165,21 @@ public sealed class RedisEndpointOptions : EndpointOptions
             throw new ArgumentOutOfRangeException(nameof(StreamReadCount), "StreamReadCount must be > 0.");
         if (StreamClaimMinIdleMs is <= 0)
             throw new ArgumentOutOfRangeException(nameof(StreamClaimMinIdleMs), "StreamClaimMinIdleMs must be > 0.");
-        if (StreamClaimMinIdleMs is not null && StreamNoAck)
+        if (StreamClaimMinIdleMs is not null && AckMode == AckMode.Auto)
             throw new ArgumentException(
-                "'streamClaimMinIdleMs' claims pending entries, and 'streamNoAck=true' leaves none: they contradict each other.");
+                "'streamClaimMinIdleMs' claims pending entries, and 'ackMode=auto' leaves none: they contradict each other.");
         if (ProcessingList is not null && string.IsNullOrWhiteSpace(ProcessingList))
             throw new ArgumentException("'processingList' is empty: name the list, or leave it unset.");
-
-        // The core binder leaves a parameter it cannot place — a name no option has, or a value that does not convert to
-        // the option's type — among the unmapped parameters, where nothing reads it: a typo would drop the option without
-        // a word. Each one is refused, by name only: the value may be a secret.
-        if (UnmappedParameters.Count > 0)
-            throw new ArgumentException(
-                string.Join(" ", UnmappedParameters.Keys.Select(DescribeUnmapped)), UnmappedParameters.Keys.First());
     }
 
-    private static string DescribeUnmapped(string name)
-    {
-        if (name.Equals("streamAutoAck", StringComparison.OrdinalIgnoreCase))
-            return "'streamAutoAck' is gone: 'streamAutoAck=false' read with NOACK while its name promised a manual " +
-                   "acknowledgement. A group consumer acknowledges after its route succeeded; 'streamNoAck=true' reads " +
-                   "with NOACK (at-most-once).";
-
-        var option = Array.Find(
-            typeof(RedisEndpointOptions).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance),
-            p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-        if (option is null)
-            return $"'{name}' is not an option of the Redis endpoint, so it would be dropped without a word.";
-
-        var type = Nullable.GetUnderlyingType(option.PropertyType) ?? option.PropertyType;
-        return $"'{name}': the value is not a {type.Name}, so the option would be dropped without a word.";
-    }
+    /// <inheritdoc />
+    protected override string? UnknownParameterHint(string name)
+        => name.Equals("streamNoAck", StringComparison.OrdinalIgnoreCase)
+            ? "'streamNoAck' is replaced by 'ackMode': ackMode=auto reads with NOACK, as streamNoAck=true did; " +
+              "ackMode=manual (the default) acknowledges after the route."
+            : name.Equals("streamAutoAck", StringComparison.OrdinalIgnoreCase)
+            ? "'streamAutoAck' is gone: 'streamAutoAck=false' read with NOACK while its name promised a manual " +
+              "acknowledgement. A group consumer acknowledges after its route succeeded; 'ackMode=auto' reads " +
+              "with NOACK (at-most-once)."
+            : null;
 }

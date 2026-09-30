@@ -52,6 +52,7 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
         EnsureStarted();
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"{_endpoint.EntityName} send", ActivityKind.Producer,
             "messaging.system", "azureservicebus",
             _endpoint.Uri.NormalizedKey,
@@ -62,7 +63,7 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
         if (defers && _options.BatchCommit)
         {
             // The block's sends through this producer leave as one Service Bus batch when the block commits.
-            var messages = _options.EnableBatch ? BuildBatchMessages(exchange) : [BuildSingle(exchange)];
+            var messages = _options.EnableBatch ? BuildBatchMessages(exchange, activity) : [BuildSingle(exchange, activity)];
             if (_options.EnableBatch)
                 exchange.In.Headers[AzureServiceBusHeaders.BatchMessageCount] = messages.Count;
             TransactedActions.JoinBatch(exchange, _batchKey, () => new AzureServiceBusSendBatch(this), ProducerName)
@@ -72,7 +73,7 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
 
         // The messages are built now, from the exchange as it is at this step; only the send itself waits for the
         // commit when the producer joins the enclosing .Transacted() block.
-        var send = _options.EnableBatch ? PrepareBatch(exchange) : PrepareSingle(exchange);
+        var send = _options.EnableBatch ? PrepareBatch(exchange, activity) : PrepareSingle(exchange, activity);
 
         if (defers)
         {
@@ -84,29 +85,39 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
         // goes out at once must not: it would wait for the block's commit, and next to a database in the same block it
         // would escalate the transaction to a distributed one.
         using (new TransactionScope(TransactionScopeOption.Suppress, TransactionScopeAsyncFlowOption.Enabled))
-            await send(ct).ConfigureAwait(false);
+        {
+            try
+            {
+                await send(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                activity.RecordFailure(ex);
+                throw;
+            }
+        }
     }
 
     // ── Single send ──
 
-    private Func<CancellationToken, Task> PrepareSingle(IExchange exchange)
+    private Func<CancellationToken, Task> PrepareSingle(IExchange exchange, Activity? activity)
     {
-        var msg = BuildSingle(exchange);
+        var msg = BuildSingle(exchange, activity);
         return ct => _sender!.SendMessageAsync(msg, ct);
     }
 
-    private ServiceBusMessage BuildSingle(IExchange exchange)
+    private ServiceBusMessage BuildSingle(IExchange exchange, Activity? activity)
     {
-        var msg = BuildMessage(exchange);
+        var msg = BuildMessage(exchange, activity);
         exchange.In.Headers[AzureServiceBusHeaders.MessageId] = msg.MessageId;
         return msg;
     }
 
     // ── Batch send ──
 
-    private Func<CancellationToken, Task> PrepareBatch(IExchange exchange)
+    private Func<CancellationToken, Task> PrepareBatch(IExchange exchange, Activity? activity)
     {
-        var messages = BuildBatchMessages(exchange);
+        var messages = BuildBatchMessages(exchange, activity);
 
         return async ct =>
         {
@@ -119,7 +130,7 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
     /// One message per item of the collection body. More items than <c>batchMaxMessages</c> fail the step: they used to
     /// be dropped without a word.
     /// </summary>
-    private List<ServiceBusMessage> BuildBatchMessages(IExchange exchange)
+    private List<ServiceBusMessage> BuildBatchMessages(IExchange exchange, Activity? activity)
     {
         var body = exchange.In.Body
             ?? throw new InvalidOperationException("Body is null; batch send requires an IEnumerable body.");
@@ -138,7 +149,7 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
 
             var data = ResolveBodyData(item);
             var msg = new ServiceBusMessage(data);
-            ApplyProperties(msg, exchange);
+            ApplyProperties(msg, exchange, activity);
             msg.MessageId = Guid.NewGuid().ToString(); // unique id per batched message
             messages.Add(msg);
         }
@@ -171,21 +182,22 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
 
     // ── Message building ──
 
-    private ServiceBusMessage BuildMessage(IExchange exchange)
+    private ServiceBusMessage BuildMessage(IExchange exchange, Activity? activity)
     {
         var data = ResolveBodyData(exchange.In.Body
             ?? throw new InvalidOperationException("Body is null; cannot send an empty message."));
 
         var msg = new ServiceBusMessage(data);
-        ApplyProperties(msg, exchange);
+        ApplyProperties(msg, exchange, activity);
         return msg;
     }
 
     /// <summary>
     /// Maps native Service Bus properties and application properties from exchange headers/options.
-    /// Shared by single and batch send so batched messages carry the same metadata.
+    /// Shared by single and batch send so batched messages carry the same metadata, the trace context of
+    /// <paramref name="activity"/> included.
     /// </summary>
-    private void ApplyProperties(ServiceBusMessage msg, IExchange exchange)
+    private void ApplyProperties(ServiceBusMessage msg, IExchange exchange, Activity? activity)
     {
         // Identity
         msg.MessageId = ResolveHeader<string>(exchange, AzureServiceBusHeaders.MessageId)
@@ -235,6 +247,10 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
             if (value is null) continue;
             msg.ApplicationProperties[key] = value;
         }
+
+        // The context of this send, over a Diagnostic-Id the header bridge copied from a received message: that one
+        // names the previous hop.
+        RouteTelemetryExtensions.InjectTraceContext(activity, msg.ApplicationProperties, AzureServiceBusTrace.Write);
     }
 
     private static BinaryData ResolveBodyData(object? body)

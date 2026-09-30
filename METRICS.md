@@ -7,7 +7,12 @@ for one section of it.
 ## The two layers
 
 **Layer 1 — OpenTelemetry export.** One ActivitySource and one Meter, both named `redb.Route`.
-Traces cover consumers, producers and processors; metrics cover the engine and the EIPs:
+Traces cover the routes and the processors, and the transports that open spans: a send span per producer call, and
+an inbound span per message or request — a child of the caller's `traceparent`, or a root when none came — with the
+sender's baggage back on it and `redb.route.endpoint` on every one. Connectors do this through
+`RouteTelemetryExtensions` (`StartConsumerSpan`, `InjectTraceContext`, `RecordFailure`); a connector's README says
+what it traces. `RouteEngineOptions.EnableTelemetry = false` opens none of these spans, the transport spans included, but a context that came in is still passed on to
+the next hop. Metrics cover the engine and the EIPs:
 
 | Instrument | Kind | What it counts |
 |---|---|---|

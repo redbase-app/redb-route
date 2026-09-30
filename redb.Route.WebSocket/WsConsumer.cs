@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
@@ -10,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Http;
+using redb.Route.Telemetry;
 
 namespace redb.Route.WebSocket;
 
@@ -236,6 +238,10 @@ public sealed class WsConsumer : IConsumer
         if (_connectionSemaphore is not null)
             await _connectionSemaphore.WaitAsync(httpContext.RequestAborted).ConfigureAwait(false);
 
+        // The upgrade request is the only place a client can put trace headers; every message span links it.
+        var handshake = RouteTelemetryExtensions.ExtractTraceContext(httpContext.Request.Headers,
+            static (headers, name) => headers.TryGetValue(name, out var values) ? values.ToString() : null);
+
         var connectionId = Guid.NewGuid().ToString("N");
         System.Net.WebSockets.WebSocket ws;
 
@@ -263,7 +269,7 @@ public sealed class WsConsumer : IConsumer
         try
         {
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(httpContext.RequestAborted, _cts?.Token ?? CancellationToken.None);
-            await HandleWebSocket(ws, connectionId, remoteEp, localEp, principal, userId, linkedCts.Token)
+            await HandleWebSocket(ws, connectionId, remoteEp, localEp, principal, userId, handshake, linkedCts.Token)
                 .ConfigureAwait(false);
         }
         finally
@@ -276,8 +282,9 @@ public sealed class WsConsumer : IConsumer
 
     private async Task HandleWebSocket(System.Net.WebSockets.WebSocket ws, string connectionId,
         string remoteEp, string localEp, System.Security.Claims.ClaimsPrincipal? principal, string? userId,
-        CancellationToken ct)
+        ActivityContext handshake, CancellationToken ct)
     {
+        IEnumerable<ActivityLink>? links = handshake == default ? null : [new ActivityLink(handshake)];
         var buffer = new byte[_options.ReceiveBufferSize];
 
         while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
@@ -310,6 +317,14 @@ public sealed class WsConsumer : IConsumer
             // double-counted every frame (the statistics-ownership audit).
             var exchange = BuildExchange(data, msgType, connectionId, remoteEp, localEp, principal, userId);
 
+            // A frame carries no headers: its span is a root linked to the upgrade request, never a child of the
+            // connection's activity, which may live for hours.
+            using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+                (_endpoint.Component as ComponentBase)?.Context,
+                $"ws {_endpoint.ConsumerPath} receive", ActivityKind.Consumer, "messaging.system", "websocket",
+                _endpoint.Uri.NormalizedKey, null, static (_, _) => null,
+                destination: _endpoint.ConsumerPath, operation: "receive", links: links);
+
             _drain.Increment();
             try
             {
@@ -323,6 +338,11 @@ public sealed class WsConsumer : IConsumer
                         remoteEp, msgType);
                     exchange.Exception = ex;
                 }
+
+                // Our own stop is not a failure; any other cancellation, a timeout inside the route, is.
+                if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+                    && (failure is not OperationCanceledException || !_drain.ProcessingToken.IsCancellationRequested))
+                    span.Activity.RecordFailure(failure);
 
                 // InOut: send response frame (use drain-safe token so response completes during drain)
                 if (_options.InOut && exchange.Exception is null && exchange.HasOut && exchange.Out!.Body is not null)

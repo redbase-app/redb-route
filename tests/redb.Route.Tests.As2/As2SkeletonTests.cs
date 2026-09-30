@@ -100,21 +100,21 @@ public class As2SkeletonTests
     [Fact]
     public void Options_Validate_SupportedMatrix_Ok()
     {
-        var act = () => new As2EndpointOptions { SignAlg = "sha-512", EncryptAlg = "3des" }.Validate();
+        var act = () => new As2EndpointOptions { SignAlg = "sha-512", EncryptAlg = "3des", AllowLegacyAlgorithms = true }.Validate();
         act.Should().NotThrow();
     }
 
     // ── Secret redaction ─────────────────────────────────────────────────────
 
     [Fact]
-    public void CertPassword_IsSensitive_RedactedInUri()
+    public void SslCertPassword_IsSensitive_RedactedInUri()
     {
         // Binding harvests [Sensitive] props → registers the key for URI sanitization.
         var o = new As2EndpointOptions();
-        o.BindFromUri(new Dictionary<string, string> { ["certPassword"] = "s3cr3t" });
-        o.CertPassword.Should().Be("s3cr3t");
+        o.BindFromUri(new Dictionary<string, string> { ["sslCertPassword"] = "s3cr3t" });
+        o.SslCertPassword.Should().Be("s3cr3t");
 
-        var masked = EndpointUri.Sanitize("as2s://p/as2?certPassword=s3cr3t");
+        var masked = EndpointUri.Sanitize("as2s://p/as2?sslCertPassword=s3cr3t");
         masked.Should().NotContain("s3cr3t");
         masked.Should().Contain(EndpointUri.Redacted);
     }

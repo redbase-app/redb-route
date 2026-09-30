@@ -83,6 +83,7 @@ public class HttpProducer : ConnectableProducer
         var method = ResolveMethod(exchange);
 
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
             $"HTTP {method.Method}", ActivityKind.Client,
             "http.method", method.Method,
             _endpoint.Uri.NormalizedKey,
@@ -116,17 +117,35 @@ public class HttpProducer : ConnectableProducer
         // Set per-request auth if using dynamic token
         ConfigurePerRequestAuth(request, exchange);
 
+        // The context of this send, over a traceparent the header bridge copied from the incoming request: that one
+        // names the previous hop, and HttpClient does not overwrite a trace header already on the request.
+        RouteTelemetryExtensions.InjectTraceContext(activity, request, static (r, name, value) =>
+        {
+            r.Headers.Remove(name);
+            r.Headers.TryAddWithoutValidation(name, value);
+        });
+
         HttpResponseMessage response;
         try
         {
             // Send request
             response = await _httpClient!.SendAsync(request, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             Logger?.LogError(ex, "HTTP {Method} to {Url} failed. Timeout={Timeout}ms, auth={Auth}",
                 method.Method, EndpointUri.Sanitize(url), _options.Timeout, _options.AuthScheme);
+            activity.RecordFailure(ex);
             throw;
+        }
+
+        if (activity is not null)
+        {
+            if (activity.IsAllDataRequested)
+                activity.SetTag("http.response.status_code", (int)response.StatusCode);
+            // A client span is an error for any 4xx or 5xx: the call did not do what it asked.
+            if ((int)response.StatusCode >= 400)
+                activity.SetStatus(ActivityStatusCode.Error);
         }
 
         // When StreamResponse is enabled, the response stream is set as exchange body.

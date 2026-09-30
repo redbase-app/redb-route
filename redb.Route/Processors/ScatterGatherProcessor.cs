@@ -56,6 +56,8 @@ public sealed class ScatterGatherProcessor : IProcessor, IAsyncDisposable
         if (recipients.Count == 0)
             throw new ArgumentException("At least one recipient is required.", nameof(recipients));
         _staticRecipients = recipients;
+        foreach (var recipient in recipients)
+            (context as RouteContext)?.NoteStaticEndpoint(recipient);
         _dynamicRecipients = null;
         _aggregationStrategy = aggregationStrategy ?? throw new ArgumentNullException(nameof(aggregationStrategy));
         _parallelProcessing = parallelProcessing;

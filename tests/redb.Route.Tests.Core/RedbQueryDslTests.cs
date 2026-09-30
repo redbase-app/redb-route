@@ -35,12 +35,14 @@ public sealed class RedbQueryDslTests
     private readonly IRouteContext _context = Substitute.For<IRouteContext>();
     private readonly IOrderedRedbQueryable<OrderProps> _query = Substitute.For<IOrderedRedbQueryable<OrderProps>>();
     private Expression<Func<OrderProps, bool>>? _captured;
+    private Expression<Func<redb.Core.Models.Contracts.IRedbObject, bool>>? _capturedRedb;
 
     public RedbQueryDslTests()
     {
         _context.GetService<IRedbService>().Returns(_redb);
         _redb.Query<OrderProps>().Returns(_query);
         _query.Where(Arg.Do<Expression<Func<OrderProps, bool>>>(e => _captured = e)).Returns(_query);
+        _query.WhereRedb(Arg.Do<Expression<Func<redb.Core.Models.Contracts.IRedbObject, bool>>>(e => _capturedRedb = e)).Returns(_query);
         _query.OrderBy(Arg.Any<Expression<Func<OrderProps, int>>>()).Returns(_query);
         _query.OrderByDescending(Arg.Any<Expression<Func<OrderProps, int>>>()).Returns(_query);
         _query.Skip(Arg.Any<int>()).Returns(_query);
@@ -234,5 +236,199 @@ public sealed class RedbQueryDslTests
 
         exchange.In.Body.Should().Be("kept");
         exchange.In.Headers["orders"].Should().BeSameAs(stored);
+    }
+
+    // ── whereRedb / orderByRedb: the base fields of the stored object ─
+
+    private async Task<Expression<Func<redb.Core.Models.Contracts.IRedbObject, bool>>> BasePredicateFor(string whereRedb,
+        params (string Key, object? Value)[] headers)
+    {
+        var route = NewRoute();
+        route.RedbQuery(typeof(OrderProps), whereRedb: whereRedb);
+        var exchange = new Exchange();
+        foreach (var (key, value) in headers)
+            exchange.In.Headers[key] = value;
+        await route.Outputs[0].CreateProcessor(_context).Process(exchange, CancellationToken.None);
+        _capturedRedb.Should().NotBeNull("whereRedb goes to WhereRedb, not to Where");
+        _captured.Should().BeNull();
+        // The core's own parser must accept what the markup produced — the provider runs it next.
+        var parse = () => new redb.Core.Query.Parsing.FilterExpressionParser().ParseRedbFilter(_capturedRedb!);
+        parse.Should().NotThrow();
+        return _capturedRedb!;
+    }
+
+    [Fact]
+    public async Task WhereRedb_ValueGuidFromAHeader()
+    {
+        var key = Guid.NewGuid();
+        var predicate = (await BasePredicateFor("ValueGuid == header.key", ("key", key.ToString()))).Compile();
+
+        predicate(new RedbObject<OrderProps> { ValueGuid = key }).Should().BeTrue();
+        predicate(new RedbObject<OrderProps> { ValueGuid = Guid.NewGuid() }).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WhereRedb_IdParentIdAndValueString_Combine()
+    {
+        var predicate = (await BasePredicateFor("ParentId == 7 AND ValueString == 'A-1' AND Id > 100")).Compile();
+
+        predicate(new RedbObject<OrderProps> { ParentId = 7, ValueString = "A-1", Id = 101 }).Should().BeTrue();
+        predicate(new RedbObject<OrderProps> { ParentId = 7, ValueString = "A-1", Id = 100 }).Should().BeFalse();
+        predicate(new RedbObject<OrderProps> { ParentId = 8, ValueString = "A-1", Id = 101 }).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WhereRedb_NullParent_AndStartsWithOnName()
+    {
+        var predicate = (await BasePredicateFor("ParentId == null AND startsWith(Name, 'INC-')")).Compile();
+
+        predicate(new RedbObject<OrderProps> { Name = "INC-1" }).Should().BeTrue();
+        predicate(new RedbObject<OrderProps> { Name = "INC-1", ParentId = 3 }).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WhereRedb_DateCreate_TakesATextDate()
+    {
+        var predicate = (await BasePredicateFor("DateCreate >= header.since", ("since", "2026-09-01T00:00:00+00:00"))).Compile();
+
+        predicate(new RedbObject<OrderProps> { DateCreate = new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero) }).Should().BeTrue();
+        predicate(new RedbObject<OrderProps> { DateCreate = new DateTimeOffset(2026, 8, 31, 0, 0, 0, TimeSpan.Zero) }).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WhereAndWhereRedb_BothReachTheQueryable()
+    {
+        var route = NewRoute();
+        route.RedbQuery(typeof(OrderProps), where: "Status == 'open'", whereRedb: "ValueLong == 5");
+
+        await route.Outputs[0].CreateProcessor(_context).Process(new Exchange(), CancellationToken.None);
+
+        _captured.Should().NotBeNull();
+        _capturedRedb.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void WhereRedb_APropsName_RefusesNamingTheBaseFields()
+    {
+        var act = () => NewRoute().RedbQuery(typeof(OrderProps), whereRedb: "Status == 'open'");
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("whereRedb 'Status == 'open'': 'Status' is neither a base field*")
+            .WithMessage("*ValueGuid*", "the base-field list helps fix it");
+    }
+
+    [Fact]
+    public void WhereRedb_AComputedMemberOfIRedbObject_IsNotABaseField()
+    {
+        // HasParent is on IRedbObject but has no column; the core would map it to _id silently.
+        var act = () => NewRoute().RedbQuery(typeof(OrderProps), whereRedb: "HasParent == true");
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*'HasParent' is neither a base field*");
+    }
+
+    [Fact]
+    public void WhereRedb_ValueBytes_IsRefused()
+    {
+        var act = () => NewRoute().RedbQuery(typeof(OrderProps), whereRedb: "ValueBytes == null");
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*'ValueBytes' is neither a base field*");
+    }
+
+    [Fact]
+    public void WhereRedb_ANestedPath_Refuses()
+    {
+        var act = () => NewRoute().RedbQuery(typeof(OrderProps), whereRedb: "Name.Length == 3");
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*base fields are flat*");
+    }
+
+    [Fact]
+    public async Task OrderByRedb_ReachesOrderByDescendingRedb_WithTheFieldType()
+    {
+        _query.OrderByDescendingRedb(Arg.Any<Expression<Func<redb.Core.Models.Contracts.IRedbObject, DateTimeOffset>>>()).Returns(_query);
+        var route = NewRoute();
+        route.RedbQuery(typeof(OrderProps), whereRedb: "ParentId == 1", orderByRedb: "DateCreate", descending: true);
+
+        await route.Outputs[0].CreateProcessor(_context).Process(new Exchange(), CancellationToken.None);
+
+        _query.Received(1).OrderByDescendingRedb(
+            Arg.Is<Expression<Func<redb.Core.Models.Contracts.IRedbObject, DateTimeOffset>>>(e =>
+                new redb.Core.Query.OrderingExpressionParser().ParseRedbOrdering(e, redb.Core.Query.QueryExpressions.SortDirection.Descending) != null));
+    }
+
+    [Fact]
+    public void OrderByAndOrderByRedb_Together_Refuse()
+    {
+        var act = () => NewRoute().RedbQuery(typeof(OrderProps), orderBy: "Total", orderByRedb: "Id");
+
+        act.Should().Throw<ArgumentException>().WithMessage("*orders by one key*");
+    }
+
+    [Fact]
+    public void OrderByRedb_AnUnknownField_Refuses()
+    {
+        var act = () => NewRoute().RedbQuery(typeof(OrderProps), orderByRedb: "Total");
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*not a base field path of IRedbObject*");
+    }
+
+    // ── outputType: the terminal operation ───────────────────────────
+
+    private async Task<Exchange> RunOutput(RedbQueryOutput output, string? whereRedb = "Id > 0")
+    {
+        var route = NewRoute();
+        route.RedbQuery(typeof(OrderProps), whereRedb: whereRedb, outputType: output);
+        var exchange = new Exchange();
+        await route.Outputs[0].CreateProcessor(_context).Process(exchange, CancellationToken.None);
+        return exchange;
+    }
+
+    [Fact]
+    public async Task OutputFirst_IsFirstOrDefault_AndLandsTheObjectOrNull()
+    {
+        var found = new RedbObject<OrderProps>();
+        _query.FirstOrDefaultAsync().Returns(found, (RedbObject<OrderProps>?)null);
+
+        (await RunOutput(RedbQueryOutput.First)).In.Body.Should().BeSameAs(found);
+        (await RunOutput(RedbQueryOutput.First)).In.Body.Should().BeNull("nothing matched is null, the markup decides");
+        await _query.DidNotReceive().ToListAsync();
+    }
+
+    [Fact]
+    public async Task OutputCountAndAny_AreCountAsyncAndAnyAsync()
+    {
+        _query.CountAsync().Returns(3);
+        _query.AnyAsync().Returns(true);
+
+        (await RunOutput(RedbQueryOutput.Count)).In.Body.Should().Be(3);
+        (await RunOutput(RedbQueryOutput.Any)).In.Body.Should().Be(true);
+        await _query.DidNotReceive().ToListAsync();
+    }
+
+    [Fact]
+    public async Task OutputCount_WithoutACondition_IsNoUnboundedScan()
+    {
+        // The guard is about pulling every row into memory; a count reads one number.
+        _query.CountAsync().Returns(7);
+
+        (await RunOutput(RedbQueryOutput.Count, whereRedb: null)).In.Body.Should().Be(7);
+    }
+
+    [Fact]
+    public void OutputFirst_WithTake_Refuses()
+    {
+        var act = () => NewRoute().RedbQuery(typeof(OrderProps), whereRedb: "Id > 0", take: 1,
+            outputType: RedbQueryOutput.First);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*First reads one object*take does not apply*");
+    }
+
+    [Fact]
+    public void OutputCount_WithOrdering_Refuses()
+    {
+        var act = () => NewRoute().RedbQuery(typeof(OrderProps), whereRedb: "Id > 0", orderByRedb: "Id",
+            outputType: RedbQueryOutput.Count);
+
+        act.Should().Throw<ArgumentException>().WithMessage("*Count answers for all the matches*");
     }
 }

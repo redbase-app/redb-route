@@ -1332,10 +1332,73 @@ public static partial class ExpressionResolver
 
                 return SysExpression.Condition(conditionBool, ifTrueExpr, ifFalseExpr);
 
+            case ListLiteralNode listNode:
+            {
+                var items = listNode.Items
+                    .Select(item =>
+                    {
+                        var compiled = CompileAstNode(item, exchangeParam);
+                        return compiled.Type == typeof(object) ? compiled : SysExpression.Convert(compiled, typeof(object));
+                    })
+                    .ToArray();
+                return SysExpression.NewArrayInit(typeof(object), items);
+            }
+
+            case InOperationNode inNode:
+            {
+                var valueExpr = CompileAstNode(inNode.Value, exchangeParam);
+                var listExpr = CompileAstNode(inNode.List, exchangeParam);
+                if (valueExpr.Type != typeof(object)) valueExpr = SysExpression.Convert(valueExpr, typeof(object));
+                if (listExpr.Type != typeof(object)) listExpr = SysExpression.Convert(listExpr, typeof(object));
+
+                var inMethod = typeof(ExpressionResolver).GetMethod(nameof(Ast_In), BindingFlags.Public | BindingFlags.Static)!;
+                return SysExpression.Convert(
+                    SysExpression.Call(inMethod, valueExpr, listExpr,
+                        SysExpression.Constant(inNode.Negated), SysExpression.Constant(inNode.ToString())),
+                    typeof(object));
+            }
+
             default:
                 throw new ExpressionCompilationException(
                     $"Unsupported AST node type: {node.GetType().Name}");
         }
+    }
+
+    /// <summary>
+    /// <c>value in list</c> / <c>value not in list</c>, shared by the interpreted and the compiled
+    /// path so the two can never disagree. Elements compare with <see cref="Ast_AreEqual"/> — the
+    /// equality <c>==</c> uses. A null list is empty (nothing is a member of it), a string is refused
+    /// rather than split into characters, anything else that is not a collection is refused.
+    /// </summary>
+    /// <param name="value">The value tested for membership.</param>
+    /// <param name="list">The collection, or null.</param>
+    /// <param name="negated">True for <c>not in</c>.</param>
+    /// <param name="display">The expression as written, for the error message.</param>
+    public static bool Ast_In(object? value, object? list, bool negated, string display)
+    {
+        bool found;
+        switch (list)
+        {
+            case null:
+                found = false;
+                break;
+            case string:
+                throw new InvalidOperationException(
+                    $"'{display}': the right side of in is a string, and a string is not split into a list. " +
+                    "Reference a collection the message carries (header.codes) or write a list literal ('a','b').");
+            case System.Collections.IEnumerable items:
+                found = false;
+                foreach (var item in items)
+                {
+                    if (Ast_AreEqual(value, item)) { found = true; break; }
+                }
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"'{display}': the right side of in is a {list.GetType().Name}, not a collection. " +
+                    "Reference a collection the message carries (header.codes) or write a list literal ('a','b').");
+        }
+        return negated ? !found : found;
     }
     
     /// <summary>

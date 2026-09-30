@@ -270,6 +270,7 @@ public class HttpEndpoint : EndpointBase<HttpEndpointOptions>
     /// <inheritdoc />
     public override IProducer CreateProducer()
     {
+        RefuseInboundOptionsOnProducer();
         return new HttpProducer(this, Options);
     }
 
@@ -278,7 +279,51 @@ public class HttpEndpoint : EndpointBase<HttpEndpointOptions>
     {
         ArgumentNullException.ThrowIfNull(processor);
 
+        RefuseIgnoredInboundCredentials();
+
         var component = (HttpComponent)Component;
-        return new HttpConsumer(this, processor, Options, component.Server);
+        return new HttpConsumer(this, processor, Options, component.Server)
+        {
+            Authenticator = HttpInboundAuthenticator.Create(Options, component.Context),
+        };
+    }
+
+    /// <summary>
+    /// <c>inboundAuth</c> and its companions say what a CONSUMER requires of its callers; a producer sends a request
+    /// and checks nobody. Written on a <c>to(...)</c> they would look like protection and do nothing. The message names
+    /// the parameters, never their values.
+    /// </summary>
+    private void RefuseInboundOptionsOnProducer()
+    {
+        var written = redb.Route.Core.EndpointOptions.WrittenForOtherRole(Options.GetType(), Uri, EndpointRole.Producer);
+        if (written.Count == 0)
+            return;
+
+        throw new InvalidOperationException(
+            $"http producer '{EndpointUri.Sanitize(Uri.NormalizedKey)}' sets {string.Join(", ", written)}: these options " +
+            "tell a consumer which callers to accept, and a producer checks nobody. For the credentials a producer sends, " +
+            "use authScheme with username/password or authToken.");
+    }
+
+    /// <summary>
+    /// <c>authScheme</c>, <c>username</c> and <c>password</c> are what a PRODUCER sends. They share the
+    /// options class with the consumer, so on a <c>from(...)</c> they used to bind and validate and then
+    /// check nothing: the endpoint looked closed and was open, with the password sitting in the route
+    /// key. Refused until the consumer has an inbound check of its own. Only what this URI wrote counts
+    /// — a named connection factory may carry producer credentials beside the TLS material a consumer
+    /// reuses it for, and that is not a statement about inbound access. The message names the
+    /// parameters and never their values. The consumer's own check is <c>inboundAuth</c>.
+    /// </summary>
+    private void RefuseIgnoredInboundCredentials()
+    {
+        var written = redb.Route.Core.EndpointOptions.WrittenForOtherRole(Options.GetType(), Uri, EndpointRole.Consumer);
+        if (written.Count == 0)
+            return;
+
+        throw new InvalidOperationException(
+            $"http consumer '{EndpointUri.Sanitize(Uri.NormalizedKey)}' sets {string.Join(", ", written)}, but an " +
+            "http: consumer does not check callers with them — these options are what a producer sends. As written the endpoint " +
+            "would accept every caller while looking protected. To check callers, use inboundAuth=basic with " +
+            "inboundUsername/inboundPassword, or inboundAuth=bearer with tokenValidator=#name.");
     }
 }

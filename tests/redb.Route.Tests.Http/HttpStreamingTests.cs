@@ -163,7 +163,9 @@ public class HttpStreamingTests : IAsyncLifetime
             .Split('\n')
             .First(l => l.StartsWith(dataPrefix, StringComparison.Ordinal));
         using var json = JsonDocument.Parse(dataLine[dataPrefix.Length..]);
-        json.RootElement.GetProperty("llm.tokens.out").GetString().Should().Be("3");
+        // A count is a JSON number, as the Llm documentation shows it — this used to assert the
+        // string "3", which pinned the defect rather than the contract.
+        json.RootElement.GetProperty("llm.tokens.out").GetInt32().Should().Be(3);
         json.RootElement.GetProperty("llm.stop_reason").GetString().Should().Be("EndTurn");
     }
 
@@ -284,12 +286,5 @@ public class HttpStreamingTests : IAsyncLifetime
             "server-side enumerator should observe client cancellation");
     }
 
-    private static int GetFreePort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    private static int GetFreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 }

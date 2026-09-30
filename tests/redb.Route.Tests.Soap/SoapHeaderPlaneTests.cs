@@ -11,14 +11,7 @@ namespace redb.Route.Tests.Soap;
 /// <summary>Ф3: the two header planes — envelope <c>&lt;soap:Header&gt;</c> vs transport — round-trip.</summary>
 public class SoapHeaderPlaneTests
 {
-    private static int FreePort()
-    {
-        var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int FreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     [Fact]
     public async Task EnvelopeHeader_And_Operation_ReachTheRoute()

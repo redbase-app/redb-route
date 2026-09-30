@@ -545,7 +545,6 @@ public sealed class SftpEndpointOptionsTests
             ["noop"] = "true",
             ["idempotent"] = "true",
             ["doneFileName"] = "${file:name}.done",
-            ["stepWise"] = "false",
             ["sendEmptyMessageWhenIdle"] = "true"
         });
 

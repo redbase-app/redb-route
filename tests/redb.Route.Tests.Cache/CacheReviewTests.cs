@@ -46,6 +46,17 @@ public class CacheReviewTests
         act.Should().Throw<FormatException>();
     }
 
+    [Theory]
+    [InlineData("9999999999d")]
+    [InlineData("1e400ms")]
+    [InlineData("NaNs")]
+    [InlineData("Infinityh")]
+    public void Duration_OutOfRange_IsAFormatError(string text)
+    {
+        var act = () => CacheDuration.Parse(text);
+        act.Should().Throw<FormatException>("an unusable number is a format error like any other typo, not an overflow out of TimeSpan");
+    }
+
     [Fact]
     public async Task Hit_RestoresOut_WhenTheMissProducedOut()
     {

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Llm.Providers;
+using redb.Route.Core;
 
 namespace redb.Route.Llm;
 
@@ -38,6 +39,7 @@ public sealed class LlmConnectionFactory
     public string? ModelContractTier { get; set; }
 
     /// <summary>API key. Prefer <see cref="ApiKeySecretRef"/> for production deployments.</summary>
+    [Sensitive]
     public string? ApiKey { get; set; }
 
     /// <summary>Reference to a secret store entry — resolved at <see cref="Build"/> time.</summary>

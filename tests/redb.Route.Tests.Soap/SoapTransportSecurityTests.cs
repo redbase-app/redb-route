@@ -15,14 +15,7 @@ namespace redb.Route.Tests.Soap;
 /// </summary>
 public class SoapTransportSecurityTests
 {
-    private static int FreePort()
-    {
-        var l = new TcpListener(IPAddress.Loopback, 0);
-        l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
-        l.Stop();
-        return port;
-    }
+    private static int FreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
     [Fact]
     public void Ssl_Listener_Uri_Carries_The_Scheme_And_The_Certificate_Path()

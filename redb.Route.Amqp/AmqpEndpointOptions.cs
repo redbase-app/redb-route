@@ -94,8 +94,19 @@ public sealed class AmqpEndpointOptions : EndpointOptions
     /// <summary>Link credit (prefetch). How many messages the broker can send before ack. (default: 100)</summary>
     public int Credit { get; set; } = 100;
 
-    /// <summary>Auto-accept (settle) messages after processing. (default: true)</summary>
-    public bool AutoAccept { get; set; } = true;
+    /// <summary>
+    /// When a delivery is settled (<see cref="Core.AckMode"/>). <c>Manual</c> (default): accepted after a turn that ended
+    /// well, released for redelivery on failure (at-least-once). <c>Auto</c>: accepted on receipt, before the route runs
+    /// (at-most-once).
+    /// </summary>
+    public AckMode AckMode { get; set; } = AckMode.Manual;
+
+    /// <inheritdoc />
+    protected override string? UnknownParameterHint(string name)
+        => name.Equals("autoAccept", StringComparison.OrdinalIgnoreCase)
+            ? "'autoAccept' is replaced by 'ackMode': ackMode=manual (the default) accepts after the route, as autoAccept=true did; " +
+              "ackMode=auto accepts on receipt. autoAccept=false left every delivery unsettled, with nothing to settle it."
+            : null;
 
     /// <summary>Concurrent consumer workers: a number or "auto" (= max(CPU, 2)). Default 1 (serial, ordering preserved).</summary>
     // A string so "auto" binds verbatim instead of silently degrading to the int default (В-7).
