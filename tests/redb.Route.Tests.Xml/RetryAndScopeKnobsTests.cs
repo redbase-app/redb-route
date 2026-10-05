@@ -1,5 +1,6 @@
 using FluentAssertions;
 using redb.Route.Abstractions;
+using redb.Route.Components;
 using redb.Route.Core;
 using redb.Route.Xml;
 
@@ -357,5 +358,63 @@ public class RetryAndScopeKnobsTests : IAsyncDisposable
             """, "bad-tag.xml");
 
         act.Should().Throw<XmlRouteException>().WithMessage("*bad-tag.xml(5,*fromHeader*expr*");
+    }
+
+    // ── split: stopOnException=false lets the rest of the batch run ──────────
+
+    [Fact]
+    public async Task Split_StopOnExceptionFalse_ProcessesTheRestAfterAFailure()
+    {
+        Load("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="knob-split">
+                <from uri="direct://knob-split-in"/>
+                <split stopOnException="false">
+                  <tokenizeLines separator=","/>
+                  <choice>
+                    <when expr="body == '2'">
+                      <throwException type="System.InvalidOperationException" message="boom"/>
+                    </when>
+                  </choice>
+                  <to uri="mock://knob-split-out"/>
+                </split>
+              </route>
+            </routes>
+            """);
+        var producer = await StartAndProducer("direct://knob-split-in");
+        var mock = (MockEndpoint)_context.GetEndpoint("mock://knob-split-out");
+
+        // The second of the three elements throws; the third must still be processed.
+        await producer.Process(new Exchange(new Message("1,2,3")));
+
+        mock.ReceivedExchanges.Should().HaveCount(2,
+            "the failing element is skipped and the elements after it still run");
+    }
+
+    [Fact]
+    public void Split_StopOnExceptionFalse_ReachesTheGeneratedCode()
+    {
+        var code = CodeOf("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="knob-split-off">
+                <from uri="direct://knob-split-off-in"/>
+                <split stopOnException="false">
+                  <tokenizeLines separator=","/>
+                  <setBody value="x"/>
+                </split>
+              </route>
+              <route id="knob-split-on">
+                <from uri="direct://knob-split-on-in"/>
+                <split stopOnException="true">
+                  <tokenizeLines separator=","/>
+                  <setBody value="x"/>
+                </split>
+              </route>
+            </routes>
+            """);
+
+        // StopOnException() defaults to true, so the false case has to survive the round trip.
+        code.Should().Contain("StopOnException(false)");
+        code.Should().Contain("StopOnException()");
     }
 }

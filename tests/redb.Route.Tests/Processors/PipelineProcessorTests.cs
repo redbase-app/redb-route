@@ -118,4 +118,22 @@ public class PipelineProcessorTests
 
         exchange.In.ContentType.Should().Be("application/xml");
     }
+
+    /// <summary>Out→In merge keeps In's ContentType when the Out message carries none.</summary>
+    [Fact]
+    public async Task Process_OutToInMerge_KeepsContentTypeWhenOutHasNone()
+    {
+        var pipeline = new PipelineProcessor();
+        pipeline.Add(new DelegateProcessor(ex => ex.Out = new Message("response")));
+        pipeline.Add(new DelegateProcessor(ex =>
+        {
+            ex.In.Body.Should().Be("response");
+            ex.In.ContentType.Should().Be("text/plain");
+        }));
+
+        var exchange = new Exchange(new Message("original") { ContentType = "text/plain" });
+        await pipeline.Process(exchange);
+
+        exchange.In.ContentType.Should().Be("text/plain");
+    }
 }

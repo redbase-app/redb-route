@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Processors;
 
@@ -122,22 +123,26 @@ public class TryCatchProcessor : IProcessor
         {
             await _body.Process(exchange, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        // A downstream timeout is an OperationCanceledException whose token (ours) is still live — not a
+        // cancellation, so it enters here. Name it a TimeoutException so Catch<TimeoutException> sees it;
+        // a genuine cancellation (the caller's token fired) is filtered out and never handled.
+        catch (Exception ex) when (!RouteCancellation.IsCancellation(ex, ct))
         {
-            exchange.Exception = ex;
+            var failure = RouteCancellation.Normalize(ex, ct);
+            exchange.Exception = failure;
 
             var matched = false;
             foreach (var clause in _catchClauses)
             {
-                if (clause.Matches(ex))
+                if (clause.Matches(failure))
                 {
-                    _logger?.LogWarning(ex, "TryCatch: caught {ExceptionType}: {Message}",
-                        ex.GetType().Name, ex.Message);
+                    _logger?.LogWarning(failure, "TryCatch: caught {ExceptionType}: {Message}",
+                        failure.GetType().Name, failure.Message);
                     await clause.Handler.Process(exchange, ct).ConfigureAwait(false);
                     exchange.ExceptionHandled = true;
                     // The catch clause is where this failure ends; the steps left in the try body are deliberately
                     // abandoned, so nothing replays them later (OnException ... Continued()).
-                    ResumePoints.Forget(exchange, ex);
+                    ResumePoints.Forget(exchange, failure);
                     matched = true;
                     break;
                 }

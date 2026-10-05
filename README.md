@@ -49,6 +49,7 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 - [Request-Response (InOut)](#request-response-inout)
 - [Concurrency & Parallelism](#concurrency--parallelism) — `.Threads(N)` EIP, consumer-level knobs, [full guide](CONCURRENCY.md)
 - [Transactions](TRANSACTIONS.md) — `.Transacted()`, commit order (database, sends, acknowledgement), `Retry`, idempotent consumer
+- [Behaviour Guarantees](#behaviour-guarantees) — stop and `DoFinally`, Out→In merge, Split properties, `now()` and `delay`
 - [Reliability](#reliability) — RabbitMQ confirms, Kafka EOS, persistent IdempotentConsumer, Outbox via Sql polling
 - [Validation](#validation)
 - [Testing with Mock](#testing-with-mock)
@@ -981,6 +982,39 @@ From(Mqtt.Subscribe("telemetry/#").Qos(1).ConcurrentConsumers(5)).Process(Ingest
 ```
 
 `.Threads(N)` is an async boundary (like `.To("seda://")`): backpressured bounded queue, own DI scope per exchange, graceful drain-on-stop, errors routed to `OnException` — ordering not preserved when `N > 1`. Full guide, per-transport table, and Camel mapping: **[CONCURRENCY.md](CONCURRENCY.md)**.
+
+---
+
+## Behaviour Guarantees
+
+A few behaviours are easy to get wrong from reading a single method, so they are stated here.
+
+### A stopped exchange and `DoFinally`
+
+`exchange.Stop()` stops the pipeline from running its remaining steps; it is not an exception. A `DoFinally()` block
+still runs, because it is the C# `finally` of `TryCatchProcessor`: the body is abandoned at the point of the stop and
+the finally runs on the way out. A failure and a cancellation behave the same way. `DoCatch` / `DoFinally` therefore
+give you a cleanup hook that fires whatever happened inside the try.
+
+### The Out → In merge between pipeline steps
+
+When a step writes `exchange.Out`, the pipeline merges it into `In` before the next step: the body and every header of
+`Out` are copied over, `ContentType` is copied only when `Out` carries one (a step that leaves it `null` does not wipe
+the In content type), and `Out` is then cleared. The merge happens only between steps, so the last step's `Out` is left
+in place for an InOut caller.
+
+### Properties in a Split branch
+
+A `Split` branch is a child exchange. It gets the part as its body, a copy of the parent's In headers plus
+`CamelSplitIndex`, `CamelSplitSize` and `CamelSplitComplete`, and the parent's properties: the property dictionary is
+inherited, and the values are shared, not deep-copied. Writing a property on a branch does not reach the parent; the
+aggregation strategy decides what goes back.
+
+### `now()` and `delay`
+
+- `now()` returns a `DateTime` with `DateTimeKind.Utc`.
+- `delay` accepts a `TimeSpan`, an `int` / `long` / `double` meaning milliseconds, a string that parses as a number of
+  milliseconds, or a string that parses as `hh:mm:ss`. Anything else throws `InvalidOperationException` at run time.
 
 ---
 

@@ -85,6 +85,12 @@ public class CalcBean
         return $"row-{id}";
     }
     public int Answer() => 42;
+
+    // Амбиентные параметры: обмен, его In-сообщение и токен подставляются по типу и не считаются
+    // среди аргументов.
+    public string Require(IExchange exchange, string permission) => $"{permission}:{exchange.In.Body}";
+    public string Describe(IMessage message, string suffix) => $"{message.Body}+{suffix}";
+    public string Stamp(CancellationToken ct, string tag) => $"{tag}:{ct.CanBeCanceled}";
 }
 
 /// <summary>
@@ -379,6 +385,49 @@ public class BeanComponentTests : IAsyncDisposable
         await producer.Process(exchange);
 
         exchange.In.Body.Should().Be(42);
+    }
+
+    [Fact]
+    public async Task Binding_ExchangeParameter_IsInjectedByType()
+    {
+        // The headline case: bean:#x?method=Require('incident.view') with Require(IExchange, string).
+        // The exchange is supplied by the binding, so only 'incident.view' is read from the URI.
+        _context.AddRoutes(r => r.From("direct://bean-bindexchange")
+            .To($"bean:{Q(typeof(CalcBean))}?method=Require('incident.view')"));
+        var producer = await StartAndProducer("direct://bean-bindexchange");
+
+        var exchange = Msg("u-42");
+        await producer.Process(exchange);
+
+        exchange.In.Body.Should().Be("incident.view:u-42");
+    }
+
+    [Fact]
+    public async Task Binding_MessageParameter_IsInjectedByType()
+    {
+        _context.AddRoutes(r => r.From("direct://bean-bindmessage")
+            .To($"bean:{Q(typeof(CalcBean))}?method=Describe('tag')"));
+        var producer = await StartAndProducer("direct://bean-bindmessage");
+
+        var exchange = Msg("hello");
+        await producer.Process(exchange);
+
+        exchange.In.Body.Should().Be("hello+tag");
+    }
+
+    [Fact]
+    public async Task Binding_CancellationToken_IsInjectedWhereverItStands()
+    {
+        // The token is filled by the binding like the exchange, not only as a trailing parameter.
+        _context.AddRoutes(r => r.From("direct://bean-bindct-first")
+            .To($"bean:{Q(typeof(CalcBean))}?method=Stamp('id')"));
+        var producer = await StartAndProducer("direct://bean-bindct-first");
+
+        using var cts = new CancellationTokenSource();
+        var exchange = Msg("x");
+        await producer.Process(exchange, cts.Token);
+
+        exchange.In.Body.Should().Be("id:True");
     }
 
     [Fact]

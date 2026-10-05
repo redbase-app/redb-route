@@ -83,5 +83,4 @@ dotnet build As4Module -c Debug
 Copy the `.tpkg` into the Tsak worker's `modules/` folder, set `AS4_DEMO_DIR` for the worker (the folder with
 `certs/node.pfx`, `outbox/`, `inbox/`), and the worker picks the module up by hot-reload. The `.tpkg` carries only
 the module DLL: `redb.Route.As4` and `redb.Route.File` come from the worker's shared libraries. `redb.Route.As4` is
-not on NuGet yet, so the module builds against the sources; switch the project references to packages once it is
-published.
+on NuGet; this module references the sources of the repository, and a standalone copy can take the package instead.

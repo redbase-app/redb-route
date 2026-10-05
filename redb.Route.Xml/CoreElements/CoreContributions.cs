@@ -208,7 +208,9 @@ internal static partial class CoreContributions
                 : cur.Split(Tokenizer(tokenizers[0], ctx));
             if (ctx.Convert<bool>(e, "parallel") == true) scope.ParallelProcessing();
             if (ctx.Convert<int>(e, "maxParallelism") is { } dop) scope.MaxParallelism(dop);
-            if (ctx.Convert<bool>(e, "stopOnException") == true) scope.StopOnException();
+            // Pass the attribute through as it is: the default is true, so a false value must reach the
+            // definition instead of being dropped (as scatterGather already does).
+            if (ctx.Convert<bool>(e, "stopOnException") is { } stop) scope.StopOnException(stop);
             IRouteDefinition inner = scope;
             foreach (var child in e.Elements().Except(tokenizers))
                 inner = ctx.ParseStep(child, inner);

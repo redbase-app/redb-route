@@ -286,6 +286,8 @@ public sealed class XmlRouteLoader
             route.Cluster(cluster);
         if (ctx.Convert<bool>(element, "messageHistory") is { } history)
             route.MessageHistory(history);
+        if (ctx.Convert<bool>(element, "tracing") is { } tracing)
+            route.Tracing(tracing);
         if (ctx.Convert<TimeSpan>(element, "processingTimeout") is { } timeout)
             route.ProcessingTimeout(timeout);
         if (ctx.Attr(element, "routePolicy") is { Length: > 0 } policy)

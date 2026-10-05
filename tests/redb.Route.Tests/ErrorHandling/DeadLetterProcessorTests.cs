@@ -71,7 +71,7 @@ public class DeadLetterProcessorTests
     }
 
     [Fact]
-    public async Task OperationCanceled_IsNotCaughtByDlc()
+    public async Task CallerCancellation_IsNotCaughtByDlc()
     {
         var inner = new DelegateProcessor(async (_, _) =>
         {
@@ -82,9 +82,30 @@ public class DeadLetterProcessorTests
         var sut = new DeadLetterProcessor(inner, dlcTarget);
         var exchange = new Exchange(new Message { Body = "data" });
 
-        var act = () => sut.Process(exchange);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var act = () => sut.Process(exchange, cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task Timeout_IsDeadLetteredAsTimeoutException()
+    {
+        // A timeout is a failure: it reaches the dead letter channel named a TimeoutException, instead of
+        // being rethrown as a cancellation the DLC would skip.
+        var inner = new DelegateProcessor(async (_, _) => throw new TaskCanceledException("downstream deadline"));
+        TimeoutException? seen = null;
+        var dlcTarget = new DelegateProcessor(ex => seen = ex.Exception as TimeoutException);
+
+        var sut = new DeadLetterProcessor(inner, dlcTarget);
+        var exchange = new Exchange(new Message { Body = "data" });
+
+        await sut.Process(exchange);
+
+        seen.Should().NotBeNull("the timeout is a failure and reaches the dead letter channel");
+        exchange.In.Headers["CamelDeadLetterExceptionType"].Should().Be(typeof(TimeoutException).FullName);
+        exchange.ExceptionHandled.Should().BeTrue();
     }
 
     // ── B9: DLC with RetryPolicy ──

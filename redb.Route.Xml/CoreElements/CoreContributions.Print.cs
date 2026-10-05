@@ -215,7 +215,10 @@ internal static partial class CoreContributions
                 {
                     if (A(e, "parallel") == "true") w2.Config("ParallelProcessing()");
                     if (A(e, "maxParallelism") is { } dop) w2.Config($"MaxParallelism({dop})");
-                    if (A(e, "stopOnException") == "true") w2.Config("StopOnException()");
+                    // StopOnException() defaults to true, so a false attribute has to be printed as
+                    // StopOnException(false) — dropping it loses the setting on the way back to markup.
+                    if (A(e, "stopOnException") is { } s)
+                        w2.Config(bool.Parse(s) ? "StopOnException()" : "StopOnException(false)");
                     foreach (var child in e.Elements().Where(c => c != tokenizer))
                         w2.PrintStep(child);
                 });
@@ -224,7 +227,8 @@ internal static partial class CoreContributions
             {
                 if (A(e, "parallel") == "true") w2.Config("ParallelProcessing()");
                 if (A(e, "maxParallelism") is { } dop) w2.Config($"MaxParallelism({dop})");
-                if (A(e, "stopOnException") == "true") w2.Config("StopOnException()");
+                if (A(e, "stopOnException") is { } s)
+                    w2.Config(bool.Parse(s) ? "StopOnException()" : "StopOnException(false)");
                 w2.PrintSteps(e);
             }),
             ["aggregate"] = (e, w) => w.Scope(e, "Aggregate", Trim(

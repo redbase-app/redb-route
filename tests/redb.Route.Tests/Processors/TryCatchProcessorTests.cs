@@ -119,16 +119,38 @@ public class TryCatchProcessorTests
         clause.Matches(new ArgumentException("msg", "other")).Should().BeFalse();
     }
 
-    /// <summary>OperationCanceledException is never caught.</summary>
+    /// <summary>A genuine cancellation is never caught — the caller's token is what makes it one.</summary>
     [Fact]
-    public async Task Process_OperationCanceled_NeverCaught()
+    public async Task Process_CallerCancellation_NeverCaught()
     {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
         var tryCatch = new TryCatchProcessor(
                 new DelegateProcessor(_ => throw new OperationCanceledException()))
             .Catch<Exception>(new DelegateProcessor(_ => { }));
 
-        var act = () => tryCatch.Process(new Exchange());
+        var act = () => tryCatch.Process(new Exchange(), cts.Token);
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    /// <summary>A downstream timeout (an OperationCanceledException with our token still live) is named a
+    /// TimeoutException and reaches the catch clause.</summary>
+    [Fact]
+    public async Task Process_Timeout_CaughtAsTimeoutException()
+    {
+        Exception? caught = null;
+        var tryCatch = new TryCatchProcessor(
+                new DelegateProcessor(_ => throw new TaskCanceledException("downstream deadline")))
+            .Catch<TimeoutException>(new DelegateProcessor(ex => caught = ex.Exception));
+
+        var exchange = new Exchange();
+        await tryCatch.Process(exchange); // ct is not cancelled → not a cancellation
+
+        caught.Should().BeOfType<TimeoutException>();
+        caught!.InnerException.Should().BeOfType<TaskCanceledException>(
+            "the original timeout symptom is kept as the cause");
+        exchange.ExceptionHandled.Should().BeTrue();
     }
 
     /// <summary>Invalid exception type in CatchClause throws.</summary>

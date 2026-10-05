@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Telemetry;
 
 namespace redb.Route.ErrorHandling;
@@ -44,18 +45,17 @@ public sealed class DeadLetterProcessor : IProcessor
                 await _inner.Process(exchange, ct).ConfigureAwait(false);
                 return; // Success — no dead letter needed
             }
-            catch (OperationCanceledException)
+            // A downstream timeout is an OperationCanceledException whose token (ours) is still live — a
+            // failure to retry and dead-letter, not a cancellation. Named a TimeoutException.
+            catch (Exception ex) when (!RouteCancellation.IsCancellation(ex, ct))
             {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                if (attempt < maxRetries && _retryPolicy != null && _retryPolicy.ShouldRetry(ex))
+                var failure = RouteCancellation.Normalize(ex, ct);
+                if (attempt < maxRetries && _retryPolicy != null && _retryPolicy.ShouldRetry(failure))
                 {
                     attempt++;
-                    _logger?.LogWarning(ex,
+                    _logger?.LogWarning(failure,
                         "DeadLetterChannel: retry {Attempt}/{Max} for {ExceptionType}",
-                        attempt, maxRetries, ex.GetType().Name);
+                        attempt, maxRetries, failure.GetType().Name);
 
                     var delay = _retryPolicy.GetDelay(attempt - 1);
                     if (delay > TimeSpan.Zero)
@@ -67,16 +67,16 @@ public sealed class DeadLetterProcessor : IProcessor
                 }
 
                 // Stamp the exchange with the failure info
-                exchange.Exception = ex;
-                exchange.In.Headers["CamelDeadLetterReason"] = ex.Message;
-                exchange.In.Headers["CamelDeadLetterExceptionType"] = ex.GetType().FullName;
+                exchange.Exception = failure;
+                exchange.In.Headers["CamelDeadLetterReason"] = failure.Message;
+                exchange.In.Headers["CamelDeadLetterExceptionType"] = failure.GetType().FullName;
                 exchange.In.Headers["CamelDeadLetterTimestamp"] = DateTimeOffset.UtcNow;
                 if (attempt > 0)
                     exchange.In.Headers["CamelDeadLetterRedeliveryCount"] = attempt;
 
-                _logger?.LogError(ex,
+                _logger?.LogError(failure,
                     "DeadLetterChannel: routing to DLQ after {Attempts} attempts for {ExceptionType}",
-                    attempt, ex.GetType().Name);
+                    attempt, failure.GetType().Name);
 
                 // Route to dead letter channel
                 ProcessorMetrics.DeadLetterSent.Add(1);

@@ -99,16 +99,36 @@ public class OnExceptionProcessorTests
         handled.Should().BeTrue();
     }
 
-    /// <summary>OperationCanceledException is never caught.</summary>
+    /// <summary>A genuine cancellation is never caught — the caller's token is what makes it one.</summary>
     [Fact]
-    public async Task Process_Cancellation_NeverCaught()
+    public async Task Process_CallerCancellation_NeverCaught()
     {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
         var processor = new OnExceptionProcessor(
                 new DelegateProcessor(_ => throw new OperationCanceledException()))
             .Handle<Exception>(new DelegateProcessor(_ => { }));
 
-        var act = () => processor.Process(new Exchange());
+        var act = () => processor.Process(new Exchange(), cts.Token);
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    /// <summary>A downstream timeout (an OperationCanceledException with our token still live) is named a
+    /// TimeoutException and reaches the handler.</summary>
+    [Fact]
+    public async Task Process_Timeout_HandledAsTimeoutException()
+    {
+        var handled = false;
+        var processor = new OnExceptionProcessor(
+                new DelegateProcessor(_ => throw new TaskCanceledException("downstream deadline")))
+            .Handle<TimeoutException>(new DelegateProcessor(_ => handled = true), handled: true);
+
+        var exchange = new Exchange();
+        await processor.Process(exchange);
+
+        handled.Should().BeTrue();
+        exchange.ExceptionHandled.Should().BeTrue();
     }
 
     /// <summary>Handlers property returns registered handlers.</summary>

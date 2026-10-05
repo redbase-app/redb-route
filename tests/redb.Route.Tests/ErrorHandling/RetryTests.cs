@@ -217,7 +217,7 @@ public class RetryProcessorTests
     }
 
     [Fact]
-    public async Task DoesNotRetry_OperationCanceled()
+    public async Task DoesNotRetry_CallerCancellation()
     {
         var callCount = 0;
         var inner = new DelegateProcessor(async (_, _) =>
@@ -229,10 +229,31 @@ public class RetryProcessorTests
         var sut = new RetryProcessor(inner, RetryPolicy.Fixed(5, TimeSpan.FromMilliseconds(1)));
         var exchange = new Exchange(new Message { Body = "test" });
 
-        var act = () => sut.Process(exchange);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var act = () => sut.Process(exchange, cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         callCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Retries_Timeout()
+    {
+        // A timeout is an OperationCanceledException with our token still live — a failure, so the policy
+        // sees it as a TimeoutException and Retry retries it instead of passing it through as cancellation.
+        var callCount = 0;
+        var inner = new DelegateProcessor(async (_, _) =>
+        {
+            callCount++;
+            if (callCount < 3) throw new TaskCanceledException("downstream deadline");
+        });
+
+        var sut = new RetryProcessor(inner, RetryPolicy.Fixed(5, TimeSpan.FromMilliseconds(1)));
+
+        await sut.Process(new Exchange(new Message { Body = "test" }));
+
+        callCount.Should().Be(3, "a timeout is a failure and the retry policy retries it");
     }
 
     [Fact]

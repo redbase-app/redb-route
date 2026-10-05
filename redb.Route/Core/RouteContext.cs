@@ -893,6 +893,11 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                     logger?.LogInformation(
                         "Registered global exception handler for {ExceptionType}",
                         exType.Name);
+
+                    // A handler on an OperationCanceledException can never fire — a genuine cancellation is
+                    // never handled and a timeout arrives as TimeoutException. Said once at load.
+                    if (Validation.RouteDefinitionValidator.CancellationHandlerWarning(exType) is { } cancellationWarning)
+                        logger?.LogWarning("OnException: {Warning}", cancellationWarning);
                 }
             }
         }
@@ -1087,8 +1092,10 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 }
 
                 // Telemetry / metrics: outside every error handler, as the statistics below, so a redelivered exchange is
-                // one span and one measurement with its final outcome — not one per attempt.
-                if (_options.EnableTelemetry)
+                // one span and one measurement with its final outcome — not one per attempt. Route-level .Tracing()
+                // overrides the global option, so a service route (a health check, a metric summary) opens no span.
+                var routeTracing = definition.GetTracing() ?? _options.EnableTelemetry;
+                if (routeTracing)
                     finalProcessor = new InstrumentedProcessor(finalProcessor, $"route:{routeId}");
 
                 if (_options.EnableMetrics)

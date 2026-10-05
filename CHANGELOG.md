@@ -61,6 +61,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [4.2.2] — 2026-10-05
+
+### Fixed — a downstream timeout reaches error handling, instead of passing through as a cancellation
+
+- A timeout of a component's own deadline — an HTTP producer's `HttpClient.Timeout`, an RPC reply deadline —
+  is raised as an `OperationCanceledException` (a `TaskCanceledException`), and every EIP handler rethrew any
+  `OperationCanceledException` by type: `TryCatch`/`Catch<T>`, `OnException`, `Retry` and `DeadLetterChannel`
+  all skipped it, and the exchange failed whole with a `500`. A cancellation is what the caller's token asked
+  for; an `OperationCanceledException` raised while that token is still live is a failure, and error handling
+  now sees it.
+- Error handling names such a timeout a `System.TimeoutException`, keeping the original as `InnerException`, so
+  a route can catch it by name: `Catch<TimeoutException>`, `OnException<TimeoutException>()` and
+  `<catch exceptions="System.TimeoutException">` in Route-XML. A genuine cancellation (the caller's token
+  fired) is still never handled, retried, dead-lettered or swallowed. The exception's text carries only the
+  sanitized target URL, never a body or credentials.
+- The rule lives once now, in `redb.Route.Core.RouteCancellation`, and is public for callers who need the same
+  one: `IsCancellation(ex, ct)` (a cancellation is what the caller's token asked for), `IsOwnedTimeout(ex, ct)`,
+  `Normalize(ex, ct[, message])` (name an owned timeout a `TimeoutException`) and `IsCancellationType(type)`.
+  `HttpProducer` uses it; the inline predicate in the other transports is left as it is, a follow-up rather
+  than part of this fix.
+
+### Added — a dead `Catch<T>` / `OnException<T>` on an `OperationCanceledException` is warned about at load
+
+- A `Catch<T>` or `OnException<T>` whose `T` is an `OperationCanceledException` (`TaskCanceledException` above
+  all) can never fire: a genuine cancellation is filtered out and a timeout arrives as a `TimeoutException`.
+  The route load now warns, naming the type and pointing at `System.TimeoutException`, instead of leaving the
+  dead branch to be found by a red test. The route still builds.
+
+### Fixed — a route reached through `direct:` / `direct-vm:` keeps its own `redb.route.id`
+
+- A `direct:` / `direct-vm:` call runs the target route's pipeline on the CALLER's exchange, and the target's
+  first step stamps `exchange.RouteId`, which nothing restored. After `to("direct:callee")` the caller carried
+  the callee's id, so `route:caller`'s span tag and the caller's later step metrics — both read the live
+  `exchange.RouteId` — were attributed to the callee. The caller's id is saved and put back when the target
+  returns (on failure too), so "current route" means the route actually executing, the rule
+  `IExchange.Context` already follows. `vm:`/`seda:` clone the exchange and are unaffected.
+
+### Fixed — `<split stopOnException="false">` in Route-XML is no longer dropped
+
+- The `<split>` loader passed the attribute only when it was `true`
+  (`if (ctx.Convert<bool>(e, "stopOnException") == true) scope.StopOnException();`), and the default is `true`,
+  so `stopOnException="false"` was ignored: a failure in one element stopped the whole batch — the batching
+  pattern the attribute exists for could not be written at all. The loader now passes the value through as it
+  is, as `<scatterGather>` already did, and the C# generator prints `StopOnException(false)` (a bare
+  `StopOnException()` for `true`) instead of losing the `false` case. `<multicast>` carried the same
+  loader/printer pattern and is fixed too — harmless there so far, its default being `false`.
+
+### Added — a bean method's `IExchange` and `IMessage` parameters come from the binding
+
+- `bean:#x?method=Require('incident.view')` now binds a method `Require(IExchange exchange, string permission)`:
+  an `IExchange` parameter is the exchange itself and an `IMessage` parameter its In message, both supplied by the
+  binding like a Camel bean's `Exchange` / `Message`, and neither counts among the arguments. A `CancellationToken`
+  is filled in wherever it stands, not only as a trailing parameter. Was: the parameters had to be the arguments
+  themselves plus an optional trailing token, so a bean that needed both an argument and the exchange had to read the
+  argument from a property first, two steps instead of one. The method's remaining parameters are the arguments, in
+  order; the XML form takes the same URI, so the route moves to Route-XML unchanged.
+
+### Added — a route may switch tracing off on its own: `.Tracing(false)` / `<route tracing="false">`
+
+- `RouteEngineOptions.EnableTelemetry` is context-wide, so a service route (a health check, a metric summary on a
+  timer) had no way to stay out of the trace and its one-span traces crowded Jaeger. `.Tracing(false)` on a route,
+  and the matching `<route tracing="false">` attribute in Route-XML, override the global option for that route only,
+  the way `.MessageHistory()` already did. A route that says nothing inherits the global setting.
+
+### Fixed — the Out → In merge no longer clears `ContentType` when the Out message has none
+
+- `PipelineProcessor` copied `ContentType` from the Out message unconditionally, so a step that wrote an Out body
+  without setting a content type wiped the In message's format to `null`. It is merged like a header now: the Out
+  content type wins when it is set, and the In one stands when it is not. A step that does set it behaves as before.
+
 ## [4.2.0] — 2026-09-30
 
 ### Fixed — Controllers: a reply the action wrote itself reaches the caller

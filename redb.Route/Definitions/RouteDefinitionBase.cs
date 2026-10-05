@@ -38,6 +38,7 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     private TimeSpan? _processingTimeout;
     private bool _cluster;
     private bool? _messageHistory;
+    private bool? _tracing;
     private IRoutePolicy? _routePolicy;
     private string? _routePolicyName;
     internal IRouteContext? _context;
@@ -1567,6 +1568,16 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
 
     /// <inheritdoc />
     public bool? GetMessageHistory() => _messageHistory;
+
+    /// <inheritdoc />
+    public TSelf Tracing(bool value = true)
+    {
+        _tracing = value;
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public bool? GetTracing() => _tracing;
 
     /// <inheritdoc />
     public TSelf RoutePolicy(IRoutePolicy policy)

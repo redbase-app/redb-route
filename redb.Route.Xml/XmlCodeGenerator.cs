@@ -220,6 +220,8 @@ public static class XmlCodeGenerator
             writer.Config($"Cluster({XmlCodeWriter.Bool(bool.Parse(cluster))})");
         if (route.Attribute("messageHistory")?.Value is { } history)
             writer.Config($"MessageHistory({XmlCodeWriter.Bool(bool.Parse(history))})");
+        if (route.Attribute("tracing")?.Value is { } tracing)
+            writer.Config($"Tracing({XmlCodeWriter.Bool(bool.Parse(tracing))})");
         if (route.Attribute("processingTimeout")?.Value is { } timeout)
             writer.Config($"ProcessingTimeout({XmlCodeWriter.Ts(TimeSpan.Parse(timeout, System.Globalization.CultureInfo.InvariantCulture))})");
         if (route.Attribute("routePolicy")?.Value is { Length: > 0 } policy)

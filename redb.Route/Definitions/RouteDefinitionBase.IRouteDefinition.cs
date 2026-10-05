@@ -191,6 +191,7 @@ public abstract partial class RouteDefinitionBase<TSelf>
     // ── Route-level policy ──
     IRouteDefinition IRouteDefinition.Cluster(bool value) => Cluster(value);
     IRouteDefinition IRouteDefinition.MessageHistory(bool value) => MessageHistory(value);
+    IRouteDefinition IRouteDefinition.Tracing(bool value) => Tracing(value);
     IRouteDefinition IRouteDefinition.RoutePolicy(IRoutePolicy policy) => RoutePolicy(policy);
     IRouteDefinition IRouteDefinition.RoutePolicy(string policyName) => RoutePolicy(policyName);
 }

@@ -131,11 +131,18 @@ public class HttpProducer : ConnectableProducer
             // Send request
             response = await _httpClient!.SendAsync(request, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        catch (Exception ex) when (!RouteCancellation.IsCancellation(ex, ct))
         {
             Logger?.LogError(ex, "HTTP {Method} to {Url} failed. Timeout={Timeout}ms, auth={Auth}",
                 method.Method, EndpointUri.Sanitize(url), _options.Timeout, _options.AuthScheme);
             activity.RecordFailure(ex);
+            // The producer owns its deadline: name the timeout as one here, with the exact method and URL,
+            // so a direct (non-EIP) caller of Process is on the same contract too. The EIP layer
+            // (RouteCancellation.Normalize) would name it anyway; a real cancellation is untouched. The
+            // message carries only the sanitized URL — never the body or credentials (BR-4).
+            if (RouteCancellation.IsOwnedTimeout(ex, ct))
+                throw new TimeoutException(
+                    $"HTTP {method.Method} {EndpointUri.Sanitize(url)} timed out after {_options.Timeout} ms.", ex);
             throw;
         }
 

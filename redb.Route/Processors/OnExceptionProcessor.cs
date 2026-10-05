@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.ErrorHandling;
 
 namespace redb.Route.Processors;
@@ -169,12 +170,12 @@ public class OnExceptionProcessor : IProcessor
                 }
                 return; // Success — exit
             }
-            catch (OperationCanceledException)
+            // A downstream timeout is an OperationCanceledException whose token (ours) is still live — not a
+            // cancellation, so it enters here and is named a TimeoutException so OnException<TimeoutException>
+            // matches it. A genuine cancellation (the caller's token fired) is filtered out, never swallowed.
+            catch (Exception ex) when (!RouteCancellation.IsCancellation(ex, ct))
             {
-                throw; // Never swallow cancellation
-            }
-            catch (Exception ex)
-            {
+                ex = RouteCancellation.Normalize(ex, ct);
                 exchange.Exception = ex;
 
                 var handler = FindHandler(ex, exchange);

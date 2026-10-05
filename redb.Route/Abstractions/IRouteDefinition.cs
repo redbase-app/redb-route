@@ -843,6 +843,14 @@ public interface IRouteDefinition : IProcessorDefinition
     /// <summary>Gets the route-level message-history override (<c>null</c> = inherit the global setting).</summary>
     bool? GetMessageHistory();
 
+    /// <summary>Apache Camel parity: enable/disable OpenTelemetry tracing for this route, overriding
+    /// the global <c>RouteEngineOptions.EnableTelemetry</c>. Pass <c>false</c> for a service route
+    /// (a health check, a metric summary on a timer) whose single-span traces only crowd the collector.</summary>
+    IRouteDefinition Tracing(bool value = true);
+
+    /// <summary>Gets the route-level tracing override (<c>null</c> = inherit the global setting).</summary>
+    bool? GetTracing();
+
     /// <summary>Sets an explicit route policy, overriding any factory-resolved policy.</summary>
     IRouteDefinition RoutePolicy(IRoutePolicy policy);
 

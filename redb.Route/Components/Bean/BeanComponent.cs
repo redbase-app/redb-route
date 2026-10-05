@@ -311,9 +311,13 @@ public sealed partial class BeanInvoker
     /// <summary>
     /// Builds the invoker for a <c>method=name(arg, …)</c> specification. Each argument is a
     /// route-language expression compiled at endpoint creation (a malformed one fails the build);
-    /// the overload is picked by argument count, with an optional trailing
-    /// <see cref="CancellationToken"/> parameter filled automatically. Argument values convert to
-    /// the parameter types through the shared option converter; a value already of the parameter
+    /// the overload is picked by the number of bindable parameters. A parameter of type
+    /// <see cref="IExchange"/> is the exchange itself, one of type <see cref="IMessage"/> its In
+    /// message: both are supplied by the binding, like a Camel bean's <c>Exchange</c>/<c>Message</c>,
+    /// and neither counts among the arguments. A <see cref="CancellationToken"/> is filled in
+    /// wherever it stands, counted the same way. So <c>method=Require('incident.view')</c> binds
+    /// <c>Require(IExchange exchange, string permission)</c>. Argument values convert to the
+    /// parameter types through the shared option converter; a value already of the parameter
     /// type passes as-is. Boundary: an argument must not contain a bare <c>&amp;</c> — the URI
     /// query splits on it; write the word form <c>AND</c>.
     /// </summary>
@@ -333,19 +337,14 @@ public sealed partial class BeanInvoker
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
             .Where(m => !m.IsSpecialName && m.DeclaringType != typeof(object)
                         && m.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-            .Where(m =>
-            {
-                var p = m.GetParameters();
-                return p.Length == argTexts.Count
-                    || (p.Length == argTexts.Count + 1 && p[^1].ParameterType == typeof(CancellationToken));
-            })
-            .OrderByDescending(m => m.GetParameters().Length) // the ct-taking overload wins
+            .Where(m => BindableCount(m.GetParameters()) == argTexts.Count)
+            .OrderByDescending(m => m.GetParameters().Length) // the ambient-taking overload wins
             .ToList();
 
         if (candidates.Count == 0)
             throw new InvalidOperationException(
                 $"bean: '{reference}' has no public method '{name}' taking {argTexts.Count} argument(s) " +
-                "(an optional trailing CancellationToken does not count).");
+                "(IExchange, IMessage and CancellationToken parameters are supplied by the binding and do not count).");
         if (candidates.Count > 1 && candidates[0].GetParameters().Length == candidates[1].GetParameters().Length)
             throw new InvalidOperationException(
                 $"bean: '{reference}' has several '{name}' overloads with {argTexts.Count} argument(s) — " +
@@ -353,28 +352,45 @@ public sealed partial class BeanInvoker
 
         var method = candidates[0];
         var parameters = method.GetParameters();
-        var takesCt = parameters.Length == argTexts.Count + 1;
 
         var converters = new Func<object?, object?>[argTexts.Count];
-        for (var i = 0; i < argTexts.Count; i++)
+        var argIndex = 0;
+        foreach (var parameter in parameters)
         {
-            var parameter = parameters[i];
+            if (IsAmbient(parameter.ParameterType))
+                continue;
             var target = parameter.ParameterType;
             var where = $"parameter '{parameter.Name}' of {type.Name}.{method.Name}";
-            converters[i] = value => ConvertArgument(value, target, where);
+            converters[argIndex++] = value => ConvertArgument(value, target, where);
         }
 
-        var call = CompileBoundCall(type, method, takesCt);
+        var call = CompileBoundCall(type, method);
         object? Invoke(object instance, IExchange exchange, CancellationToken ct)
         {
             var args = new object?[expressions.Length];
             for (var i = 0; i < expressions.Length; i++)
                 args[i] = converters[i](expressions[i].Evaluate<object>(exchange));
-            return call(instance, args, ct);
+            return call(instance, args, exchange, ct);
         }
 
         var (returnsValue, taskResult, toTask) = ClassifyReturn(method.ReturnType);
         return new BeanInvoker(AwaitableAsTask(Invoke, toTask), returnsValue, taskResult);
+    }
+
+    /// <summary>A parameter the binding supplies itself: the exchange, its In message, or the token.</summary>
+    private static bool IsAmbient(Type parameterType)
+        => parameterType == typeof(IExchange)
+           || parameterType == typeof(IMessage)
+           || parameterType == typeof(CancellationToken);
+
+    /// <summary>Counts the parameters an argument list binds, that is, every parameter but the ambient ones.</summary>
+    private static int BindableCount(ParameterInfo[] parameters)
+    {
+        var count = 0;
+        foreach (var parameter in parameters)
+            if (!IsAmbient(parameter.ParameterType))
+                count++;
+        return count;
     }
 
     /// <summary>Splits top-level commas, respecting quotes (with backslash escapes) and nesting.</summary>
@@ -439,21 +455,30 @@ public sealed partial class BeanInvoker
         }
     }
 
-    private static Func<object, object?[], CancellationToken, object?> CompileBoundCall(
-        Type type, MethodInfo method, bool takesCt)
+    private static Func<object, object?[], IExchange, CancellationToken, object?> CompileBoundCall(
+        Type type, MethodInfo method)
     {
         var instance = Expression.Parameter(typeof(object), "instance");
         var args = Expression.Parameter(typeof(object?[]), "args");
+        var exchange = Expression.Parameter(typeof(IExchange), "exchange");
         var ct = Expression.Parameter(typeof(CancellationToken), "ct");
 
         var parameters = method.GetParameters();
         var callArgs = new List<Expression>(parameters.Length);
-        var bindable = takesCt ? parameters.Length - 1 : parameters.Length;
-        for (var i = 0; i < bindable; i++)
-            callArgs.Add(Expression.Convert(
-                Expression.ArrayIndex(args, Expression.Constant(i)), parameters[i].ParameterType));
-        if (takesCt)
-            callArgs.Add(ct);
+        var argIndex = 0;
+        foreach (var parameter in parameters)
+        {
+            var target = parameter.ParameterType;
+            if (target == typeof(IExchange))
+                callArgs.Add(exchange);
+            else if (target == typeof(IMessage))
+                callArgs.Add(Expression.Convert(Expression.Property(exchange, nameof(IExchange.In)), target));
+            else if (target == typeof(CancellationToken))
+                callArgs.Add(ct);
+            else
+                callArgs.Add(Expression.Convert(
+                    Expression.ArrayIndex(args, Expression.Constant(argIndex++)), target));
+        }
 
         Expression call = Expression.Call(Expression.Convert(instance, type), method, callArgs);
         Expression body = method.ReturnType == typeof(void)
@@ -461,7 +486,7 @@ public sealed partial class BeanInvoker
             : Expression.Convert(call, typeof(object));
 
         return Expression
-            .Lambda<Func<object, object?[], CancellationToken, object?>>(body, instance, args, ct)
+            .Lambda<Func<object, object?[], IExchange, CancellationToken, object?>>(body, instance, args, exchange, ct)
             .Compile();
     }
 

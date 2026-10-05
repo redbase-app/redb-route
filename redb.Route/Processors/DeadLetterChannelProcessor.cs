@@ -55,14 +55,13 @@ public sealed class DeadLetterChannelProcessor : IProcessor
         {
             await _inner.Process(exchange, ct).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        // A downstream timeout is an OperationCanceledException whose token (ours) is still live — a failure
+        // to dead-letter, not a cancellation. Named a TimeoutException. A genuine cancellation passes.
+        catch (Exception ex) when (!RouteCancellation.IsCancellation(ex, ct))
         {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            exchange.Exception = ex;
-            _logger?.LogWarning(ex, "Dead-lettering exchange to {Uri}.", _deadLetterUri);
+            var failure = RouteCancellation.Normalize(ex, ct);
+            exchange.Exception = failure;
+            _logger?.LogWarning(failure, "Dead-lettering exchange to {Uri}.", _deadLetterUri);
             try
             {
                 var (endpoint, producer) = await GetOrCreatePair(ct).ConfigureAwait(false);

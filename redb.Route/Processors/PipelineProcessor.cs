@@ -62,11 +62,15 @@ public class PipelineProcessor : IProcessor
             }
 
             // Pipeline EIP: propagate Out body/headers → In so the next processor sees the result.
+            // ContentType is merged like a header, not taken wholesale: a step that writes an Out body
+            // without setting a content type leaves the In content type in place (it used to be nulled,
+            // which lost the format for a body that had not declared its own).
             if (exchange.HasOut && i < _processors.Count - 1)
             {
                 var outMsg = exchange.Out!;
                 exchange.In.Body = outMsg.Body;
-                exchange.In.ContentType = outMsg.ContentType;
+                if (outMsg.ContentType is not null)
+                    exchange.In.ContentType = outMsg.ContentType;
                 foreach (var (key, value) in outMsg.Headers)
                     exchange.In.Headers[key] = value;
                 exchange.Out = null; // prevent stale Out from re-merging on next step

@@ -245,7 +245,8 @@ internal static partial class CoreContributions
             var scope = cur.Multicast();
             if (ctx.Convert<bool>(e, "parallel") == true) scope.ParallelProcessing();
             if (ctx.Convert<int>(e, "maxParallelism") is { } dop) scope.MaxParallelism(dop);
-            if (ctx.Convert<bool>(e, "stopOnException") == true) scope.StopOnException();
+            // Pass the attribute through as it is, not only when it is true (same as <split> and <scatterGather>).
+            if (ctx.Convert<bool>(e, "stopOnException") is { } stop) scope.StopOnException(stop);
             ctx.ParseSteps(e, scope);
             return scope.EndMulticast();
         }),

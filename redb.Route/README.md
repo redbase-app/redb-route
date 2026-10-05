@@ -408,6 +408,27 @@ Built-in OpenTelemetry — distributed tracing + metrics per route and step:
 .Metered("throughput", e => { e.In.Body = Transform(e); })
 ```
 
+`RouteEngineOptions.EnableTelemetry` is on for the whole context. A single route can opt out with `.Tracing(false)`
+(or `<route tracing="false">` in Route-XML), so a service route such as a health check or a metric summary opens no
+span of its own.
+
+## Behaviour Guarantees
+
+A few behaviours are easy to get wrong from reading a single method, so they are stated here.
+
+- **A stopped exchange.** `exchange.Stop()` stops the pipeline from running its remaining steps; it is not an
+  exception. A `DoFinally()` block still runs, because it is the C# `finally` of `TryCatchProcessor`. A failure and a
+  cancellation behave the same way.
+- **The Out → In merge.** When a step writes `exchange.Out`, the pipeline merges it into `In` before the next step:
+  the body and every header of `Out` are copied over, `ContentType` is copied only when `Out` carries one, and `Out`
+  is cleared. The last step's `Out` is left in place for an InOut caller.
+- **A Split branch.** It gets the part as its body, a copy of the parent's In headers plus `CamelSplitIndex`,
+  `CamelSplitSize` and `CamelSplitComplete`, and the parent's properties (the dictionary is inherited, the values are
+  shared). Writing a property on a branch does not reach the parent.
+- **`now()` and `delay`.** `now()` returns a `DateTime` with `DateTimeKind.Utc`. `delay` accepts a `TimeSpan`, an
+  `int` / `long` / `double` meaning milliseconds, a string that parses as a number of milliseconds, or a string that
+  parses as `hh:mm:ss`.
+
 ## Validation
 
 ```csharp

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Telemetry;
 
 namespace redb.Route.ErrorHandling;
@@ -41,19 +42,21 @@ public sealed class RetryProcessor : IProcessor
                     ProcessorMetrics.RetrySuccess.Add(1);
                 return; // Success
             }
-            catch (OperationCanceledException)
+            // A downstream timeout is an OperationCanceledException whose token (ours) is still live — a
+            // failure to retry, not a cancellation. Named a TimeoutException so the policy sees it as one.
+            // A genuine cancellation (the caller's token fired) is filtered out: never retried.
+            catch (Exception ex) when (!RouteCancellation.IsCancellation(ex, ct))
             {
-                throw; // Never retry cancellation
-            }
-            catch (Exception ex)
-            {
-                if (attempt >= _policy.MaxRetries || !_policy.ShouldRetry(ex))
+                var failure = RouteCancellation.Normalize(ex, ct);
+                if (attempt >= _policy.MaxRetries || !_policy.ShouldRetry(failure))
                 {
                     ProcessorMetrics.RetryExhausted.Add(1);
-                    _logger?.LogError(ex,
+                    _logger?.LogError(failure,
                         "Exchange processing failed after {Attempts} attempt(s). No more retries.",
                         attempt + 1);
-                    throw;
+                    if (ReferenceEquals(failure, ex))
+                        throw;          // a plain failure — keep its original stack
+                    throw failure;      // a named timeout (TimeoutException)
                 }
 
                 ProcessorMetrics.RetryAttempts.Add(1);
@@ -63,7 +66,7 @@ public sealed class RetryProcessor : IProcessor
 
                 _logger?.LogWarning(
                     "Exchange processing failed (attempt {Attempt}/{MaxRetries}): {Error}. Retrying in {Delay:F0}ms.",
-                    attempt + 1, _policy.MaxRetries, ex.Message, actualDelay.TotalMilliseconds);
+                    attempt + 1, _policy.MaxRetries, failure.Message, actualDelay.TotalMilliseconds);
 
                 await Task.Delay(actualDelay, ct).ConfigureAwait(false);
 

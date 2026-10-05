@@ -11,8 +11,8 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
-  <!-- redb.Route.As4 is not on NuGet yet: the demo builds against the sources.
-       Switch to PackageReference after publishing (as EchoModule references its packages). -->
+  <!-- The demo builds against the sources of this repository.
+       A standalone copy can use PackageReference (as EchoModule references its packages). -->
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\redb.Route\redb.Route.csproj" />
     <ProjectReference Include="..\..\..\src\redb.Route.As4\redb.Route.As4.csproj" />

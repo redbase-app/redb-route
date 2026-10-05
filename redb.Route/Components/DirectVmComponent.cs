@@ -98,7 +98,20 @@ public class DirectVmProducer : IProducer
                 $"No consumer registered for direct-vm endpoint '{_endpoint.Name}'. " +
                 "Ensure the consumer route is started before sending.");
 
-        await processor.Process(exchange, ct).ConfigureAwait(false);
+        // direct-vm: runs the target route — in another context — on THIS exchange, and the target's
+        // first step stamps exchange.RouteId; nothing restores it, so after the call the caller would
+        // carry the callee's id and its own route span and step metrics would be attributed to the callee.
+        // Save ours and put it back once the target returns — on failure too, before the caller's own
+        // error handler runs.
+        var callerRouteId = exchange.RouteId;
+        try
+        {
+            await processor.Process(exchange, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            exchange.RouteId = callerRouteId;
+        }
     }
 
     /// <inheritdoc />

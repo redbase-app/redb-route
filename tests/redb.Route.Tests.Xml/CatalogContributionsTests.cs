@@ -617,6 +617,27 @@ public class CatalogContributionsTests : IAsyncDisposable
     }
 
     [Fact]
+    public void Tracing_ReachesTheRouteDefinition()
+    {
+        // The route-level <route tracing="false"> attribute, the markup form of .Tracing(false): a
+        // service route stays out of the trace without switching the whole context's telemetry off.
+        Load("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="cat-notracing" tracing="false">
+                <from uri="direct://cat-notracing-in"/>
+                <log level="Debug">step</log>
+              </route>
+            </routes>
+            """);
+
+        var builder = _context.RouteBuilders.Single();
+        if (!builder.IsBuilt)
+            builder.InternalBuild(_context);
+        builder.Definitions.OfType<IRouteDefinition>().Single()
+            .GetTracing().Should().BeFalse("<route tracing=\"false\"> is the markup form of .Tracing(false)");
+    }
+
+    [Fact]
     public async Task MessageHistory_TrailIsReadableFromAnExpression()
     {
         // The trail the engine records is a value like any other: the markup reads it through the

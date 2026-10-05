@@ -240,6 +240,7 @@ public static class XmlRouteSchema
                 Attribute(new AttributeSpec("autoStart", AttributeType.Bool)),
                 Attribute(new AttributeSpec("cluster", AttributeType.Bool)),
                 Attribute(new AttributeSpec("messageHistory", AttributeType.Bool)),
+                Attribute(new AttributeSpec("tracing", AttributeType.Bool)),
                 Attribute(new AttributeSpec("processingTimeout", AttributeType.Duration)),
                 Attribute(new AttributeSpec("routePolicy", AttributeType.Reference)),
                 Attribute(new AttributeSpec("enabled", AttributeType.String)),
