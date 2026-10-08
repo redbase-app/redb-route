@@ -125,7 +125,13 @@ public static class XmlRouteSchema
         schema.Add(BeanElement());
         schema.Add(BeanListType());
         if (catalog is not null)
+        {
             schema.Add(OtherSideTypes());
+            // One type per (component, side), referenced from every endpoint position (see
+            // SchemeElement): a connector's options are declared once, not once per position.
+            foreach (var endpointType in EndpointTypes(catalog))
+                schema.Add(endpointType);
+        }
         schema.Add(RouteElement(catalog));
         schema.Add(RoutesElement(contributions));
         schema.Add(ContextElement(contributions));
@@ -311,9 +317,39 @@ public static class XmlRouteSchema
             new XAttribute("minOccurs", "0"),
             EndpointParticles(catalog, side));
 
+    /// <summary>
+    /// The scheme element at an endpoint position: a reference to the ONE type carrying its options.
+    /// The options used to be inlined at every position that takes an endpoint (<c>from</c>, <c>to</c>,
+    /// <c>enrich</c>, <c>pollEnrich</c>, <c>wireTap</c>, <c>interceptSendToEndpoint</c>, both sides), so a
+    /// connector's whole option set stood in the schema twelve times over. That is what the editor's
+    /// language server pays for: it builds a content model per complex type, and the same options
+    /// repeated across a dozen models, each inside a choice of every scheme, is not what a schema of the
+    /// same size costs when it is written with named types (2026-10-08). One type per (component, side)
+    /// is the whole difference.
+    /// </summary>
     private static XElement SchemeElement(CatalogComponent component, EndpointRole side)
+        => new(Xs + "element",
+            new XAttribute("name", component.Scheme),
+            new XAttribute("type", "r:" + EndpointTypeName(component, side)));
+
+    /// <summary>The name of the type a scheme element refers to — one per component and side.</summary>
+    private static string EndpointTypeName(CatalogComponent component, EndpointRole side)
+        => component.Scheme + (side == EndpointRole.Producer ? "Producer" : "Consumer");
+
+    /// <summary>Every endpoint type the catalog needs, in a stable order (the scheme ordinal).</summary>
+    private static IEnumerable<XElement> EndpointTypes(IReadOnlyList<CatalogComponent> catalog)
+        => catalog
+            .OrderBy(c => c.Scheme, StringComparer.Ordinal)
+            .SelectMany(c => new[]
+            {
+                EndpointType(c, EndpointRole.Producer),
+                EndpointType(c, EndpointRole.Consumer),
+            });
+
+    private static XElement EndpointType(CatalogComponent component, EndpointRole side)
     {
         var type = new XElement(Xs + "complexType",
+            new XAttribute("name", EndpointTypeName(component, side)),
             new XAttribute("mixed", "true"),
             // Family entries (<param name=… value=…/>) and long text options are open children.
             new XElement(Xs + "choice",
@@ -373,7 +409,7 @@ public static class XmlRouteSchema
         type.Add(new XElement(Xs + "anyAttribute",
             new XAttribute("namespace", component.Lenient ? "##any" : "##other"),
             new XAttribute("processContents", "lax")));
-        return new XElement(Xs + "element", new XAttribute("name", component.Scheme), type);
+        return type;
     }
 
     /// <summary>
@@ -381,10 +417,26 @@ public static class XmlRouteSchema
     /// converter parses with ignoreCase, and the engine's own messages write them lowercase —
     /// <c>ackMode=manual</c>). A union of the lowercase list, which the editor offers as
     /// completion, and a case-insensitive pattern, which accepts <c>Manual</c> as the engine does.
-    /// A [Flags] enum takes several members joined by commas (<c>Tls12,Tls13</c>).
+    /// A [Flags] enum takes several members joined by commas (<c>Tls12,Tls13</c>), which is a
+    /// pattern and nothing else, so flags always take the union.
+    ///
+    /// A LONG pick-one list keeps the plain member list instead. The pattern spells every member out
+    /// as character classes, and the catalog's 43 long options (fileExist, sortBy, postProcess,
+    /// operation …) sit at the same sites the short ones do: with the union for all of them the schema
+    /// reached 21k lines and 1.1 MB, and the editor's language server died with an out-of-memory error
+    /// on the first completion (2026-10-08). A long list loses the case-insensitive spelling with it:
+    /// the schema takes the names the catalog lists (<c>fileExist="Append"</c>), other cases only load
+    /// in the engine. <see cref="CatalogEnumOptionsTests"/> pins both halves of this.
     /// </summary>
     private static XElement EnumOptionType(IReadOnlyList<string> members, bool flags)
     {
+        if (!flags && members.Count > CaseInsensitiveUnionMaxMembers)
+        {
+            return new XElement(Xs + "simpleType",
+                new XElement(Xs + "restriction", new XAttribute("base", "xs:string"),
+                    members.Select(m => new XElement(Xs + "enumeration", new XAttribute("value", m)))));
+        }
+
         var member = "(" + string.Join("|", members.Select(AnyCase)) + ")";
         var pattern = flags ? $@"{member}(\s*,\s*{member})*" : member;
         return new XElement(Xs + "simpleType",
@@ -396,6 +448,9 @@ public static class XmlRouteSchema
                     new XElement(Xs + "restriction", new XAttribute("base", "xs:string"),
                         new XElement(Xs + "pattern", new XAttribute("value", pattern))))));
     }
+
+    /// <summary>Members up to which the case-insensitive union is worth its size (see <see cref="EnumOptionType"/>).</summary>
+    private const int CaseInsensitiveUnionMaxMembers = 3;
 
     /// <summary>A member name as a case-insensitive XSD regex (<c>Tls12</c> → <c>[tT][lL][sS]12</c>).</summary>
     private static string AnyCase(string name)

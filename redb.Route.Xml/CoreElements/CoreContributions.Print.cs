@@ -512,6 +512,8 @@ internal static partial class CoreContributions
         if (A(e, "useOriginalBody") == "true") w.Config("UseOriginalBody()");
         if (A(e, "logStackTrace") is { } st) w.Config($"LogStackTrace({XmlCodeWriter.Bool(bool.Parse(st))})");
         if (A(e, "logExhausted") is { } le) w.Config($"LogExhausted({XmlCodeWriter.Bool(bool.Parse(le))})");
+        if (A(e, "logHandled") is { } lh) w.Config($"LogHandled({XmlCodeWriter.Bool(bool.Parse(lh))})");
+        if (A(e, "logContinued") is { } lc) w.Config($"LogContinued({XmlCodeWriter.Bool(bool.Parse(lc))})");
         if (A(e, "retryAttemptedLogLevel") is { } ra) w.Config($"RetryAttemptedLogLevel({LevelRef(ra)})");
         if (A(e, "retriesExhaustedLogLevel") is { } re) w.Config($"RetriesExhaustedLogLevel({LevelRef(re)})");
         foreach (var (attribute, verb) in OnExceptionProcessorRefs)

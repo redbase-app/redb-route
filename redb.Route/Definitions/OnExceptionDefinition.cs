@@ -275,6 +275,26 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
     /// <summary>Current LogExhausted value (default true).</summary>
     public bool LogExhaustedValue => _logExhausted;
 
+    /// <summary>Whether the exhausted-failure log entry is written for a failure the handler handled (default: false, as in Camel).</summary>
+    public OnExceptionDefinition LogHandled(bool value = true)
+    {
+        _logHandled = value;
+        return this;
+    }
+    private bool _logHandled;
+    /// <summary>Current LogHandled value (default false).</summary>
+    public bool LogHandledValue => _logHandled;
+
+    /// <summary>Whether the exhausted-failure log entry is written for a failure the handler continued (default: false, as in Camel).</summary>
+    public OnExceptionDefinition LogContinued(bool value = true)
+    {
+        _logContinued = value;
+        return this;
+    }
+    private bool _logContinued;
+    /// <summary>Current LogContinued value (default false).</summary>
+    public bool LogContinuedValue => _logContinued;
+
     // ── Navigation ─────────────────────────────────────────────────────────────
 
     /// <summary>Closes this OnException scope and returns the parent route definition.</summary>
@@ -354,6 +374,8 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
                 useOriginalBody: _useOriginalBody,
                 logStackTrace: _logStackTrace,
                 logExhausted: _logExhausted,
+                logHandled: _logHandled,
+                logContinued: _logContinued,
                 onExceptionOccurredProcessor: _onExceptionOccurredProcessor,
                 onRedeliveryProcessor: _onRedeliveryProcessor,
                 onPrepareFailureProcessor: _onPrepareFailureProcessor);

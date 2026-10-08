@@ -13,6 +13,8 @@ export interface ElementInfo {
     attributes: { name: string; type: string; required?: boolean; enumValues?: string[] }[];
     children?: ElementInfo[];
     allowsText?: boolean;
+    /** Whether the element may hold steps — what the skeleton completion reads (skeletonscope.ts). */
+    allowsSteps?: boolean;
     takesEndpoint?: boolean;
 }
 

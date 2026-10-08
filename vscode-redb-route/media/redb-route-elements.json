@@ -928,6 +928,16 @@
         "required": false
       },
       {
+        "name": "logHandled",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "logContinued",
+        "type": "Bool",
+        "required": false
+      },
+      {
         "name": "retryAttemptedLogLevel",
         "type": "Enum",
         "required": false,
@@ -1280,6 +1290,27 @@
         "name": "target",
         "type": "String",
         "required": false
+      },
+      {
+        "name": "whereRedb",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "orderByRedb",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "outputType",
+        "type": "Enum",
+        "required": false,
+        "enumValues": [
+          "List",
+          "First",
+          "Count",
+          "Any"
+        ]
       }
     ],
     "children": [],
@@ -1493,6 +1524,46 @@
         "name": "version",
         "type": "String",
         "required": false
+      },
+      {
+        "name": "clientRequestValidation",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "errorHandler",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "inboundAuth",
+        "type": "Enum",
+        "required": false,
+        "enumValues": [
+          "none",
+          "basic",
+          "bearer"
+        ]
+      },
+      {
+        "name": "inboundUsername",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "inboundPassword",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "inboundRealm",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "tokenValidator",
+        "type": "String",
+        "required": false
       }
     ],
     "children": [
@@ -1538,9 +1609,61 @@
               "off",
               "json"
             ]
+          },
+          {
+            "name": "clientRequestValidation",
+            "type": "Bool",
+            "required": false
           }
         ],
-        "children": [],
+        "children": [
+          {
+            "name": "param",
+            "kind": "ConfigChild",
+            "attributes": [
+              {
+                "name": "name",
+                "type": "String",
+                "required": true
+              },
+              {
+                "name": "type",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "path",
+                  "query",
+                  "header"
+                ]
+              },
+              {
+                "name": "required",
+                "type": "Bool",
+                "required": false
+              },
+              {
+                "name": "dataType",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              {
+                "name": "description",
+                "type": "String",
+                "required": false
+              }
+            ],
+            "children": [],
+            "allowsSteps": false,
+            "allowsText": false,
+            "takesEndpoint": false
+          }
+        ],
         "allowsSteps": true,
         "allowsText": false,
         "takesEndpoint": false
@@ -1587,9 +1710,61 @@
               "off",
               "json"
             ]
+          },
+          {
+            "name": "clientRequestValidation",
+            "type": "Bool",
+            "required": false
           }
         ],
-        "children": [],
+        "children": [
+          {
+            "name": "param",
+            "kind": "ConfigChild",
+            "attributes": [
+              {
+                "name": "name",
+                "type": "String",
+                "required": true
+              },
+              {
+                "name": "type",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "path",
+                  "query",
+                  "header"
+                ]
+              },
+              {
+                "name": "required",
+                "type": "Bool",
+                "required": false
+              },
+              {
+                "name": "dataType",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              {
+                "name": "description",
+                "type": "String",
+                "required": false
+              }
+            ],
+            "children": [],
+            "allowsSteps": false,
+            "allowsText": false,
+            "takesEndpoint": false
+          }
+        ],
         "allowsSteps": true,
         "allowsText": false,
         "takesEndpoint": false
@@ -1636,9 +1811,61 @@
               "off",
               "json"
             ]
+          },
+          {
+            "name": "clientRequestValidation",
+            "type": "Bool",
+            "required": false
           }
         ],
-        "children": [],
+        "children": [
+          {
+            "name": "param",
+            "kind": "ConfigChild",
+            "attributes": [
+              {
+                "name": "name",
+                "type": "String",
+                "required": true
+              },
+              {
+                "name": "type",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "path",
+                  "query",
+                  "header"
+                ]
+              },
+              {
+                "name": "required",
+                "type": "Bool",
+                "required": false
+              },
+              {
+                "name": "dataType",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              {
+                "name": "description",
+                "type": "String",
+                "required": false
+              }
+            ],
+            "children": [],
+            "allowsSteps": false,
+            "allowsText": false,
+            "takesEndpoint": false
+          }
+        ],
         "allowsSteps": true,
         "allowsText": false,
         "takesEndpoint": false
@@ -1685,9 +1912,61 @@
               "off",
               "json"
             ]
+          },
+          {
+            "name": "clientRequestValidation",
+            "type": "Bool",
+            "required": false
           }
         ],
-        "children": [],
+        "children": [
+          {
+            "name": "param",
+            "kind": "ConfigChild",
+            "attributes": [
+              {
+                "name": "name",
+                "type": "String",
+                "required": true
+              },
+              {
+                "name": "type",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "path",
+                  "query",
+                  "header"
+                ]
+              },
+              {
+                "name": "required",
+                "type": "Bool",
+                "required": false
+              },
+              {
+                "name": "dataType",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              {
+                "name": "description",
+                "type": "String",
+                "required": false
+              }
+            ],
+            "children": [],
+            "allowsSteps": false,
+            "allowsText": false,
+            "takesEndpoint": false
+          }
+        ],
         "allowsSteps": true,
         "allowsText": false,
         "takesEndpoint": false
@@ -1734,9 +2013,61 @@
               "off",
               "json"
             ]
+          },
+          {
+            "name": "clientRequestValidation",
+            "type": "Bool",
+            "required": false
           }
         ],
-        "children": [],
+        "children": [
+          {
+            "name": "param",
+            "kind": "ConfigChild",
+            "attributes": [
+              {
+                "name": "name",
+                "type": "String",
+                "required": true
+              },
+              {
+                "name": "type",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "path",
+                  "query",
+                  "header"
+                ]
+              },
+              {
+                "name": "required",
+                "type": "Bool",
+                "required": false
+              },
+              {
+                "name": "dataType",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              {
+                "name": "description",
+                "type": "String",
+                "required": false
+              }
+            ],
+            "children": [],
+            "allowsSteps": false,
+            "allowsText": false,
+            "takesEndpoint": false
+          }
+        ],
         "allowsSteps": true,
         "allowsText": false,
         "takesEndpoint": false
@@ -1783,9 +2114,61 @@
               "off",
               "json"
             ]
+          },
+          {
+            "name": "clientRequestValidation",
+            "type": "Bool",
+            "required": false
           }
         ],
-        "children": [],
+        "children": [
+          {
+            "name": "param",
+            "kind": "ConfigChild",
+            "attributes": [
+              {
+                "name": "name",
+                "type": "String",
+                "required": true
+              },
+              {
+                "name": "type",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "path",
+                  "query",
+                  "header"
+                ]
+              },
+              {
+                "name": "required",
+                "type": "Bool",
+                "required": false
+              },
+              {
+                "name": "dataType",
+                "type": "Enum",
+                "required": false,
+                "enumValues": [
+                  "string",
+                  "integer",
+                  "number",
+                  "boolean"
+                ]
+              },
+              {
+                "name": "description",
+                "type": "String",
+                "required": false
+              }
+            ],
+            "children": [],
+            "allowsSteps": false,
+            "allowsText": false,
+            "takesEndpoint": false
+          }
+        ],
         "allowsSteps": true,
         "allowsText": false,
         "takesEndpoint": false

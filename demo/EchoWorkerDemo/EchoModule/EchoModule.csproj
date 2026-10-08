@@ -15,9 +15,9 @@
   <!-- Pre-built redb NuGet packages. These connectors also ship in the Tsak
        worker's shared Libs, so the .tpkg carries only EchoModule.dll (see PackTpkg). -->
   <ItemGroup>
-    <PackageReference Include="redb.Route" Version="4.2.2" />
-    <PackageReference Include="redb.Route.Core" Version="4.2.2" />
-    <PackageReference Include="redb.Route.Http" Version="4.2.2" />
+    <PackageReference Include="redb.Route" Version="4.2.3" />
+    <PackageReference Include="redb.Route.Core" Version="4.2.3" />
+    <PackageReference Include="redb.Route.Http" Version="4.2.3" />
     <PackageReference Include="redb.Core" Version="4.2.2" />
   </ItemGroup>
 

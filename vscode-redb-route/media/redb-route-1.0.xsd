@@ -618,6 +618,8 @@
       <xs:attribute name="useOriginalBody" type="xs:boolean" />
       <xs:attribute name="logStackTrace" type="xs:boolean" />
       <xs:attribute name="logExhausted" type="xs:boolean" />
+      <xs:attribute name="logHandled" type="xs:boolean" />
+      <xs:attribute name="logContinued" type="xs:boolean" />
       <xs:attribute name="retryAttemptedLogLevel">
         <xs:simpleType>
           <xs:restriction base="xs:string">
@@ -1720,6 +1722,7 @@
       <xs:attribute name="autoStart" type="xs:boolean" />
       <xs:attribute name="cluster" type="xs:boolean" />
       <xs:attribute name="messageHistory" type="xs:boolean" />
+      <xs:attribute name="tracing" type="xs:boolean" />
       <xs:attribute name="processingTimeout" type="xs:string" />
       <xs:attribute name="routePolicy" type="xs:string" />
       <xs:attribute name="enabled" type="xs:string" />

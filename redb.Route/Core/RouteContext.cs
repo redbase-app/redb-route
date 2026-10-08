@@ -1083,6 +1083,8 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                                 useOriginalBody: exDef.IsUseOriginalBody,
                                 logStackTrace: exDef.LogStackTraceValue,
                                 logExhausted: exDef.LogExhaustedValue,
+                                logHandled: exDef.LogHandledValue,
+                                logContinued: exDef.LogContinuedValue,
                                 onExceptionOccurredProcessor: exDef.OnExceptionOccurredProcessor,
                                 onRedeliveryProcessor: exDef.OnRedeliveryProcessor,
                                 onPrepareFailureProcessor: exDef.OnPrepareFailureProcessor);

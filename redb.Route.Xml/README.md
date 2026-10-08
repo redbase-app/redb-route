@@ -299,7 +299,7 @@ Handlers declared at the container level apply to every route of the **context**
 <onException exceptions="System.Net.Http.HttpRequestException"
              handled="true" maximumRedeliveries="3" redeliveryDelay="00:00:02"
              exponentialBackOff="true" backOffMultiplier="2.0"
-             useOriginalBody="true" logStackTrace="false" logExhausted="true"
+             useOriginalBody="true" logStackTrace="false" logExhausted="true" logHandled="true"
              retryAttemptedLogLevel="Debug" retriesExhaustedLogLevel="Critical"
              onExceptionOccurred="#countFailure" onRedelivery="#stampAttempt"
              onPrepareFailure="#stampDead">
@@ -314,6 +314,11 @@ attempt follows; both are conditions of the handler, not steps of it. The three 
 `IProcessor` beans from the registry and run at their own moments: `onExceptionOccurred` on every
 occurrence, `onRedelivery` before each retry, `onPrepareFailure` once, before the handler takes
 over for good. A name the registry does not hold is refused at load, with its position.
+
+The entry written when the retries are over follows `logHandled` / `logContinued`: a failure the handler
+handled is logged only with `logHandled="true"`, one it continued only with `logContinued="true"` (both
+`false` by default, as in Camel), and an unhandled failure is always logged. A rollback-only exchange is
+logged either way, its work having been rolled back. `logExhausted="false"` silences the entry altogether.
 
 `handled="true"` ends the route after the handler; `continued="true"` resumes it at the step
 **after** the one that failed, as Camel's `continued(true)` does. What the resumption does not

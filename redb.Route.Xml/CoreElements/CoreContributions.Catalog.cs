@@ -777,6 +777,8 @@ internal static partial class CoreContributions
         if (ctx.Convert<bool>(e, "useOriginalBody") == true) scope.UseOriginalBody();
         if (ctx.Convert<bool>(e, "logStackTrace") is { } stackTrace) scope.LogStackTrace(stackTrace);
         if (ctx.Convert<bool>(e, "logExhausted") is { } exhausted) scope.LogExhausted(exhausted);
+        if (ctx.Convert<bool>(e, "logHandled") is { } logHandled) scope.LogHandled(logHandled);
+        if (ctx.Convert<bool>(e, "logContinued") is { } logContinued) scope.LogContinued(logContinued);
         if (LogLevelOf(e, "retryAttemptedLogLevel", ctx) is { } attempted) scope.RetryAttemptedLogLevel(attempted);
         if (LogLevelOf(e, "retriesExhaustedLogLevel", ctx) is { } exhaustedLevel) scope.RetriesExhaustedLogLevel(exhaustedLevel);
         // The three moments a handler can step into, each a bean from the registry: on every

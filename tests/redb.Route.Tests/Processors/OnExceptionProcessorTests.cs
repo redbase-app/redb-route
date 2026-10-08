@@ -642,6 +642,121 @@ public class OnExceptionProcessorTests
             .Should().NotContain(LogLevel.Error);
     }
 
+    // ── LogHandled / LogContinued (Camel's logHandled / logContinued) ──
+
+    /// <summary>The argument list of every <c>Log</c> call a substitute logger received.</summary>
+    private static IReadOnlyList<object?[]> Logged(ILogger logger) =>
+        [.. logger.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == "Log")
+            .Select(c => c.GetArguments())];
+
+    /// <summary>The argument list of every Error-level <c>Log</c> call.</summary>
+    private static IReadOnlyList<object?[]> LoggedErrors(ILogger logger) =>
+        [.. Logged(logger).Where(a => a[0] is LogLevel.Error)];
+
+    /// <summary>The exception each Error-level call handed to the logger (the fourth argument of <c>ILogger.Log</c>).</summary>
+    private static IReadOnlyList<Exception?> LoggedErrorsWithStack(ILogger logger) =>
+        [.. LoggedErrors(logger).Select(a => a[3] as Exception)];
+
+    [Fact]
+    public async Task HandledFailure_NotLogged_ByDefault()
+    {
+        var logger = Substitute.For<ILogger>();
+        var body = new DelegateProcessor(_ => throw new InvalidOperationException("handled"));
+
+        var processor = new OnExceptionProcessor(body, logger)
+            .Handle<InvalidOperationException>(new DelegateProcessor(_ => { }), handled: true);
+
+        var exchange = new Exchange();
+        await processor.Process(exchange);
+
+        exchange.ExceptionHandled.Should().BeTrue();
+        LoggedErrors(logger).Should().BeEmpty(
+            "the handler answered the exchange: an Error entry with the stack is noise (Camel's logHandled=false)");
+    }
+
+    [Fact]
+    public async Task HandledFailure_Logged_WhenLogHandled()
+    {
+        var logger = Substitute.For<ILogger>();
+        var failure = new InvalidOperationException("handled and logged");
+        var body = new DelegateProcessor(_ => throw failure);
+
+        var processor = new OnExceptionProcessor(body, logger)
+            .Handle<InvalidOperationException>(new DelegateProcessor(_ => { }), handled: true, logHandled: true);
+
+        await processor.Process(new Exchange());
+
+        LoggedErrorsWithStack(logger).Should().Contain(failure, "LogHandled(true) asks for the entry");
+    }
+
+    [Fact]
+    public async Task ContinuedFailure_NotLogged_ByDefault()
+    {
+        var logger = Substitute.For<ILogger>();
+        var body = new DelegateProcessor(_ => throw new InvalidOperationException("continued"));
+
+        var processor = new OnExceptionProcessor(body, logger)
+            .Handle<InvalidOperationException>(new DelegateProcessor(_ => { }), continued: true);
+
+        var exchange = new Exchange();
+        await processor.Process(exchange);
+
+        exchange.ExceptionHandled.Should().BeTrue();
+        LoggedErrors(logger).Should().BeEmpty(
+            "Camel's logContinued=false keeps a continued failure out of the log");
+    }
+
+    [Fact]
+    public async Task ContinuedFailure_Logged_WhenLogContinued()
+    {
+        var logger = Substitute.For<ILogger>();
+        var failure = new InvalidOperationException("continued and logged");
+        var body = new DelegateProcessor(_ => throw failure);
+
+        var processor = new OnExceptionProcessor(body, logger)
+            .Handle<InvalidOperationException>(new DelegateProcessor(_ => { }), continued: true, logContinued: true);
+
+        await processor.Process(new Exchange());
+
+        LoggedErrorsWithStack(logger).Should().Contain(failure, "LogContinued(true) asks for the entry");
+    }
+
+    [Fact]
+    public async Task HandledFailure_OnRollbackOnlyExchange_IsLogged()
+    {
+        var logger = Substitute.For<ILogger>();
+        var failure = new InvalidOperationException("the work was rolled back");
+        var body = new DelegateProcessor(ex =>
+        {
+            ex.MarkRollbackOnly();
+            throw failure;
+        });
+
+        var processor = new OnExceptionProcessor(body, logger)
+            .Handle<InvalidOperationException>(new DelegateProcessor(_ => { }), handled: true);
+
+        await processor.Process(new Exchange());
+
+        LoggedErrorsWithStack(logger).Should().Contain(failure,
+            "a rollback-only exchange lost its work, so the entry is worth having even though the handler answered");
+    }
+
+    [Fact]
+    public async Task UnhandledFailure_StillLogged()
+    {
+        var logger = Substitute.For<ILogger>();
+        var failure = new InvalidOperationException("nobody handled this");
+        var body = new DelegateProcessor(_ => throw failure);
+
+        var processor = new OnExceptionProcessor(body, logger)
+            .Handle<InvalidOperationException>(new DelegateProcessor(_ => { }));
+
+        await processor.Process(new Exchange());
+
+        LoggedErrorsWithStack(logger).Should().Contain(failure, "an unhandled failure is logged exactly as before");
+    }
+
     // ── B10: Exchange redelivery headers ──
 
     [Fact]

@@ -61,6 +61,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Versions 1.0.0 – 1.0.3 were not published to NuGet (internal deployments only).
 > The first public NuGet release is **1.0.4**.
 
+## [4.2.3] — 2026-10-08
+
+### Fixed — the XSD validator rejects a root element the schema does not declare
+
+- A document whose root element is not a global declaration of the schema is refused now. The .NET
+  schema processor reports an element it has no declaration for as a *warning* ("Could not find schema
+  information for the element 'x'") and skips its subtree, and warnings are not delivered unless
+  `ReportValidationWarnings` is set. So an unknown-namespace root, a foreign-namespace root and a
+  no-namespace root all passed validation and only failed later, when the body was parsed. `XsdValidator`
+  now checks the document's root against the compiled schema set (`XmlSchemaSet.GlobalElements`) before
+  validating and fails it the way Apache Camel does (`cvc-elt.1.a`), because Camel's JAXP/Xerces parser
+  treats an undeclared root as an error. Enabling `ReportValidationWarnings` instead was rejected: it
+  would also turn legitimate warnings (an `xs:any processContents="lax"` element with no schema for one)
+  into failures, which is stricter than Camel. This applies to every entry point: `.ValidateXsd(...)`, the
+  `validator:` component and `<validateXsd>` in Route-XML.
+- **Breaking.** A document that used to validate because its root was not declared (a foreign or absent
+  namespace) is a failure now. A consumer that relied on it should send a document whose root the schema
+  declares. Covered by `ValidatorTests` (`XsdValidator_RootWithoutNamespace_ReturnsFailure`,
+  `XsdValidator_RootInForeignNamespace_ReturnsFailure`).
+
+### Fixed — the idempotent consumer gives back the key a handled failure has to return
+
+- An `OnException` handler with `Handled(true)` answers the exchange: the consumer acknowledges and the route
+  reports success. The idempotent consumer read that as "the work was done" and confirmed the key it had
+  claimed, so a redelivery of that message (the broker's own, or a requeue after a restart) was skipped as a
+  duplicate and the work was lost for good, with nothing in the log but the handler's own line. A handled
+  failure now gives the key back, exactly as an unhandled one does. Camel marks the exchange inside the error
+  handler (`ExchangeHelper.setFailureHandled`) and `IdempotentOnCompletion` asks that mark, `removeOnFailure`
+  being `true` by default. The mark is a flag of its own, separate from the ack decision: a handled failure is
+  still acknowledged, which is the point of `Handled(true)`.
+- Only `Handled(true)` sets the mark. `Continued(true)` clears it (the route carries on with the exchange, so
+  the key stays confirmed), a failure caught by `DoCatch` never sets it (a catch says nothing about the work,
+  so the key stays), and a redelivery clears it before the next attempt. A key claimed inside `.Transacted()`
+  still follows the transaction, not the handler.
+- The flag is public for anyone who needs the same rule: `MarkFailureHandled()`, `ClearFailureHandled()` and
+  `IsFailureHandled()` on `IExchange`, in `ExchangeFailureExtensions`.
+- Covered by `IdempotentUnitOfWorkTests`: `A_handled_failure_in_the_block_takes_the_key_back`,
+  `A_handled_failure_after_the_block_takes_the_key_back`,
+  `A_handled_failure_after_the_redeliveries_takes_the_key_back`, `A_continued_failure_keeps_the_key`,
+  `A_failure_caught_by_do_catch_keeps_the_key`,
+  `A_handled_failure_inside_a_transaction_still_rolls_the_transaction_back`.
+
+### Changed — a handled failure is no longer logged as an exhausted failure; VS Code extension 0.2.20
+
+- `Retries exhausted for <type> after N attempts`, with the exception and its stack trace, went to the log at
+  `Error` level for a failure the handler had already answered. For a route that handles a known condition by
+  design (a partner's 404, a validation rejection) every handled message produced an entry that reads like an
+  incident. The engine asks before it writes now: a failure the handler handled is logged only when
+  `LogHandled(true)`, one the handler continued only when `LogContinued(true)`, both `false` by default, as
+  Camel's `logHandled` / `logContinued` are. An unhandled failure is logged as before, and so is a failure no
+  handler matched.
+- A rollback-only exchange (`.RollbackAll()`, `.MarkRollbackOnly()`) bypasses both checks: its work was rolled
+  back, so the failure is real even when a handler answered a client. Camel's
+  `RedeliveryErrorHandler.logFailedDelivery` skips the checks under the same condition,
+  `!exchange.isRollbackOnly()`.
+- Both knobs are on the definition and in Route-XML: `.OnException<X>().Handled(true).LogHandled(true)` and
+  `<onException handled="true" logHandled="true">`, `logContinued` likewise. `LogExhausted(false)` still
+  silences the entry altogether, handled or not.
+- **Breaking.** A route that counted on the entry for a handled failure does not get it any more: put
+  `LogHandled(true)` next to `Handled(true)` to keep it.
+- Covered by `OnExceptionProcessorTests` (`HandledFailure_NotLogged_ByDefault`,
+  `HandledFailure_Logged_WhenLogHandled`, `ContinuedFailure_NotLogged_ByDefault`,
+  `ContinuedFailure_Logged_WhenLogContinued`, `HandledFailure_OnRollbackOnlyExchange_IsLogged`,
+  `UnhandledFailure_StillLogged`) and by `RetryAndScopeKnobsTests`
+  (`OnException_LoggingAndRetrySettings_ReachTheGeneratedCode`) for the XML round trip.
+- The route describer lists both knobs (`logContinued=false logHandled=false` next to `logExhausted`), which is
+  why the example golden of the Route-XML examples changed: a deliberate regeneration
+  (`REDB_XML_GOLDEN_REGEN=1`), with no parser change behind it.
+- The editor's resources are regenerated with both knobs and the extension is 0.2.17: the schema the editor
+  validates against (`redb-route-1.0.catalog.xsd`, the one `catalog.xml` binds the namespace to) and
+  `redb-route-1.0.xsd` know `logHandled` and `logContinued`, and `redb-route-elements.json` offers them in the
+  property panel. Without it the editor flags `logHandled` as an attribute the element does not take.
+- The same regeneration carried a fix that was overdue: `<route tracing="false">` was missing from the editor's
+  schemas. The attribute reached the engine in 4.2.2, after the resources were last regenerated,
+  and nothing noticed, since no test reads them. `EditorResourcesTests` now pins the core element list against
+  the committed schemas and `redb-route-elements.json`, so a forgotten regeneration fails the build instead of
+  shipping an editor that refuses a released attribute.
+- The case-insensitive enum union is written for a short member list only (up to three members) and for a
+  `[Flags]` option, whose comma-joined form is a pattern and nothing else. The editor's language server
+  (LemMinX on Apache Xerces) died with an out-of-memory error on the first completion in a workspace without
+  a project binding: the union spells every member out as character classes, and the catalog's 43 long
+  pick-one lists (`fileExist`, `sortBy`, `postProcess`, `operation`) sit at the same sites the short ones do,
+  so the schema had grown to 21k lines and 1.1 MB, half again what the extension carried before. Those long
+  lists keep the plain member list now. The trade-off is the spelling: the schema takes the names the catalog
+  lists
+  (`fileExist="Append"`), and another case is marked although the engine parses it.
+  `CatalogEnumOptionsTests` pins both halves of that.
+- A connector's options are declared once now, not once per endpoint position. The schema inlined the whole
+  option set of every scheme at all six positions that take an endpoint (`from`, `to`, `enrich`, `pollEnrich`,
+  `wireTap`, `interceptSendToEndpoint`) and on both sides, so each connector stood in the file twelve times
+  over: 12 declarations per option, 312 endpoint positions, one named complex type in the entire file.
+  A language server builds a content model per complex type, so those copies multiplied exactly what it pays
+  for. One named type per (component, side), referenced by every position, is the whole difference: the
+  catalog schema is 7,612 lines and 353 KB now, against 18,912 and 1.0 MB, and the case-insensitive unions
+  fall to 83 with it. A document sees none of this, the same file validates the same way.
+- The skeleton completion knows where it is now (extension 0.2.20). It offered every composite skeleton
+  at every element position, so `<choice>` and `<tryCatch>` were suggested directly under `<routes>`,
+  where the loader refuses them ("`<choice>` is not valid at the container level") and where the schema
+  never offered them; the `<routes>` skeleton was offered only inside a document that already had that
+  root, so it could never be right and is gone. The place is read from the generated element list
+  (`allowsSteps`, the same list the palette reads): beside the routes a `<route>`, inside any element
+  that holds steps — a route, a choice branch, a tryCatch handler, an `onException` scope — the step
+  skeletons, and nothing anywhere else. `skeletonscope.test.ts` pins it, including the half-typed
+  document a completion request arrives on (the tree parser refuses that by design, so the context is
+  read textually).
+- The mirror gate (`publish-route-public.ps1`, step 8b) verifies `media/redb-route-1.0.catalog.xsd` against the
+  tree now as well. It was the one media file the editor reads and the only one missing from the byte-for-byte
+  list, so a stale schema could have shipped next to documents written for the new one.
+
 ## [4.2.2] — 2026-10-05
 
 ### Fixed — a downstream timeout reaches error handling, instead of passing through as a cancellation
