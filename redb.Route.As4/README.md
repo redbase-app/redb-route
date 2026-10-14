@@ -112,12 +112,13 @@ the route from starting, with the offending registry name in the message.
 | `OurPartyIdType` | null | Our `eb:PartyId/@type`; omitted when null. |
 | `ExternalHostName` | `redb.route` | Host part of the message ids we generate (`uuid@host`). Set a public name; the default is a fixed placeholder, never the machine name, so internal host names do not leak. |
 | `SigningCertificate` | — (required) | Our certificate **with private key**; signs our messages and receipts. |
+| `SigningCertificateChain` | empty | The certification authorities above `SigningCertificate`, in any order. Sent with it as its certification path to a partner whose `KeyReference` is `PkiPath`; the path is ordered once, when the node starts. A certificate here that issued neither `SigningCertificate` nor another authority of the chain stops the node from starting. |
 | `DecryptionCertificates` | empty (required) | Our certificates with private keys that decrypt payloads. Several while we rotate; the one a message names is used. |
 | `ClientCertificate` | null | Our TLS client certificate for partners that require mutual TLS when we send. |
 | `SslCertPath` / `SslCertPassword` | null | PFX our receive server presents over TLS when the endpoint URI gives none. The password is `[Sensitive]`. |
 | `ClientCertificateMode` / `AllowedClientThumbprints` | `NoCertificate` / null | Mutual TLS on our receive server when the endpoint URI does not say, as the SOAP factory offers it. |
 | `SslProtocols` | TLS 1.2 + 1.3 | TLS versions our sender offers; the profile allows only these two, anything else is refused (Holodeck `AllowedProtocols`, phase4, Domibus default the same). |
-| `RevocationMode` | `NoCheck` | Revocation check of pinned certificates (partner signing and encryption, our signing, allow-listed TLS clients): `NoCheck`, `Online` (CRL / OCSP the certificate points at) or `Offline` (OS cache). Off by default, as Camel/CXF, Holodeck and phase4. |
+| `RevocationMode` | `NoCheck` | Revocation check of pinned certificates (partner signing and encryption, our signing, allow-listed TLS clients) and of the certificates below the anchor in a partner's certification path: `NoCheck`, `Online` (CRL / OCSP the certificate points at) or `Offline` (OS cache). Off by default, as Camel/CXF, Holodeck and phase4. |
 | `RevocationSoftFail` | false | Accept a certificate whose revocation status cannot be determined. Default: refused, as phase4 and Domibus refuse it. |
 | `Partners` | empty | The agreements of this node, one per trading partner. |
 
@@ -135,9 +136,11 @@ HTTP response are **not options**: the profile mandates them.
 | `Service` / `ServiceType` / `Action` | — (Service, Action required) | `eb:Service` and `eb:Action` of the request leg. |
 | `AllowOverrideService` / `AllowOverrideAction` | false | Whether a route may send another service / action (endpoint option or header). |
 | `ReplyLeg` | null | `As4Leg { Service, ServiceType, Action }` of the reply in a Two-Way / Push-and-Push exchange. |
-| `PartnerSigningCertificates` | empty (required) | Certificates that verify the partner's signatures; several while the partner rotates. |
+| `PartnerSigningCertificates` | empty | Certificates that verify the partner's signatures (the certificate is pinned); several while the partner rotates. Required unless `PartnerTrustAnchors` is set. |
 | `PartnerEncryptionCertificate` | — (required) | Certificate we encrypt payloads for. |
-| `KeyReference` | `BinarySecurityToken` | How our signature references our certificate: `BinarySecurityToken`, `IssuerSerial` or `KeyIdentifier` (all three are accepted on receipt). |
+| `KeyReference` | `BinarySecurityToken` | How our signature references our certificate: `BinarySecurityToken`, `IssuerSerial`, `KeyIdentifier` or `PkiPath` (all are accepted on receipt from a partner whose certificate is pinned). `PkiPath` sends the certificate with the node's `SigningCertificateChain` as an `X509PKIPathv1` token. |
+| `PartnerTrustAnchors` | empty | Certification authorities the partner's signing certificate must chain to, instead of `PartnerSigningCertificates`: roots or intermediate authorities. With these set the partner must present its certificate in an `X509PKIPathv1` token; any other reference is refused. Set one or the other. See [Certification paths](#certification-paths). |
+| `PartnerCertificatePolicies` | empty | Certificate policy OIDs the partner's signing certificate, and every authority between it and the anchor, must assert. Used with `PartnerTrustAnchors`. |
 | `SignatureAlgorithm` | RSA-SHA256 | `http://www.w3.org/2001/04/xmldsig-more#rsa-sha256` |
 | `DigestAlgorithm` | SHA-256 | `http://www.w3.org/2001/04/xmlenc#sha256` |
 | `DataEncryptionAlgorithm` | AES-128-GCM | `http://www.w3.org/2009/xmlenc11#aes128-gcm` |
@@ -148,6 +151,7 @@ HTTP response are **not options**: the profile mandates them.
 | `TimestampTolerance` | 5 min | Clock skew accepted on the partner's `wsu:Timestamp`: how far ahead its `Created` may lie and how long past its `Expires` (WSS4J futureTimeToLive). |
 | `TimestampTimeToLive` | 5 min | How old a received `Created` may be (WSS4J timeStampTTL). It bounds a replay whatever `Expires` says. |
 | `CompressPayloads` | true | Gzip what we send. Received payloads are decompressed whenever their part properties say so. |
+| `RequireFourCornerProperties` | true | Whether every message must carry `originalSender` and `finalRecipient`, on sending and on receipt. False for a point-to-point agreement (common profile without the Four Corner enhancement). |
 
 The algorithm properties accept exactly the eDelivery AS4 1.16 set listed above; any other URI stops the
 endpoint from starting.
@@ -156,6 +160,50 @@ On receipt a message is matched to one partner the way Domibus and Holodeck matc
 addressed to our `OurPartyId`; its sender, service and action must be those of a partner's request leg or
 reply leg; an `AgreementRef`, when the partner declares one, must match. Two partners that a message could
 not tell apart are rejected when the node is validated.
+
+---
+
+### Certification paths
+
+By default an agreement **pins** the partner's signing certificate: the signer of a message must be one of
+`PartnerSigningCertificates`, whatever form the reference to it takes. The other model trusts an **authority**: the
+partner presents its certificate together with its certification path in an `X509PKIPathv1` security token (WS-Security
+X.509 Token Profile §3.1.2), and the path is validated up to one of `PartnerTrustAnchors` (eDelivery AS4 1.16 §4.3.3).
+
+```csharp
+new As4Partner
+{
+    Name = "acme",
+    // ...
+    KeyReference = As4KeyReference.PkiPath,              // we present our path: SigningCertificate + SigningCertificateChain
+    PartnerTrustAnchors = { acmeIssuingAuthority },      // acme must present its path, leading here
+    PartnerCertificatePolicies = { "1.3.6.1.4.1.99999.1.1" },
+    PartnerEncryptionCertificate = acmeCertificate,      // the recipient of the key is still named by its certificate
+}
+```
+
+A path is validated from the anchor down (RFC 5280 §6.1). The anchor is the certificate of the path nearest to the
+signer that is one of `PartnerTrustAnchors`, or the anchor that issued the first certificate of the path. An anchor may
+be an intermediate authority; a certificate that is its own authority is a path of one and is trusted when it is itself
+the anchor. The path is accepted when the whole token is a path — every certificate issued by the one before it (the
+name and the signature), every issuer a certification authority whose key may sign certificates (key usage
+`keyCertSign`, when the certificate restricts the key at all) — and, from the anchor down, every authority's path length
+constraint allows the authorities below it, everything is within its validity period, and the signer and the
+authorities below the anchor assert the required policies (`anyPolicy` satisfies each). A signer that does not present
+a path is refused with `EBMS:0101` even when its certificate would chain: the agreement asks for the path. The two
+directions are independent: `KeyReference` says how we sign, `PartnerTrustAnchors` how the partner must.
+
+With `RevocationMode` set on the node, the signer and the authorities below the anchor are checked for revocation, under
+the same rules as a pinned certificate: hard-fail when the status cannot be determined unless `RevocationSoftFail`, and
+a certificate that names no CRL distribution point and no authority information access passes. The CRLs are checked on
+a chain that ends at a self-signed root, which .NET requires on Windows and on Linux alike; under an intermediate anchor
+the chain is completed from what the token carries above it, the other `PartnerTrustAnchors` and, as for a pinned
+certificate, the local certificate stores and the anchor's authority information access. The certificates found there
+serve the revocation check only: they are not trusted for anything. When no root is found, the status cannot be
+determined.
+
+The reference to a path token carries `wsse11:TokenType` (WS-I Basic Security Profile 1.1, R5215): Domibus and
+Holodeck refuse it otherwise.
 
 ---
 
@@ -170,12 +218,27 @@ From("direct://outbound")
     .To(As4.Send("https://ap.acme.example/as4").ConnectionFactory("node").Partner("acme"));
 ```
 
-The body is sent as one payload: `byte[]` as is, `string` as UTF-8, `Stream` copied (not buffered, and not
+A body that is not a list of `As4Payload` (see below) is sent as one payload: `byte[]` as is, `string` as UTF-8, `Stream` copied (not buffered, and not
 closed: the exchange owns it), anything else as its UTF-8 `ToString()`. The payload is compressed, encrypted and
 written to the wire through the core stream cache, so a large one goes through a temporary file, not memory. Its media type is `Message.ContentType` (default `application/octet-stream`).
-The eDelivery four-corner properties `originalSender` and `finalRecipient` are mandatory: without the two
-headers the message is refused before anything is sent. Any other `redbAs4.property.<name>` header becomes
-an `eb:Property`.
+The eDelivery four-corner properties `originalSender` and `finalRecipient` are mandatory by default: without the two
+headers the message is refused before anything is sent. They belong to the Four Corner Topology enhancement of the
+profile (§4.1.2), so a point-to-point agreement turns the requirement off with `RequireFourCornerProperties = false`.
+Any other `redbAs4.property.<name>` header becomes an `eb:Property`; `redbAs4.propertyType.<name>` gives it a `type`.
+
+**Several payloads.** A body that is a list of `As4Payload` is sent as that many payloads, `eb:PartInfo` in the order
+of the list; the first is the leading business document. An entry names its Content-ID (null generates one), its media
+type and its part properties, written next to `MimeType` and `CompressionType`, which the connector sets itself. An
+empty list sends a message without payloads, as a simple SOAP message.
+
+```csharp
+.Process(e => e.In.Body = new List<As4Payload>
+{
+    new("invoice@us.example", "application/xml", invoiceStream, new Dictionary<string, string> { ["CharacterSet"] = "utf-8" }),
+    new(null, "application/pdf", scanStream, new Dictionary<string, string>()),
+})
+.To(As4.Send("https://ap.acme.example/as4").ConnectionFactory("node").Partner("acme"));
+```
 
 The producer waits for the partner's HTTP response and verifies the receipt: signed by one of the partner's
 certificates, naming exactly the digests we signed. The outcome is on `exchange.Out` (InOut):
@@ -277,6 +340,7 @@ route only after its GCM tag and the signature are verified; a spool that fails 
 | `connectionFactory` | `.ConnectionFactory(name)` | — (required) | Registry name of the node. |
 | `idempotentRepository` | `.IdempotentRepository(name)` | — (required) | Name of an `IIdempotentRepository` registered with `context.AddIdempotentRepository`. See [Duplicate detection](#duplicate-detection). |
 | `streamBody` | `.StreamBody()` | false | Hand a single payload to the route as a `Stream` instead of `byte[]`. |
+| `payloadList` | `.PayloadList()` | false | Always hand the payloads as a list of `As4Payload` (one entry for a single payload, none for a message without), with Content-IDs and part properties. Takes precedence over `streamBody`. |
 | `host` | `.Host(host)` | `0.0.0.0` | Bind address. |
 | `port` | `.Port(port)` | `4090` | Listen port. |
 | scheme `as4s` | `.Tls(certPath?, password?)` | HTTP | Serve over HTTPS; the certificate from the URI, else the node. With neither the receiver refuses to start. |
@@ -325,7 +389,8 @@ All connector headers start with `redbAs4.` (`As4Headers`).
 | `toPartyId`, `toPartyIdType`, `toRole` | receive | Recipient party. |
 | `service`, `serviceType`, `action` | both | Business collaboration; on send they override the agreement when allowed. |
 | `agreementRef`, `pmode` | receive | `eb:AgreementRef` and its `@pmode`. |
-| `property.<name>` | both | `eb:MessageProperties`; `property.originalSender` and `property.finalRecipient` are mandatory. |
+| `property.<name>` | both | `eb:MessageProperties`; `property.originalSender` and `property.finalRecipient` are mandatory unless the agreement sets `RequireFourCornerProperties = false`. |
+| `propertyType.<name>` | both | The `type` attribute of that message property; absent when it has none. |
 | `partner` | both | Name of the partner the message was matched to or sent to. |
 | `signatureValid`, `signerThumbprint` | receive | Signature verified; thumbprint of the signing certificate. |
 | `remoteAddress` | receive | Address of the peer. |
@@ -359,7 +424,7 @@ All connector headers start with `redbAs4.` (`As4Headers`).
   then what the host's principal resolver adds, as camel-cxf with WSS4J takes the principal from the signature.
 - **Attachment canonicalization**: an uncompressed attachment is signed over its MIME canonical form (SwA 1.1
   §5.4.2, the WSS4J rules): Exclusive C14N for XML types, CRLF line endings for other `text/*`.
-- **Four-corner properties** are required on receipt too: a message without `originalSender` or `finalRecipient`
+- **Four-corner properties** are required on receipt too, unless the agreement sets `RequireFourCornerProperties = false`: a message without `originalSender` or `finalRecipient`
   is answered `EBMS:0010`, as Domibus answers it.
 - Passwords are `[Sensitive]` and redacted in logs and the dashboard.
 
@@ -372,18 +437,19 @@ outside the profile hits; the answer is the one it gets.
 
 | What | Accepted | Anything else |
 |---|---|---|
+| Signing token | pinned agreement: any reference form; agreement with `PartnerTrustAnchors`: an `X509PKIPathv1` token whose path leads to an anchor | `EBMS:0101` |
 | Signature | RSA-SHA256 | the partner's configuration is refused at start; a received message: `EBMS:0101` |
 | Digest | SHA-256 | as above |
 | Payload encryption | AES-128-GCM | refused at start; a received message: `EBMS:0102` (AES-256-GCM, AES-128-CBC) |
 | Key transport | RSA-OAEP with MGF1-SHA256 and SHA-256 | refused at start; a received message: `EBMS:0102` (`rsa-oaep-mgf1p` of XML Encryption 1.0) |
 | Canonicalization | Exclusive C14N | `EBMS:0101` |
 | Reference transforms | exactly one `ds:Transform` per reference | `EBMS:0101` |
-| Signature coverage | `eb:Messaging`, `soap:Body`, every attachment, the `wsu:Timestamp` when present | `EBMS:0101` |
+| Signature coverage | `eb:Messaging`, `soap:Body`, every attachment | `EBMS:0103`, as Domibus answers from its policy (`sp:SignedParts`); a `wsu:Timestamp` that is present and not covered: `EBMS:0101` |
 | Unsigned or unencrypted message | never | `EBMS:0103` |
 | Payload in the SOAP body | never (payloads are attachments) | `EBMS:0002` |
 | Compression | gzip, with `MimeType` | `EBMS:0303` / `EBMS:0003` |
 | `eb:PartyId` per side | exactly one | `EBMS:0010` |
-| Four-corner properties | `originalSender` and `finalRecipient` present | `EBMS:0010` |
+| Four-corner properties | `originalSender` and `finalRecipient` present, unless the agreement does not require them | `EBMS:0010` |
 | MEP | one-way and two-way push, on the default MPC | a pull request: `EBMS:0010` (as Domibus without a pull process); another `mpc`: `EBMS:0001` (as Domibus); an unsolicited receipt or error: 202, logged |
 
 ---

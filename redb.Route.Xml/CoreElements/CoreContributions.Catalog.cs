@@ -450,6 +450,23 @@ internal static partial class CoreContributions
             ctx.ParseSteps(e, scope);
             return scope.EndTraced();
         }),
+        // As <setHeader>: value is a literal, expr an expression — exactly one of them.
+        Step("spanTag", (e, cur, ctx) =>
+        {
+            var key = ctx.RequiredAttr(e, "key");
+            var pick = ctx.ExactlyOneOf(e, "value", "expr");
+            if (key is null || pick is null) return cur;
+            var target = redb.Route.Telemetry.SpanTarget.Enclosing;
+            if (ctx.Attr(e, "target") is { } targetName
+                && !Enum.TryParse(targetName, ignoreCase: true, out target))
+            {
+                ctx.AddError(e, $"'{targetName}' is not a span target ({string.Join(", ", Enum.GetNames<redb.Route.Telemetry.SpanTarget>())}).");
+                return cur;
+            }
+            return pick.Value.Name == "value"
+                ? cur.SpanTag(key, pick.Value.Value, target)
+                : cur.SpanTag(key, new StringExpression(pick.Value.Value), target);
+        }),
         Scope("metered", (e, cur, ctx) =>
         {
             var name = ctx.RequiredAttr(e, "name");
@@ -777,6 +794,8 @@ internal static partial class CoreContributions
         if (ctx.Convert<bool>(e, "useOriginalBody") == true) scope.UseOriginalBody();
         if (ctx.Convert<bool>(e, "logStackTrace") is { } stackTrace) scope.LogStackTrace(stackTrace);
         if (ctx.Convert<bool>(e, "logExhausted") is { } exhausted) scope.LogExhausted(exhausted);
+        if (ctx.Convert<bool>(e, "logHandled") is { } logHandled) scope.LogHandled(logHandled);
+        if (ctx.Convert<bool>(e, "logContinued") is { } logContinued) scope.LogContinued(logContinued);
         if (LogLevelOf(e, "retryAttemptedLogLevel", ctx) is { } attempted) scope.RetryAttemptedLogLevel(attempted);
         if (LogLevelOf(e, "retriesExhaustedLogLevel", ctx) is { } exhaustedLevel) scope.RetriesExhaustedLogLevel(exhaustedLevel);
         // The three moments a handler can step into, each a bean from the registry: on every

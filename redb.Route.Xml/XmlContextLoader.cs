@@ -69,7 +69,7 @@ public sealed class XmlContextLoader
         // contribution set up.
         foreach (var element in root.Elements())
         {
-            if (element.Name.LocalName is "components" or "bean" or "onInit")
+            if (element.Name.LocalName is "components" or "bean" or "onInit" or XmlRouteLoader.RouteConfigurationElement)
                 continue;
             if (ctx.Registry.Find(element.Name.LocalName) is IXmlContextContribution contextLevel
                 && contextLevel.Kind == XmlElementKind.ContextLevel)
@@ -81,7 +81,22 @@ public sealed class XmlContextLoader
                 .Where(c => c.Kind == XmlElementKind.ContextLevel)
                 .Select(c => "<" + c.Name + ">");
             ctx.AddError(element, $"unknown <context> section <{element.Name.LocalName}> " +
-                                  $"(valid: <components>, <bean>, <onInit>{string.Concat(contributed.Select(n => ", " + n))}).");
+                                  $"(valid: <components>, <bean>, <onInit>, <routeConfiguration>{string.Concat(contributed.Select(n => ", " + n))}).");
+        }
+
+        // Route configurations: the context's shared error handling, for the routes of every file and builder. They
+        // live on a builder of their own, built here so every error surfaces at Load, added once the document is valid.
+        var configurationElements = root.Elements()
+            .Where(e => e.Name.LocalName == XmlRouteLoader.RouteConfigurationElement).ToList();
+        XmlRouteLoader.XmlRoutesBuilder? configurations = null;
+        if (configurationElements.Count > 0)
+        {
+            configurations = new XmlRouteLoader.XmlRoutesBuilder(sourceName, b =>
+            {
+                foreach (var element in configurationElements)
+                    XmlRouteLoader.ParseRouteConfiguration(element, b, ctx);
+            });
+            configurations.BuildNow(_context);
         }
 
         RouteDefinition? init = null;
@@ -106,6 +121,8 @@ public sealed class XmlContextLoader
         if (ctx.Errors.Count > 0)
             throw new XmlRouteException(sourceName, ctx.Errors);
 
+        if (configurations is not null)
+            _context.AddRoutes(configurations);
         if (init is not null && init.Outputs.Count > 0)
             _context.AddLifecycleListener(new XmlInitListener(init, sourceName));
     }

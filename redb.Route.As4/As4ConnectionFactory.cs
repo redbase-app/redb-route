@@ -1,5 +1,6 @@
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using redb.Route.As4.Security;
 using redb.Route.Core;
 
 namespace redb.Route.As4;
@@ -38,6 +39,15 @@ public sealed class As4ConnectionFactory
 
     /// <summary>Our certificate with its private key: signs our messages and receipts.</summary>
     public X509Certificate2? SigningCertificate { get; set; }
+
+    /// <summary>
+    /// The certification authorities above <see cref="SigningCertificate"/>, in any order, private keys not needed.
+    /// Sent with our certificate as its certification path to a partner whose <see cref="As4Partner.KeyReference"/> is
+    /// <see cref="As4KeyReference.PkiPath"/>, the outermost authority first. Empty for a certificate that is its own
+    /// authority, or when no agreement uses a path. Every certificate here must lie on that path: one that issued neither
+    /// our certificate nor another authority of the chain stops the node from starting.
+    /// </summary>
+    public IList<X509Certificate2> SigningCertificateChain { get; set; } = new List<X509Certificate2>();
 
     /// <summary>
     /// Our certificates with private keys that decrypt payloads partners encrypt for us. More than one while
@@ -108,6 +118,19 @@ public sealed class As4ConnectionFactory
             throw new InvalidOperationException($"{owner}: SslProtocols '{SslProtocols}' is not allowed; eDelivery AS4 1.16 permits TLS 1.2 and TLS 1.3 only.");
         if (SigningCertificate is not { HasPrivateKey: true })
             throw new InvalidOperationException($"{owner}: SigningCertificate with a private key is required — every AS4 message and receipt is signed.");
+        if (SigningCertificateChain is null || SigningCertificateChain.Any(c => c is null))
+            throw new InvalidOperationException($"{owner}: SigningCertificateChain contains an empty entry.");
+        // An authority that does not lie on the path of our certificate would be left out of every PKIPath token
+        // without a word, and the partner would refuse our messages (EBMS:0101): refused here, before the first one.
+        if (SigningCertificateChain.Count > 0)
+        {
+            var path = PkiPath.Order(SigningCertificate, SigningCertificateChain);
+            if (SigningCertificateChain.FirstOrDefault(c => path.All(p => p.Thumbprint != c.Thumbprint)) is { } stray)
+                throw new InvalidOperationException(
+                    $"{owner}: SigningCertificateChain holds {stray.Subject} ({stray.Thumbprint}), which is not on the certification " +
+                    $"path of the SigningCertificate {SigningCertificate.Subject}: every authority of the chain must have issued " +
+                    "the signing certificate or another authority of the chain.");
+        }
         if (DecryptionCertificates is null || DecryptionCertificates.Count == 0)
             throw new InvalidOperationException($"{owner}: DecryptionCertificates is empty — every received payload is encrypted.");
         if (DecryptionCertificates.Any(c => c is not { HasPrivateKey: true }))

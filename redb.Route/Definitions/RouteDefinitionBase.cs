@@ -41,6 +41,7 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
     private bool? _tracing;
     private IRoutePolicy? _routePolicy;
     private string? _routePolicyName;
+    private string? _routeConfigurationId;
     internal IRouteContext? _context;
 
     /// <summary>Route context captured during compile (null until the route is added to a context).</summary>
@@ -866,6 +867,21 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         return Self;
     }
 
+    /// <inheritdoc cref="IRouteDefinition.SpanTag(string, string, Telemetry.SpanTarget)"/>
+    public TSelf SpanTag(string key, string value, Telemetry.SpanTarget target = Telemetry.SpanTarget.Enclosing)
+    {
+        // A constant tag that is never set is a mistake in the route, not a value to skip per message.
+        ArgumentException.ThrowIfNullOrEmpty(value);
+        return SpanTag(key, new Expressions.ConstantExpression(value), target);
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.SpanTag(string, IExpression, Telemetry.SpanTarget)"/>
+    public TSelf SpanTag(string key, IExpression value, Telemetry.SpanTarget target = Telemetry.SpanTarget.Enclosing)
+    {
+        AddOutput(new SpanTagDefinition(key, value, target));
+        return Self;
+    }
+
     // ── Enrichment ───────────────────────────────────────────────────────────
 
     /// <inheritdoc />
@@ -1599,6 +1615,17 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
 
     /// <inheritdoc />
     public string? GetRoutePolicyName() => _routePolicyName;
+
+    /// <inheritdoc />
+    public TSelf RouteConfigurationId(string ids)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ids);
+        _routeConfigurationId = ids;
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public string? GetRouteConfigurationId() => _routeConfigurationId;
 
     // ── Rich logging scope ────────────────────────────────────────────────────
 

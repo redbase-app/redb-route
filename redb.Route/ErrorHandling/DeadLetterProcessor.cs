@@ -68,11 +68,7 @@ public sealed class DeadLetterProcessor : IProcessor
 
                 // Stamp the exchange with the failure info
                 exchange.Exception = failure;
-                exchange.In.Headers["CamelDeadLetterReason"] = failure.Message;
-                exchange.In.Headers["CamelDeadLetterExceptionType"] = failure.GetType().FullName;
-                exchange.In.Headers["CamelDeadLetterTimestamp"] = DateTimeOffset.UtcNow;
-                if (attempt > 0)
-                    exchange.In.Headers["CamelDeadLetterRedeliveryCount"] = attempt;
+                DeadLetterHeaders.Stamp(exchange, failure, attempt);
 
                 _logger?.LogError(failure,
                     "DeadLetterChannel: routing to DLQ after {Attempts} attempts for {ExceptionType}",

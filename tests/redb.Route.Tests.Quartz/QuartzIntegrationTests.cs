@@ -42,6 +42,7 @@ public class QuartzIntegrationTests : IAsyncLifetime
         var context = CreateContext("multi-timer");
         var component = new QuartzTimerComponent();
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var counts = new ConcurrentDictionary<string, int>();
         counts["fast"] = 0;
@@ -74,6 +75,7 @@ public class QuartzIntegrationTests : IAsyncLifetime
         var timerComponent = new QuartzTimerComponent();
         context.AddComponent(cronComponent);
         context.AddComponent(timerComponent);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var cronExchanges = new ConcurrentBag<IExchange>();
         var timerExchanges = new ConcurrentBag<IExchange>();
@@ -116,6 +118,7 @@ public class QuartzIntegrationTests : IAsyncLifetime
         var context = CreateContext("stop-one");
         var component = new QuartzTimerComponent();
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var counts = new ConcurrentDictionary<string, int>();
         counts["a"] = 0;
@@ -150,6 +153,7 @@ public class QuartzIntegrationTests : IAsyncLifetime
         var context = CreateContext("pipeline");
         var component = new CronComponent();
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var results = new ConcurrentBag<string>();
 
@@ -185,6 +189,7 @@ public class QuartzIntegrationTests : IAsyncLifetime
         var context = CreateContext("restart");
         var component = new QuartzTimerComponent();
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var fireCount = 0;
         var uri = EndpointUriParser.Parse("qtimer://restartable?period=100");
@@ -224,7 +229,9 @@ public class QuartzIntegrationTests : IAsyncLifetime
         var comp1 = new QuartzTimerComponent();
         var comp2 = new QuartzTimerComponent();
         context1.AddComponent(comp1);
+        await context1.Start(); // the context runs: a consumer started now starts the scheduler
         context2.AddComponent(comp2);
+        await context2.Start(); // the context runs: a consumer started now starts the scheduler
 
         var count1 = 0;
         var count2 = 0;
@@ -273,6 +280,7 @@ public class QuartzIntegrationTests : IAsyncLifetime
         var context = CreateContext("error-isolation");
         var component = new QuartzTimerComponent();
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var errorCount = 0;
         var successCount = 0;

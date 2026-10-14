@@ -24,6 +24,26 @@ public static class ExchangeFailureExtensions
         exchange.Properties.TryGetValue(RollbackOnlyPropertyKey, out var value) && value is true;
 
     /// <summary>
+    /// Exchange property set by an <c>OnException</c> handler that ran with <c>Handled(true)</c> — Apache Camel's
+    /// <c>ExchangeHelper.setFailureHandled</c>. The exchange completes successfully (the consumer acknowledges), but the
+    /// failure WAS handled by an error handler, so a dedup key guarding the failed work (the idempotent consumer) must
+    /// not be confirmed. Cleared on <c>continued</c> and before every redelivery attempt.
+    /// </summary>
+    public const string FailureHandledPropertyKey = "FailureHandled";
+
+    /// <summary>Marks the failure an error handler handled (Camel's <c>setFailureHandled(true)</c>).</summary>
+    public static void MarkFailureHandled(this IExchange exchange) =>
+        exchange.Properties[FailureHandledPropertyKey] = true;
+
+    /// <summary>Clears the failure-handled marker: a redelivery, or a <c>continued</c> handler (Camel's <c>setFailureHandled(false)</c>).</summary>
+    public static void ClearFailureHandled(this IExchange exchange) =>
+        exchange.Properties.Remove(FailureHandledPropertyKey);
+
+    /// <summary>Whether an error handler handled the failure on this exchange (Camel's <c>ExchangeHelper.isFailureHandled</c>).</summary>
+    public static bool IsFailureHandled(this IExchange exchange) =>
+        exchange.Properties.TryGetValue(FailureHandledPropertyKey, out var value) && value is true;
+
+    /// <summary>
     /// Whether the unit of work did not succeed: an unhandled failure is left on the exchange, or the route marked it
     /// rollback-only. A consumer does not acknowledge such an exchange.
     /// </summary>

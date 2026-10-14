@@ -394,6 +394,29 @@ public interface IRouteDefinition : IProcessorDefinition
     /// </summary>
     IRouteDefinition Metered(string stepName, IProcessor processor);
 
+    /// <summary>
+    /// Puts the attribute <paramref name="key"/> = <paramref name="value"/> (a literal) on a span of the engine, so the
+    /// trace can be found by it. See <see cref="SpanTag(string, IExpression, Telemetry.SpanTarget)"/>.
+    /// </summary>
+    /// <param name="key">Attribute name: lowercase, dot-separated, outside the reserved namespaces (<c>redb.</c>, <c>http.</c>, ...).</param>
+    /// <param name="value">The value, as is — a literal, never a template; a template is <c>Expr("${...}")</c>.</param>
+    /// <param name="target">Which span receives it; the enclosing <c>Traced</c> scope or route span by default.</param>
+    IRouteDefinition SpanTag(string key, string value, Telemetry.SpanTarget target = Telemetry.SpanTarget.Enclosing);
+
+    /// <summary>
+    /// Puts the attribute <paramref name="key"/> on a span of the engine, its value evaluated per message — the way to
+    /// find a trace by a business key (<c>.SpanTag("sap.order.id", XPath("/Ack/OrderNo"))</c>). The exchange is not
+    /// touched. Nothing is set without a listener, on an unsampled span (the value is then not evaluated), for a
+    /// <c>null</c> or empty value, or when the value fails to evaluate (logged at Debug). The value is exported
+    /// unfiltered: never personal data or credentials. Its length is limited by the OpenTelemetry SDK
+    /// (<c>OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT</c>).
+    /// </summary>
+    /// <param name="key">Attribute name: lowercase, dot-separated, outside the reserved namespaces (<c>redb.</c>, <c>http.</c>, ...).</param>
+    /// <param name="value">Expression producing the value.</param>
+    /// <param name="target">Which span receives it; the enclosing <c>Traced</c> scope or route span by default.</param>
+    /// <exception cref="ArgumentException"><paramref name="key"/> is templated, malformed, reserved or names a secret.</exception>
+    IRouteDefinition SpanTag(string key, IExpression value, Telemetry.SpanTarget target = Telemetry.SpanTarget.Enclosing);
+
     // ── Enrichment ──
 
     /// <summary>Sends exchange to a URI and continues (wire tap).</summary>
@@ -866,6 +889,17 @@ public interface IRouteDefinition : IProcessorDefinition
 
     /// <summary>Gets the explicitly set route policy, or null if not set.</summary>
     IRoutePolicy? GetRoutePolicy();
+
+    /// <summary>
+    /// Assigns route configurations to the route by id (Apache Camel's <c>routeConfigurationId</c>): several ids
+    /// separated by commas, each an exact id, a wildcard ending in <c>*</c> or a regular expression. A route with
+    /// assigned configurations does not get the nameless ones — those are the default for routes without an assignment.
+    /// An exact id no configuration of the context has fails <c>Start()</c>, naming the route.
+    /// </summary>
+    IRouteDefinition RouteConfigurationId(string ids);
+
+    /// <summary>The ids set by <see cref="RouteConfigurationId"/>, null when unset.</summary>
+    string? GetRouteConfigurationId();
 
     // ── Rich logging scope ──
 

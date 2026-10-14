@@ -6,16 +6,31 @@ using redb.Route.ErrorHandling;
 namespace redb.Route.Processors;
 
 /// <summary>
-/// Global exception handler. Registered at route level, handles exceptions
-/// that aren't caught by per-step TryCatchProcessor.
-/// Matches by exception type and executes handler processors.
-/// Supports redelivery with configurable delay, exponential backoff, and max attempts.
+/// The <c>OnException</c> handlers of one scope around a body: handles the failures a per-step
+/// <c>TryCatchProcessor</c> did not, with redelivery (delay, exponential backoff, max attempts).
+/// <para>
+/// The handler is chosen as Apache Camel's <c>DefaultExceptionPolicyStrategy</c> chooses it: the failure is walked
+/// from its innermost cause up to the exception that was thrown; a handler of exactly that type wins at once;
+/// otherwise the handler whose type is the nearest ancestor does, the earlier exception of the walk and the earlier
+/// declared handler winning a tie. A handler whose <c>OnWhen</c> is false is passed over. A later handler of the same
+/// type without <c>OnWhen</c> replaces the earlier one.
+/// </para>
+/// <para>
+/// A route has two such scopes, the route's own handlers inside and the ones shared with other routes (its route
+/// configurations and its builder) outside. The inner one leaves a failure to the outer one when that has a strictly
+/// nearer handler; on a tie the route's own handler wins.
+/// </para>
 /// </summary>
 public class OnExceptionProcessor : IProcessor
 {
     private readonly IProcessor _body;
     private readonly List<ExceptionHandler> _handlers = [];
     private readonly ILogger? _logger;
+
+    /// <summary>
+    /// The scope around this one. A failure this scope could take is left to it when it has a strictly nearer handler.
+    /// </summary>
+    internal OnExceptionProcessor? Outer { get; set; }
 
     /// <summary>Creates an on-exception processor wrapping the body.</summary>
     /// <param name="body">The main processor pipeline to protect.</param>
@@ -47,6 +62,8 @@ public class OnExceptionProcessor : IProcessor
     /// <param name="allowRedeliveryWhileStopping">Allow retries during cancellation.</param>
     /// <param name="logStackTrace">Include stack trace in retry logs.</param>
     /// <param name="logExhausted">Log when retries are exhausted.</param>
+    /// <param name="logHandled">Log the exhausted failure when the handler handled it (default: false, as in Camel).</param>
+    /// <param name="logContinued">Log the exhausted failure when the handler continued it (default: false, as in Camel).</param>
     /// <returns>This instance for fluent chaining.</returns>
     public OnExceptionProcessor Handle<TException>(
         IProcessor handler,
@@ -67,14 +84,17 @@ public class OnExceptionProcessor : IProcessor
         bool useOriginalBody = false,
         bool allowRedeliveryWhileStopping = false,
         bool logStackTrace = true,
-        bool logExhausted = true)
+        bool logExhausted = true,
+        bool logHandled = false,
+        bool logContinued = false)
         where TException : Exception
     {
         return Handle(typeof(TException), handler, maxRedeliveries, redeliveryDelay,
             backoffMultiplier, useExponentialBackoff, handled, continued,
             onWhenPredicate, retryAttemptedLogLevel, retriesExhaustedLogLevel, onExceptionOccurred,
             retryWhile, onRedelivery, onPrepareFailure, useOriginalMessage, useOriginalBody,
-            allowRedeliveryWhileStopping, logStackTrace, logExhausted);
+            allowRedeliveryWhileStopping, logStackTrace, logExhausted,
+            logHandled: logHandled, logContinued: logContinued);
     }
 
     /// <summary>Registers a handler for a specific exception type (non-generic).</summary>
@@ -104,7 +124,11 @@ public class OnExceptionProcessor : IProcessor
         // parameter would shift the ones after it and break every caller built against the old order.
         IProcessor? onExceptionOccurredProcessor = null,
         IProcessor? onRedeliveryProcessor = null,
-        IProcessor? onPrepareFailureProcessor = null)
+        IProcessor? onPrepareFailureProcessor = null,
+        // Camel's LogHandled / LogContinued: whether the exhausted-failure log entry is written when the handler handled
+        // (or continued) the failure. Both false by default, as in Camel. A rollback-only exchange bypasses both checks.
+        bool logHandled = false,
+        bool logContinued = false)
     {
         ArgumentNullException.ThrowIfNull(exceptionType);
         ArgumentNullException.ThrowIfNull(handler);
@@ -123,16 +147,27 @@ public class OnExceptionProcessor : IProcessor
             };
         }
 
-        _handlers.Add(new ExceptionHandler(exceptionType, handler, maxRedeliveries, retryPolicy,
+        var registered = new ExceptionHandler(exceptionType, handler, maxRedeliveries, retryPolicy,
             handled, continued, onWhenPredicate, retryAttemptedLogLevel, retriesExhaustedLogLevel,
             onExceptionOccurred, retryWhile, onRedelivery, onPrepareFailure,
             useOriginalMessage, useOriginalBody, allowRedeliveryWhileStopping,
-            logStackTrace, logExhausted)
+            logStackTrace, logExhausted, logHandled, logContinued)
         {
             OnExceptionOccurredProcessor = onExceptionOccurredProcessor,
             OnRedeliveryProcessor = onRedeliveryProcessor,
             OnPrepareFailureProcessor = onPrepareFailureProcessor,
-        });
+        };
+
+        // Camel keys its policies by exception type and OnWhen: a later handler of the same type without OnWhen takes
+        // the place of the earlier one (so a route configuration's handler is used instead of the builder's). Handlers
+        // with an OnWhen are each their own entry.
+        var same = onWhenPredicate is null
+            ? _handlers.FindIndex(h => h.ExceptionType == exceptionType && h.OnWhenPredicate is null)
+            : -1;
+        if (same >= 0)
+            _handlers[same] = registered;
+        else
+            _handlers.Add(registered);
         return this;
     }
 
@@ -178,9 +213,13 @@ public class OnExceptionProcessor : IProcessor
                 ex = RouteCancellation.Normalize(ex, ct);
                 exchange.Exception = ex;
 
-                var handler = FindHandler(ex, exchange);
+                var (handler, distance) = FindHandler(ex, exchange);
                 if (handler == null)
                     throw; // No handler — rethrow
+
+                // The scope around has a strictly nearer handler: the failure is its to take.
+                if (Outer?.FindHandler(ex, exchange) is { Handler: not null } outer && outer.Distance < distance)
+                    throw;
 
                 // Invoke callback if registered
                 handler.OnExceptionOccurred?.Invoke(exchange);
@@ -250,6 +289,7 @@ public class OnExceptionProcessor : IProcessor
 
                     exchange.Exception = null;
                     exchange.ExceptionHandled = false;
+                    exchange.ClearFailureHandled(); // a redelivery is not a handled failure yet
                     continue; // Retry
                 }
 
@@ -257,8 +297,13 @@ public class OnExceptionProcessor : IProcessor
                 exchange.In.Headers["CamelRedeliveryExhausted"] = true;
                 exchange.In.Headers["CamelRedeliveryMaxCounter"] = handler.MaxRedeliveries;
 
-                // B8: Log exhausted
-                if (handler.LogExhausted)
+                // B8: Log exhausted. Camel's RedeliveryErrorHandler.logFailedDelivery logs a handled failure only when
+                // LogHandled, a continued one only when LogContinued. Both checks are bypassed for a rollback-only
+                // exchange: its work was rolled back, so the failure is real even if the handler answered a client.
+                var logThisFailure = handler.LogExhausted
+                    && (exchange.IsRollbackOnly()
+                        || !((handler.Handled && !handler.LogHandled) || (handler.Continued && !handler.LogContinued)));
+                if (logThisFailure)
                 {
                     if (handler.LogStackTrace)
                     {
@@ -297,13 +342,26 @@ public class OnExceptionProcessor : IProcessor
                 // so the consumer, which treats `Exception != null && !ExceptionHandled` as a failure, rolls
                 // back and does not ack. Previously this branch set ExceptionHandled=true, silently swallowing
                 // the failure: the transaction rolled back while the message was acknowledged.
-                if (handler.Handled || handler.Continued)
+                if (handler.Handled)
                 {
+                    // Camel's ExchangeHelper.setFailureHandled: an error handler handled the failure. The exchange
+                    // completes successfully (the consumer acknowledges), but the idempotent consumer must not confirm
+                    // the key it claimed for the work that failed.
+                    exchange.MarkFailureHandled();
+                    exchange.ExceptionHandled = true;
+                    exchange.Exception = null;
+                }
+                else if (handler.Continued)
+                {
+                    // Camel's prepareExchangeForContinue clears the marker: a continued handler does not count the
+                    // failure handled, so a dedup key claimed for the block stays confirmed.
+                    exchange.ClearFailureHandled();
                     exchange.ExceptionHandled = true;
                     exchange.Exception = null;
                 }
                 else
                 {
+                    exchange.ClearFailureHandled();
                     exchange.ExceptionHandled = false;
                 }
 
@@ -337,26 +395,64 @@ public class OnExceptionProcessor : IProcessor
         }
     }
 
-    private ExceptionHandler? FindHandler(Exception ex, IExchange exchange)
+    /// <summary>
+    /// The handler of this scope for <paramref name="ex"/> and how far its type is from the exception it matched
+    /// (0 — exactly that type), or no handler. See the class remarks for the rule.
+    /// </summary>
+    internal (ExceptionHandler? Handler, int Distance) FindHandler(Exception ex, IExchange exchange)
     {
-        // Camel semantics: pick the most-specific (most-derived) matching handler, not the first
-        // declared. Among candidates whose type matches and whose OnWhen guard passes, prefer the one
-        // whose ExceptionType is deepest in the hierarchy; ties keep declaration order (first wins).
         ExceptionHandler? best = null;
-        foreach (var h in _handlers)
+        var bestDistance = int.MaxValue;
+        foreach (var failure in InnermostFirst(ex))
         {
-            if (!h.ExceptionType.IsInstanceOfType(ex)) continue;
-            if (h.OnWhenPredicate != null && !h.OnWhenPredicate(exchange)) continue;
-            if (best == null || IsMoreSpecific(h.ExceptionType, best.ExceptionType))
-                best = h;
+            var failureType = failure.GetType();
+            ExceptionHandler? candidate = null;
+            var candidateDistance = int.MaxValue;
+            foreach (var h in _handlers)
+            {
+                if (!h.ExceptionType.IsInstanceOfType(failure)) continue;
+                if (h.OnWhenPredicate != null && !h.OnWhenPredicate(exchange)) continue;
+
+                var distance = Distance(failureType, h.ExceptionType);
+                if (distance < candidateDistance)
+                {
+                    candidate = h;
+                    candidateDistance = distance;
+                    if (distance == 0)
+                        break;
+                }
+            }
+
+            // The earlier exception of the walk keeps a tie.
+            if (candidate is not null && candidateDistance < bestDistance)
+            {
+                best = candidate;
+                bestDistance = candidateDistance;
+            }
+            if (bestDistance == 0)
+                break;
         }
-        return best;
+        return (best, bestDistance);
     }
 
-    /// <summary><paramref name="candidate"/> is more specific than <paramref name="current"/> when it is
-    /// a strict subtype — <paramref name="current"/> is assignable from it but not the reverse.</summary>
-    private static bool IsMoreSpecific(Type candidate, Type current)
-        => candidate != current && current.IsAssignableFrom(candidate);
+    /// <summary>The failure and its causes, the innermost cause first, the thrown exception last.</summary>
+    private static List<Exception> InnermostFirst(Exception ex)
+    {
+        var chain = new List<Exception>();
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+            chain.Add(current);
+        chain.Reverse();
+        return chain;
+    }
+
+    /// <summary>How many base-type steps separate <paramref name="failureType"/> from <paramref name="handlerType"/>.</summary>
+    private static int Distance(Type failureType, Type handlerType)
+    {
+        var distance = 0;
+        for (var type = failureType; type is not null && type != handlerType; type = type.BaseType)
+            distance++;
+        return distance;
+    }
 
     /// <summary>Gets the registered handlers.</summary>
     public IReadOnlyList<ExceptionHandler> Handlers => _handlers;
@@ -380,6 +476,8 @@ public class OnExceptionProcessor : IProcessor
     /// <param name="AllowRedeliveryWhileStopping">When false (default), redelivery stops immediately if cancellation is requested.</param>
     /// <param name="LogStackTrace">Whether to include the full stack trace in retry log messages (default: true).</param>
     /// <param name="LogExhausted">Whether to log when all retries are exhausted (default: true).</param>
+    /// <param name="LogHandled">Whether to log the exhausted failure when the handler handled it (default: false, as in Camel).</param>
+    /// <param name="LogContinued">Whether to log the exhausted failure when the handler continued it (default: false, as in Camel).</param>
     public record ExceptionHandler(
         Type ExceptionType,
         IProcessor Processor,
@@ -398,7 +496,9 @@ public class OnExceptionProcessor : IProcessor
         bool UseOriginalBody = false,
         bool AllowRedeliveryWhileStopping = false,
         bool LogStackTrace = true,
-        bool LogExhausted = true)
+        bool LogExhausted = true,
+        bool LogHandled = false,
+        bool LogContinued = false)
     {
         /// <summary>Processor invoked every time the exception occurs, before any retry.</summary>
         public IProcessor? OnExceptionOccurredProcessor { get; init; }

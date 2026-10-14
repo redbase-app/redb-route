@@ -72,7 +72,8 @@ node ids and labels, `WeaveById` targets, generated-code comments).
 `validateXsd`, `xslt`, `marshal`, `unmarshal`, `controlBus`, `enrich`, `pollEnrich`,
 `recipientList`, `dynamicRouter`, `routingSlip`, `claimCheck`, `beginTransaction`,
 `commitTransaction`, `rollbackTransaction`, `rollbackAll`, `exceptionHandled`, `routePolicy`,
-`saga`, `scatterGather`, `loadBalance`, `normalize`.
+`saga`, `scatterGather`, `loadBalance`, `normalize`, `spanTag` (`key`, `value` or `expr`,
+`target="Inbound"` for the request's own span — a business key to find the trace by; exported unfiltered).
 
 **Scopes** (children are steps) — `filter`, `split` (with `tokenizeLines` / `tokenizeXml` /
 `tokenizeJsonArray` children), `multicast`, `aggregate`, `tryCatch` (`try`/`catch`/`finally`),
@@ -84,9 +85,10 @@ node ids and labels, `WeaveById` targets, generated-code comments).
 **Branching** — `choice` with `when` (expression or `predicate="#name"` registry reference)
 and `otherwise`.
 
-**Container level** (directly under `<routes>`; the handlers apply to every route of the context, not only of this file) —
+**Container level** (directly under `<routes>`; the handlers apply to the routes of this file) —
 `bean`, `onException`, `intercept`, `interceptFrom`, `interceptSendToEndpoint`,
-`onCompletion`, and package-contributed top-level elements such as `rest`.
+`onCompletion`, and package-contributed top-level elements such as `rest`. `routeConfiguration` is the
+container-level element whose `onException` blocks reach the routes of **other** files too.
 
 A few rules that keep documents unambiguous:
 
@@ -282,7 +284,11 @@ The gate counts `<redb><idempotentRepository name>` as a declaration of `dedup`,
 needs: `IIdempotentRepository` for `<idempotentConsumer>`, `IClaimCheckRepository` for
 `<claimCheck>`.
 
-Handlers declared at the container level apply to every route of the **context**, not only to the routes of their own file: the engine registers `onException`, `intercept*` and `onCompletion` of every builder globally, so one file of handlers covers the routes of all the other files and the C# routes of the same context. Declare each of them once:
+Handlers declared at the container level apply to the routes **of their own file** — each file is a route builder,
+and a builder's `onException`, `intercept*` and `onCompletion` cover its own routes (Apache Camel's RouteBuilder scope;
+they used to leak to every route of the context — see the CHANGELOG). For a failure of any route of the context that
+no `onException` took, the context has its dead letter channel: `<deadLetterChannel uri="..."/>` in `context.xml`
+(see [The context document](#the-context-document)).
 
 ```xml
 <onException exceptions="System.Exception" handled="true"
@@ -290,6 +296,47 @@ Handlers declared at the container level apply to every route of the **context**
   <log level="Error">[ERR] ${routeId}: ${exception.message}</log>
 </onException>
 ```
+
+### Handlers shared by several files: `<routeConfiguration>`
+
+Apache Camel's Route Configuration. Its `<onException>` blocks apply to the routes of every file and every C#
+builder of the context, so one file can hold the error handling of a whole module:
+
+```xml
+<!-- errors.route.xml: no routes, only the shared handlers -->
+<routes xmlns="urn:redb:route:1.0">
+  <!-- No id: the default, for every route that names no configuration. -->
+  <routeConfiguration>
+    <onException exceptions="System.Exception" handled="true" maximumRedeliveries="2">
+      <log level="Error">[ERR] ${routeId}: ${exception.message}</log>
+    </onException>
+  </routeConfiguration>
+
+  <!-- With an id: for the routes that name it. -->
+  <routeConfiguration id="audit">
+    <onException exceptions="System.IO.IOException" handled="true">
+      <to uri="direct://audit-failed"/>
+    </onException>
+  </routeConfiguration>
+</routes>
+```
+
+```xml
+<route id="audit-publish" routeConfigurationId="audit">
+  <from uri="direct://audit"/>
+  ...
+</route>
+```
+
+- `routeConfigurationId` takes exact ids, a wildcard ending in `*` or a regular expression, separated by commas.
+  A route that names configurations does not get the default one.
+- An id is unique within the context; an exact id nobody declares fails `Start()`, naming the route.
+- The same element is valid in `context.xml`, beside `<deadLetterChannel>`.
+- Which handler takes a failure: the one whose exception type is nearest to it, among the route's own
+  `<onException>`, its file's and its configurations'. On a tie the route's own wins, and a configuration's handler
+  is used instead of its file's handler of the same type.
+- `<routeConfiguration>` takes `<onException>` only; intercepts and `<onCompletion>` stay at the container level of
+  the file whose routes they serve.
 
 ### The retry policy of a handler
 
@@ -299,7 +346,7 @@ Handlers declared at the container level apply to every route of the **context**
 <onException exceptions="System.Net.Http.HttpRequestException"
              handled="true" maximumRedeliveries="3" redeliveryDelay="00:00:02"
              exponentialBackOff="true" backOffMultiplier="2.0"
-             useOriginalBody="true" logStackTrace="false" logExhausted="true"
+             useOriginalBody="true" logStackTrace="false" logExhausted="true" logHandled="true"
              retryAttemptedLogLevel="Debug" retriesExhaustedLogLevel="Critical"
              onExceptionOccurred="#countFailure" onRedelivery="#stampAttempt"
              onPrepareFailure="#stampDead">
@@ -314,6 +361,11 @@ attempt follows; both are conditions of the handler, not steps of it. The three 
 `IProcessor` beans from the registry and run at their own moments: `onExceptionOccurred` on every
 occurrence, `onRedelivery` before each retry, `onPrepareFailure` once, before the handler takes
 over for good. A name the registry does not hold is refused at load, with its position.
+
+The entry written when the retries are over follows `logHandled` / `logContinued`: a failure the handler
+handled is logged only with `logHandled="true"`, one it continued only with `logContinued="true"` (both
+`false` by default, as in Camel), and an unhandled failure is always logged. A rollback-only exchange is
+logged either way, its work having been rolled back. `logExhausted="false"` silences the entry altogether.
 
 `handled="true"` ends the route after the handler; `continued="true"` resumes it at the step
 **after** the one that failed, as Camel's `continued(true)` does. What the resumption does not
@@ -352,6 +404,8 @@ Besides route files, a package can carry a `context.xml` — the context-level c
     <component type="redb.Route.Sql.SqlComponent, redb.Route.Sql"/>
   </components>
   <bean name="main-db" type="…"> … </bean>
+  <!-- the context's dead letter channel: a failure of any route no onException took -->
+  <deadLetterChannel uri="direct://errors"/>
   <onInit>
     <to uri="sql:CREATE TABLE IF NOT EXISTS demo_log (id BIGINT)?dataSource=#main-db"/>
     <to uri="bean:#seeder?method=EnsureDefaults"/>

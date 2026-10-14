@@ -109,6 +109,16 @@ public sealed class As4EndpointOptions : EndpointOptions
     [EndpointRole(EndpointRole.Consumer)]
     public bool StreamBody { get; set; }
 
+    /// <summary>
+    /// If true, the consumer always sets the exchange body to the list of <see cref="As4Payload"/>, in the order of
+    /// <c>eb:PartInfo</c>: one entry for a single payload, none for a message without payloads. Each entry keeps the
+    /// Content-ID and the part properties, which a single payload handed as the body itself does not carry. The same
+    /// list is what a send endpoint takes, so a route can pass a received message on as it came. Takes precedence over
+    /// <see cref="StreamBody"/>. (default: false)
+    /// </summary>
+    [EndpointRole(EndpointRole.Consumer)]
+    public bool PayloadList { get; set; }
+
     /// <summary>Bind address of the receive server. Default 0.0.0.0.</summary>
     [EndpointRole(EndpointRole.Consumer)]
     public string Host { get; set; } = "0.0.0.0";

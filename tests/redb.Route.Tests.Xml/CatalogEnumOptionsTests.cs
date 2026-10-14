@@ -23,10 +23,21 @@ public sealed class ProbeTlsComponent : ComponentBase
         => throw new NotSupportedException("catalog-only test component");
 }
 
+/// <summary>A pick-one enum whose list is long enough to lose the case-insensitive union.</summary>
+public enum ProbeFileExist
+{
+    Override,
+    Append,
+    Fail,
+    Ignore,
+}
+
 /// <summary>The options <see cref="ProbeTlsComponent"/> binds.</summary>
 public sealed class ProbeTlsEndpointOptions : EndpointOptions
 {
     public ProbeAckMode AckMode { get; set; }
+
+    public ProbeFileExist FileExist { get; set; }
 
     public SslProtocols SslProtocols { get; set; }
 
@@ -68,6 +79,9 @@ public sealed class ProbeInboxEndpoint(EndpointUri uri, IComponent component, Pr
 /// parses member names in any case, and a [Flags] enum takes several members joined by commas.
 /// The schema used to take exact C# names only (<c>ackMode="manual"</c>, the engine's own
 /// spelling, was an error) and one flags member at most (<c>sslProtocols="Tls12,Tls13"</c> was one).
+/// A LONG pick-one list is the one exception, and it is deliberate: the case-insensitive form costs
+/// the editor's language server its memory, so above the threshold the schema lists the member names
+/// and nothing more (see <c>XmlRouteSchema.EnumOptionType</c>).
 /// </summary>
 public sealed class CatalogEnumOptionsTests
 {
@@ -118,4 +132,15 @@ public sealed class CatalogEnumOptionsTests
     [InlineData("sslProtocols=\"Tls12,\"")]
     public void Schema_RefusesWhatTheEngineRefuses(string attributes)
         => Validate(attributes).Should().NotBeEmpty();
+
+    [Fact]
+    public void Schema_LongPickOneList_TakesTheNamesTheCatalogLists_AndNoOtherCase()
+    {
+        // The one deliberate exception (see the class comment): the case-insensitive union for the
+        // catalog's 43 long pick-one lists is what took the editor's language server past its memory
+        // on the first completion (2026-10-08). The engine goes on parsing any case, the editor asks
+        // for the spelling the catalog carries.
+        Validate("fileExist=\"Append\"").Should().BeEmpty();
+        Validate("fileExist=\"append\"").Should().NotBeEmpty();
+    }
 }

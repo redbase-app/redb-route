@@ -108,8 +108,10 @@ public interface IRouteContext : IDisposable
     // ── Exception Handling ──
 
     /// <summary>
-    /// Gets or sets the last-resort error handler invoked when no local or global
-    /// exception handler matches. Set to <c>null</c> to disable.
+    /// Gets or sets the context's error handler — Apache Camel's context-level error handler: on every route, the
+    /// last resort for a failure no <c>OnException</c> took and no local or global handler matches. A handler that
+    /// marks the exchange handled (<see cref="IExchange.ExceptionHandled"/>, as a dead letter channel does) ends the
+    /// failure; otherwise the failure goes on to the caller. Set to <c>null</c> to disable.
     /// </summary>
     IErrorHandler? ErrorHandler { get; set; }
 
@@ -126,7 +128,9 @@ public interface IRouteContext : IDisposable
     /// 1. Local route handler (by <see cref="IExchange.RouteId"/>).
     /// 2. Global handler (registered via <see cref="AddGlobalExceptionHandler{TException}"/>).
     /// 3. Fallback error handler.
-    /// Walks the exception type hierarchy to find the best matching handler.
+    /// Walks the exception type hierarchy to find the best matching handler; throws when none matches. The same
+    /// lookup is the outermost layer of every route's error scope, so the engine does not call this method itself —
+    /// it is for a caller outside a route.
     /// </summary>
     /// <param name="exchange">The exchange that caused the exception.</param>
     /// <param name="exception">The exception to handle.</param>
@@ -156,7 +160,11 @@ public interface IRouteContext : IDisposable
     /// </summary>
     IReadOnlyCollection<(string RouteId, string MarkerName)> GetReplayMarkers();
 
-    /// <summary>Registers a global exception handler for a specific exception type.</summary>
+    /// <summary>
+    /// Registers a global exception handler for a specific exception type: on every route, for a failure of this type
+    /// no <c>OnException</c> took. The processor runs with the failure on the exchange; unless it marks the exchange
+    /// handled, the failure goes on to the caller.
+    /// </summary>
     /// <typeparam name="TException">Exception type to handle.</typeparam>
     /// <param name="processor">Processor to invoke when this exception type is caught.</param>
     void AddGlobalExceptionHandler<TException>(IProcessor processor) where TException : Exception;
@@ -168,7 +176,10 @@ public interface IRouteContext : IDisposable
     /// <param name="processor">Processor to invoke when the exception is caught.</param>
     void AddGlobalExceptionHandler(Type exceptionType, IProcessor processor);
 
-    /// <summary>Registers a local exception handler for a specific route and exception type.</summary>
+    /// <summary>
+    /// Registers a local exception handler for a specific route and exception type: checked before the global
+    /// handlers, for a failure of that route no <c>OnException</c> took.
+    /// </summary>
     /// <param name="routeId">Route identifier.</param>
     /// <param name="exceptionType">Exception type to handle.</param>
     /// <param name="processor">Processor to invoke when this exception type is caught in this route.</param>

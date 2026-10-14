@@ -298,6 +298,13 @@ internal static partial class CoreContributions
                     w2.PrintSteps(e);
                 }),
             ["traced"] = (e, w) => w.Scope(e, "Traced", [S6(e, "name")], "EndTraced"),
+            // Fully qualified: the generated file does not import redb.Route.Telemetry, and only a non-default target prints.
+            ["spanTag"] = (e, w) => w.Verb(e, "SpanTag", Trim(S6(e, "key"),
+                A(e, "expr") is { } x ? XmlCodeWriter.Expr(x) : S6(e, "value"),
+                A(e, "target") is { } t && Enum.Parse<redb.Route.Telemetry.SpanTarget>(t, true) is var target
+                    && target != redb.Route.Telemetry.SpanTarget.Enclosing
+                    ? $"global::redb.Route.Telemetry.SpanTarget.{target}"
+                    : null)),
             ["metered"] = (e, w) => w.Scope(e, "Metered", [S6(e, "name")], "EndMetered", body: w2 =>
             {
                 foreach (var child in e.Elements())
@@ -512,6 +519,8 @@ internal static partial class CoreContributions
         if (A(e, "useOriginalBody") == "true") w.Config("UseOriginalBody()");
         if (A(e, "logStackTrace") is { } st) w.Config($"LogStackTrace({XmlCodeWriter.Bool(bool.Parse(st))})");
         if (A(e, "logExhausted") is { } le) w.Config($"LogExhausted({XmlCodeWriter.Bool(bool.Parse(le))})");
+        if (A(e, "logHandled") is { } lh) w.Config($"LogHandled({XmlCodeWriter.Bool(bool.Parse(lh))})");
+        if (A(e, "logContinued") is { } lc) w.Config($"LogContinued({XmlCodeWriter.Bool(bool.Parse(lc))})");
         if (A(e, "retryAttemptedLogLevel") is { } ra) w.Config($"RetryAttemptedLogLevel({LevelRef(ra)})");
         if (A(e, "retriesExhaustedLogLevel") is { } re) w.Config($"RetriesExhaustedLogLevel({LevelRef(re)})");
         foreach (var (attribute, verb) in OnExceptionProcessorRefs)

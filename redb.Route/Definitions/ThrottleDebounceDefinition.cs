@@ -115,6 +115,9 @@ public class DebounceDefinition : RouteDefinitionBase<DebounceDefinition>, IRout
     public override IProcessor CreateProcessor(IRouteContext context)
     {
         IProcessor downstream = BuildPipeline(Outputs, context);
+        // The body only ever runs on a flush, after the exchange that fed it has left the route's error wrappers: it is
+        // wrapped by the route's error scope (its OnException, its builder's, the context's handlers).
+        downstream = (context as Core.RouteContext)?.DetachedErrorScope?.WrapDetached(downstream) ?? downstream;
         var loggerFactory = context.GetService<ILoggerFactory>();
         var logger = loggerFactory?.CreateLogger<DebounceProcessor>();
         return new DebounceProcessor(downstream, _keyExtractor, _quietPeriod, logger);

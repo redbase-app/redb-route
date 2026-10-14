@@ -146,8 +146,8 @@ public class ThreadsProcessorTests : IAsyncDisposable
 
         _context.AddRoutes(r =>
         {
-            // OnException is registered as a global handler; the detached pool worker routes to it
-            // via IRouteContext.HandleException.
+            // The builder's OnException is kept for this route's HandleException; the detached pool worker
+            // routes to it through IRouteContext.HandleException.
             r.OnException<InvalidOperationException>()
                 .Handled()
                 .Process(e => handled.Add((int)e.In.Body!));

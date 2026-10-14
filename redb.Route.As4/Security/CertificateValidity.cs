@@ -90,6 +90,7 @@ internal static class CertificateValidity
             throw new CryptographicException(problem);
     }
 
-    private static bool NamesRevocationSources(X509Certificate2 certificate) =>
+    /// <summary>Whether <paramref name="certificate"/> names a CRL distribution point or an authority information access.</summary>
+    internal static bool NamesRevocationSources(X509Certificate2 certificate) =>
         certificate.Extensions.Any(e => e.Oid?.Value is CrlDistributionPointsOid or AuthorityInformationAccessOid);
 }

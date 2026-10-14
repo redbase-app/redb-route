@@ -45,7 +45,8 @@ namespace redb.Route.Processors;
 /// </summary>
 public sealed class ThreadsProcessor : IProcessor, IRouteLifecycleListener
 {
-    private readonly IProcessor _body;
+    private readonly IProcessor _body;           // InOut: inline, inside the route's error handlers
+    private readonly IProcessor _detachedBody;   // InOnly workers: wrapped by the route's error scope
     private readonly int _poolSize;
     private readonly IRouteContext _context;
     private readonly ILogger? _logger;
@@ -81,8 +82,19 @@ public sealed class ThreadsProcessor : IProcessor, IRouteLifecycleListener
     /// <param name="context">Route context (used for error routing + lifecycle/drain registration).</param>
     /// <param name="logger">Optional logger.</param>
     public ThreadsProcessor(IProcessor body, int poolSize, int maxQueueSize, IRouteContext context, ILogger? logger = null)
+        : this(body, body, poolSize, maxQueueSize, context, logger)
+    {
+    }
+
+    /// <summary>
+    /// Creates a Threads processor whose in-only workers run <paramref name="detachedBody"/> — the body wrapped by the
+    /// route's error scope, since a worker runs after the caller and its error handlers have returned.
+    /// </summary>
+    internal ThreadsProcessor(IProcessor body, IProcessor detachedBody, int poolSize, int maxQueueSize, IRouteContext context,
+        ILogger? logger)
     {
         _body = body ?? throw new ArgumentNullException(nameof(body));
+        _detachedBody = detachedBody ?? throw new ArgumentNullException(nameof(detachedBody));
         if (poolSize < 1)
             throw new ArgumentOutOfRangeException(nameof(poolSize), poolSize, "poolSize must be at least 1.");
         if (maxQueueSize < 0)
@@ -260,16 +272,23 @@ public sealed class ThreadsProcessor : IProcessor, IRouteLifecycleListener
     {
         try
         {
-            await _body.Process(exchange, ct).ConfigureAwait(false);
+            await _detachedBody.Process(exchange, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             // Shutting down / cancelled — not a business error, do not route to OnException.
         }
+        catch (Exception ex) when (!ReferenceEquals(_detachedBody, _body))
+        {
+            // The route's whole error scope has run around the body (its OnException, its builder's, the context's
+            // handlers) and none took the failure: it ends here, with nobody left to give it to.
+            exchange.Exception = ex;
+            _logger?.LogError(ex, "Threads pool: exchange {ExchangeId} failed and no error handler took it.",
+                exchange.ExchangeId);
+        }
         catch (Exception ex)
         {
-            // Detached from the caller: route the failure to the route's error handling explicitly,
-            // since the ancestor OnException wrapper has already returned on the caller's thread.
+            // Built outside a route compiler, with no error scope around the body: the context's handlers, explicitly.
             exchange.Exception = ex;
             try
             {

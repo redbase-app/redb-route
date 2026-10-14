@@ -97,6 +97,36 @@ public class XmlRouteSchemaTests
             .Should().Be(XmlRouteSchema.Generate(Registry).ToString());
     }
 
+    [Fact]
+    public void EnumOption_LongerThanThreeMembers_LosesTheCaseInsensitiveUnion()
+    {
+        // The union spells every member out as character classes, so a long enum costs thousands of
+        // characters: at the catalog's five hundred enum sites the schema grew to 21k lines, and the
+        // editor's language server died with an out-of-memory error on the first completion
+        // (2026-10-08). Short lists keep the union, long ones go back to the plain member list.
+        var component = new CatalogComponent(
+            "seda", [], "redb.Route", "redb.Route.Components.SedaEndpointOptions", "queue", false,
+            [
+                new CatalogOption("AckMode", "enum", "Manual", false, ["Manual", "Auto"],
+                    Role: null, ConnectionParameter: false, ConnectionFactoryReference: false),
+                new CatalogOption("FileExist", "enum", "Override", false,
+                    ["Override", "Append", "Fail", "Ignore", "Move", "TryRename"],
+                    Role: null, ConnectionParameter: false, ConnectionFactoryReference: false),
+            ], Lenient: false);
+
+        var schema = XDocument.Parse(XmlRouteSchema.Generate(Registry, [component]).ToString());
+        var xs = schema.Root!.Name.Namespace;
+
+        XElement Option(string name) => schema.Descendants(xs + "attribute")
+            .First(a => (string?)a.Attribute("name") == name);
+
+        Option("ackMode").Descendants(xs + "union").Should().HaveCount(1,
+            "a two-member enum still gets the case-insensitive union");
+        Option("fileExist").Descendants(xs + "union").Should().BeEmpty();
+        Option("fileExist").Descendants(xs + "enumeration").Select(e => (string?)e.Attribute("value"))
+            .Should().Equal("Override", "Append", "Fail", "Ignore", "Move", "TryRename");
+    }
+
     // ── validation behavior the phase promises ───────────────────────────────
 
     [Fact]

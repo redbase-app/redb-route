@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using redb.Route.Configuration;
 using redb.Route.Core;
+using redb.Route.Expressions;
 using redb.Route.Http;
 using redb.Route.Telemetry;
 using redb.Route.Tests.Telemetry;
@@ -52,6 +53,23 @@ public sealed class HttpTracePropagationTests : IAsyncLifetime
                 .Process(async (_, ct) => await Task.Delay(3000, ct));
             r.From($"http://127.0.0.1:{port}/echo?inOut=true").RouteId($"trace-{port}-echo")
                 .Process(e => e.In.Body = e.In.Headers.TryGetValue("traceparent", out var tp) ? tp?.ToString() : "<none>");
+            r.From($"http://127.0.0.1:{port}/tagged?inOut=true").RouteId($"trace-{port}-tagged")
+                .SpanTag("shop.order.id", new HeaderExpression("X-Order"), SpanTarget.Inbound)
+                .SetBody("ok");
+        });
+        // A builder of its own: its OnException applies to its routes only.
+        _ctx.AddRoutes(r =>
+        {
+            r.OnException<InvalidOperationException>().Handled(true)
+                .SpanTag("shop.order.id", new PropertyExpression("orderNo"), SpanTarget.Inbound)
+                .SetHeader(HttpHeaders.ResponseCode, 500)
+                .SetBody("failed");
+            r.From($"http://127.0.0.1:{port}/tagged-failure?inOut=true").RouteId($"trace-{port}-tagged-failure")
+                .Process(e =>
+                {
+                    e.Properties["orderNo"] = "A-500";
+                    throw new InvalidOperationException("the order could not be taken");
+                });
         });
         await _ctx.Start();
 
@@ -112,6 +130,33 @@ public sealed class HttpTracePropagationTests : IAsyncLifetime
 
         var route = routes.Activities.Should().ContainSingle().Subject;
         route.ParentSpanId.Should().Be(server.SpanId, "the route runs inside the request");
+    }
+
+    [Fact]
+    public async Task SpanTag_Inbound_puts_the_business_key_on_the_server_span_of_the_request()
+    {
+        using var probe = RouteTelemetryProbe.ForEndpointContaining($":{_port}/tagged");
+        using var routes = RouteTelemetryProbe.ForRouteIdPrefix($"trace-{_port}-tagged");
+
+        var response = await Get(_port, "/tagged", ("X-Order", "A-42"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        ServerSpan(probe, "/tagged").GetTagItem("shop.order.id").Should().Be("A-42");
+        routes.Activities.Should().ContainSingle()
+            .Which.GetTagItem("shop.order.id").Should().BeNull("the inbound target is the request's span, not the route's");
+    }
+
+    [Fact]
+    public async Task SpanTag_Inbound_in_an_OnException_body_tags_the_server_span_of_the_failed_request()
+    {
+        using var probe = RouteTelemetryProbe.ForEndpointContaining($":{_port}/tagged-failure");
+
+        var response = await Get(_port, "/tagged-failure");
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        (await response.Content.ReadAsStringAsync()).Should().Be("failed", "the handler answered, not the consumer's default");
+        ServerSpan(probe, "/tagged-failure").GetTagItem("shop.order.id").Should().Be("A-500",
+            "a request answered with 500 is found by its business key too");
     }
 
     [Fact]

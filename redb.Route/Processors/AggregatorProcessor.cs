@@ -21,6 +21,13 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable, IStopAwareProce
     /// <summary>Logs groups dropped or failing to complete on stop.</summary>
     internal ILogger? Logger { get; init; }
 
+    /// <summary>
+    /// The target for a group completed by the timeout or on stop — after every exchange that fed it has left the
+    /// route's error wrappers: the target wrapped by the route's error scope. <c>null</c> outside a route compiler,
+    /// where the target is used as it is.
+    /// </summary>
+    internal IProcessor? DetachedTarget { get; init; }
+
     private readonly Func<IExchange, string> _correlationKey;
     private readonly Func<IExchange, IExchange, IExchange> _aggregationStrategy;
     private readonly Func<IExchange, bool> _completionPredicate;
@@ -147,7 +154,7 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable, IStopAwareProce
                 ProcessorMetrics.AggregatorInflightGroups.Add(-1);
             // Completed by this arrival: a failure of the completed group is this call's failure too, as it was when
             // the group went on with the caller's own exchange.
-            var aggregate = await CompleteAsync(completed, ct).ConfigureAwait(false);
+            var aggregate = await CompleteAsync(completed, _target, ct).ConfigureAwait(false);
             if (aggregate.Exception is { } failure && !aggregate.ExceptionHandled)
                 exchange.Exception ??= failure;
         }
@@ -166,13 +173,13 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable, IStopAwareProce
     /// Sends a completed group on down the route in a DI scope of its own, then releases every exchange it held.
     /// Returns the aggregate, released; its outcome stays readable.
     /// </summary>
-    private async Task<IExchange> CompleteAsync(Group group, CancellationToken ct)
+    private async Task<IExchange> CompleteAsync(Group group, IProcessor target, CancellationToken ct)
     {
         var aggregate = group.Aggregate;
         (aggregate as Core.Exchange)?.EnsureOwnScope();
         try
         {
-            await _target.Process(aggregate, ct).ConfigureAwait(false);
+            await target.Process(aggregate, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -258,7 +265,7 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable, IStopAwareProce
             ProcessorMetrics.AggregatorInflightGroups.Add(-1);
             try
             {
-                await CompleteAsync(group, ct).ConfigureAwait(false);
+                await CompleteAsync(group, DetachedTarget ?? _target, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
@@ -289,7 +296,7 @@ public class AggregatorProcessor : IProcessor, IAsyncDisposable, IStopAwareProce
             ProcessorMetrics.AggregatorCompleted.Add(1);
             try
             {
-                await CompleteAsync(group, ct).ConfigureAwait(false);
+                await CompleteAsync(group, DetachedTarget ?? _target, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {

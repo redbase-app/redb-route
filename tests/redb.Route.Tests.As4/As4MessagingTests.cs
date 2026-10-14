@@ -134,6 +134,22 @@ public class As4MessagingTests
     }
 
     [Fact]
+    public void RepeatedPartProperty_IsInvalidHeader()
+    {
+        // A part property named twice reaches no route: the payload list keys part properties by name.
+        var xml = MessagingWriter.CreateEnvelope(SampleUserMessage(new PartInfo("cid:p1@redb.test",
+            [new Property("MimeType", "text/xml", null), new Property("CharacterSet", "UTF-8", null)]))).OuterXml;
+        const string find = "<eb:Property name=\"CharacterSet\">UTF-8</eb:Property>";
+        xml.Should().Contain(find);
+
+        var act = () => MessagingReader.Read(Load(xml.Replace(find, find + "<eb:Property name=\"CharacterSet\" type=\"other\">ISO-8859-1</eb:Property>")));
+
+        act.Should().Throw<As4ProcessingException>()
+            .Where(e => e.Code == As4ErrorCode.InvalidHeader)
+            .WithMessage("*PartProperties*property 'CharacterSet' appears more than once*");
+    }
+
+    [Fact]
     public void TwoUserMessages_AreInvalid()
     {
         var xml = MessagingWriter.CreateEnvelope(SampleUserMessage()).OuterXml;
@@ -194,6 +210,156 @@ public class As4MessagingTests
         var act = () => As4Compression.Decompress(part, info, 1_000_000, Spool);
 
         act.Should().Throw<As4ProcessingException>().Where(e => e.Code == As4ErrorCode.DecompressionFailure);
+    }
+
+    [Theory]
+    [InlineData("half")]            // stops in the middle of the deflate stream
+    [InlineData("no trailer")]      // everything but the CRC-32 and the length
+    [InlineData("half a trailer")]
+    [InlineData("header only")]
+    [InlineData("nothing")]
+    [InlineData("garbage after the header")]
+    public void Decompression_OfTruncatedOrDamagedGzip_IsDecompressionFailure(string damage)
+    {
+        // GZipStream inflates each of these without an exception, to a part of the document or to nothing.
+        var whole = As4TestMessages.Gzip(System.Text.Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("<invoice><id>42</id></invoice>", 40))));
+        var bytes = damage switch
+        {
+            "half" => whole[..(whole.Length / 2)],
+            "no trailer" => whole[..^8],
+            "half a trailer" => whole[..^4],
+            "header only" => whole[..10],
+            "nothing" => [],
+            _ => [.. whole[..10], .. Enumerable.Repeat((byte)0x5A, whole.Length - 10)],
+        };
+        var part = new SwaPart("p1", "application/gzip", bytes);
+        var info = new PartInfo("cid:p1", [new Property("MimeType", "text/xml", null), new Property("CompressionType", "application/gzip", null)]);
+
+        var act = () => As4Compression.Decompress(part, info, 1_000_000, Spool);
+
+        act.Should().Throw<As4ProcessingException>().Where(e => e.Code == As4ErrorCode.DecompressionFailure);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(200_000)]           // more than one read buffer
+    public void Decompression_OfAWholeGzip_ChecksItsTrailer_AndRestoresTheContent(int length)
+    {
+        var content = new byte[length];
+        new Random(length).NextBytes(content);
+        var part = new SwaPart("p1", "application/octet-stream", content);
+        var info = new PartInfo("cid:p1", As4Compression.Compress(part, Spool));
+
+        As4Compression.Decompress(part, info, 1_000_000, Spool).Should().BeTrue();
+
+        part.ToArray().Should().Equal(content);
+    }
+
+    [Theory]
+    [InlineData("whole", true)]
+    [InlineData("an empty member between", true)]
+    [InlineData("a header with name, comment, extra and crc", true)]
+    [InlineData("last member cut", false)]
+    [InlineData("last member without its trailer", false)]
+    [InlineData("first member's crc wrong", false)]
+    [InlineData("bytes after the last member", false)]
+    public void Decompression_OfSeveralGzipMembers_IsWalkedMemberByMember(string shape, bool whole)
+    {
+        // RFC 1952 §2.2: a gzip file is a series of members. GZipStream inflates them all; only a walk over the members
+        // tells a whole stream from one that stops inside its last member.
+        static byte[] Member(string text) => WholeGzip(System.Text.Encoding.UTF8.GetBytes(text));
+        var first = Member(string.Concat(Enumerable.Repeat("first ", 2000)));
+        var second = Member(string.Concat(Enumerable.Repeat("second ", 3000)));
+        var expected = string.Concat(Enumerable.Repeat("first ", 2000)) + string.Concat(Enumerable.Repeat("second ", 3000));
+
+        byte[] bytes = shape switch
+        {
+            "whole" => [.. first, .. second],
+            "an empty member between" => [.. first, .. WholeGzip([]), .. second],
+            "a header with name, comment, extra and crc" => [.. WithOptionalHeaderFields(first), .. second],
+            "last member cut" => [.. first, .. second[..(second.Length / 2)]],
+            "last member without its trailer" => [.. first, .. second[..^8]],
+            "first member's crc wrong" => [.. first[..^8], (byte)(first[^8] ^ 0xFF), .. first[^7..], .. second],
+            _ => [.. first, .. second, 0x00, 0x01, 0x02],
+        };
+        var part = new SwaPart("p1", "application/gzip", bytes);
+        var info = new PartInfo("cid:p1", [new Property("MimeType", "text/plain", null), new Property("CompressionType", "application/gzip", null)]);
+
+        if (whole)
+        {
+            As4Compression.Decompress(part, info, 1_000_000, Spool).Should().BeTrue();
+            System.Text.Encoding.UTF8.GetString(part.ToArray()).Should().Be(expected);
+        }
+        else
+        {
+            var act = () => As4Compression.Decompress(part, info, 1_000_000, Spool);
+            act.Should().Throw<As4ProcessingException>().Where(e => e.Code == As4ErrorCode.DecompressionFailure);
+        }
+    }
+
+    /// <summary>A whole gzip member of <paramref name="content"/>, also for empty content on every runtime.</summary>
+    private static byte[] WholeGzip(byte[] content)
+    {
+        var part = new SwaPart("m", "application/octet-stream", content);
+        As4Compression.Compress(part, Spool);
+        return part.ToArray();
+    }
+
+    /// <summary>The member with FEXTRA, FNAME, FCOMMENT and FHCRC set in its header (RFC 1952 §2.3.1).</summary>
+    private static byte[] WithOptionalHeaderFields(byte[] member)
+    {
+        var header = member[..10];
+        header[3] = 0x02 | 0x04 | 0x08 | 0x10;
+        byte[] extra = [3, 0, (byte)'a', (byte)'b', (byte)'c'];           // XLEN = 3, then three bytes
+        byte[] name = [(byte)'f', (byte)'.', (byte)'x', 0];
+        byte[] comment = [(byte)'c', 0];
+        // CRC16: the two least significant bytes of the CRC-32 of the header up to here.
+        byte[] before = [.. header, .. extra, .. name, .. comment];
+        var crc = ~redb.Route.As4.Compression.Crc32.Append(0xFFFFFFFFu, before);
+        byte[] headerCrc = [(byte)crc, (byte)(crc >> 8)];
+        return [.. before, .. headerCrc, .. member[10..]];
+    }
+
+    [Fact]
+    public void Multipart_IsWrittenWithCrlfLineEndings_OnEveryPlatform()
+    {
+        // MIME lines end in CRLF (RFC 2046). MimeKit's default follows the platform, so on Linux the body was written
+        // with a bare LF before each boundary: Domibus took it for the last byte of the encrypted attachment before it,
+        // and the AES-GCM tag did not match. The content here has no line break of its own, so every LF in the output
+        // belongs to the MIME structure.
+        SwaMessage.WireFormat.NewLineFormat.Should().Be(MimeKit.NewLineFormat.Dos);
+
+        var message = SwaMessage.Create(As4TestMessages.UserMessage("m1@a.example", "p1@a.example", moreContentIds: "p2@a.example"));
+        message.AddPart("p1@a.example", "application/octet-stream", [1, 2, 3, 250, 251]);
+        message.AddPart("p2@a.example", "application/octet-stream", [4, 5, 6]);
+        var (contentType, body) = message.Write();
+
+        var envelopeStart = body.AsSpan().IndexOf("<soapenv:Envelope"u8);
+        var envelopeEnd = body.AsSpan().IndexOf("</soapenv:Envelope>"u8);
+        for (var i = 0; i < body.Length; i++)
+        {
+            if (body[i] != (byte)'\n' || (i > envelopeStart && i < envelopeEnd)) continue;   // the envelope's own text aside
+            (i > 0 && body[i - 1] == (byte)'\r').Should().BeTrue($"the line break at offset {i} must be CRLF");
+        }
+
+        // And it reads back to the same bytes.
+        var read = SwaMessage.Read(contentType, body, 1024 * 1024);
+        read.Parts["p1@a.example"].ToArray().Should().Equal(1, 2, 3, 250, 251);
+        read.Parts["p2@a.example"].ToArray().Should().Equal(4, 5, 6);
+    }
+
+    [Fact]
+    public void Compression_OfEmptyContent_IsTheEmptyGzipMember_NotZeroBytes()
+    {
+        // GZipStream of .NET 9 and later writes nothing for empty content; zero bytes are not gzip to any other receiver.
+        var part = new SwaPart("p1", "text/xml", []);
+        As4Compression.Compress(part, Spool);
+
+        var compressed = part.ToArray();
+        compressed.Should().HaveCount(20);
+        compressed[..3].Should().Equal(0x1F, 0x8B, 0x08);
+        As4TestMessages.Gunzip(compressed).Should().BeEmpty();
     }
 
     [Fact]

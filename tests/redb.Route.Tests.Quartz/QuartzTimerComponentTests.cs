@@ -150,6 +150,7 @@ public class QuartzTimerComponentTests
         var component = new QuartzTimerComponent();
         var context = new RouteContext("qtimer-test-1");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("qtimer://tick?period=200");
         var endpoint = component.CreateEndpoint(uri);
@@ -160,11 +161,13 @@ public class QuartzTimerComponentTests
         var consumer = endpoint.CreateConsumer(processor);
         await consumer.Start();
 
-        QuartzConsumerRegistry.Get(endpoint.Uri.NormalizedKey).Should().NotBeNull();
+        var scheduler = context.GetService<global::Quartz.IScheduler>()!;
+        var jobKey = new global::Quartz.JobKey("tick", "redb");
+        QuartzConsumerRegistry.Get(scheduler, jobKey).Should().NotBeNull();
 
         await consumer.Stop();
 
-        QuartzConsumerRegistry.Get(endpoint.Uri.NormalizedKey).Should().BeNull();
+        QuartzConsumerRegistry.Get(scheduler, jobKey).Should().BeNull();
 
         context.Dispose();
     }
@@ -188,6 +191,7 @@ public class QuartzTimerComponentTests
         var component = new QuartzTimerComponent();
         var context = new RouteContext("qtimer-fire-test");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("qtimer://rapid?period=200");
         var endpoint = component.CreateEndpoint(uri);
@@ -229,6 +233,7 @@ public class QuartzTimerComponentTests
         var component = new QuartzTimerComponent();
         var context = new RouteContext("qtimer-fixedrate");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("qtimer://fr?period=200&fixedRate=true");
         var endpoint = component.CreateEndpoint(uri);
@@ -258,6 +263,7 @@ public class QuartzTimerComponentTests
         var component = new QuartzTimerComponent();
         var context = new RouteContext("qtimer-delay");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("qtimer://delayed?period=100&delay=2000");
         var endpoint = component.CreateEndpoint(uri);
@@ -287,6 +293,7 @@ public class QuartzTimerComponentTests
         var component = new QuartzTimerComponent();
         var context = new RouteContext("qtimer-pattern");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("qtimer://chk?period=200");
         var endpoint = component.CreateEndpoint(uri);
@@ -316,6 +323,7 @@ public class QuartzTimerComponentTests
         var component = new QuartzTimerComponent();
         var context = new RouteContext("qtimer-firetime");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("qtimer://ft?period=200");
         var endpoint = component.CreateEndpoint(uri);
@@ -348,6 +356,7 @@ public class QuartzTimerComponentTests
         var component = new QuartzTimerComponent();
         var context = new RouteContext("qtimer-idem");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("qtimer://idem?period=500");
         var endpoint = component.CreateEndpoint(uri);
@@ -375,6 +384,7 @@ public class QuartzTimerComponentTests
         var context = new RouteContext("shared-scheduler-test");
         context.AddComponent(cronComponent);
         context.AddComponent(timerComponent);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var cronUri = EndpointUriParser.Parse("cron://cJob?schedule=* * * * * ?");
         var timerUri = EndpointUriParser.Parse("qtimer://tJob?period=200");
@@ -406,6 +416,7 @@ public class QuartzTimerComponentTests
         var component = new QuartzTimerComponent();
         var context = new RouteContext("qtimer-error");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("qtimer://err?period=200");
         var endpoint = component.CreateEndpoint(uri);
@@ -505,6 +516,7 @@ public class QuartzTimerComponentTests
         var component = new QuartzTimerComponent();
         var context = new RouteContext("qtimer-group-test");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("qtimer://monitoring/heartbeat?period=200");
         var endpoint = component.CreateEndpoint(uri);

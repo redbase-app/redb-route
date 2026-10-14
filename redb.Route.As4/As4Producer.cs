@@ -109,7 +109,7 @@ internal sealed class As4Producer : ConnectableProducer
     }
 
     /// <summary>
-    /// Builds the request of <paramref name="messageId"/>: the body spooled as one payload (a large one to a temporary
+    /// Builds the request of <paramref name="messageId"/>: each payload of the body spooled (a large one to a temporary
     /// file), compressed per the agreement, signed, encrypted and written to a spool the HTTP content streams from.
     /// </summary>
     private async Task<As4Transmission> BuildAsync(IExchange exchange, As4Node node, As4Partner partner, string messageId, CancellationToken ct)
@@ -122,33 +122,100 @@ internal sealed class As4Producer : ConnectableProducer
             ?? Guid.NewGuid().ToString("D");
         var properties = MessageProperties(exchange, partner);
 
-        var contentId = "part-" + Guid.NewGuid().ToString("N") + "@" + host;
-        var contentType = exchange.In.ContentType ?? "application/octet-stream";
-        using var part = new SwaPart(contentId, contentType,
-            await As4Spool.RunAsync(_spool, (output, token) => WritePayloadAsync(exchange.In.Body, output, token), ct).ConfigureAwait(false));
-        var partProperties = partner.CompressPayloads
-            ? As4Compression.Compress(part, _spool)
-            : [new Property(As4Compression.MimeTypeProperty, part.ContentType, null)];
+        // One part per payload, eb:PartInfo in the order the route gave them: the first is the leading business
+        // document (eDelivery AS4 1.16 §3.2.3).
+        var parts = new List<SwaPart>();
+        try
+        {
+            var partInfos = new List<PartInfo>();
+            foreach (var payload in Payloads(exchange.In, partner))
+            {
+                var contentId = payload.ContentId ?? "part-" + Guid.NewGuid().ToString("N") + "@" + host;
+                if (parts.Any(p => p.ContentId == contentId))
+                    throw new InvalidOperationException(
+                        $"AS4 message to partner '{partner.Name}' has two payloads with Content-ID '{contentId}'.");
 
-        var user = new UserMessage(
-            new MessageInfo(DateTimeOffset.UtcNow, messageId, refToMessageId),
-            new Party([new PartyId(node.Factory.OurPartyId!, node.Factory.OurPartyIdType)], partner.OurRole),
-            new Party([new PartyId(partner.PartyId!, partner.PartyIdType)], partner.PartnerRole),
-            new CollaborationInfo(
-                partner.AgreementRef is null ? null : new AgreementRef(partner.AgreementRef, partner.AgreementRefType, partner.PModeId),
-                new Service(service, serviceType), action, conversationId),
-            properties,
-            [new PartInfo(WsSecurityNames.CidUri(contentId), partProperties)],
-            null);
+                var part = new SwaPart(contentId, payload.ContentType,
+                    await As4Spool.RunAsync(_spool, (output, token) => WritePayloadAsync(payload.Content, output, token), ct).ConfigureAwait(false));
+                parts.Add(part);
+                IReadOnlyList<Property> described = partner.CompressPayloads
+                    ? As4Compression.Compress(part, _spool)
+                    : [new Property(As4Compression.MimeTypeProperty, part.ContentType, null)];
+                partInfos.Add(new PartInfo(WsSecurityNames.CidUri(contentId), [.. described, .. payload.Properties]));
+            }
 
-        using var message = SwaMessage.Create(MessagingWriter.CreateEnvelope(user), _spool);
-        message.Parts.Add(contentId, part);
+            var user = new UserMessage(
+                new MessageInfo(DateTimeOffset.UtcNow, messageId, refToMessageId),
+                new Party([new PartyId(node.Factory.OurPartyId!, node.Factory.OurPartyIdType)], partner.OurRole),
+                new Party([new PartyId(partner.PartyId!, partner.PartyIdType)], partner.PartnerRole),
+                new CollaborationInfo(
+                    partner.AgreementRef is null ? null : new AgreementRef(partner.AgreementRef, partner.AgreementRefType, partner.PModeId),
+                    new Service(service, serviceType), action, conversationId),
+                properties,
+                partInfos,
+                null);
 
-        var signed = As4SecurityEngine.Sign(message, node.Factory.SigningCertificate!, partner.KeyReference, partner.TimestampTtl, DateTimeOffset.UtcNow);
-        As4SecurityEngine.Encrypt(message, partner.PartnerEncryptionCertificate!, partner.KeyReference);
-        string? wireType = null;
-        var body = As4Spool.Run(_spool, output => wireType = message.WriteTo(output));
-        return new As4Transmission(messageId, partner.Name!, exchange.In.Body, body, wireType!, signed);
+            using var message = SwaMessage.Create(MessagingWriter.CreateEnvelope(user), _spool);
+            foreach (var part in parts)
+                message.Parts.Add(part.ContentId, part);
+
+            var signed = As4SecurityEngine.Sign(message, node.Factory.SigningCertificate!, partner.KeyReference, partner.TimestampTtl, DateTimeOffset.UtcNow,
+                node.SigningPath);
+            As4SecurityEngine.Encrypt(message, partner.PartnerEncryptionCertificate!, partner.KeyReference);
+            string? wireType = null;
+            var body = As4Spool.Run(_spool, output => wireType = message.WriteTo(output));
+            return new As4Transmission(messageId, partner.Name!, exchange.In.Body, body, wireType!, signed);
+        }
+        finally
+        {
+            foreach (var part in parts) part.Dispose();
+        }
+    }
+
+    /// <summary>What the route asks to send as one payload: its content as the exchange gave it.</summary>
+    private readonly record struct OutboundPayload(string? ContentId, string ContentType, object? Content, IReadOnlyList<Property> Properties);
+
+    /// <summary>
+    /// The payloads of the message. A body that is a list of <see cref="As4Payload"/> (or one of them) is sent as that
+    /// many payloads in that order, each with its Content-ID and part properties; an empty list is a message without
+    /// payloads. Any other body is one payload with a generated Content-ID and the media type of the message.
+    /// </summary>
+    private static IReadOnlyList<OutboundPayload> Payloads(IMessage message, As4Partner partner)
+    {
+        IEnumerable<As4Payload>? listed = message.Body switch
+        {
+            As4Payload one => [one],
+            IEnumerable<As4Payload> many => many,
+            _ => null,
+        };
+        if (listed is null)
+            return [new OutboundPayload(null, message.ContentType ?? "application/octet-stream", message.Body, [])];
+
+        var payloads = new List<OutboundPayload>();
+        foreach (var payload in listed)
+        {
+            if (payload is null)
+                throw new InvalidOperationException($"AS4 message to partner '{partner.Name}': a payload in the body list is null.");
+            if (payload.ContentId is { } id && (id.Length == 0 || id.Any(c => char.IsWhiteSpace(c) || c is '<' or '>')))
+                throw new InvalidOperationException(
+                    $"AS4 message to partner '{partner.Name}': Content-ID '{id}' is not usable; give it without angle brackets and spaces, or null.");
+            if (string.IsNullOrWhiteSpace(payload.ContentType))
+                throw new InvalidOperationException($"AS4 message to partner '{partner.Name}': a payload has no ContentType.");
+
+            if (payload.Properties is not null && payload.Properties.TryGetValue(PayloadConsistency.CharacterSetProperty, out var characterSet)
+                && !PayloadConsistency.IsCharacterSetName(characterSet))
+                throw new InvalidOperationException(
+                    $"AS4 message to partner '{partner.Name}': CharacterSet '{characterSet}' is not an encoding name of XML 1.0 §4.3.3 (UTF-8, ISO-8859-1, ...).");
+
+            // MimeType and CompressionType describe what the connector does to the part; they are its own to write.
+            var properties = (payload.Properties ?? new Dictionary<string, string>())
+                .Where(p => p.Key is not (As4Compression.MimeTypeProperty or As4Compression.CompressionTypeProperty) && p.Value is not null)
+                .Select(p => new Property(p.Key, p.Value, null))
+                .OrderBy(p => p.Name, StringComparer.Ordinal)
+                .ToList();
+            payloads.Add(new OutboundPayload(payload.ContentId, payload.ContentType, payload.Content, properties));
+        }
+        return payloads;
     }
 
     /// <summary>
@@ -303,7 +370,7 @@ internal sealed class As4Producer : ConnectableProducer
         try
         {
             As4SecurityEngine.Verify(answer, partner.PartnerSigningCertificates.ToList(), partner.TimestampTolerance, DateTimeOffset.UtcNow,
-                Node!.Factory.Revocation, partner.TimestampTimeToLive);
+                Node!.Factory.Revocation, partner.TimestampTimeToLive, partner.PkiPathTrust);
         }
         catch (CryptographicException e)
         {
@@ -371,15 +438,26 @@ internal sealed class As4Producer : ConnectableProducer
 
     /// <summary>
     /// <c>eb:MessageProperties</c> from the exchange headers under <see cref="As4Headers.PropertyPrefix"/> — the only
-    /// exchange headers that reach the partner. The eDelivery four-corner properties are required.
+    /// exchange headers that reach the partner, each with the <c>type</c> a header under
+    /// <see cref="As4Headers.PropertyTypePrefix"/> gives it. The eDelivery four-corner properties are required unless
+    /// the agreement says otherwise (<see cref="As4Partner.RequireFourCornerProperties"/>).
     /// </summary>
     private static IReadOnlyList<Property> MessageProperties(IExchange exchange, As4Partner partner)
     {
-        var properties = exchange.In.Headers
+        var headers = exchange.In.Headers;
+        var properties = headers
             .Where(h => h.Key.StartsWith(As4Headers.PropertyPrefix, StringComparison.Ordinal) && h.Value is not null)
-            .Select(h => new Property(h.Key[As4Headers.PropertyPrefix.Length..], h.Value!.ToString()!, null))
+            .Select(h =>
+            {
+                var name = h.Key[As4Headers.PropertyPrefix.Length..];
+                var type = headers.TryGetValue(As4Headers.PropertyTypePrefix + name, out var t) && t?.ToString() is { Length: > 0 } text ? text : null;
+                return new Property(name, h.Value!.ToString()!, type);
+            })
             .OrderBy(p => p.Name, StringComparer.Ordinal)
             .ToList();
+
+        if (!partner.RequireFourCornerProperties)
+            return properties;
 
         foreach (var required in new[] { As4Headers.OriginalSender, As4Headers.FinalRecipient })
         {

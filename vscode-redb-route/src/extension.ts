@@ -1,10 +1,13 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
 import * as path from "path";
 import { execFile } from "child_process";
 import { sniff } from "./sniff";
 import { scanRoutes, RouteEntry } from "./routescan";
 import { elementPosition } from "./elementposition";
-import { SKELETONS } from "./skeletons";
+import { skeletonsFor } from "./skeletons";
+import { skeletonPlace } from "./skeletonscope";
+import { buildIndex, ElementInfo, ElementIndex } from "./graphmodel";
 import { RouteGraphEditorProvider } from "./grapheditor";
 
 const FILE_GLOBS = ["**/*.route.xml", "**/*.redb-route.xml"];
@@ -20,6 +23,11 @@ const FILE_GLOBS = ["**/*.route.xml", "**/*.redb-route.xml"];
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     await wireSchemaCatalog(context);
 
+    // The generated element list, the same one the graph reads: the skeleton completion asks it
+    // which element holds steps (skeletonscope.ts), so the answer cannot drift from the schema.
+    const elements: ElementInfo[] = JSON.parse(fs.readFileSync(
+        context.asAbsolutePath(path.join("media", "redb-route-elements.json")), "utf8"));
+
     const tree = new RouteTreeProvider();
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider("redbRoutes", tree),
@@ -27,7 +35,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand("redbRoute.open", openAtLine),
         vscode.commands.registerCommand("redbRoute.showMermaid", showMermaid),
         vscode.languages.registerCompletionItemProvider(
-            "xml", new SkeletonCompletionProvider(), "<"),
+            "xml", new SkeletonCompletionProvider(buildIndex(elements)), "<"),
         RouteGraphEditorProvider.register(context),
         vscode.commands.registerCommand("redbRoute.openGraph", async (uri?: vscode.Uri) => {
             const target = uri ?? vscode.window.activeTextEditor?.document.uri;
@@ -77,16 +85,25 @@ async function wireSchemaCatalog(context: vscode.ExtensionContext): Promise<void
  * OUR documents (the sniff) and only at a new-element position.
  */
 class SkeletonCompletionProvider implements vscode.CompletionItemProvider {
+    constructor(private readonly index: ElementIndex) {}
+
     provideCompletionItems(
         document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem[] {
-        if (sniff(document.getText())?.kind !== "routes")
+        const text = document.getText();
+        if (sniff(text)?.kind !== "routes")
             return [];
-        const where = elementPosition(document.getText(), document.offsetAt(position));
+        const where = elementPosition(text, document.offsetAt(position));
         if (!where.ok)
+            return [];
+        // Only what the position takes: a `<route>` beside the routes, a step skeleton inside an
+        // element that holds steps. Offering the whole list here is how `<choice>` used to appear
+        // under `<routes>`, where the loader refuses it (skeletonscope.ts).
+        const place = skeletonPlace(text, where.replaceFrom, this.index);
+        if (!place)
             return [];
 
         const range = new vscode.Range(document.positionAt(where.replaceFrom), position);
-        return SKELETONS.map(skeleton => {
+        return skeletonsFor(place).map(skeleton => {
             const item = new vscode.CompletionItem(
                 skeleton.label, vscode.CompletionItemKind.Snippet);
             item.detail = skeleton.detail;

@@ -99,6 +99,38 @@ public sealed class XsdValidator : IMessageValidator
 
     private ValidationResult ValidateXml(string xml)
     {
+        // The document's root must be a global element of the schema. The .NET schema processor
+        // reports an element it has no declaration for as a *warning* ("Could not find schema
+        // information for the element 'x'") and skips its subtree; warnings are not delivered to the
+        // handler unless ReportValidationWarnings is set, so an unknown-namespace, foreign-namespace
+        // or no-namespace root passed validation and only failed later, when the body was parsed.
+        // Apache Camel rejects it (its JAXP/Xerces parser raises cvc-elt.1.a), and so does this check.
+        // Enabling ReportValidationWarnings instead was rejected: it would also turn legitimate
+        // warnings (an xs:any processContents="lax" element with no schema for it) fatal.
+        XDocument document;
+        try
+        {
+            document = XDocument.Parse(xml);
+        }
+        catch (XmlException ex)
+        {
+            return ValidationResult.Failure($"XML parsing error: {ex.Message}");
+        }
+
+        var root = document.Root;
+        if (root is null)
+            return ValidationResult.Failure("XML document has no root element");
+
+        var rootName = new XmlQualifiedName(root.Name.LocalName, root.Name.NamespaceName);
+        if (!_schemaSet.GlobalElements.Contains(rootName))
+        {
+            var shown = string.IsNullOrEmpty(root.Name.NamespaceName)
+                ? root.Name.LocalName
+                : $"{{{root.Name.NamespaceName}}}{root.Name.LocalName}";
+            return ValidationResult.Failure(
+                $"Root element '{shown}' is not declared in the schema (cvc-elt.1.a)");
+        }
+
         var errors = new List<string>();
 
         var settings = _readerSettings.Clone();

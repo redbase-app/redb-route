@@ -1,19 +1,26 @@
+using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using Quartz;
-using redb.Route.Abstractions;
 
 namespace redb.Route.Quartz;
 
 /// <summary>
 /// Universal Quartz job that bridges between Quartz scheduler and redb.Route consumers.
-/// Created via reflection by Quartz. Resolves RouteContext from scheduler context,
-/// finds the running consumer instance via <see cref="QuartzConsumerRegistry"/>,
-/// and delegates execution. Concurrency is controlled by the consumer's semaphore,
-/// NOT by Quartz's [DisallowConcurrentExecution] — this allows configurable threads &gt; 1
-/// and is cluster-friendly (cluster support in a separate project).
+/// Created via reflection by Quartz. Finds the running consumer by the job it claimed on this scheduler
+/// (<see cref="QuartzConsumerRegistry"/>) and delegates execution. Concurrency is controlled by the consumer's
+/// semaphore, NOT by Quartz's [DisallowConcurrentExecution] — this allows configurable threads &gt; 1.
+/// <para>
+/// A fire with no consumer on this node: in an in-memory store the job is this process's own and is cleaned up; in a
+/// persistent store it belongs to the store — the next start of this node or another node of the cluster runs it (a
+/// rolling upgrade, a route stopped on one node) — so it is skipped and logged once, never deleted.
+/// </para>
 /// </summary>
 public class QuartzRouteJob : IJob
 {
-    private const string SchedulerContextKey = "redb.Route.Quartz.RouteContext";
+    /// <summary>Key of the logger the context's scheduler holder leaves in the scheduler context.</summary>
+    internal const string LoggerKey = "redb.Route.Quartz.Logger";
+
+    private static readonly ConcurrentDictionary<string, byte> Warned = new(StringComparer.Ordinal);
 
     /// <summary>Parameterless constructor required by Quartz reflection-based instantiation.</summary>
     public QuartzRouteJob() { }
@@ -21,37 +28,31 @@ public class QuartzRouteJob : IJob
     /// <inheritdoc />
     public async Task Execute(IJobExecutionContext context)
     {
-        var endpointUri = context.JobDetail.JobDataMap.GetString("endpointUri");
-        var contextId = context.JobDetail.JobDataMap.GetString("contextId");
-
-        if (string.IsNullOrEmpty(endpointUri) || string.IsNullOrEmpty(contextId))
+        var consumer = QuartzConsumerRegistry.Get(context.Scheduler, context.JobDetail.Key);
+        if (consumer is not null)
         {
-            throw new InvalidOperationException(
-                "QuartzRouteJob requires 'endpointUri' and 'contextId' in JobDataMap.");
+            // The consumer's semaphore + processor pipeline; the route's error scope runs inside it.
+            await consumer.ExecuteJob(context).ConfigureAwait(false);
+            return;
         }
 
-        // 1. Find the running consumer instance via Registry
-        var consumer = QuartzConsumerRegistry.Get(endpointUri);
-        if (consumer == null)
+        var metaData = await context.Scheduler.GetMetaData(context.CancellationToken).ConfigureAwait(false);
+        if (!metaData.JobStoreSupportsPersistence)
         {
-            // Consumer unregistered (route stopped) — clean up orphaned job + trigger
+            // In-memory: the job is this process's own and its consumer is gone — clean up job + trigger.
             await QuartzConsumerBase.CleanupOrphanedJob(
                 context.Scheduler, context.JobDetail.Key, context.Trigger.Key).ConfigureAwait(false);
             return;
         }
 
-        // 2. Resolve RouteContext from scheduler context (stored during consumer Start)
-        var routeContext = context.Scheduler.Context.Get($"{SchedulerContextKey}_{contextId}") as IRouteContext;
-        if (routeContext == null)
+        if (Warned.TryAdd(QuartzConsumerRegistry.KeyOf(context.Scheduler, context.JobDetail.Key), 0)
+            && context.Scheduler.Context.Get(LoggerKey) is ILogger logger)
         {
-            // Context gone — clean up orphaned job
-            await QuartzConsumerBase.CleanupOrphanedJob(
-                context.Scheduler, context.JobDetail.Key, context.Trigger.Key).ConfigureAwait(false);
-            return;
+            logger.LogWarning(
+                "Quartz job '{Job}' fired on node {Node} of scheduler {Scheduler}, which runs no consumer for it; the fire is " +
+                "skipped and the job kept in the store. Nodes that share a scheduler name must carry the same schedules.",
+                context.JobDetail.Key, context.Scheduler.SchedulerInstanceId, context.Scheduler.SchedulerName);
         }
-
-        // 3. Delegate to the consumer (semaphore + processor pipeline + exception handling)
-        await consumer.ExecuteJob(context, routeContext).ConfigureAwait(false);
     }
 }
 

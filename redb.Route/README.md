@@ -29,8 +29,15 @@ builder.Services.AddRedbRoute(route =>
 
     // Or RouteBuilder classes
     route.AddRouteBuilder<MyRoutes>();
+
+    // Or every public, non-abstract RouteBuilder of an assembly (constructor injection works);
+    // the filter is optional and leaves builders out
+    route.AddRouteBuilders([typeof(MyRoutes).Assembly], type => type != typeof(DebugRoutes));
 });
 ```
+
+Without a host, `context.AddRoutes(typeof(MyRoutes).Assembly)` adds the builders that have a public parameterless
+constructor. A builder that cannot be created, or a type already added, is an error naming it — never skipped.
 
 ### RouteBuilder — Full DSL
 
@@ -57,7 +64,7 @@ public class OrderRoutes : RouteBuilder
             .EndChoice()
             .Log("Order routed: ${header.orderId}");
 
-        // Exception handling with redelivery
+        // Exception handling with redelivery — for the routes of this builder only
         OnException<HttpRequestException>()
             .MaximumRedeliveries(3)
             .RedeliveryDelay(TimeSpan.FromSeconds(2))
@@ -411,6 +418,21 @@ Built-in OpenTelemetry — distributed tracing + metrics per route and step:
 `RouteEngineOptions.EnableTelemetry` is on for the whole context. A single route can opt out with `.Tracing(false)`
 (or `<route tracing="false">` in Route-XML), so a service route such as a health check or a metric summary opens no
 span of its own.
+
+To find a trace by a business key, put it on a span with `.SpanTag(key, value)` — a literal or an expression, as in
+`SetHeader` (`<spanTag key="..." value="..."/>` or `expr="..."` in Route-XML). Jaeger and Tempo find a trace by an
+attribute on any of its spans:
+
+```csharp
+.SpanTag("sap.order.id", XPath("/Ack/OrderNo"))                   // nearest Traced scope, else the route span
+.SpanTag("sap.order.id", Header("orderNo"), SpanTarget.Inbound)   // the request's / message's own span
+```
+
+The key is checked when the route is built (lowercase, dot-separated, outside `redb.`, `http.`, `messaging.` and the
+other reserved namespaces, never a secret's name). Nothing is set without a listener, on an unsampled span, with
+`.Tracing(false)` (no fallback to the transport span), or on a span that has ended; a value that fails to evaluate is
+skipped. The host's own span (ASP.NET Core) is never written. **The value is exported unfiltered** — no personal data,
+no credentials; and a business key goes on a span, not in baggage, which travels to every next service.
 
 ## Behaviour Guarantees
 

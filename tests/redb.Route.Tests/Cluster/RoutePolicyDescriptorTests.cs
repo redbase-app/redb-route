@@ -68,6 +68,21 @@ public class RoutePolicyDescriptorTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Cluster_route_declined_by_a_factory_reports_AllNodes_and_the_decline()
+    {
+        _context.AddRoutePolicyFactory(new DecliningFactory());
+        _context.AddRoutes(r => r.From("direct://d").RouteId("d").Cluster(true).Process(_ => { }));
+        await _context.Start();
+
+        var d = _context.GetRoutePolicy("d");
+        d.RequestedCluster.Should().BeTrue();
+        d.EffectivePolicy.Should().Be("AllNodes");
+        d.Reason.Should().Contain("declined");
+        _capture.Entries.Should().NotContain(e => e.Message.Contains("no IRoutePolicyFactory is registered"),
+            "a factory is registered; it declined the route and says why itself");
+    }
+
+    [Fact]
     public void Unknown_route_returns_AllNodes_NotFound_reason()
     {
         var d = _context.GetRoutePolicy("ghost");
@@ -79,6 +94,11 @@ public class RoutePolicyDescriptorTests : IAsyncDisposable
     {
         public IRoutePolicy? CreateRoutePolicy(IRouteContext context, string routeId, RouteDefinition definition)
             => new StubPolicy();
+    }
+
+    private sealed class DecliningFactory : IRoutePolicyFactory
+    {
+        public IRoutePolicy? CreateRoutePolicy(IRouteContext context, string routeId, RouteDefinition definition) => null;
     }
 
     private sealed class StubPolicy : IRoutePolicy { }

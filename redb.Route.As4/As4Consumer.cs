@@ -244,7 +244,8 @@ internal sealed class As4Consumer : IConsumer
             messageId = user.MessageInfo.MessageId;
             (partner, _) = node.MatchInbound(user);
             verification = Secure(message, node, partner);
-            RequireFourCornerProperties(user);
+            if (partner.RequireFourCornerProperties)
+                RequireFourCornerProperties(user);
             exchange = CreateExchange(http, user, message, partner, verification);
         }
         catch (As4ProcessingException e)
@@ -255,7 +256,8 @@ internal sealed class As4Consumer : IConsumer
             activity.RecordFailure(e);
             await WriteSignal(http, Responses.Error(e.Code, messageId, host, reference,
                 signer: partner is null ? null : node.Factory.SigningCertificate,
-                keyReference: partner?.KeyReference ?? As4KeyReference.BinarySecurityToken)).ConfigureAwait(false);
+                keyReference: partner?.KeyReference ?? As4KeyReference.BinarySecurityToken,
+                signingPath: node.SigningPath)).ConfigureAwait(false);
             return;
         }
 
@@ -277,7 +279,8 @@ internal sealed class As4Consumer : IConsumer
                 _endpoint.RecordError(e);
                 activity.RecordFailure(e);
                 await WriteSignal(http, Responses.Error(As4ErrorCode.Other, messageId, host, reference,
-                    signer: node.Factory.SigningCertificate, keyReference: partner!.KeyReference)).ConfigureAwait(false);
+                    signer: node.Factory.SigningCertificate, keyReference: partner!.KeyReference,
+                    signingPath: node.SigningPath)).ConfigureAwait(false);
                 return;
             }
 
@@ -287,7 +290,7 @@ internal sealed class As4Consumer : IConsumer
                 // information — and do not deliver it twice. The sender stops resending once it has a receipt.
                 _logger?.LogInformation("AS4 receiver {Path}: message {MessageId} is a duplicate; receipt sent again, not delivered.", Path, messageId);
                 await WriteSignal(http, Responses.Receipt(messageId!, verification.References, host,
-                    node.Factory.SigningCertificate!, partner!.KeyReference, partner.TimestampTtl)).ConfigureAwait(false);
+                    node.Factory.SigningCertificate!, partner!.KeyReference, partner.TimestampTtl, node.SigningPath)).ConfigureAwait(false);
                 return;
             }
 
@@ -312,13 +315,13 @@ internal sealed class As4Consumer : IConsumer
                 _logger?.LogWarning(exchange.Exception, "AS4 receiver {Path}: route failed for message {MessageId}; answered {Code} (ref {Reference}).",
                     Path, messageId, code.Code, exchange.ExchangeId);
                 await WriteSignal(http, Responses.Error(code, messageId, host, exchange.ExchangeId, callerText,
-                    node.Factory.SigningCertificate, partner!.KeyReference)).ConfigureAwait(false);
+                    node.Factory.SigningCertificate, partner!.KeyReference, node.SigningPath)).ConfigureAwait(false);
                 return;
             }
 
             await ConfirmClaimAsync(messageId!).ConfigureAwait(false);
             await WriteSignal(http, Responses.Receipt(messageId!, verification.References, host,
-                node.Factory.SigningCertificate!, partner!.KeyReference, partner.TimestampTtl)).ConfigureAwait(false);
+                node.Factory.SigningCertificate!, partner!.KeyReference, partner.TimestampTtl, node.SigningPath)).ConfigureAwait(false);
         }
         finally
         {
@@ -392,7 +395,12 @@ internal sealed class As4Consumer : IConsumer
         try
         {
             return As4SecurityEngine.Verify(message, partner.PartnerSigningCertificates.ToList(), partner.TimestampTolerance, DateTimeOffset.UtcNow,
-                node.Factory.Revocation, partner.TimestampTimeToLive);
+                node.Factory.Revocation, partner.TimestampTimeToLive, partner.PkiPathTrust);
+        }
+        catch (SignatureCoverageException e)
+        {
+            // Signed, and what is signed is intact, but not everything the profile requires: the policy is not met.
+            throw new As4ProcessingException(As4ErrorCode.PolicyNoncompliance, e.Message, e);
         }
         catch (CryptographicException e)
         {
@@ -404,6 +412,7 @@ internal sealed class As4Consumer : IConsumer
     {
         // Every payload is decompressed before any is handed on: a failure leaves them all with the message.
         var matched = new List<(PartInfo Info, SwaPart Part)>();
+        PayloadConsistency.CheckCharacterSets(user);
         foreach (var (info, part) in PayloadConsistency.Match(user, message))
         {
             if (part is null)
@@ -414,25 +423,27 @@ internal sealed class As4Consumer : IConsumer
 
         // One payload is the body itself — byte[], or with streamBody the spooled stream, which the exchange closes
         // (Exchange.DisposeAsync), as the File and S3 consumers hand theirs. Several are As4Payload streams the
-        // exchange releases (ExchangeResources.ReleaseWithExchange).
+        // exchange releases (ExchangeResources.ReleaseWithExchange). With payloadList the body is always that list, in
+        // the order of eb:PartInfo, whatever the number of payloads.
         object? body;
         List<As4Payload>? payloads = null;
-        switch (matched.Count)
+        var single = matched.Count == 1 && !_options.PayloadList;
+        if (matched.Count == 0 && !_options.PayloadList)
         {
-            case 0:
-                body = null;
-                break;
-            case 1:
-                body = _options.StreamBody ? matched[0].Part.Detach() : matched[0].Part.ToArray();
-                break;
-            default:
-                payloads = matched.Select(m => new As4Payload(m.Part.ContentId, m.Part.ContentType, m.Part.Detach(),
-                    m.Info.Properties.ToDictionary(p => p.Name, p => p.Value, StringComparer.Ordinal))).ToList();
-                body = payloads;
-                break;
+            body = null;
+        }
+        else if (single)
+        {
+            body = _options.StreamBody ? matched[0].Part.Detach() : matched[0].Part.ToArray();
+        }
+        else
+        {
+            payloads = matched.Select(m => new As4Payload(m.Part.ContentId, m.Part.ContentType, m.Part.Detach(),
+                m.Info.Properties.ToDictionary(p => p.Name, p => p.Value, StringComparer.Ordinal))).ToList();
+            body = payloads;
         }
 
-        var messageOut = new Message(body) { ContentType = matched.Count == 1 ? matched[0].Part.ContentType : null };
+        var messageOut = new Message(body) { ContentType = single ? matched[0].Part.ContentType : null };
         Headers(messageOut, user, partner, verification);
         if (http.Connection.RemoteIpAddress is { } remote)
             messageOut.Headers[As4Headers.RemoteAddress] = remote.ToString();
@@ -507,7 +518,10 @@ internal sealed class As4Consumer : IConsumer
         }
 
         foreach (var property in user.MessageProperties)
+        {
             h[As4Headers.PropertyPrefix + property.Name] = property.Value;
+            if (property.Type is not null) h[As4Headers.PropertyTypePrefix + property.Name] = property.Type;
+        }
 
         h[As4Headers.Partner] = partner.Name;
         h[As4Headers.SignatureValid] = true;
@@ -561,7 +575,8 @@ internal sealed class As4Consumer : IConsumer
     }
 
     /// <summary>
-    /// eDelivery AS4 1.16: <c>originalSender</c> and <c>finalRecipient</c> MUST be on every message (four-corner model).
+    /// eDelivery AS4 1.16 §4.1.2: <c>originalSender</c> and <c>finalRecipient</c> MUST be on every message of a
+    /// four-corner exchange; asked of an agreement with <see cref="As4Partner.RequireFourCornerProperties"/> (the default).
     /// Missing or empty is <see cref="As4ErrorCode.ProcessingModeMismatch"/>, as Domibus answers it (PropertyProfileValidator);
     /// checked after the security checks, as there.
     /// </summary>

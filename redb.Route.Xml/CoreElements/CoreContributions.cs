@@ -11,7 +11,8 @@ namespace redb.Route.Xml.CoreElements;
 /// </summary>
 internal static partial class CoreContributions
 {
-    internal static IReadOnlyList<IXmlElementContribution> All { get; } = [.. Basic(), .. Catalog()];
+    internal static IReadOnlyList<IXmlElementContribution> All { get; } =
+        [.. Basic(), .. Catalog(), DeadLetterChannelContextContribution.Instance];
 
     private static IXmlElementContribution[] Basic() =>
     [

@@ -77,6 +77,9 @@ public sealed class As4Builder
     /// <summary>Hand a single payload to the route as a <c>Stream</c> instead of <c>byte[]</c> (receive only).</summary>
     public As4Builder StreamBody() => Set("streamBody", "true");
 
+    /// <summary>Always hand the payloads to the route as a list of <c>As4Payload</c>, with Content-IDs and part properties (receive only).</summary>
+    public As4Builder PayloadList() => Set("payloadList", "true");
+
     /// <summary>Bind host of the receive server (receive only).</summary>
     public As4Builder Host(string host) => Set("host", host);
 

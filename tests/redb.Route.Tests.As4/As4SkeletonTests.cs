@@ -280,6 +280,16 @@ public class As4SkeletonTests
         act.Should().NotThrow();
     }
 
+    [Fact]
+    public void Node_AReplyLegWithTheValuesOfItsOwnRequestLeg_IsFine()
+    {
+        // A Two-Way exchange answered under the same service and action: either leg is this partner's.
+        using var ctx = NewContext(partner: p => p.ReplyLeg = new As4Leg { Service = p.Service, ServiceType = p.ServiceType, Action = p.Action });
+
+        var act = () => As4Node.Resolve(ctx, "node");
+        act.Should().NotThrow();
+    }
+
     // ── Start-time checks ────────────────────────────────────────────────────
 
     [Fact]

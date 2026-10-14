@@ -17,13 +17,14 @@ internal static class Responses
 {
     /// <summary>The signed receipt for <paramref name="receivedMessageId"/>, echoing <paramref name="receivedReferences"/>.</summary>
     public static (string ContentType, byte[] Body) Receipt(string receivedMessageId, IReadOnlyList<XmlElement> receivedReferences,
-        string host, X509Certificate2 signer, As4KeyReference keyReference, TimeSpan? timestampTtl)
+        string host, X509Certificate2 signer, As4KeyReference keyReference, TimeSpan? timestampTtl,
+        IReadOnlyList<X509Certificate2>? signingPath = null)
     {
         var signal = new SignalMessage(
             new MessageInfo(DateTimeOffset.UtcNow, MessageIdFactory.New(host), receivedMessageId),
             Receipts.NonRepudiation(receivedReferences), [], null);
         var message = SwaMessage.Create(MessagingWriter.CreateEnvelope(signal));
-        As4SecurityEngine.Sign(message, signer, keyReference, timestampTtl, DateTimeOffset.UtcNow);
+        As4SecurityEngine.Sign(message, signer, keyReference, timestampTtl, DateTimeOffset.UtcNow, signingPath);
         return message.Write();
     }
 
@@ -34,14 +35,15 @@ internal static class Responses
     /// own bytes. Signed when a signer is given (the agreement is known), unsigned otherwise.
     /// </summary>
     public static (string ContentType, byte[] Body) Error(As4ErrorCode code, string? refToMessageId, string host, string reference,
-        string? callerText = null, X509Certificate2? signer = null, As4KeyReference keyReference = As4KeyReference.BinarySecurityToken)
+        string? callerText = null, X509Certificate2? signer = null, As4KeyReference keyReference = As4KeyReference.BinarySecurityToken,
+        IReadOnlyList<X509Certificate2>? signingPath = null)
     {
         var error = new EbmsError(code.Code, code.Severity, code.Category, "ebms", refToMessageId, code.ShortDescription,
             callerText ?? code.PartnerText, $"ref: {reference}");
         var signal = new SignalMessage(new MessageInfo(DateTimeOffset.UtcNow, MessageIdFactory.New(host), refToMessageId), null, [error], null);
         var message = SwaMessage.Create(MessagingWriter.CreateEnvelope(signal));
         if (signer is not null)
-            As4SecurityEngine.Sign(message, signer, keyReference, timestampTtl: null, DateTimeOffset.UtcNow);
+            As4SecurityEngine.Sign(message, signer, keyReference, timestampTtl: null, DateTimeOffset.UtcNow, signingPath);
         return message.Write();
     }
 

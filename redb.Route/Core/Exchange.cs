@@ -56,6 +56,14 @@ public class Exchange : IExchange
     /// </remarks>
     public IRouteContext? Context { get; internal set; }
 
+    /// <summary>
+    /// The inbound span of the transport that delivered this exchange — kept by the route wrapper for
+    /// <c>.SpanTag(..., SpanTarget.Inbound)</c>, restored on exit. Not part of <see cref="IExchange"/>, and not carried
+    /// by a <see cref="Snapshot"/>: a replayed checkpoint runs long after that span ended. Copies made while the route
+    /// runs (split, multicast, a detached branch) carry it; one that outlives it finds it stopped and writes nothing.
+    /// </summary>
+    internal System.Diagnostics.Activity? InboundSpan { get; set; }
+
     /// <inheritdoc />
     public string ExchangeId { get; private set; } = Guid.NewGuid().ToString("N");
 
@@ -106,6 +114,7 @@ public class Exchange : IExchange
             Pattern = Pattern,
             RouteId = RouteId,
             Context = Context,
+            InboundSpan = InboundSpan,
             Exception = Exception,
             ExceptionHandled = ExceptionHandled
         };
@@ -180,7 +189,8 @@ public class Exchange : IExchange
         {
             Pattern = Pattern,
             RouteId = RouteId,
-            Context = Context
+            Context = Context,
+            InboundSpan = InboundSpan
         };
 
         foreach (var kvp in _properties)
@@ -211,6 +221,7 @@ public class Exchange : IExchange
             Pattern = Pattern,
             RouteId = RouteId,
             Context = Context,
+            InboundSpan = InboundSpan,
             _ownsScope = false,
             _scope = _scope,
             _scopeFactory = _scopeFactory
@@ -235,6 +246,7 @@ public class Exchange : IExchange
             Pattern = Pattern,
             RouteId = RouteId,
             Context = Context,
+            InboundSpan = InboundSpan,
             Exception = Exception,
             ExceptionHandled = ExceptionHandled,
             _ownsScope = false,

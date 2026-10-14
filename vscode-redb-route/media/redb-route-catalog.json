@@ -498,6 +498,13 @@
         "role": "producer"
       },
       {
+        "name": "PayloadList",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false,
+        "role": "consumer"
+      },
+      {
         "name": "Port",
         "type": "int",
         "default": "4090",
@@ -585,6 +592,16 @@
     "optionsType": "redb.Route.AzureServiceBus.AzureServiceBusEndpointOptions",
     "pathIsText": false,
     "options": [
+      {
+        "name": "AckMode",
+        "type": "enum",
+        "default": "Manual",
+        "sensitive": false,
+        "enumValues": [
+          "Manual",
+          "Auto"
+        ]
+      },
       {
         "name": "AutoDeadLetter",
         "type": "bool",
@@ -681,12 +698,6 @@
         "sensitive": false
       },
       {
-        "name": "ReceiveMode",
-        "type": "string",
-        "default": "PeekLock",
-        "sensitive": false
-      },
-      {
         "name": "RetryDelayMs",
         "type": "int",
         "default": "800",
@@ -752,7 +763,8 @@
         "type": "bool",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "bean",
@@ -766,7 +778,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": true
   },
   {
     "scheme": "cache",
@@ -782,9 +795,8 @@
         "sensitive": false
       },
       {
-        "name": "CacheHeaders",
-        "type": "bool",
-        "default": "false",
+        "name": "Headers",
+        "type": "string",
         "sensitive": false
       },
       {
@@ -807,7 +819,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "controlbus",
@@ -875,7 +888,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "cron",
@@ -986,7 +1000,8 @@
         "default": "500",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "direct",
@@ -994,7 +1009,8 @@
     "package": "redb.Route",
     "optionsType": "redb.Route.Components.DirectEndpointOptions",
     "pathIsText": false,
-    "options": []
+    "options": [],
+    "lenient": false
   },
   {
     "scheme": "direct-vm",
@@ -1002,7 +1018,8 @@
     "package": "redb.Route",
     "optionsType": "redb.Route.Components.DirectVmEndpointOptions",
     "pathIsText": false,
-    "options": []
+    "options": [],
+    "lenient": false
   },
   {
     "scheme": "elasticsearch",
@@ -1191,7 +1208,8 @@
         "default": "",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "embed",
@@ -1205,7 +1223,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "exec",
@@ -1280,7 +1299,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "fbstorage",
@@ -1436,7 +1456,8 @@
         "default": "false",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "fcm",
@@ -1565,7 +1586,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "file",
@@ -1881,7 +1903,8 @@
         "default": "",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "fstore",
@@ -1990,7 +2013,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "ftp",
@@ -2396,7 +2420,8 @@
         "default": "true",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "grpc",
@@ -2613,7 +2638,8 @@
         "default": "true",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "http",
@@ -3483,6 +3509,16 @@
     "pathIsText": false,
     "options": [
       {
+        "name": "AckMode",
+        "type": "enum",
+        "default": "Manual",
+        "sensitive": false,
+        "enumValues": [
+          "Manual",
+          "Auto"
+        ]
+      },
+      {
         "name": "Acks",
         "type": "string",
         "default": "All",
@@ -3524,12 +3560,6 @@
       {
         "name": "ConnectionFactory",
         "type": "string",
-        "sensitive": false
-      },
-      {
-        "name": "EnableAutoCommit",
-        "type": "bool",
-        "default": "true",
         "sensitive": false
       },
       {
@@ -3689,7 +3719,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "knowledge",
@@ -3726,7 +3757,8 @@
         "default": "0",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "ldap",
@@ -4008,7 +4040,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "log",
@@ -4051,7 +4084,8 @@
         "default": "0",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "mqtt",
@@ -4172,7 +4206,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "pop3",
@@ -4615,7 +4650,8 @@
         "default": "1",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "rabbitmq",
@@ -4996,6 +5032,16 @@
     "pathIsText": false,
     "options": [
       {
+        "name": "AckMode",
+        "type": "enum",
+        "default": "Manual",
+        "sensitive": false,
+        "enumValues": [
+          "Manual",
+          "Auto"
+        ]
+      },
+      {
         "name": "Bit",
         "type": "bool",
         "sensitive": false
@@ -5148,12 +5194,6 @@
         "sensitive": false
       },
       {
-        "name": "StreamNoAck",
-        "type": "bool",
-        "default": "false",
-        "sensitive": false
-      },
-      {
         "name": "StreamReadCount",
         "type": "int",
         "default": "10",
@@ -5181,7 +5221,8 @@
         "default": "false",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "s3",
@@ -5566,7 +5607,8 @@
         "default": "false",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "seda",
@@ -5583,7 +5625,7 @@
       {
         "name": "Size",
         "type": "int",
-        "default": "0",
+        "default": "1000",
         "sensitive": false
       },
       {
@@ -5592,7 +5634,8 @@
         "default": "30000",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "sftp",
@@ -6100,7 +6143,8 @@
         "default": "",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "signalr",
@@ -6243,7 +6287,8 @@
         "default": "false",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "smtp",
@@ -6706,7 +6751,8 @@
         "default": "false",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "soap",
@@ -6818,7 +6864,8 @@
         "default": "false",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "sql",
@@ -7032,7 +7079,8 @@
         "default": "false",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": true
   },
   {
     "scheme": "sqs",
@@ -7046,6 +7094,16 @@
         "type": "string",
         "default": "",
         "sensitive": true
+      },
+      {
+        "name": "AckMode",
+        "type": "enum",
+        "default": "Manual",
+        "sensitive": false,
+        "enumValues": [
+          "Manual",
+          "Auto"
+        ]
       },
       {
         "name": "AttributeNames",
@@ -7092,12 +7150,6 @@
         "name": "DelaySeconds",
         "type": "int",
         "default": "0",
-        "sensitive": false
-      },
-      {
-        "name": "DeleteAfterRead",
-        "type": "bool",
-        "default": "true",
         "sensitive": false
       },
       {
@@ -7223,7 +7275,8 @@
         "default": "20",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "stt",
@@ -7252,7 +7305,8 @@
         "type": "string",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "tcp",
@@ -7416,7 +7470,8 @@
         "default": "false",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "telegram",
@@ -7501,7 +7556,8 @@
         "default": "",
         "sensitive": true
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "timer",
@@ -7528,7 +7584,8 @@
         "default": "-1",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "validator",
@@ -7559,7 +7616,8 @@
         "default": "true",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "vm",
@@ -7576,10 +7634,11 @@
       {
         "name": "Size",
         "type": "int",
-        "default": "0",
+        "default": "1000",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "wmq",
@@ -7837,7 +7896,148 @@
         "default": "5000",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
+  },
+  {
+    "scheme": "ws",
+    "alternateSchemes": [],
+    "package": "redb.Route.WebSocket",
+    "optionsType": "redb.Route.WebSocket.WsEndpointOptions",
+    "pathIsText": false,
+    "options": [
+      {
+        "name": "ConnectTimeout",
+        "type": "int",
+        "default": "10000",
+        "sensitive": false
+      },
+      {
+        "name": "ConnectionFactory",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "Encoding",
+        "type": "string",
+        "default": "utf-8",
+        "sensitive": false
+      },
+      {
+        "name": "Host",
+        "type": "string",
+        "default": "0.0.0.0",
+        "sensitive": false
+      },
+      {
+        "name": "InOut",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "KeepAliveInterval",
+        "type": "int",
+        "default": "30000",
+        "sensitive": false
+      },
+      {
+        "name": "MaxConnections",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MaxReconnectAttempts",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "MessageType",
+        "type": "enum",
+        "default": "Text",
+        "sensitive": false,
+        "enumValues": [
+          "Text",
+          "Binary"
+        ]
+      },
+      {
+        "name": "Mode",
+        "type": "enum",
+        "default": "Client",
+        "sensitive": false,
+        "enumValues": [
+          "Client",
+          "Server"
+        ]
+      },
+      {
+        "name": "Port",
+        "type": "int",
+        "default": "8080",
+        "sensitive": false
+      },
+      {
+        "name": "ReceiveBufferSize",
+        "type": "int",
+        "default": "8192",
+        "sensitive": false
+      },
+      {
+        "name": "Reconnect",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "ReconnectInterval",
+        "type": "int",
+        "default": "5000",
+        "sensitive": false
+      },
+      {
+        "name": "ReconnectTimeout",
+        "type": "int",
+        "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "SendBufferSize",
+        "type": "int",
+        "default": "8192",
+        "sensitive": false
+      },
+      {
+        "name": "Ssl",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      },
+      {
+        "name": "SslCertPassword",
+        "type": "string",
+        "sensitive": true
+      },
+      {
+        "name": "SslCertPath",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "SubProtocol",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "TrustAllCertificates",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false
+      }
+    ],
+    "lenient": false
   },
   {
     "scheme": "wss",
@@ -7976,7 +8176,8 @@
         "default": "false",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   },
   {
     "scheme": "xslt",
@@ -8014,6 +8215,7 @@
         "default": "",
         "sensitive": false
       }
-    ]
+    ],
+    "lenient": false
   }
 ]

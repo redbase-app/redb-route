@@ -1,3 +1,5 @@
+using System.Security.Cryptography.X509Certificates;
+using redb.Route.As4.Security;
 using redb.Route.Abstractions;
 using redb.Route.Extensions;
 
@@ -11,11 +13,13 @@ namespace redb.Route.As4;
 /// </summary>
 internal sealed class As4Node
 {
-    private As4Node(string name, As4ConnectionFactory factory, IReadOnlyDictionary<string, As4Partner> partners)
+    private As4Node(string name, As4ConnectionFactory factory, IReadOnlyDictionary<string, As4Partner> partners,
+        IReadOnlyList<X509Certificate2> signingPath)
     {
         Name = name;
         Factory = factory;
         Partners = partners;
+        SigningPath = signingPath;
     }
 
     /// <summary>Registry name of the factory.</summary>
@@ -26,6 +30,13 @@ internal sealed class As4Node
 
     /// <summary>The node's partners, keyed by <see cref="As4Partner.Name"/> (ordinal).</summary>
     public IReadOnlyDictionary<string, As4Partner> Partners { get; }
+
+    /// <summary>
+    /// Our certificate with its authorities from <see cref="As4ConnectionFactory.SigningCertificateChain"/>, outermost
+    /// first: the certification path a <see cref="As4KeyReference.PkiPath"/> token carries. Ordered once, when the node is
+    /// resolved; the factory validation has made sure every authority of the chain is on it.
+    /// </summary>
+    public IReadOnlyList<X509Certificate2> SigningPath { get; }
 
     /// <summary>
     /// Looks up the factory and validates it with its partners together. Throws with the offending name on
@@ -47,7 +58,7 @@ internal sealed class As4Node
 
         EnsureUnambiguous(factoryName, partners);
 
-        return new As4Node(factoryName, factory, partners);
+        return new As4Node(factoryName, factory, partners, PkiPath.Order(factory.SigningCertificate!, factory.SigningCertificateChain));
     }
 
     /// <summary>
@@ -111,7 +122,9 @@ internal sealed class As4Node
     /// Two partners that an incoming user message could not tell apart would make receipt depend on
     /// dictionary order. A message is matched on everything its agreement pins — agreement reference, sender,
     /// service and action, as Domibus and Holodeck match a P-Mode — so that combination must be unique across
-    /// the node, for every leg. One agreement shared by many partners is fine: the sender tells them apart.
+    /// the node, for every leg. One agreement shared by many partners is fine: the sender tells them apart. So is a
+    /// reply leg with the service and action of its own request leg — a Two-Way exchange that answers under the same
+    /// values, as the eDelivery conformance tests run it: either way the message is that partner's.
     /// </summary>
     private static void EnsureUnambiguous(string factoryName, IReadOnlyDictionary<string, As4Partner> partners)
     {
@@ -120,7 +133,7 @@ internal sealed class As4Node
         void Claim(As4Partner p, string partnerName, string? service, string? serviceType, string? action, string leg)
         {
             var key = string.Join('\n', p.AgreementRef, p.AgreementRefType, p.PartyId, p.PartyIdType, service, serviceType, action);
-            if (byKey.TryGetValue(key, out var other))
+            if (byKey.TryGetValue(key, out var other) && other != partnerName)
                 throw new InvalidOperationException(
                     $"AS4 connection factory '{factoryName}': partners '{other}' and '{partnerName}' ({leg}) share agreement, " +
                     $"sender, service and action ('{p.AgreementRef}', '{p.PartyId}', '{service}', '{action}'); " +

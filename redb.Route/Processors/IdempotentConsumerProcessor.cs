@@ -135,7 +135,10 @@ public sealed class IdempotentConsumerProcessor : IProcessor
     /// idempotent consumer with <c>completionEager=false</c> and <c>removeOnFailure=true</c>, the defaults).
     /// <list type="bullet">
     ///   <item>Claimed outside a transaction: the key is confirmed when the exchange completes and removed when it fails,
-    ///   wherever the failure happened (inside the block or after it), so the redelivery is processed again.</item>
+    ///   wherever the failure happened (inside the block or after it), so the redelivery is processed again. A failure an
+    ///   error handler marked handled (<c>OnException</c> with <c>Handled(true)</c>) removes the key too: the handler
+    ///   answered the exchange, but the work it guarded did not happen. A failure caught by <c>DoCatch</c> proves nothing
+    ///   about the work, so it keeps the key.</item>
     ///   <item>Claimed inside a transaction: the key follows the transaction, not the exchange. It commits with the work
     ///   and stays even if the exchange fails later (a send after the database commit, say), so the redelivery does not
     ///   redo committed work. It goes with a rollback: by itself for a repository that
@@ -162,8 +165,19 @@ public sealed class IdempotentConsumerProcessor : IProcessor
                 transaction.TransactionCompleted += RemoveUnlessCommitted;
         }
 
-        public Task OnComplete(IExchange exchange, CancellationToken ct) =>
-            FollowsTransaction ? Task.CompletedTask : Consumer._repository.Confirm(Key, ct);
+        public Task OnComplete(IExchange exchange, CancellationToken ct)
+        {
+            if (FollowsTransaction)
+                return Task.CompletedTask;
+
+            // Camel's IdempotentOnCompletion: onComplete checks ExchangeHelper.isFailureHandled and, when it is set,
+            // removes the key (removeOnFailure) instead of confirming it. So a message whose failure an OnException
+            // handler marked Handled(true) is reprocessed on its redelivery rather than skipped as a duplicate. A failure
+            // caught by DoCatch is not marked handled, so its key stays confirmed.
+            return exchange.IsFailureHandled()
+                ? Consumer._repository.Remove(Key, ct)
+                : Consumer._repository.Confirm(Key, ct);
+        }
 
         public async Task OnFailure(IExchange exchange, CancellationToken ct)
         {

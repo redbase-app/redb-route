@@ -33,17 +33,46 @@ public abstract class RouteBuilder : IRouteBuilder
     private readonly List<OnExceptionDefinition> _exceptionDefinitions = [];
     private readonly List<InterceptDefinition> _intercepts = [];
     private readonly List<OnCompletionDefinition> _onCompletions = [];
+    private readonly List<RouteConfigurationDefinition> _routeConfigurations = [];
+
+    /// <summary>
+    /// Route configurations declared on this builder (<see cref="RouteConfigurationBuilder"/>, a
+    /// <c>&lt;routeConfiguration&gt;</c> of a markup file) — unlike the builder's own handlers they apply to the routes
+    /// of every builder of the context.
+    /// </summary>
+    public IReadOnlyList<RouteConfigurationDefinition> RouteConfigurations => _routeConfigurations;
+
+    /// <summary>
+    /// Starts a route configuration (Apache Camel's Route Configuration): error handling for the routes of every
+    /// builder of the context, not only of this one. Without an <paramref name="id"/> it is the default one: it
+    /// applies to every route that has no configurations assigned. With an id it applies to the routes that name it
+    /// with <c>.RouteConfigurationId("id")</c>; an id is unique within a context. A class that holds nothing but
+    /// configurations reads best as a <see cref="RouteConfigurationBuilder"/>.
+    /// </summary>
+    /// <param name="id">The id of the configuration, or <c>null</c> for the default one.</param>
+    protected RouteConfigurationDefinition RouteConfiguration(string? id = null) => AddRouteConfiguration(id);
+
+    /// <summary>Declares a route configuration on this builder from outside it (the markup loader).</summary>
+    internal RouteConfigurationDefinition AddRouteConfiguration(string? id)
+    {
+        var configuration = new RouteConfigurationDefinition(id);
+        _routeConfigurations.Add(configuration);
+        return configuration;
+    }
+
+    /// <summary>What the builder is called in a log line: its type, or the document a markup builder was loaded from.</summary>
+    internal virtual string SourceName => GetType().Name;
 
     /// <summary>Gets the route definitions created during <see cref="Configure"/>.</summary>
     public IReadOnlyList<RouteDefinition> Definitions => _definitions;
 
-    /// <summary>Gets the global exception handler definitions registered via <see cref="OnException{TException}"/>.</summary>
+    /// <summary>Exception handlers declared on this builder via <see cref="OnException{TException}"/> — they apply to every route it defines, and to no route of another builder.</summary>
     public IReadOnlyList<OnExceptionDefinition> ExceptionDefinitions => _exceptionDefinitions;
 
-    /// <summary>Intercepts declared on this builder — they apply to every route it defines.</summary>
+    /// <summary>Intercepts declared on this builder — they apply to every route it defines, and to no route of another builder.</summary>
     public IReadOnlyList<InterceptDefinition> Intercepts => _intercepts;
 
-    /// <summary>OnCompletion blocks declared on this builder — they apply to every route it defines.</summary>
+    /// <summary>OnCompletion blocks declared on this builder — they apply to every route it defines, and to no route of another builder.</summary>
     public IReadOnlyList<OnCompletionDefinition> OnCompletions => _onCompletions;
 
     /// <summary>Steps that run before every step of every route in this builder (Camel <c>intercept()</c>).</summary>
@@ -91,7 +120,10 @@ public abstract class RouteBuilder : IRouteBuilder
     }
 
     /// <summary>
-    /// Defines a global exception handler that applies to all routes in this builder.
+    /// Defines an exception handler for all routes of this builder (Apache Camel's RouteBuilder scope) — not for
+    /// the routes of another builder of the same context; for those, see <see cref="RouteConfiguration"/>. Between
+    /// this handler and a route's own the one whose exception type is nearest to the failure wins, the route's own
+    /// on a tie.
     /// <example>
     /// <code>
     /// OnException&lt;IOException&gt;()
@@ -111,7 +143,7 @@ public abstract class RouteBuilder : IRouteBuilder
     }
 
     /// <summary>
-    /// Defines a global exception handler for multiple exception types at once.
+    /// Defines an exception handler for multiple exception types at once, for all routes of this builder.
     /// </summary>
     /// <param name="exceptionTypes">Exception types to handle.</param>
     /// <returns>Definition for fluent chaining.</returns>
@@ -140,6 +172,7 @@ public abstract class RouteBuilder : IRouteBuilder
         _exceptionDefinitions.Clear();
         _intercepts.Clear();
         _onCompletions.Clear();
+        _routeConfigurations.Clear();
         Context = context;
         Configure();
         IsBuilt = true;

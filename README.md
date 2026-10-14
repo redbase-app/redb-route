@@ -42,7 +42,7 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 - [Configuration](#configuration) — appsettings, IOptions, DI parameterization, [credentials & secret redaction](#credentials--secret-redaction)
 - [How It Compares](#how-it-compares) — vs Apache Camel, MassTransit, NServiceBus, Wolverine; [Migrating from Camel](#migrating-from-apache-camel)
 - [Routing Patterns](#routing-patterns) — From, To, Filter, Choice, Split, Recipient List, Dynamic Router
-- [Error Handling](#error-handling) — [Retry](#retry-per-step) · [Dead Letter Channel](#dead-letter-channel) · [TryCatch](#trycatch-scoped) · [OnException scope](#onexception--scope-form-chain) · [OnException configure](#onexception--configure-form-action) · [Redelivery options](#redelivery-configuration) · [Combined example](#combined-example)
+- [Error Handling](#error-handling) — [Retry](#retry-per-step) · [Dead Letter Channel](#dead-letter-channel) · [TryCatch](#trycatch-scoped) · [OnException scope](#onexception--scope-form-chain) · [Route configuration](#route-configuration--handlers-apart-from-the-routes) · [OnException configure](#onexception--configure-form-action) · [Redelivery options](#redelivery-configuration) · [Combined example](#combined-example)
 - [Message Transformation](#message-transformation) — SetBody, SetHeader, Marshal, Unmarshal
 - [Expression Language](#expression-language) — helpers, predicates, string templates
 - [Other EIP Patterns](#other-eip-patterns) — WireTap, Multicast, Throttle, Circuit Breaker, Saga, Idempotent Consumer, Loop, Delay, Resequencer, Enrich
@@ -134,6 +134,18 @@ public class OrderRoutes : RouteBuilder
 }
 
 builder.Services.AddRedbRoute(route => route.AddRouteBuilder<OrderRoutes>());
+```
+
+Or every route builder of an assembly — each public, non-abstract `RouteBuilder` (Apache Camel's routes
+discovery). A filter states conditions and leaves builders out; a builder that cannot be created, or one already
+registered, is an error naming the type, never skipped:
+
+```csharp
+builder.Services.AddRedbRoute(route => route
+    .AddRouteBuilders([typeof(OrderRoutes).Assembly], type => type.Namespace!.StartsWith("Orders.Routes")));
+
+// Without a host: builders with a public parameterless constructor
+context.AddRoutes(typeof(OrderRoutes).Assembly);
 ```
 
 ---
@@ -542,7 +554,24 @@ Wolverine is excellent at handler-style messaging with Marten-backed sagas. redb
 
 ## Error Handling
 
-redb.Route has four layers of error handling, designed to be combined: per-step `Retry`, scoped `DoTry/DoCatch`, route-local `OnException`, and global `OnException` declared in `RouteBuilder`. A `DeadLetterChannel` can route failed messages to any URI when retries are exhausted.
+redb.Route's error handling is designed to be combined: per-step `Retry`, scoped `DoTry/DoCatch`, and one **error
+scope per route**, as in Apache Camel. From the inside out, the scope is:
+
+1. the route's own `OnException` (declared anywhere in its body);
+2. the `OnException` it shares with other routes: those of its `RouteBuilder` — that builder's routes only — and
+   those of its [route configurations](#route-configuration--handlers-apart-from-the-routes);
+3. the context's error handling — a local handler of the route (`AddLocalExceptionHandler`), a global handler
+   (`AddGlobalExceptionHandler`), then `context.ErrorHandler` — for a failure **no `OnException` took**
+   (`Handled(false)` included: an `OnException` that matched owns the failure, as in Camel).
+
+Among 1 and 2 the handler is chosen as Camel's exception policy chooses it: the failure is matched from its innermost
+cause up to the exception that was thrown, and the handler whose type is **nearest** wins wherever it is declared — a
+builder's `OnException<IOException>` takes an `IOException` from the route's `OnException<Exception>`. The route's own
+handler wins a tie; a route configuration's handler is used instead of the builder's handler of the same type.
+
+A body that runs after its caller has gone — `.Threads()` for an in-only exchange, a `Debounce` flush, an `Aggregate`
+completed by timeout, a `Resequence` batch — is wrapped by the same scope, with every handler setting; a redelivery
+re-runs that body. A `DeadLetterChannel` can route failed messages to any URI when retries are exhausted.
 
 ### Retry (per step)
 
@@ -575,6 +604,23 @@ From("seda://dlq")
         .Otherwise().To("sftp://archive/failed/")
     .EndChoice();
 ```
+
+**For the whole context** — Camel's context-level `errorHandler(deadLetterChannel(...))`: every route sends there a
+failure no `OnException` took, stamped with `CamelDeadLetterReason` / `CamelDeadLetterExceptionType` /
+`CamelDeadLetterTimestamp`, and the failure is handled. Redeliveries stay with `OnException`.
+
+```csharp
+context.ErrorHandler = new DeadLetterErrorHandler(context, "direct://errors");
+```
+```xml
+<!-- context.xml -->
+<context xmlns="urn:redb:route:1.0">
+  <deadLetterChannel uri="direct://errors"/>
+</context>
+```
+
+A route whose `OnException` takes a failure keeps it from the context's handler; to dead-letter from inside that
+handler, send there explicitly: `OnException<X>().Log("...").To("direct://errors")`.
 
 ### TryCatch (scoped)
 
@@ -615,14 +661,16 @@ From("kafka://orders")
     .To("rabbitmq://processed");
 ```
 
-**At RouteBuilder level** — global, applies to every route in the builder:
+**At RouteBuilder level** — applies to every route of this builder, and to no route of another builder (Apache
+Camel's RouteBuilder scope; the same holds for a builder's `Intercept*` and `OnCompletion`). Handlers shared by the
+routes of several builders go into a [route configuration](#route-configuration--handlers-apart-from-the-routes):
 
 ```csharp
 public class OrderRoutes : RouteBuilder
 {
     protected override void Configure()
     {
-        // Global handlers — apply to all From(...) routes below
+        // Builder handlers — apply to all From(...) routes below, not to other builders' routes
         OnException<HttpRequestException>()
             .MaximumRedeliveries(5)
             .UseExponentialBackOff()
@@ -650,6 +698,48 @@ public class OrderRoutes : RouteBuilder
     }
 }
 ```
+
+### Route configuration — handlers apart from the routes
+
+Apache Camel's Route Configuration: `OnException` declared once, in a class of its own, for the routes of **every**
+builder of the context. Use it when a module keeps its error handling in one place and its routes in others.
+
+```csharp
+public sealed class IntegrationErrors : RouteConfigurationBuilder
+{
+    protected override void Configuration()
+    {
+        // No id: the default — every route of the context that has no configurations assigned.
+        RouteConfiguration()
+            .OnException<HttpRequestException>()
+                .MaximumRedeliveries(3)
+                .UseExponentialBackOff()
+                .Handled()
+                .To("seda://http-failures");
+
+        // By id: only the routes that name it.
+        RouteConfiguration("audit")
+            .OnException<Exception>().Handled().Log("audit failed: ${exception.message}");
+    }
+}
+
+context.AddRoutes(new IntegrationErrors());          // a configuration builder is added like any builder
+context.AddRoutes(new OrderRoutes());                // its routes get the default configuration
+
+// A route picks configurations by id: exact ids, a wildcard ("audit*") or a regular expression, comma-separated.
+From("direct://audit").RouteConfigurationId("audit").To("rabbitmq://audit");
+```
+
+- A handler of a configuration has everything a builder's has — redeliveries, `OnWhen`, `Handled`/`Continued`, the
+  handler's steps. The steps are compiled into each route they apply to, so `.SpanTag(..., SpanTarget.Inbound)` there
+  tags the request that failed.
+- A route with assigned configurations does **not** get the default one. An id is unique within a context, and an
+  exact id that no configuration has fails `Start()`.
+- Inline, without a class: `context.AddRouteConfiguration(c => c.OnException<X>().Handled()...)` and
+  `context.AddRouteConfiguration("audit", c => ...)`.
+- Route-XML: `<routeConfiguration id="…">` with `<onException>` blocks, in a routes file or in `context.xml`, and
+  `<route routeConfigurationId="…">`.
+- `Intercept*` and `OnCompletion` are not part of a route configuration yet; share them through a base class.
 
 ### OnException — configure form (action)
 
@@ -743,7 +833,7 @@ public class PaymentRoutes : RouteBuilder
 }
 ```
 
-Resolution order when multiple matches exist: route-local `OnException` → RouteBuilder global `OnException` → `DeadLetterChannel` → unhandled (logged and propagated). The most specific exception type wins within each level.
+Resolution when several handlers match: the nearest exception type wins among the route's `OnException`, its route configurations' and its builder's — on a tie the route's own, then the configuration's; a failure none of them took goes to the context's handlers and `DeadLetterChannel`, and otherwise stays unhandled (logged and propagated).
 
 ---
 
@@ -1246,6 +1336,41 @@ builder.Services.Configure<RouteEngineOptions>(o =>
 ```
 
 Metrics exposed: `redb.route.messages.processed`, `redb.route.messages.failed`, `redb.route.processing.duration` — per route and per step.
+
+### Finding a trace by a business key — `SpanTag`
+
+`.SpanTag(key, value)` puts one attribute on a span, so a trace can be found by an order number, a batch id, a
+document key. Jaeger's tag search and Tempo's TraceQL (`{ span.sap.order.id = "A-42" }`) find a trace by an
+attribute on **any** of its spans, not only the root. The value is a literal or, as in `SetHeader`, an expression
+evaluated per message; the exchange is not touched:
+
+```csharp
+From("http://0.0.0.0:8080/sap/ack")
+    .Unmarshal().Json<SapAck>()
+    .SpanTag("sap.order.id", XPath("/Ack/OrderNo"))                    // the route span
+    .SpanTag("sap.order.id", Header("orderNo"), SpanTarget.Inbound)    // the request's server span
+    .Traced("post-to-erp")
+        .SpanTag("erp.batch", Expr("${property.batch}"))               // the enclosing Traced span
+        .To("http://erp/api/orders")
+    .EndTraced();
+```
+
+| Target | Span | Nothing set when |
+|---|---|---|
+| `Enclosing` (default) | the nearest `Traced` scope, else the route span | the route has `.Tracing(false)` — never falls back to the transport span |
+| `Inbound` | the server/consumer span of the transport that received the message; a route called through `direct:` uses its caller's | no transport span (in-process sources), or it has already ended (a wire tap running later) |
+
+The host's own span (ASP.NET Core) is never written — it belongs to the host. Nothing is set, and the value is not
+evaluated, when nobody listens or the span is not sampled; a `null` or empty value sets nothing; a value that fails
+to evaluate is skipped and logged at Debug — telemetry does not change the outcome of a message.
+
+The key is checked when the route is built: lowercase, dot-separated (`sap.order.id`), not in the namespaces of the
+engine and the semantic conventions (`redb.`, `messaging.`, `http.`, `rpc.`, `db.`, `exception.`, `otel.`), and not
+a secret's name (`*token*`, `*password*`...). The length of a value is the SDK's limit
+(`OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT`).
+
+> **The value is exported unfiltered.** Never put personal data or credentials in a span attribute. And do not put a
+> business key in baggage instead: baggage travels to every next service, a span attribute stays in the trace.
 
 ---
 

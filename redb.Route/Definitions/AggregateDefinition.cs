@@ -69,6 +69,8 @@ public class AggregateDefinition : RouteDefinitionBase<AggregateDefinition>, IRo
         {
             ForceCompletionOnStop = ForceCompletionOnStopEnabled == true,
             Logger = context.GetService<ILoggerFactory>()?.CreateLogger<AggregatorProcessor>(),
+            // A group completed by the timeout or on stop runs after its exchanges left the route's error wrappers.
+            DetachedTarget = (context as Core.RouteContext)?.DetachedErrorScope?.WrapDetached(target),
         };
     }
 }

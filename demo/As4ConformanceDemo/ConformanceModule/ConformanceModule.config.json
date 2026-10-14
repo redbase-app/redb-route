@@ -1,0 +1,25 @@
+{
+  "ContextName": "as4-conformance",
+  "AutoStart": true,
+  "TestDriver": {
+    "PartyId": "test_driver",
+    "ControllerPartyId": "test_driver_sut_controller_domain"
+  },
+  "Sut": {
+    "PartyId": "system_under_test",
+    "ControllerPartyId": "sut_controller_domain",
+    "HostName": "redb.route"
+  },
+  "Receive": {
+    "Port": 4090,
+    "SutPath": "/as4/sut",
+    "ControllerPath": "/as4/controller",
+    "DuplicateStore": "memory",
+    "DuplicateWindowDays": 7
+  },
+  "Retry": {
+    "Count": 5,
+    "DelaySeconds": 20,
+    "SendTimeoutMs": 60000
+  }
+}

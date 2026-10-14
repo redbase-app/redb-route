@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Project 2 of 2: the DEBUG HOST.
+       Runs ConformanceModule.InitRoute outside Tsak: against the conformance testing service (settings from AS4CT_*
+       environment variables), or with "selftest" against a test driver of its own on loopback. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ConformanceWorker</RootNamespace>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ConformanceModule\ConformanceModule.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.3" />
+  </ItemGroup>
+
+  <!-- The module's own defaults, the file the package carries: the debug host reads it as the Tsak worker does. -->
+  <ItemGroup>
+    <None Include="..\ConformanceModule\ConformanceModule.config.json" Link="ConformanceModule.config.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

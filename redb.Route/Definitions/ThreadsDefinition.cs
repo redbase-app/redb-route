@@ -1,4 +1,6 @@
+using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Processors;
 
 namespace redb.Route.Definitions;
@@ -76,7 +78,11 @@ public class ThreadsDefinition : RouteDefinitionBase<ThreadsDefinition>, IRouteS
     {
         IProcessor body = NodePipeline.Body(context, Outputs);
 
-        return new ThreadsProcessor(body, _poolSize, _maxQueueSize, context)
+        // An in-only exchange runs on a pool worker after its caller has returned, outside the route's error handlers:
+        // that body is wrapped by the route's whole error scope. In-out runs inline, inside them, as it is.
+        var detachedBody = (context as RouteContext)?.DetachedErrorScope?.WrapDetached(body) ?? body;
+        var logger = context.GetService<ILoggerFactory>()?.CreateLogger<ThreadsProcessor>();
+        return new ThreadsProcessor(body, detachedBody, _poolSize, _maxQueueSize, context, logger)
         {
             EnqueueTimeout = _enqueueTimeout
         };

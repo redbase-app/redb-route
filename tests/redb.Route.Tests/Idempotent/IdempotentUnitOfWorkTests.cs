@@ -239,6 +239,195 @@ public class IdempotentUnitOfWorkTests
         work.Should().Be(2);
     }
 
+    /// <summary>
+    /// A failure an error handler marked handled (<c>Handled(true)</c>) takes the key back, like any other failure: the
+    /// handler answered the exchange, but the work the key guards never happened. Camel's <c>IdempotentOnCompletion</c>
+    /// asks <c>ExchangeHelper.isFailureHandled</c> for exactly this case.
+    /// </summary>
+    [Fact]
+    public async Task A_handled_failure_in_the_block_takes_the_key_back()
+    {
+        var repo = new InMemoryIdempotentRepository();
+        var work = 0;
+        var failNext = true;
+        await using var context = new RouteContext();
+        context.AddRoutes(r => r
+            .From("direct://uow-handled-block")
+            .OnException<InvalidOperationException>()
+                .Handled(true)
+            .End()
+            .IdempotentConsumer(repo, MessageId)
+                .Process(_ =>
+                {
+                    if (!failNext)
+                    {
+                        work++;
+                        return;
+                    }
+                    failNext = false;
+                    throw new InvalidOperationException("the block fails once");
+                })
+            .EndIdempotentConsumer());
+        var producer = await Start(context, "direct://uow-handled-block");
+
+        await producer.Process(Delivery("m-8"));
+
+        (await repo.Contains("m-8")).Should().BeFalse(
+            "the handler only answered the exchange; the redelivery has to run the work");
+
+        await producer.Process(Delivery("m-8"));
+
+        work.Should().Be(1, "the redelivery is not a duplicate: the first attempt did not do the work");
+        (await repo.Contains("m-8")).Should().BeTrue();
+    }
+
+    /// <summary>A handled failure after the block takes the key back too.</summary>
+    [Fact]
+    public async Task A_handled_failure_after_the_block_takes_the_key_back()
+    {
+        var repo = new InMemoryIdempotentRepository();
+        var work = 0;
+        var failNext = true;
+        await using var context = new RouteContext();
+        context.AddRoutes(r => r
+            .From("direct://uow-handled-tail")
+            .OnException<InvalidOperationException>()
+                .Handled(true)
+            .End()
+            .IdempotentConsumer(repo, MessageId)
+                .Process(_ => work++)
+            .EndIdempotentConsumer()
+            .Process(_ =>
+            {
+                if (!failNext) return;
+                failNext = false;
+                throw new InvalidOperationException("a step after the block");
+            }));
+        var producer = await Start(context, "direct://uow-handled-tail");
+
+        await producer.Process(Delivery("m-9"));
+
+        (await repo.Contains("m-9")).Should().BeFalse(
+            "the exchange did not get through, whatever the handler answered");
+
+        await producer.Process(Delivery("m-9"));
+
+        work.Should().Be(2, "the block has to be redone");
+        (await repo.Contains("m-9")).Should().BeTrue();
+    }
+
+    /// <summary>A handled failure after the last redelivery takes the key back.</summary>
+    [Fact]
+    public async Task A_handled_failure_after_the_redeliveries_takes_the_key_back()
+    {
+        var repo = new InMemoryIdempotentRepository();
+        var attempts = 0;
+        await using var context = new RouteContext();
+        context.AddRoutes(r => r
+            .From("direct://uow-handled-redelivery")
+            .OnException<InvalidOperationException>()
+                .MaximumRedeliveries(1)
+                .RedeliveryDelay(TimeSpan.FromMilliseconds(1))
+                .Handled(true)
+            .End()
+            .IdempotentConsumer(repo, MessageId)
+                .Process(_ =>
+                {
+                    attempts++;
+                    throw new InvalidOperationException("every attempt fails");
+                })
+            .EndIdempotentConsumer());
+        var producer = await Start(context, "direct://uow-handled-redelivery");
+
+        await producer.Process(Delivery("m-10"));
+
+        attempts.Should().Be(2, "the handler answered after the redelivery, not before it");
+        (await repo.Contains("m-10")).Should().BeFalse(
+            "the attempt the handler answered last still did no work");
+    }
+
+    /// <summary>
+    /// <c>Continued(true)</c> is not a handled failure (Camel clears failureHandled on continue): the route carries on
+    /// with the exchange, so the key stays confirmed.
+    /// </summary>
+    [Fact]
+    public async Task A_continued_failure_keeps_the_key()
+    {
+        var repo = new InMemoryIdempotentRepository();
+        await using var context = new RouteContext();
+        context.AddRoutes(r => r
+            .From("direct://uow-continued")
+            .OnException<InvalidOperationException>()
+                .Continued(true)
+            .End()
+            .IdempotentConsumer(repo, MessageId)
+                .Process(_ => throw new InvalidOperationException("continued"))
+            .EndIdempotentConsumer());
+        var producer = await Start(context, "direct://uow-continued");
+
+        await producer.Process(Delivery("m-11"));
+
+        (await repo.Contains("m-11")).Should().BeTrue(
+            "a continued handler sets exceptionHandled, not failureHandled, so the key is confirmed");
+    }
+
+    /// <summary>A failure caught by <c>DoCatch</c> is not a handled failure: the key stays.</summary>
+    [Fact]
+    public async Task A_failure_caught_by_do_catch_keeps_the_key()
+    {
+        var repo = new InMemoryIdempotentRepository();
+        await using var context = new RouteContext();
+        context.AddRoutes(r => r
+            .From("direct://uow-docatch")
+            .DoTry()
+                .IdempotentConsumer(repo, MessageId)
+                    .Process(_ => throw new InvalidOperationException("caught inside the block"))
+                .EndIdempotentConsumer()
+            .DoCatch<InvalidOperationException>()
+                .Process(_ => { })
+            .End());
+        var producer = await Start(context, "direct://uow-docatch");
+
+        await producer.Process(Delivery("m-12"));
+
+        (await repo.Contains("m-12")).Should().BeTrue(
+            "DoCatch sets exceptionHandled only — it says nothing about the work, so the key is not taken back");
+    }
+
+    /// <summary>
+    /// A key claimed inside a transaction follows the transaction: a failure inside <c>.Transacted()</c> rolls the
+    /// transaction back before the route's handler runs, so the key goes with it, handled or not. The redelivery has to
+    /// do the work again and take the key again.
+    /// </summary>
+    [Fact]
+    public async Task A_handled_failure_inside_a_transaction_still_rolls_the_transaction_back()
+    {
+        var repo = new InMemoryIdempotentRepository();
+        var work = 0;
+        await using var context = new RouteContext();
+        context.AddRoutes(r => r
+            .From("direct://uow-handled-tx")
+            .OnException<InvalidOperationException>()
+                .Handled(true)
+            .End()
+            .Transacted()
+                .IdempotentConsumer(repo, MessageId)
+                    .Process(_ =>
+                    {
+                        work++;
+                        throw new InvalidOperationException("the work fails inside the transaction");
+                    })
+                .EndIdempotentConsumer()
+            .End());
+        var producer = await Start(context, "direct://uow-handled-tx");
+
+        await producer.Process(Delivery("m-13"));
+
+        work.Should().Be(1);
+        (await repo.Contains("m-13")).Should().BeFalse(
+            "the transaction rolled back before the handler answered, so the redelivery has to do the work again");
+    }
+
     private sealed class KeyAtFailure(IIdempotentRepository repo, string key) : IRouteLifecycleListener
     {
         public bool? KeyPresentAtFailure { get; private set; }

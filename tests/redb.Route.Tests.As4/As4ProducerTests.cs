@@ -23,7 +23,7 @@ public class As4ProducerTests
     private static readonly System.Security.Cryptography.X509Certificates.X509Certificate2 Stranger = As4TestMessages.KeyPair("CN=stranger.as4.test");
     private const string Payload = "<invoice xmlns=\"urn:example\"><total>42</total></invoice>";
 
-    private enum Answer { Receipt, Error, Nothing, WrongDigest, SignedByStranger, Late, Huge }
+    private enum Answer { Receipt, Error, Nothing, WrongDigest, SignedByStranger, Unsigned, Late, Huge }
 
     [Fact]
     public async Task Send_GetsAVerifiedReceipt_AndPutsTheOutcomeOnOut()
@@ -322,6 +322,19 @@ public class As4ProducerTests
     }
 
     [Fact]
+    public async Task Send_AnUnsignedReceipt_IsInvalidReceipt_NotAProofOfReceipt()
+    {
+        // The receipt names the right digests, but nobody signed it: anyone on the path could have written it.
+        await using var fake = new FakePartner(Answer.Unsigned);
+        var (context, producer) = await Start(fake.Port);
+        await using var _ = context;
+
+        var act = () => producer.Process(NewExchange());
+
+        (await act.Should().ThrowAsync<As4ReceiptException>()).Which.Code.Should().Be(As4ErrorCode.InvalidReceipt);
+    }
+
+    [Fact]
     public async Task Send_ReceiptSignedByAStranger_IsInvalidReceipt()
     {
         await using var fake = new FakePartner(Answer.SignedByStranger);
@@ -346,6 +359,160 @@ public class As4ProducerTests
         var act = () => producer.Process(exchange);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*originalSender*");
+        fake.Received.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TA16_APing_IsAUserMessageForTheEbmsTestService()
+    {
+        // ebMS 3.0 Core §5.2.2: the test service and action; an agreement for them is all a ping needs.
+        const string testService = "http://docs.oasis-open.org/ebxml-msg/ebms/v3.0/ns/core/200704/service";
+        const string testAction = "http://docs.oasis-open.org/ebxml-msg/ebms/v3.0/ns/core/200704/test";
+        await using var fake = new FakePartner(Answer.Receipt);
+        var (context, producer) = await Start(fake.Port, p => { p.Service = testService; p.Action = testAction; });
+        await using var _ = context;
+
+        var exchange = NewExchange();
+        await producer.Process(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        var collaboration = fake.Received!.UserMessages.Single().CollaborationInfo;
+        collaboration.Service.Value.Should().Be(testService);
+        collaboration.Action.Should().Be(testAction);
+    }
+
+    [Fact]
+    public async Task TA18_Send_WithoutAConversationId_GeneratesOne_AndAGivenOneIsKept()
+    {
+        await using var fake = new FakePartner(Answer.Receipt);
+        var (context, producer) = await Start(fake.Port);
+        await using var _ = context;
+
+        await producer.Process(NewExchange());
+        fake.Received!.UserMessages.Single().CollaborationInfo.ConversationId.Should().NotBeNullOrWhiteSpace();
+
+        var given = NewExchange();
+        given.In.Headers[As4Headers.ConversationId] = "conversation-42";
+        await producer.Process(given);
+        fake.Received!.UserMessages.Single().CollaborationInfo.ConversationId.Should().Be("conversation-42");
+    }
+
+    [Fact]
+    public async Task Send_WithoutFourCornerProperties_IsSent_WhenTheAgreementDoesNotRequireThem()
+    {
+        await using var fake = new FakePartner(Answer.Receipt);
+        var (context, producer) = await Start(fake.Port, p => p.RequireFourCornerProperties = false);
+        await using var _ = context;
+
+        var exchange = new Exchange(new Message(Payload) { ContentType = "text/xml" });
+        await producer.Process(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        fake.Received!.UserMessages.Single().MessageProperties.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Send_APropertyTypeHeader_SetsTheTypeOfThatProperty()
+    {
+        await using var fake = new FakePartner(Answer.Receipt);
+        var (context, producer) = await Start(fake.Port);
+        await using var _ = context;
+
+        var exchange = NewExchange();
+        exchange.In.Headers[As4Headers.PropertyTypePrefix + "finalRecipient"] = "urn:example:type";
+        await producer.Process(exchange);
+
+        var properties = fake.Received!.UserMessages.Single().MessageProperties;
+        properties.Select(p => p.Name).Should().Equal("finalRecipient", "originalSender");
+        properties.Single(p => p.Name == "finalRecipient").Type.Should().Be("urn:example:type");
+        properties.Single(p => p.Name == "originalSender").Type.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Send_AListOfPayloads_KeepsTheirOrder_ContentIdsAndPartProperties()
+    {
+        await using var fake = new FakePartner(Answer.Receipt);
+        var (context, producer) = await Start(fake.Port);
+        await using var _ = context;
+
+        var exchange = NewExchange();
+        exchange.In.Body = new List<As4Payload>
+        {
+            new("xmlpayload@gitb", "application/xml", new MemoryStream(Encoding.UTF8.GetBytes("<leading/>")),
+                new Dictionary<string, string> { ["CharacterSet"] = "utf-8", ["MimeType"] = "ignored/ours" }),
+            new("custompayload@gitb", "application/octet-stream", new MemoryStream([1, 2, 3]), new Dictionary<string, string>()),
+            new(null, "application/octet-stream", new MemoryStream([4, 5]), new Dictionary<string, string>()),
+        };
+        await producer.Process(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        fake.Parts.Should().HaveCount(3);
+        fake.Parts[0].ContentId.Should().Be("xmlpayload@gitb");
+        fake.Parts[1].ContentId.Should().Be("custompayload@gitb");
+        fake.Parts[2].ContentId.Should().EndWith("@us.example");
+        Encoding.UTF8.GetString(fake.Parts[0].Content).Should().Be("<leading/>");
+        fake.Parts[1].Content.Should().Equal(1, 2, 3);
+        fake.Parts[2].Content.Should().Equal(4, 5);
+
+        // The leading document: its own media type and character set, next to the compression the connector applied.
+        var leading = fake.Parts[0].Info;
+        leading.PropertyValue("MimeType").Should().Be("application/xml");
+        leading.PropertyValue("CompressionType").Should().Be("application/gzip");
+        leading.PropertyValue("CharacterSet").Should().Be("utf-8");
+        leading.Properties.Count(p => p.Name == "MimeType").Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Send_AnEmptyPayloadList_IsASimpleSoapMessageWithoutPayloads()
+    {
+        await using var fake = new FakePartner(Answer.Receipt);
+        var (context, producer) = await Start(fake.Port);
+        await using var _ = context;
+
+        var exchange = NewExchange();
+        exchange.In.Body = Array.Empty<As4Payload>();
+        await producer.Process(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        fake.Parts.Should().BeEmpty();
+        fake.Received!.UserMessages.Single().PayloadInfo.Should().BeEmpty();
+        fake.WireContentType.Should().StartWith("application/soap+xml");
+    }
+
+    [Fact]
+    public async Task Send_ACharacterSetThatIsNotAnEncodingName_IsRefusedBeforeSending()
+    {
+        await using var fake = new FakePartner(Answer.Receipt);
+        var (context, producer) = await Start(fake.Port);
+        await using var _ = context;
+
+        var exchange = NewExchange();
+        exchange.In.Body = new List<As4Payload>
+        {
+            new(null, "application/xml", new MemoryStream([1]), new Dictionary<string, string> { ["CharacterSet"] = "!utf*" }),
+        };
+        var act = () => producer.Process(exchange);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*CharacterSet*!utf**");
+        fake.Received.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Send_TwoPayloadsWithTheSameContentId_IsRefusedBeforeSending()
+    {
+        await using var fake = new FakePartner(Answer.Receipt);
+        var (context, producer) = await Start(fake.Port);
+        await using var _ = context;
+
+        var exchange = NewExchange();
+        exchange.In.Body = new List<As4Payload>
+        {
+            new("same@gitb", "application/xml", new MemoryStream([1]), new Dictionary<string, string>()),
+            new("same@gitb", "application/xml", new MemoryStream([2]), new Dictionary<string, string>()),
+        };
+        var act = () => producer.Process(exchange);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*same@gitb*");
         fake.Received.Should().BeNull();
     }
 
@@ -484,6 +651,12 @@ public class As4ProducerTests
 
         public byte[]? Payload { get; private set; }
 
+        /// <summary>The payloads of the last request in the order of <c>eb:PartInfo</c>, decrypted and decompressed.</summary>
+        public List<(string ContentId, PartInfo Info, byte[] Content)> Parts { get; private set; } = [];
+
+        /// <summary>Content-Type of the last request as it came on the wire.</summary>
+        public string? WireContentType { get; private set; }
+
         /// <summary>MessageId of every user message received, in order.</summary>
         public List<string> ReceivedIds { get; } = [];
 
@@ -509,7 +682,15 @@ public class As4ProducerTests
                 var verification = As4SecurityEngine.Verify(request, [As4TestMessages.PublicOnly(Us)], TimeSpan.FromMinutes(5), DateTimeOffset.UtcNow);
                 Received = MessagingReader.Read(request.Envelope);
                 Envelope = request.Envelope;
-                Payload = As4TestMessages.Gunzip(request.Parts.Values.Single().ToArray());
+                Parts = Received.UserMessages.Single().PayloadInfo
+                    .Select(info =>
+                    {
+                        var id = Uri.UnescapeDataString(info.Href!["cid:".Length..]);
+                        return (id, info, As4TestMessages.Gunzip(request.Parts[id].ToArray()));
+                    })
+                    .ToList();
+                WireContentType = http.Request.ContentType;
+                Payload = Parts.Count == 1 ? Parts[0].Content : null;
                 var messageId = Received.UserMessages.Single().MessageInfo.MessageId;
                 var mode = _answers[Math.Min(ReceivedIds.Count, _answers.Length - 1)];
                 ReceivedIds.Add(messageId);
@@ -551,8 +732,9 @@ public class As4ProducerTests
                     : new SignalMessage(info, Receipts.NonRepudiation(mode == Answer.WrongDigest ? Tampered(verification.References) : verification.References), [], null);
 
                 var answer = SwaMessage.Create(MessagingWriter.CreateEnvelope(signal));
-                As4SecurityEngine.Sign(answer, mode == Answer.SignedByStranger ? Stranger : Partner,
-                    As4KeyReference.BinarySecurityToken, timestampTtl: null, DateTimeOffset.UtcNow);
+                if (mode != Answer.Unsigned)
+                    As4SecurityEngine.Sign(answer, mode == Answer.SignedByStranger ? Stranger : Partner,
+                        As4KeyReference.BinarySecurityToken, timestampTtl: null, DateTimeOffset.UtcNow);
                 var (contentType, bytes) = answer.Write();
 
                 http.Response.StatusCode = 200;

@@ -28,7 +28,8 @@ internal static class As4Signature
     /// any failure.
     /// </summary>
     public static SignatureVerification Verify(SwaMessage message, IReadOnlyCollection<X509Certificate2> trustedSigners,
-        TimeSpan timestampTolerance, DateTimeOffset now, RevocationPolicy? revocation = null, TimeSpan? timestampTimeToLive = null)
+        TimeSpan timestampTolerance, DateTimeOffset now, RevocationPolicy? revocation = null, TimeSpan? timestampTimeToLive = null,
+        PkiPathTrust? pkiPath = null)
     {
         ArgumentNullException.ThrowIfNull(message);
         var envelope = message.Envelope;
@@ -52,10 +53,35 @@ internal static class As4Signature
 
         var keyInfo = Child(signature, "KeyInfo", WsSecurityNames.Ds)
             ?? throw new CryptographicException("ds:Signature has no ds:KeyInfo.");
-        var signer = SecurityTokenResolver.Resolve(keyInfo, envelope, trustedSigners);
-        if (signer is null || !trustedSigners.Any(c => c.Thumbprint == signer.Thumbprint))
-            throw new CryptographicException("The signing certificate is not one of the partner's.");
-        CertificateValidity.EnsureSigner(signer, now, revocation ?? RevocationPolicy.None);
+        X509Certificate2? signer;
+        if (pkiPath is not null)
+        {
+            // The agreement trusts authorities, not a pinned certificate: the signer must come with its certification
+            // path (eDelivery AS4 1.16 §4.3.3), and the path must lead to one of them.
+            var path = SecurityTokenResolver.PkiPathOf(keyInfo, envelope)
+                ?? throw new CryptographicException(
+                    "The agreement requires the signing certificate in an X509PKIPathv1 security token; the message references it another way.");
+            // Validity and revocation of the signer and its authorities are part of the path check. The signer is kept;
+            // the rest of the path is released once judged, trusted or not.
+            try
+            {
+                PkiPath.EnsureTrusted(path, pkiPath, now, revocation ?? RevocationPolicy.None);
+            }
+            catch
+            {
+                PkiPath.Release(path, keep: null);
+                throw;
+            }
+            signer = path[^1];
+            PkiPath.Release(path, keep: signer);
+        }
+        else
+        {
+            signer = SecurityTokenResolver.Resolve(keyInfo, envelope, trustedSigners);
+            if (signer is null || !trustedSigners.Any(c => c.Thumbprint == signer.Thumbprint))
+                throw new CryptographicException("The signing certificate is not one of the partner's.");
+            CertificateValidity.EnsureSigner(signer, now, revocation ?? RevocationPolicy.None);
+        }
 
         var signatureValue = Convert.FromBase64String(
             (Child(signature, "SignatureValue", WsSecurityNames.Ds)
@@ -136,13 +162,13 @@ internal static class As4Signature
         bool Covers(XmlElement element) => covered.Contains("#" + WsuId(element));
 
         if (parts.Messaging is null || !Covers(parts.Messaging))
-            throw new CryptographicException("The signature does not cover eb:Messaging.");
+            throw new SignatureCoverageException("The signature does not cover eb:Messaging.");
         if (!Covers(parts.Body))
-            throw new CryptographicException("The signature does not cover the SOAP body.");
+            throw new SignatureCoverageException("The signature does not cover the SOAP body.");
         foreach (var id in message.Parts.Keys)
         {
             if (!covered.Contains(WsSecurityNames.CidUri(id)))
-                throw new CryptographicException($"The signature does not cover the attachment '{id}'.");
+                throw new SignatureCoverageException($"The signature does not cover the attachment '{id}'.");
         }
 
         if (parts.Timestamp is { } timestamp)
@@ -190,7 +216,16 @@ internal static class As4Signature
     /// <c>ds:Reference</c> elements: what a non-repudiation receipt must echo back.
     /// </summary>
     public static IReadOnlyList<XmlElement> Sign(SwaMessage message, X509Certificate2 signer, As4KeyReference keyReference,
-        TimeSpan? timestampTtl, DateTimeOffset now)
+        TimeSpan? timestampTtl, DateTimeOffset now, IReadOnlyList<X509Certificate2>? signingPath = null) =>
+        Sign(message, signer, keyReference, timestampTtl, now, coverBody: true, signingPath);
+
+    /// <summary>
+    /// As the signing of a conformant sender, with the SOAP body left
+    /// out of the signature when <paramref name="coverBody"/> is false: what a sender outside the profile produces, for
+    /// the tests of the receiver. A conformant sender always covers the body (AS4 profile §5.1.4, §5.1.5).
+    /// </summary>
+    internal static IReadOnlyList<XmlElement> Sign(SwaMessage message, X509Certificate2 signer, As4KeyReference keyReference,
+        TimeSpan? timestampTtl, DateTimeOffset now, bool coverBody, IReadOnlyList<X509Certificate2>? signingPath = null)
     {
         ArgumentNullException.ThrowIfNull(message);
         ArgumentNullException.ThrowIfNull(signer);
@@ -205,7 +240,8 @@ internal static class As4Signature
         if (Children(security, "Signature", WsSecurityNames.Ds).Any())
             throw new CryptographicException("The message is signed already.");
 
-        var targets = new List<XmlElement> { parts.Messaging, parts.Body };
+        var targets = new List<XmlElement> { parts.Messaging };
+        if (coverBody) targets.Add(parts.Body);
         if (timestampTtl is { } ttl)
         {
             if (parts.Timestamp is not null)
@@ -232,7 +268,7 @@ internal static class As4Signature
                 AttachmentCanonicalizer.Sha256(part));
 
         // Token first, signature after it: a receiver meets the token before the reference to it.
-        var keyInfo = SecurityTokenResolver.CreateKeyInfo(doc, security, signer, keyReference);
+        var keyInfo = SecurityTokenResolver.CreateKeyInfo(doc, security, signer, keyReference, path: signingPath);
         security.AppendChild(signature);
 
         ExclusiveCanonicalizer.DeclareNamespaces(security);
@@ -330,3 +366,11 @@ internal static class As4Signature
 /// what a sender compares a receipt against.
 /// </param>
 internal sealed record SignatureVerification(X509Certificate2 Signer, IReadOnlyList<XmlElement> References);
+
+/// <summary>
+/// The signature verifies, but leaves out a part the profile requires it to cover: <c>eb:Messaging</c>, the SOAP body
+/// or an attachment (AS4 profile §5.1.4, §5.1.5). On receipt this is a policy failure, <c>EBMS:0103</c>, as Domibus
+/// reports it from its WS-SecurityPolicy (<c>sp:SignedParts</c>), not a failed authentication: nothing that was
+/// signed has been altered.
+/// </summary>
+internal sealed class SignatureCoverageException(string message) : System.Security.Cryptography.CryptographicException(message);

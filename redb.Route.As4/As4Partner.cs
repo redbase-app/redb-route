@@ -81,6 +81,28 @@ public sealed class As4Partner
     /// </summary>
     public IList<X509Certificate2> PartnerSigningCertificates { get; set; } = new List<X509Certificate2>();
 
+    /// <summary>
+    /// Certification authorities the partner's signing certificate must chain to, instead of pinning the certificate
+    /// itself in <see cref="PartnerSigningCertificates"/>: roots or intermediate authorities ("certificate path
+    /// prefixes", eDelivery AS4 1.16 §4.3.3). With these set, the partner's messages and receipts must carry the signing
+    /// certificate in an <c>X509PKIPathv1</c> security token; the path is validated up to one of the anchors — every
+    /// signature, every validity period, every issuer a certification authority. A message that references its
+    /// certificate another way is refused, even when the certificate would chain. Set one or the other, not both.
+    /// </summary>
+    public IList<X509Certificate2> PartnerTrustAnchors { get; set; } = new List<X509Certificate2>();
+
+    /// <summary>
+    /// Certificate policy OIDs (RFC 5280 §4.2.1.4) the partner's signing certificate, and every authority between it
+    /// and the trust anchor, must assert; <c>anyPolicy</c> in a certificate satisfies each. Used with
+    /// <see cref="PartnerTrustAnchors"/>. Empty for none.
+    /// </summary>
+    public IList<string> PartnerCertificatePolicies { get; set; } = new List<string>();
+
+    /// <summary>The trust of an agreement that names authorities; null when the signing certificate is pinned.</summary>
+    internal Security.PkiPathTrust? PkiPathTrust => PartnerTrustAnchors is { Count: > 0 }
+        ? new Security.PkiPathTrust(PartnerTrustAnchors.ToList(), (PartnerCertificatePolicies ?? []).ToList())
+        : null;
+
     /// <summary>The partner's certificate we encrypt payloads for.</summary>
     public X509Certificate2? PartnerEncryptionCertificate { get; set; }
 
@@ -135,6 +157,14 @@ public sealed class As4Partner
     /// </summary>
     public bool CompressPayloads { get; set; } = true;
 
+    /// <summary>
+    /// Whether every message of this agreement must carry the <c>originalSender</c> and <c>finalRecipient</c> message
+    /// properties, on sending and on receipt. They belong to the Four Corner Topology profile enhancement of eDelivery
+    /// AS4 1.16 (§4.1.2); the common profile does not ask for them, so a point-to-point agreement sets this to false.
+    /// Default true.
+    /// </summary>
+    public bool RequireFourCornerProperties { get; set; } = true;
+
     /// <summary>Throws when the agreement cannot be used; called when an endpoint of its node starts.</summary>
     public void Validate()
     {
@@ -148,8 +178,21 @@ public sealed class As4Partner
         new As4Leg { Service = Service, ServiceType = ServiceType, Action = Action }.Validate($"{owner} request leg");
         ReplyLeg?.Validate($"{owner} reply leg");
 
-        if (PartnerSigningCertificates is null || PartnerSigningCertificates.Count == 0 || PartnerSigningCertificates.Any(c => c is null))
-            throw new InvalidOperationException($"{owner}: PartnerSigningCertificates is required — every AS4 message and receipt is signed.");
+        var pinned = PartnerSigningCertificates is { Count: > 0 };
+        var anchored = PartnerTrustAnchors is { Count: > 0 };
+        if (pinned == anchored)
+            throw new InvalidOperationException(
+                $"{owner}: set either PartnerSigningCertificates (the partner's certificate is pinned) or PartnerTrustAnchors " +
+                "(the partner presents a certification path to an authority) — every AS4 message and receipt is signed, and one of the two says by whom.");
+        if ((pinned && PartnerSigningCertificates!.Any(c => c is null)) || (anchored && PartnerTrustAnchors!.Any(c => c is null)))
+            throw new InvalidOperationException($"{owner}: a certificate in PartnerSigningCertificates or PartnerTrustAnchors is null.");
+        if (PartnerCertificatePolicies is { Count: > 0 })
+        {
+            if (!anchored)
+                throw new InvalidOperationException($"{owner}: PartnerCertificatePolicies applies to a certification path; set PartnerTrustAnchors.");
+            if (PartnerCertificatePolicies.Any(string.IsNullOrWhiteSpace))
+                throw new InvalidOperationException($"{owner}: a certificate policy OID in PartnerCertificatePolicies is empty.");
+        }
         if (PartnerEncryptionCertificate is null)
             throw new InvalidOperationException($"{owner}: PartnerEncryptionCertificate is required — every payload is encrypted.");
 

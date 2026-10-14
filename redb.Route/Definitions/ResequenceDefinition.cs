@@ -29,6 +29,10 @@ public sealed class ResequenceDefinition : RouteDefinitionBase<ResequenceDefinit
     public override IProcessor CreateProcessor(IRouteContext context)
     {
         IProcessor inner = NodePipeline.Body(context, Outputs);
+        // Every delivery comes out of the buffer — on a timer, or with exchanges of callers that have already returned —
+        // and a failure is kept on its exchange, never thrown to the route's error wrappers: the body is wrapped by the
+        // route's error scope.
+        inner = (context as Core.RouteContext)?.DetachedErrorScope?.WrapDetached(inner) ?? inner;
         return new ResequencerProcessor(inner, _keySelector, _batchSize, _timeout);
     }
 

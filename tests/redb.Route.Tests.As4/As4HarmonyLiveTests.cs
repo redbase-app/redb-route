@@ -122,6 +122,165 @@ public class As4HarmonyLiveTests
         status.Should().Be("ACKNOWLEDGED", $"Harmony should accept our receipt for {messageId}");
     }
 
+    [As4LiveTheory(HarmonyPort)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SeveralPayloads_UnderOurContentIds_AreReceivedByHarmony(bool compress)
+    {
+        // The payload profile of the eDelivery conformance tests: an XML leading document and a non-XML one, each under
+        // the Content-ID the producer chose, with its CharacterSet part property.
+        var (context, producer) = await Sender(partner => partner.CompressPayloads = compress);
+        await using var _ = context;
+        var run = Guid.NewGuid().ToString("N");
+        var exchange = NewExchange("unused");
+        exchange.In.Body = new List<As4Payload>
+        {
+            new($"xmlpayload-{run}@redb", "application/xml",
+                new MemoryStream(Encoding.UTF8.GetBytes("<invoice xmlns=\"urn:example\">\n  <id>1</id>\n</invoice>")),
+                new Dictionary<string, string> { ["CharacterSet"] = "UTF-8" }),
+            new($"custompayload-{run}@redb", "application/octet-stream", new MemoryStream([0, 1, 2, 3, 250, 251, 252]),
+                new Dictionary<string, string>()),
+            new(null, "application/octet-stream", new MemoryStream(Encoding.UTF8.GetBytes("third")), new Dictionary<string, string>()),
+        };
+        await producer.Process(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue("Harmony's receipt names the digests of every part");
+        using var harmony = await HarmonyClient.LoginAsync();
+        (await harmony.StatusAsync(exchange.In.GetHeader<string>(As4Headers.MessageId)!)).Should().Be("RECEIVED");
+    }
+
+    [As4LiveFact(HarmonyPort)]
+    public async Task AMessageWithoutPayloads_IsReceivedByHarmony()
+    {
+        // The Notify command of the conformance tests has no payload: a simple SOAP message, signed, nothing to encrypt.
+        var (context, producer) = await Sender(_ => { });
+        await using var _ = context;
+        var exchange = NewExchange("unused");
+        exchange.In.Body = Array.Empty<As4Payload>();
+        await producer.Process(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        using var harmony = await HarmonyClient.LoginAsync();
+        (await harmony.StatusAsync(exchange.In.GetHeader<string>(As4Headers.MessageId)!)).Should().Be("RECEIVED");
+    }
+
+    [As4LiveFact(HarmonyPort)]
+    public async Task AnEmptyPayload_IsAWholeGzipMember_AndIsReceivedByHarmony()
+    {
+        // From .NET 9 on GZipStream writes nothing for empty content; zero bytes are not gzip to Domibus.
+        var (context, producer) = await Sender(_ => { });
+        await using var _ = context;
+        var exchange = NewExchange("");
+        await producer.Process(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        using var harmony = await HarmonyClient.LoginAsync();
+        (await harmony.StatusAsync(exchange.In.GetHeader<string>(As4Headers.MessageId)!)).Should().Be("RECEIVED");
+    }
+
+    [As4LiveTheory(HarmonyPort)]
+    [InlineData(true, null)]
+    [InlineData(false, "EBMS:0103")]
+    public async Task AnEmptyBodyLeftOutOfTheSignature_IsRefusedByDomibus_AsItsPolicyRequiresTheBodySigned(bool coverBody, string? expectedError)
+    {
+        // What the reference implementation answers to the conformance test "emptyBodyNotReferencedInSignature": its
+        // WS-SecurityPolicy (eDeliveryAS4Policy.xml) lists sp:Body among the signed parts. The same hand-built message
+        // with the body covered is the control: it is received.
+        const string contentId = "p1@redb.test";
+        var envelope = As4TestMessages.UserMessage(Guid.NewGuid().ToString("N") + "@redb.test", contentId,
+            from: "redb", to: "harmony", agreementRef: "urn:redb:as4:interop",
+            service: "urn:redb:as4:interop", serviceType: "urn:redb:services", action: "StoreMessage");
+        foreach (System.Xml.XmlElement partyId in envelope.GetElementsByTagName("PartyId", redb.Route.As4.Messaging.EbmsNamespaces.Eb))
+            partyId.SetAttribute("type", PartyIdType);
+        var message = redb.Route.As4.Mime.SwaMessage.Create(envelope);
+        message.AddPart(contentId, "application/gzip", As4TestMessages.Gzip(Encoding.UTF8.GetBytes("<invoice xmlns=\"urn:example\"/>")));
+        redb.Route.As4.Security.As4Signature.Sign(message, As4Stand.KeyPair("redb"), As4KeyReference.BinarySecurityToken, null, DateTimeOffset.UtcNow, coverBody);
+        redb.Route.As4.Security.As4SecurityEngine.Encrypt(message, As4Stand.Certificate("harmony_gw"), As4KeyReference.BinarySecurityToken);
+        var (contentType, body) = message.Write();
+
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+        var content = new ByteArrayContent(body);
+        content.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse(contentType);
+        using var response = await http.PostAsync($"http://127.0.0.1:{HarmonyPort}/services/msh", content);
+        var answerBytes = await response.Content.ReadAsByteArrayAsync();
+        var answer = redb.Route.As4.Mime.SwaMessage.Read(response.Content.Headers.ContentType!.ToString(), answerBytes, 1024 * 1024);
+        var signals = redb.Route.As4.Messaging.MessagingReader.Read(answer.Envelope).SignalMessages;
+
+        signals.SelectMany(s => s.Errors).FirstOrDefault()?.ErrorCode.Should().Be(expectedError);
+        signals.Any(s => s.IsReceipt).Should().Be(expectedError is null);
+    }
+
+    [As4LiveTheory(HarmonyPort)]
+    [InlineData(false)]   // Harmony's certificate pinned: its receipt's path token is read for the certificate it is for
+    [InlineData(true)]    // Harmony's certificate as the trust anchor: its receipt must come with a path, validated
+    public async Task AMessageSignedWithACertificationPath_IsReceivedByHarmony_UnderItsPkiPathPolicy(bool trustAnAuthority)
+    {
+        // The leg redbPushPkiPath runs under eDeliveryAS4Policy_BST_PKIP.xml: the signing token is an X509PKIPathv1
+        // BinarySecurityToken in both directions. The stand's certificates are their own authorities: paths of one.
+        var (context, producer) = await Sender(partner =>
+        {
+            partner.Action = "StoreMessagePkiPath";
+            partner.KeyReference = As4KeyReference.PkiPath;
+            if (trustAnAuthority)
+            {
+                partner.PartnerSigningCertificates.Clear();
+                partner.PartnerTrustAnchors.Add(As4Stand.Certificate("harmony_gw"));
+            }
+        });
+        await using var _ = context;
+        var exchange = NewExchange($"<invoice xmlns=\"urn:example\"><id>{Guid.NewGuid():N}</id></invoice>");
+        await producer.Process(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        using var harmony = await HarmonyClient.LoginAsync();
+        (await harmony.StatusAsync(exchange.In.GetHeader<string>(As4Headers.MessageId)!)).Should().Be("RECEIVED");
+    }
+
+    [As4LiveFact(HarmonyPort)]
+    public async Task APathOfThreeCertificates_RootIssuingAuthoritySigner_IsReadByDomibusInItsOrder()
+    {
+        // The stand's own certificates are their own authorities; this signer is issued under two (keys/pki-root.crt,
+        // pki-issuing.crt), given here out of order. WSS4J takes the signer from the path by its position: a path
+        // written in the wrong order would have Domibus verify the signature with an authority's key.
+        await using var context = new redb.Route.Core.RouteContext();
+        context.AddComponent(new As4Component());
+        context.AddToRegistry("node", new As4ConnectionFactory
+        {
+            OurPartyId = "redb_pki",
+            OurPartyIdType = PartyIdType,
+            ExternalHostName = "redb.test",
+            SigningCertificate = As4Stand.KeyPair("redb_pki"),
+            SigningCertificateChain = { As4Stand.Certificate("pki-root"), As4Stand.Certificate("pki-issuing") },
+            DecryptionCertificates = { As4Stand.KeyPair("redb_pki") },
+            Partners =
+            {
+                new As4Partner
+                {
+                    Name = "harmony",
+                    PartyId = "harmony",
+                    PartyIdType = PartyIdType,
+                    AgreementRef = "urn:redb:as4:interop",
+                    Service = "urn:redb:as4:interop",
+                    ServiceType = "urn:redb:services",
+                    Action = "StoreMessagePkiPath",
+                    KeyReference = As4KeyReference.PkiPath,
+                    PartnerTrustAnchors = { As4Stand.Certificate("harmony_gw") },
+                    PartnerEncryptionCertificate = As4Stand.Certificate("harmony_gw"),
+                },
+            },
+        });
+        var producer = context.GetEndpoint(As4Dsl.Send($"http://127.0.0.1:{HarmonyPort}/services/msh")
+            .ConnectionFactory("node").Partner("harmony").Timeout(60000)).CreateProducer();
+        await producer.Start();
+
+        var exchange = NewExchange($"<invoice xmlns=\"urn:example\"><id>{Guid.NewGuid():N}</id></invoice>");
+        await producer.Process(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        using var harmony = await HarmonyClient.LoginAsync();
+        (await harmony.StatusAsync(exchange.In.GetHeader<string>(As4Headers.MessageId)!)).Should().Be("RECEIVED");
+    }
+
     // ── Fixtures ─────────────────────────────────────────────────────────────
 
     private static async Task<(redb.Route.Core.RouteContext Context, redb.Route.Abstractions.IProducer Producer)> Sender(Action<As4Partner> configure)

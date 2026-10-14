@@ -11,33 +11,6 @@ namespace redb.Route.Tests.Quartz;
 public class QuartzRouteJobTests
 {
     [Fact]
-    public async Task Execute_MissingJobData_Throws()
-    {
-        var job = new QuartzRouteJob();
-        var scheduler = await StdSchedulerFactory.GetDefaultScheduler();
-        await scheduler.Start();
-
-        try
-        {
-            var jobDetail = JobBuilder.Create<QuartzRouteJob>()
-                .UsingJobData("endpointUri", "")
-                .UsingJobData("contextId", "")
-                .Build();
-
-            var trigger = TriggerBuilder.Create().StartNow().Build();
-            var context = new TestJobExecutionContext(scheduler, jobDetail, trigger);
-
-            var act = () => job.Execute(context);
-            await act.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("*endpointUri*contextId*");
-        }
-        finally
-        {
-            await scheduler.Shutdown();
-        }
-    }
-
-    [Fact]
     public async Task Execute_NoConsumerRegistered_CleansUpOrphan()
     {
         var job = new QuartzRouteJob();
@@ -60,51 +33,6 @@ public class QuartzRouteJobTests
         }
         finally
         {
-            await scheduler.Shutdown();
-        }
-    }
-
-    [Fact]
-    public async Task Execute_NoRouteContext_CleansUpOrphan()
-    {
-        var job = new QuartzRouteJob();
-        var scheduler = await StdSchedulerFactory.GetDefaultScheduler();
-        await scheduler.Start();
-
-        try
-        {
-            // Register a fake consumer but no RouteContext in scheduler
-            var fakeConsumer = Substitute.ForPartsOf<QuartzConsumerBase>(
-                Substitute.For<Abstractions.IEndpoint>(),
-                Substitute.For<Abstractions.IProcessor>(),
-                1,              // maxThreads
-                (string?)null,  // groupName
-                (string?)null,  // jobName
-                true,           // deleteJob
-                false,          // pauseJob
-                false,          // durableJob
-                false,          // stateful
-                false,          // recoverableJob
-                false,          // prefixJobNameWithEndpointId
-                (string?)null); // customCalendar
-
-            QuartzConsumerRegistry.Register("nocontext://test", fakeConsumer);
-
-            var jobDetail = JobBuilder.Create<QuartzRouteJob>()
-                .UsingJobData("endpointUri", "nocontext://test")
-                .UsingJobData("contextId", "missing-context-id")
-                .Build();
-
-            var trigger = TriggerBuilder.Create().StartNow().Build();
-            var context = new TestJobExecutionContext(scheduler, jobDetail, trigger);
-
-            // Should not throw — consumer found but context not found → cleanup
-            var act = () => job.Execute(context);
-            await act.Should().NotThrowAsync();
-        }
-        finally
-        {
-            QuartzConsumerRegistry.Unregister("nocontext://test");
             await scheduler.Shutdown();
         }
     }

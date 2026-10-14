@@ -275,6 +275,26 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
     /// <summary>Current LogExhausted value (default true).</summary>
     public bool LogExhaustedValue => _logExhausted;
 
+    /// <summary>Whether the exhausted-failure log entry is written for a failure the handler handled (default: false, as in Camel).</summary>
+    public OnExceptionDefinition LogHandled(bool value = true)
+    {
+        _logHandled = value;
+        return this;
+    }
+    private bool _logHandled;
+    /// <summary>Current LogHandled value (default false).</summary>
+    public bool LogHandledValue => _logHandled;
+
+    /// <summary>Whether the exhausted-failure log entry is written for a failure the handler continued (default: false, as in Camel).</summary>
+    public OnExceptionDefinition LogContinued(bool value = true)
+    {
+        _logContinued = value;
+        return this;
+    }
+    private bool _logContinued;
+    /// <summary>Current LogContinued value (default false).</summary>
+    public bool LogContinuedValue => _logContinued;
+
     // ── Navigation ─────────────────────────────────────────────────────────────
 
     /// <summary>Closes this OnException scope and returns the parent route definition.</summary>
@@ -320,21 +340,33 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
     }
 
     /// <summary>
-    /// Wraps the supplied <paramref name="body"/> processor with an
-    /// <see cref="OnExceptionProcessor"/> whose handler is this definition's pipeline of
-    /// child <see cref="ProcessorDefinition.Outputs"/>. Used by the route compiler to hoist
-    /// in-route OnException blocks into a try/handle envelope around the rest of the route.
+    /// Wraps the supplied <paramref name="body"/> processor with one <see cref="OnExceptionProcessor"/> for all of
+    /// <paramref name="handlers"/>, each with its own pipeline of child <see cref="ProcessorDefinition.Outputs"/>.
+    /// Used for a route compiled outside a <see cref="RouteContext"/>; the route compiler of a context goes through
+    /// the route's <see cref="Core.RouteErrorScope"/>, which compiles a handler once and reuses it.
     /// </summary>
-    internal IProcessor WrapBody(IProcessor body, IRouteContext context)
+    internal static IProcessor WrapBody(IProcessor body, IReadOnlyList<OnExceptionDefinition> handlers, IRouteContext context)
     {
         ArgumentNullException.ThrowIfNull(body);
         ArgumentNullException.ThrowIfNull(context);
 
-        var loggerFactory = context.GetService<ILoggerFactory>();
-        var logger = loggerFactory?.CreateLogger<OnExceptionProcessor>();
-        var oeProc = new OnExceptionProcessor(body, logger);
+        var logger = context.GetService<ILoggerFactory>()?.CreateLogger<OnExceptionProcessor>();
+        var scope = new OnExceptionProcessor(body, logger);
+        foreach (var handler in handlers)
+            handler.AddTo(scope, TryCatchDefinition.BuildPipeline(handler.Outputs, context));
+        return scope;
+    }
 
-        var handlerBody = TryCatchDefinition.BuildPipeline(Outputs, context);
+    /// <summary>
+    /// The one place an <see cref="OnExceptionProcessor"/> is configured from this definition. Registers it in
+    /// <paramref name="oeProc"/>, the processor of a whole scope: every exception type with
+    /// <paramref name="handlerBody"/> (this definition's compiled steps) and every setting of the definition.
+    /// </summary>
+    internal void AddTo(OnExceptionProcessor oeProc, IProcessor handlerBody)
+    {
+        ArgumentNullException.ThrowIfNull(oeProc);
+        ArgumentNullException.ThrowIfNull(handlerBody);
+
         foreach (var type in _exceptionTypes)
         {
             oeProc.Handle(type, handlerBody,
@@ -354,10 +386,11 @@ public class OnExceptionDefinition : RouteDefinitionBase<OnExceptionDefinition>,
                 useOriginalBody: _useOriginalBody,
                 logStackTrace: _logStackTrace,
                 logExhausted: _logExhausted,
+                logHandled: _logHandled,
+                logContinued: _logContinued,
                 onExceptionOccurredProcessor: _onExceptionOccurredProcessor,
                 onRedeliveryProcessor: _onRedeliveryProcessor,
                 onPrepareFailureProcessor: _onPrepareFailureProcessor);
         }
-        return oeProc;
     }
 }

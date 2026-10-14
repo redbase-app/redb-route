@@ -138,7 +138,9 @@ internal static class As4SecurityEngine
 
         // The key transport block goes first; the recipient's token, if referenced by BST, before it.
         security.PrependChild(encryptedKey);
-        encryptedKey.AppendChild(SecurityTokenResolver.CreateKeyInfo(doc, security, recipient, keyReference, insertTokenBefore: encryptedKey));
+        // A certification path is how a signer presents itself; the recipient of the key is named by its certificate.
+        var recipientReference = keyReference == As4KeyReference.PkiPath ? As4KeyReference.BinarySecurityToken : keyReference;
+        encryptedKey.AppendChild(SecurityTokenResolver.CreateKeyInfo(doc, security, recipient, recipientReference, insertTokenBefore: encryptedKey));
         var cipherData = As4Signature.Append(encryptedKey, "xenc", "CipherData", WsSecurityNames.Xenc);
         As4Signature.Append(cipherData, "xenc", "CipherValue", WsSecurityNames.Xenc).InnerText =
             Convert.ToBase64String(rsa.Encrypt(sessionKey, RSAEncryptionPadding.OaepSHA256));
@@ -181,13 +183,14 @@ internal static class As4SecurityEngine
 
     /// <summary>Verifies the message signature; see <see cref="As4Signature.Verify"/>.</summary>
     public static SignatureVerification Verify(SwaMessage message, IReadOnlyCollection<X509Certificate2> partnerCertificates,
-        TimeSpan timestampTolerance, DateTimeOffset now, RevocationPolicy? revocation = null, TimeSpan? timestampTimeToLive = null) =>
-        As4Signature.Verify(message, partnerCertificates, timestampTolerance, now, revocation, timestampTimeToLive);
+        TimeSpan timestampTolerance, DateTimeOffset now, RevocationPolicy? revocation = null, TimeSpan? timestampTimeToLive = null,
+        PkiPathTrust? pkiPath = null) =>
+        As4Signature.Verify(message, partnerCertificates, timestampTolerance, now, revocation, timestampTimeToLive, pkiPath);
 
-    /// <summary>Signs the message; see <see cref="As4Signature.Sign"/>.</summary>
+    /// <summary>Signs the message; see <see cref="As4Signature"/>.</summary>
     public static IReadOnlyList<XmlElement> Sign(SwaMessage message, X509Certificate2 signer, As4KeyReference keyReference,
-        TimeSpan? timestampTtl, DateTimeOffset now) =>
-        As4Signature.Sign(message, signer, keyReference, timestampTtl, now);
+        TimeSpan? timestampTtl, DateTimeOffset now, IReadOnlyList<X509Certificate2>? signingPath = null) =>
+        As4Signature.Sign(message, signer, keyReference, timestampTtl, now, signingPath);
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 

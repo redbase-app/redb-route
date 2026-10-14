@@ -42,6 +42,18 @@ cancellation — not the route's fault, and not an error), `BytesIn`/`BytesOut`,
 `HealthStatus`/`HealthReason`. A consumer endpoint's completed count is
 `MessagesIn − Errors − Cancelled`.
 
+### A business key on a span, not in baggage
+
+Two different jobs travel with a trace, and they must not be mixed. **Correlation across the network** is the
+W3C context and the baggage: they go to every next service, so baggage carries only what those services may see.
+**Finding a trace locally** — by an order number, a batch id — is an attribute on one of this service's spans:
+`.SpanTag(key, value)` (`SpanTarget.Enclosing`, the nearest `Traced` scope or the route span; `SpanTarget.Inbound`,
+the server or consumer span of the request). Jaeger and Tempo search attributes on every span of a trace. A business
+key put in baggage instead leaks to systems that have no business with it.
+
+The attribute exists only in layer 1: nobody listening, an unsampled span or `.Tracing(false)` means nothing is set.
+The same key for the route itself to read stays where it always was — a header or a property.
+
 ## Reading measurements from inside a route
 
 ### `stats()` in the expression language
@@ -188,6 +200,7 @@ disposed when the context stops; collected points stay readable.
 | You want | Use |
 |---|---|
 | Dashboards, alerting, history, percentiles | OpenTelemetry backend: `AddMeter("redb.Route")` |
+| Find a trace by a business key | `.SpanTag("sap.order.id", ...)` — a span attribute, never baggage |
 | Branch a route on an endpoint's health or counters | `stats(...)` in a condition |
 | Branch a route, or markup, on EIP counters and step durations | `stats('otel:…', field)` + `UseMetricsSnapshot()` |
 | See which steps one exchange went through, and what each cost | `messageHistory()` in a log or a condition |

@@ -144,6 +144,7 @@ public class RetryAndScopeKnobsTests : IAsyncDisposable
                 <onException exceptions="System.InvalidOperationException" handled="true"
                              maximumRedeliveries="3" redeliveryDelay="00:00:02"
                              useOriginalBody="true" logStackTrace="false" logExhausted="true"
+                             logHandled="false" logContinued="true"
                              retryAttemptedLogLevel="Debug" retriesExhaustedLogLevel="Critical">
                   <retryWhile expr="header.again == 'yes'"/>
                   <setHeader name="rescued" value="yes"/>
@@ -156,6 +157,8 @@ public class RetryAndScopeKnobsTests : IAsyncDisposable
         code.Should().Contain("UseOriginalBody()");
         code.Should().Contain("LogStackTrace(false)");
         code.Should().Contain("LogExhausted(true)");
+        code.Should().Contain("LogHandled(false)");
+        code.Should().Contain("LogContinued(true)");
         code.Should().Contain("RetryAttemptedLogLevel(LogLevel.Debug)");
         code.Should().Contain("RetriesExhaustedLogLevel(LogLevel.Critical)");
         code.Should().Contain("RetryWhile(\"header.again == 'yes'\")");

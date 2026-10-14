@@ -1,99 +1,117 @@
+using System.Collections.Specialized;
+using Quartz;
+using Quartz.Impl;
 using redb.Route.Quartz;
 
 namespace redb.Route.Tests.Quartz;
 
 /// <summary>
-/// Tests for QuartzConsumerRegistry — the static consumer instance registry
-/// that fixes the original's CreateConsumer(null) bug.
+/// Tests for QuartzConsumerRegistry — the running consumers of the process by the job they claimed on their scheduler.
+/// One job key, one consumer per scheduler: a second claimant is refused, never silently put in the first one's place.
 /// </summary>
 public class QuartzConsumerRegistryTests
 {
     [Fact]
-    public void Get_Unregistered_ReturnsNull()
+    public async Task Get_Unregistered_ReturnsNull()
     {
-        QuartzConsumerRegistry.Get("nonexistent://endpoint").Should().BeNull();
+        var scheduler = await NewScheduler();
+        QuartzConsumerRegistry.Get(scheduler, new JobKey("nonexistent", "redb")).Should().BeNull();
     }
 
     [Fact]
-    public void RegisterAndGet_ReturnsConsumer()
+    public async Task RegisterAndGet_ReturnsConsumer()
     {
-        var key = "registry-test://ep1";
+        var scheduler = await NewScheduler();
+        var jobKey = new JobKey("ep1", "redb");
+        var key = QuartzConsumerRegistry.KeyOf(scheduler, jobKey);
         var consumer = CreateMockConsumer();
 
         try
         {
-            QuartzConsumerRegistry.Register(key, consumer);
-            QuartzConsumerRegistry.Get(key).Should().BeSameAs(consumer);
+            QuartzConsumerRegistry.TryRegister(key, consumer, out _).Should().BeTrue();
+            QuartzConsumerRegistry.Get(scheduler, jobKey).Should().BeSameAs(consumer);
         }
         finally
         {
-            QuartzConsumerRegistry.Unregister(key);
+            QuartzConsumerRegistry.Unregister(key, consumer);
         }
     }
 
     [Fact]
-    public void Unregister_RemovesConsumer()
+    public async Task Unregister_RemovesConsumer()
     {
-        var key = "registry-test://ep2";
+        var scheduler = await NewScheduler();
+        var jobKey = new JobKey("ep2", "redb");
+        var key = QuartzConsumerRegistry.KeyOf(scheduler, jobKey);
         var consumer = CreateMockConsumer();
 
-        QuartzConsumerRegistry.Register(key, consumer);
-        QuartzConsumerRegistry.Unregister(key);
-        QuartzConsumerRegistry.Get(key).Should().BeNull();
+        QuartzConsumerRegistry.TryRegister(key, consumer, out _);
+        QuartzConsumerRegistry.Unregister(key, consumer);
+        QuartzConsumerRegistry.Get(scheduler, jobKey).Should().BeNull();
     }
 
     [Fact]
     public void Unregister_NonExistent_DoesNotThrow()
     {
-        var act = () => QuartzConsumerRegistry.Unregister("does-not-exist://x");
+        var act = () => QuartzConsumerRegistry.Unregister("does-not-exist", CreateMockConsumer());
         act.Should().NotThrow();
     }
 
     [Fact]
-    public void Register_OverwritesPrevious()
+    public async Task ASecondClaimant_IsRefused_AndTheFirstStays()
     {
-        var key = "registry-test://ep3";
-        var c1 = CreateMockConsumer();
-        var c2 = CreateMockConsumer();
+        var scheduler = await NewScheduler();
+        var jobKey = new JobKey("ep3", "redb");
+        var key = QuartzConsumerRegistry.KeyOf(scheduler, jobKey);
+        var first = CreateMockConsumer();
+        var second = CreateMockConsumer();
 
         try
         {
-            QuartzConsumerRegistry.Register(key, c1);
-            QuartzConsumerRegistry.Register(key, c2);
-            QuartzConsumerRegistry.Get(key).Should().BeSameAs(c2);
+            QuartzConsumerRegistry.TryRegister(key, first, out _).Should().BeTrue();
+            QuartzConsumerRegistry.TryRegister(key, second, out var owner).Should().BeFalse();
+            owner.Should().BeSameAs(first);
+
+            // The refused one cannot release what it does not hold.
+            QuartzConsumerRegistry.Unregister(key, second);
+            QuartzConsumerRegistry.Get(scheduler, jobKey).Should().BeSameAs(first);
         }
         finally
         {
-            QuartzConsumerRegistry.Unregister(key);
+            QuartzConsumerRegistry.Unregister(key, first);
         }
     }
 
     [Fact]
-    public void MultipleKeys_Independent()
+    public async Task TheSameJobKey_OnAnotherScheduler_IsAnotherClaim()
     {
-        var key1 = "registry-multi://a";
-        var key2 = "registry-multi://b";
+        var a = await NewScheduler();
+        var b = await NewScheduler();
+        var jobKey = new JobKey("ep4", "redb");
         var c1 = CreateMockConsumer();
         var c2 = CreateMockConsumer();
 
         try
         {
-            QuartzConsumerRegistry.Register(key1, c1);
-            QuartzConsumerRegistry.Register(key2, c2);
+            QuartzConsumerRegistry.TryRegister(QuartzConsumerRegistry.KeyOf(a, jobKey), c1, out _).Should().BeTrue();
+            QuartzConsumerRegistry.TryRegister(QuartzConsumerRegistry.KeyOf(b, jobKey), c2, out _).Should().BeTrue(
+                "a scheduler per context: two contexts may both say cron://ep4");
 
-            QuartzConsumerRegistry.Get(key1).Should().BeSameAs(c1);
-            QuartzConsumerRegistry.Get(key2).Should().BeSameAs(c2);
-
-            QuartzConsumerRegistry.Unregister(key1);
-            QuartzConsumerRegistry.Get(key1).Should().BeNull();
-            QuartzConsumerRegistry.Get(key2).Should().BeSameAs(c2, "unregistering key1 should not affect key2");
+            QuartzConsumerRegistry.Get(a, jobKey).Should().BeSameAs(c1);
+            QuartzConsumerRegistry.Get(b, jobKey).Should().BeSameAs(c2);
         }
         finally
         {
-            QuartzConsumerRegistry.Unregister(key1);
-            QuartzConsumerRegistry.Unregister(key2);
+            QuartzConsumerRegistry.Unregister(QuartzConsumerRegistry.KeyOf(a, jobKey), c1);
+            QuartzConsumerRegistry.Unregister(QuartzConsumerRegistry.KeyOf(b, jobKey), c2);
         }
     }
+
+    private static Task<IScheduler> NewScheduler()
+        => new StdSchedulerFactory(new NameValueCollection
+        {
+            ["quartz.scheduler.instanceName"] = "registry-test-" + Guid.NewGuid().ToString("N"),
+        }).GetScheduler();
 
     private static QuartzConsumerBase CreateMockConsumer()
     {

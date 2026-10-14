@@ -171,10 +171,25 @@ internal sealed class SwaMessage : IDisposable
             });
         }
 
-        multipart.WriteTo(FormatOptions.Default, output, contentOnly: true);
+        multipart.WriteTo(WireFormat, output, contentOnly: true);
         // The header value, not ContentType.ToString(), which renders the whole "Content-Type:" line (the AS2 lesson).
         return multipart.Headers[HeaderId.ContentType]
             ?? throw new InvalidOperationException("The multipart body has no Content-Type header.");
+    }
+
+    /// <summary>
+    /// How the multipart body is written: lines end in CRLF, as MIME requires (RFC 2046 §4.1.1, §5.1.1), on every
+    /// platform. MimeKit's default follows the platform: on Linux it writes a bare LF before each boundary, which a
+    /// receiver that splits on CRLF takes for the last byte of the part before it — one byte too many in an encrypted
+    /// attachment, and its AES-GCM tag no longer matches (Domibus: "Tag mismatch!").
+    /// </summary>
+    internal static readonly FormatOptions WireFormat = CreateWireFormat();
+
+    private static FormatOptions CreateWireFormat()
+    {
+        var options = FormatOptions.Default.Clone();
+        options.NewLineFormat = NewLineFormat.Dos;
+        return options;
     }
 
     /// <summary>Serializes the message into memory (signals, tests); see <see cref="WriteTo"/>.</summary>

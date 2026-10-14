@@ -1,0 +1,34 @@
+# Persistent storage for the stand, on top of docker-compose.tsak.yml: Tsak's own state (modules, contexts, audit,
+# dead letters, the Quartz job store) and the module's memory of received message ids live in a SQL Server database
+# instead of ending with the process.
+#
+#   docker compose -f docker-compose.tsak.yml -f docker-compose.mssql.yml up -d
+#
+# or once, in .env:  COMPOSE_FILE=docker-compose.tsak.yml:docker-compose.mssql.yml
+#
+# The database must exist: redb creates its tables, not the database. Give the stand a database and a login of its own.
+services:
+  tsak:
+    environment:
+      - ConnectionStrings__MSSql=${TSAK_MSSQL_CONNECTION:?TSAK_MSSQL_CONNECTION required}
+      - Tsak__Storage__Type=Redb
+      - Tsak__Redb__Provider=mssql
+      - Tsak__Redb__UsePro=true
+      # The job store is now in a database other nodes can share, so the scheduler is clustered: the image ships
+      # with clustering off, for its default storage, and the worker reports the combination as fatal at startup.
+      - Quartz__quartz.jobStore.clustered=true
+      # With a shared store the dashboard runs in cluster mode: it signs users in against the users of the store
+      # (roles admin / operator / viewer) and finds the worker there, under the address the worker registers.
+      # The Tsak:Web:Nodes entries of docker-compose.tsak.yml are not read in this mode.
+      - Tsak__Web__Mode=cluster
+      - Tsak__Web__ServiceApiKey=${TSAK_WEB_API_KEY:?TSAK_WEB_API_KEY required}
+      - Tsak__Cluster__NodeId=as4ct-1
+      - Tsak__Cluster__ApiEndpoint=http://localhost:9090
+      # A resend after a restart is still a duplicate: the ids of received messages go to the same database.
+      - Tsak__Contexts__as4-conformance__Override__Receive__DuplicateStore=redb
+    networks: [stand, db]
+
+networks:
+  db:
+    name: ${TSAK_DB_NETWORK:?TSAK_DB_NETWORK required}
+    external: true

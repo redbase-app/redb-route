@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Project 1 of 2: the Tsak MODULE.
+       The System Under Test for the eDelivery AS4 conformance testing service: an access point and the
+       "SUT Controller" the service asks the SUT owner to write. Only route code; the worker supplies the connectors. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ConformanceModule</RootNamespace>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- The demo builds against the sources of this repository.
+       A standalone copy can use PackageReference (as EchoModule references its packages). -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\..\src\redb.Route.As4\redb.Route.As4.csproj" />
+    <!-- RedbIdempotentRepository: duplicate detection that survives a restart, in the worker's redb. -->
+    <ProjectReference Include="..\..\..\src\redb.Route.Core\redb.Route.Core.csproj" />
+  </ItemGroup>
+
+  <!-- After build: zip manifest.json + the module DLL into output/ConformanceModule.tpkg. -->
+  <PropertyGroup>
+    <TsakModuleName>ConformanceModule</TsakModuleName>
+  </PropertyGroup>
+  <Target Name="PackTpkg" AfterTargets="Build">
+    <PropertyGroup>
+      <_TpkgStaging>$(IntermediateOutputPath)tpkg</_TpkgStaging>
+      <_TpkgFile>$(MSBuildThisFileDirectory)output\$(TsakModuleName).tpkg</_TpkgFile>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_TpkgStaging)" />
+    <MakeDir Directories="$(_TpkgStaging)" />
+    <MakeDir Directories="$(MSBuildThisFileDirectory)output" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)manifest.json" DestinationFolder="$(_TpkgStaging)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(_TpkgStaging)" />
+    <!-- {ModuleName}.config.json gives the module a named context (ContextName). -->
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)$(TsakModuleName).config.json"
+          DestinationFolder="$(_TpkgStaging)"
+          Condition="Exists('$(MSBuildThisFileDirectory)$(TsakModuleName).config.json')" />
+    <ZipDirectory SourceDirectory="$(_TpkgStaging)" DestinationFile="$(_TpkgFile)" Overwrite="true" />
+    <Message Importance="high" Text="Packed $(TsakModuleName) -> $(_TpkgFile)" />
+  </Target>
+
+</Project>

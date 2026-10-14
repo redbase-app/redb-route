@@ -230,6 +230,30 @@ public class ValidatorTests
     }
 
     [Fact]
+    public void XsdValidator_RootWithoutNamespace_ReturnsFailure()
+    {
+        var validator = new XsdValidator(PersonXsd);
+        var exchange = CreateExchange("<x/>");
+
+        var result = validator.Validate(exchange);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("not declared"));
+    }
+
+    [Fact]
+    public void XsdValidator_RootInForeignNamespace_ReturnsFailure()
+    {
+        var validator = new XsdValidator(PersonXsd);
+        var exchange = CreateExchange("<person xmlns=\"urn:example:foreign\"><name>John</name><age>30</age></person>");
+
+        var result = validator.Validate(exchange);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("not declared"));
+    }
+
+    [Fact]
     public void XsdValidator_NullBody_ReturnsFailure()
     {
         var validator = new XsdValidator(PersonXsd);

@@ -58,6 +58,7 @@
       <xs:element ref="r:setProperties" />
       <xs:element ref="r:setProperty" />
       <xs:element ref="r:sort" />
+      <xs:element ref="r:spanTag" />
       <xs:element ref="r:split" />
       <xs:element ref="r:stop" />
       <xs:element ref="r:streamCaching" />
@@ -244,6 +245,14 @@
   <xs:element name="convertBody">
     <xs:complexType>
       <xs:attribute name="type" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="deadLetterChannel">
+    <xs:complexType>
+      <xs:attribute name="uri" use="required" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -618,6 +627,8 @@
       <xs:attribute name="useOriginalBody" type="xs:boolean" />
       <xs:attribute name="logStackTrace" type="xs:boolean" />
       <xs:attribute name="logExhausted" type="xs:boolean" />
+      <xs:attribute name="logHandled" type="xs:boolean" />
+      <xs:attribute name="logContinued" type="xs:boolean" />
       <xs:attribute name="retryAttemptedLogLevel">
         <xs:simpleType>
           <xs:restriction base="xs:string">
@@ -1373,6 +1384,24 @@
       <xs:anyAttribute namespace="##other" processContents="lax" />
     </xs:complexType>
   </xs:element>
+  <xs:element name="spanTag">
+    <xs:complexType>
+      <xs:attribute name="key" use="required" type="xs:string" />
+      <xs:attribute name="value" type="xs:string" />
+      <xs:attribute name="expr" type="xs:string" />
+      <xs:attribute name="target">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:enumeration value="Enclosing" />
+            <xs:enumeration value="Inbound" />
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
   <xs:element name="split">
     <xs:complexType>
       <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -1720,9 +1749,20 @@
       <xs:attribute name="autoStart" type="xs:boolean" />
       <xs:attribute name="cluster" type="xs:boolean" />
       <xs:attribute name="messageHistory" type="xs:boolean" />
+      <xs:attribute name="tracing" type="xs:boolean" />
       <xs:attribute name="processingTimeout" type="xs:string" />
       <xs:attribute name="routePolicy" type="xs:string" />
+      <xs:attribute name="routeConfigurationId" type="xs:string" />
       <xs:attribute name="enabled" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="routeConfiguration">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="r:onException" minOccurs="1" maxOccurs="unbounded" />
+      </xs:sequence>
+      <xs:attribute name="id" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
     </xs:complexType>
   </xs:element>
@@ -1736,6 +1776,7 @@
         <xs:element ref="r:interceptFrom" />
         <xs:element ref="r:interceptSendToEndpoint" />
         <xs:element ref="r:onCompletion" />
+        <xs:element ref="r:routeConfiguration" />
         <xs:element ref="r:rest" />
       </xs:choice>
       <xs:attribute name="version" type="xs:string" />
@@ -1764,6 +1805,8 @@
             <xs:anyAttribute namespace="##other" processContents="lax" />
           </xs:complexType>
         </xs:element>
+        <xs:element ref="r:routeConfiguration" />
+        <xs:element ref="r:deadLetterChannel" />
         <xs:element ref="r:redb" />
       </xs:choice>
     </xs:complexType>

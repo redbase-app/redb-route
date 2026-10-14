@@ -1,5 +1,6 @@
 #pragma warning disable CS0619
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Processors;
 
 namespace redb.Route.Definitions;
@@ -46,6 +47,11 @@ public class RouteDefinition : RouteDefinitionBase<RouteDefinition>, IBranchingD
         var onExceptions = new List<OnExceptionDefinition>();
         CollectAndMarkOnExceptions(Outputs, onExceptions);
 
+        // Under a context's route compiler the handlers belong to the route's error scope, which a detached body of
+        // this route (.Threads()) is wrapped by too; known before the body compiles.
+        var errorScope = (context as RouteContext)?.DetachedErrorScope;
+        errorScope?.AddRouteHandlers(onExceptions);
+
         if (onExceptions.Count == 0)
         {
             if (Outputs.Count == 1)
@@ -86,12 +92,11 @@ public class RouteDefinition : RouteDefinitionBase<RouteDefinition>, IBranchingD
             body = pl;
         }
 
-        // Camel parity: handlers stack in declaration order, last declared = outermost,
-        // so the first declared OnException is innermost (most specific).
-        foreach (var oe in onExceptions)
-            body = oe.WrapBody(body, context);
-
-        return body;
+        // One scope for all of the route's handlers, so the nearest exception type wins whatever the declaration
+        // order (Camel's exception policy). Outside a context's route compiler there is no shared scope around it.
+        if (errorScope is not null)
+            return errorScope.WrapRoute(body);
+        return OnExceptionDefinition.WrapBody(body, onExceptions, context);
     }
 
     private static void CollectAndMarkOnExceptions(

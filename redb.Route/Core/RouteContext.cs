@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -46,6 +47,14 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     // Local exception handlers: RouteId → (ExceptionType → Processor)
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<Type, IProcessor>> _localExceptionHandlers = new();
 
+    // The two tables above hold what the user registered and outlive a restart. The error scope of each route — its
+    // own OnException blocks, its builder's, the context layer — is rebuilt on every compile (RouteErrorScope).
+    private readonly ConcurrentDictionary<string, RouteErrorScope> _errorScopes = new();
+
+    // The error scope of the route being compiled, for a detached body (.Threads()) to be wrapped by. Null while a
+    // handler body or a detached block (OnCompletion) compiles: those run outside the route's error handling.
+    private RouteErrorScope? _compilingErrorScope;
+
     // Route compilation
     // Not readonly: AddService(ILoggerFactory, ...) adopts a factory registered after construction
     // and back-fills component loggers, so a context created without one still logs consumer failures.
@@ -73,6 +82,8 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     /// <summary>The engine's <see cref="RouteEngineOptions.EnableTelemetry"/>, read by transport spans too.</summary>
     internal bool TelemetryEnabled => _options.EnableTelemetry;
     private readonly List<RouteBuilder> _builders = [];
+    // Builder types added by AddRoutes(Assembly[]); an explicit AddRoutes(builder) of one of them is a duplicate.
+    private readonly HashSet<Type> _discoveredBuilderTypes = [];
 
     /// <summary>Registered builders (test-kit seam for AdviceWith; definitions are built on demand).</summary>
     internal IReadOnlyList<RouteBuilder> RouteBuilders => _builders;
@@ -142,6 +153,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     public RouteContext(string? contextId = null, ILoggerFactory? loggerFactory = null, RouteEngineOptions? options = null)
     {
         ContextId = contextId ?? Guid.NewGuid().ToString("N");
+        IsContextIdGenerated = contextId is null;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory?.CreateLogger<RouteContext>();
         _options = options ?? new RouteEngineOptions();
@@ -185,6 +197,12 @@ public class RouteContext : IRouteContext, IAsyncDisposable
 
     /// <inheritdoc />
     public string ContextId { get; }
+
+    /// <summary>
+    /// Whether <see cref="ContextId"/> was generated (a new GUID) rather than given: then it differs on every start and
+    /// on every node, so nothing persisted under it — a job store's scheduler name — can be found again.
+    /// </summary>
+    public bool IsContextIdGenerated { get; }
 
     /// <inheritdoc />
     public bool IsStarted => _started;
@@ -473,6 +491,13 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 return true;
         }
 
+        // Check the OnException blocks of every route and of its builder
+        foreach (var scope in _errorScopes.Values)
+        {
+            if (scope.Handles(exType))
+                return true;
+        }
+
         return false;
     }
 
@@ -512,46 +537,57 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(exchange);
         ArgumentNullException.ThrowIfNull(exception);
 
-        // Store exception for predicate/expression usage
-        exchange.Properties["ExceptionCaught"] = exception;
+        // Tier 4: No handler found — throw
+        if (!await HandleWithContextHandlers(exchange, exception, exchange.RouteId, ct).ConfigureAwait(false))
+            throw new InvalidOperationException(
+                $"No exception handler found for {exception.GetType().Name} in route '{exchange.RouteId}'.",
+                exception);
+    }
 
+    /// <summary>
+    /// The context's error handling, in its order: a local handler of <paramref name="routeId"/> (tier 1), a global
+    /// handler (tier 2), <see cref="ErrorHandler"/> (tier 3). Runs the first that matches and returns <c>true</c>;
+    /// <c>false</c> when none does. The one lookup behind <see cref="HandleException"/> and the outermost layer of
+    /// every route's error scope (<see cref="ContextErrorLayerProcessor"/>).
+    /// </summary>
+    internal async Task<bool> HandleWithContextHandlers(IExchange exchange, Exception exception, string? routeId,
+        CancellationToken ct)
+    {
         // Tier 1: Local route handler
-        var routeId = exchange.RouteId;
         if (!string.IsNullOrEmpty(routeId) &&
-            _localExceptionHandlers.TryGetValue(routeId, out var localHandlers))
+            _localExceptionHandlers.TryGetValue(routeId, out var localHandlers) &&
+            FindHandler(localHandlers, exception.GetType()) is { } local)
         {
-            var processor = FindHandler(localHandlers, exception.GetType());
-            if (processor is not null)
-            {
-                exchange.Exception = exception;
-                await processor.Process(exchange, ct).ConfigureAwait(false);
-                return;
-            }
+            Caught(exchange, exception);
+            await local.Process(exchange, ct).ConfigureAwait(false);
+            return true;
         }
 
         // Tier 2: Global handler
+        if (FindHandler(_globalExceptionHandlers, exception.GetType()) is { } global)
         {
-            var processor = FindHandler(_globalExceptionHandlers, exception.GetType());
-            if (processor is not null)
-            {
-                exchange.Exception = exception;
-                await processor.Process(exchange, ct).ConfigureAwait(false);
-                return;
-            }
+            Caught(exchange, exception);
+            await global.Process(exchange, ct).ConfigureAwait(false);
+            return true;
         }
 
         // Tier 3: ErrorHandler fallback
-        if (ErrorHandler is not null)
+        if (ErrorHandler is { } errorHandler)
         {
-            exchange.Exception = exception;
-            await ErrorHandler.HandleError(exchange, exception, ct).ConfigureAwait(false);
-            return;
+            Caught(exchange, exception);
+            await errorHandler.HandleError(exchange, exception, ct).ConfigureAwait(false);
+            return true;
         }
 
-        // Tier 4: No handler found — throw
-        throw new InvalidOperationException(
-            $"No exception handler found for {exception.GetType().Name} in route '{routeId}'.",
-            exception);
+        return false;
+
+        // A handler takes the failure: it is on the exchange, and kept for predicate/expression usage. A failure no
+        // handler took leaves the exchange as it was.
+        static void Caught(IExchange exchange, Exception exception)
+        {
+            exchange.Properties["ExceptionCaught"] = exception;
+            exchange.Exception = exception;
+        }
     }
 
     // ── Route Management ──
@@ -562,10 +598,71 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     /// <summary>Adds a route builder containing route definitions.</summary>
     /// <param name="builder">Route builder to add.</param>
     /// <returns>This context for fluent chaining.</returns>
+    /// <exception cref="InvalidOperationException">The builder's type was already added by assembly discovery.</exception>
     public RouteContext AddRoutes(RouteBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
+        if (_discoveredBuilderTypes.Contains(builder.GetType()))
+            throw new InvalidOperationException(
+                $"Route builder '{builder.GetType().FullName}' was already added by assembly discovery. " +
+                "Leave it out of the discovery with the filter, or do not add it again.");
         _builders.Add(builder);
+        return this;
+    }
+
+    /// <summary>
+    /// Adds every route builder of <paramref name="assemblies"/>: each public, non-abstract, closed class deriving from
+    /// <see cref="RouteBuilder"/>, created through its public parameterless constructor (Apache Camel's routes
+    /// discovery). For constructor injection use <c>RedbRouteBuilder.AddRouteBuilders</c> in the host.
+    /// </summary>
+    /// <param name="assemblies">Assemblies to scan; at least one.</param>
+    /// <returns>This context for fluent chaining.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// A builder cannot be created, its type is already added, or an assembly's types cannot all be loaded. Nothing is
+    /// added then.
+    /// </exception>
+    public RouteContext AddRoutes(params Assembly[] assemblies)
+        => AddDiscoveredRoutes(assemblies, filter: null);
+
+    /// <summary>
+    /// <see cref="AddRoutes(Assembly[])"/> with a filter choosing which builders to take — the place for a condition
+    /// (environment, configuration) and for leaving a builder out.
+    /// </summary>
+    /// <param name="assemblies">Assemblies to scan; at least one.</param>
+    /// <param name="filter">Returns <c>true</c> for a builder type to add.</param>
+    /// <returns>This context for fluent chaining.</returns>
+    /// <exception cref="InvalidOperationException">As <see cref="AddRoutes(Assembly[])"/>.</exception>
+    public RouteContext AddRoutes(IEnumerable<Assembly> assemblies, Func<Type, bool> filter)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        return AddDiscoveredRoutes(assemblies, filter);
+    }
+
+    private RouteContext AddDiscoveredRoutes(IEnumerable<Assembly> assemblies, Func<Type, bool>? filter)
+    {
+        var types = RouteBuilderDiscovery.FindBuilderTypes(assemblies, filter);
+
+        // A type already here — added explicitly or by an earlier discovery — would compile its routes twice and fail
+        // only at Start with a duplicate route id; said now, with the type's name.
+        var present = _builders.Select(b => b.GetType()).ToHashSet();
+        foreach (var type in types)
+        {
+            if (present.Contains(type))
+                throw new InvalidOperationException(
+                    $"Route builder '{type.FullName}' is already added to this context. " +
+                    "Leave it out of the discovery with the filter, or do not add it explicitly.");
+        }
+
+        // Every builder is created before any is added: a failure leaves the context as it was.
+        var builders = types.Select(RouteBuilderDiscovery.Create).ToList();
+        foreach (var builder in builders)
+        {
+            _builders.Add(builder);
+            _discoveredBuilderTypes.Add(builder.GetType());
+        }
+
+        _logger?.LogInformation("Discovered {Count} route builder(s): {Builders}",
+            builders.Count, string.Join(", ", types.Select(t => t.FullName)));
         return this;
     }
 
@@ -578,6 +675,46 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         var builder = new InlineRouteBuilder(configure);
         _builders.Add(builder);
         return this;
+    }
+
+    /// <summary>
+    /// Adds the default route configuration with an inline action — the inline form of a
+    /// <see cref="RouteConfigurationBuilder"/>: error handling for every route of the context that has no
+    /// configurations assigned.
+    /// <example>
+    /// <code>
+    /// context.AddRouteConfiguration(c => c
+    ///     .OnException&lt;Exception&gt;().MaximumRedeliveries(3).Handled().Log("failed: ${exception.message}"));
+    /// </code>
+    /// </example>
+    /// </summary>
+    /// <param name="configure">Action that declares the handlers of the configuration.</param>
+    /// <returns>This context for fluent chaining.</returns>
+    public RouteContext AddRouteConfiguration(Action<RouteConfigurationDefinition> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        _builders.Add(new InlineRouteConfigurationBuilder(null, configure));
+        return this;
+    }
+
+    /// <summary>
+    /// Adds a route configuration with an id, for the routes that name it with <c>.RouteConfigurationId("id")</c>.
+    /// </summary>
+    /// <param name="id">The id of the configuration, unique within the context.</param>
+    /// <param name="configure">Action that declares the handlers of the configuration.</param>
+    /// <returns>This context for fluent chaining.</returns>
+    public RouteContext AddRouteConfiguration(string id, Action<RouteConfigurationDefinition> configure)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ArgumentNullException.ThrowIfNull(configure);
+        _builders.Add(new InlineRouteConfigurationBuilder(id, configure));
+        return this;
+    }
+
+    private sealed class InlineRouteConfigurationBuilder(string? id, Action<RouteConfigurationDefinition> configure)
+        : RouteConfigurationBuilder
+    {
+        protected override void Configuration() => configure(RouteConfiguration(id));
     }
 
     /// <summary>Registers a lifecycle listener for route state change notifications.</summary>
@@ -815,6 +952,52 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     }
 
     /// <summary>
+    /// The route configurations of a route, as Apache Camel assigns them. A route without
+    /// <c>.RouteConfigurationId(...)</c> gets the nameless ones — the default. A route with ids gets the configurations
+    /// whose id matches one of them (an exact id, a wildcard ending in <c>*</c>, or a regular expression) and none of the
+    /// nameless. An exact id no configuration has is an error: a route left without the handlers it asked for would fail
+    /// in production instead of at <c>Start()</c>.
+    /// </summary>
+    private static List<RouteConfigurationDefinition> RouteConfigurationsOf(RouteDefinition definition, string routeId,
+        List<RouteConfigurationDefinition> all)
+    {
+        if (definition.GetRouteConfigurationId() is not { } assigned)
+            return all.Where(c => c.Id is null).ToList();
+
+        var patterns = assigned.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var pattern in patterns)
+        {
+            if (IsExactConfigurationId(pattern) && !all.Any(c => c.Id == pattern))
+                throw new InvalidOperationException(
+                    $"Route '{routeId}': route configuration '{pattern}' is not declared in the context. " +
+                    "Declare it in a RouteConfigurationBuilder (or a <routeConfiguration> of the markup) and add it before Start().");
+        }
+        return all.Where(c => c.Id is { } id && patterns.Any(p => MatchesConfigurationId(id, p))).ToList();
+    }
+
+    /// <summary>An id made of letters, digits, <c>_</c>, <c>-</c> and <c>.</c> only: a name, not a wildcard or a regular expression.</summary>
+    private static bool IsExactConfigurationId(string pattern)
+        => pattern.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.');
+
+    /// <summary>Camel's pattern match: the exact id, a wildcard ending in <c>*</c>, or a regular expression over the whole id.</summary>
+    private static bool MatchesConfigurationId(string id, string pattern)
+    {
+        if (string.Equals(id, pattern, StringComparison.Ordinal))
+            return true;
+        if (pattern.EndsWith('*') && id.StartsWith(pattern[..^1], StringComparison.Ordinal))
+            return true;
+        try
+        {
+            return System.Text.RegularExpressions.Regex.IsMatch(id, $"^(?:{pattern})$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        }
+        catch (ArgumentException)
+        {
+            return false;   // not a regular expression: it was a name, and it did not match
+        }
+    }
+
+    /// <summary>
     /// Invokes all registered builders, validates definitions, compiles routes,
     /// and swaps the result into <see cref="_routes"/>.
     /// </summary>
@@ -877,28 +1060,57 @@ public class RouteContext : IRouteContext, IAsyncDisposable
             }
         }
 
-        // 3. Collect builder-level exception definitions, intercepts and completions
-        var allExceptionDefs = _builders.SelectMany(b => b.ExceptionDefinitions).ToList();
-        var builderIntercepts = _builders.SelectMany(b => b.Intercepts).ToList();
-        var builderCompletions = _builders.SelectMany(b => b.OnCompletions).ToList();
-
-        if (allExceptionDefs.Count > 0)
+        // 3. Builder-level OnException, Intercept* and OnCompletion apply to the routes of their own builder only
+        //    (Apache Camel's RouteBuilder scope); they are attached per route below. Here only what is said once.
+        foreach (var builder in _builders)
         {
-            foreach (var exDef in allExceptionDefs)
+            // A builder with handlers and no route of its own: the handlers apply to nothing. It is what a class (or a
+            // markup file) of shared handlers becomes when it is not a route configuration — said at every start,
+            // because nothing else would: the routes of the other builders simply run without those handlers.
+            if (builder.Definitions.Count == 0
+                && (builder.ExceptionDefinitions.Count > 0 || builder.Intercepts.Count > 0 || builder.OnCompletions.Count > 0))
             {
-                var handlerProcessor = Definitions.TryCatchDefinition.BuildPipeline(exDef.Outputs, this);
+                logger?.LogWarning(
+                    "{Builder} declares no routes, so its OnException / Intercept / OnCompletion apply to nothing: a builder's " +
+                    "declarations reach the routes of that builder only. For handlers shared by the routes of other builders " +
+                    "declare a route configuration — RouteConfiguration().OnException<...>() in a RouteConfigurationBuilder, " +
+                    "<routeConfiguration> in markup.",
+                    builder.SourceName);
+            }
+
+            foreach (var exDef in builder.ExceptionDefinitions)
+            {
                 foreach (var exType in exDef.ExceptionTypes)
                 {
-                    AddGlobalExceptionHandler(exType, handlerProcessor);
                     logger?.LogInformation(
-                        "Registered global exception handler for {ExceptionType}",
-                        exType.Name);
+                        "Registered builder exception handler for {ExceptionType} ({Builder})",
+                        exType.Name, builder.SourceName);
 
                     // A handler on an OperationCanceledException can never fire — a genuine cancellation is
                     // never handled and a timeout arrives as TimeoutException. Said once at load.
                     if (Validation.RouteDefinitionValidator.CancellationHandlerWarning(exType) is { } cancellationWarning)
                         logger?.LogWarning("OnException: {Warning}", cancellationWarning);
                 }
+            }
+        }
+
+        // 3a. Route configurations of every builder, in the order they were added: unlike a builder's own handlers
+        //     they reach the routes of other builders. An id is unique within the context.
+        var routeConfigurations = _builders.SelectMany(b => b.RouteConfigurations).ToList();
+        var configurationIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var configuration in routeConfigurations)
+        {
+            if (configuration.Id is { } configurationId && !configurationIds.Add(configurationId))
+                throw new InvalidOperationException(
+                    $"Duplicate route configuration id '{configurationId}'. A route configuration id is unique within a context.");
+
+            foreach (var exType in configuration.ExceptionDefinitions.SelectMany(d => d.ExceptionTypes))
+            {
+                logger?.LogInformation(
+                    "Registered route configuration exception handler for {ExceptionType} ({Configuration})",
+                    exType.Name, configuration.Id ?? "default");
+                if (Validation.RouteDefinitionValidator.CancellationHandlerWarning(exType) is { } cancellationWarning)
+                    logger?.LogWarning("OnException: {Warning}", cancellationWarning);
             }
         }
 
@@ -915,6 +1127,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
 
         // 5. Compile each route definition
         _checkpoints.Clear();   // rebuilt from scratch on every (re)compile
+        _errorScopes.Clear();
         foreach (var builder in _builders)
         {
             foreach (var definition in builder.Definitions)
@@ -927,12 +1140,20 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                     ?? RouteIdFactory.ForEndpoint(EndpointUriParser.Parse(fromUri));
 
                 PipelineProcessor pipeline;
+                // The route's error scope: its own OnException (added while its body compiles), its builder's — that
+                // builder's only —, those of its route configurations, and the context layer.
+                var errorScope = new RouteErrorScope(this, routeId, builder.ExceptionDefinitions,
+                    RouteConfigurationsOf(definition, routeId, routeConfigurations)
+                        .SelectMany(c => c.ExceptionDefinitions).ToList(),
+                    _loggerFactory?.CreateLogger<OnExceptionProcessor>());
+                _errorScopes[routeId] = errorScope;
+                _compilingErrorScope = errorScope;
                 _compilingRouteId = routeId;   // so nested ReplayableDefinition registers under this route
                 // Route-level .MessageHistory() overrides the global option; each route restarts node numbering.
                 _compilingMessageHistory = definition.GetMessageHistory() ?? _options.EnableMessageHistory;
                 _compilingNodeCounter = 0;
-                // Intercepts of this route: builder-level ones plus the route's own; CompileNode decorates every step with them.
-                _compilingIntercepts = builderIntercepts.Concat(definition.GetIntercepts()).ToList();
+                // Intercepts of this route: its builder's plus the route's own; CompileNode decorates every step with them.
+                _compilingIntercepts = builder.Intercepts.Concat(definition.GetIntercepts()).ToList();
                 _interceptBodies.Clear();
                 List<CompletionHandler> completionHandlers = [];
                 _compilingStaticEndpoints = [];
@@ -948,7 +1169,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                     // OnCompletion bodies compile here, inside the route's compile frame (route id for
                     // checkpoints, message history), detached from its intercepts; they are attached
                     // further down, outside every error handler.
-                    completionHandlers = builderCompletions.Concat(definition.GetOnCompletions())
+                    completionHandlers = builder.OnCompletions.Concat(definition.GetOnCompletions())
                         .Select(c => new CompletionHandler(CompileDetached(c.Outputs), c.Mode, c.Condition, c.BeforeConsumer))
                         .ToList();
 
@@ -961,10 +1182,13 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 catch (Exception ex) when (!_options.ThrowOnCompilationError)
                 {
                     logger?.LogError(ex, "Failed to compile route '{RouteId}'. Skipping.", routeId);
+                    // A skipped route keeps no error scope.
+                    _errorScopes.TryRemove(routeId, out _);
                     continue;
                 }
                 finally
                 {
+                    _compilingErrorScope = null;
                     _compilingStaticEndpoints = null;
                     _compilingSkippedStaticEndpoints = null;
                     _compilingRouteId = null;
@@ -1020,14 +1244,17 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 }
                 else
                 {
-                    var reason = requestedCluster
-                        ? "Route requested .Cluster(true) but no IRoutePolicyFactory is registered — running on all nodes"
-                        : "No policy attached — runs on all nodes";
+                    // A registered factory may decline a route (IRoutePolicyFactory returns null) and say why itself.
+                    var reason = !requestedCluster
+                        ? "No policy attached — runs on all nodes"
+                        : _policyFactories.Count == 0
+                            ? "Route requested .Cluster(true) but no IRoutePolicyFactory is registered — running on all nodes"
+                            : "Route requested .Cluster(true) but the registered IRoutePolicyFactory declined it — running on all nodes";
                     descriptor = new RoutePolicyDescriptor(requestedCluster, "AllNodes", null, reason);
                 }
 
                 // Startup safety: warn when .Cluster(true) is requested without any factory
-                if (_options.StartupChecks && requestedCluster && routePolicy is null)
+                if (_options.StartupChecks && requestedCluster && routePolicy is null && _policyFactories.Count == 0)
                 {
                     logger?.LogWarning(
                         "Route '{RouteId}' declares .Cluster(true) but no IRoutePolicyFactory is registered. " +
@@ -1051,45 +1278,10 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                     finalProcessor = new TimeoutProcessor(finalProcessor, routeTimeout, routeId, this,
                         _loggerFactory?.CreateLogger<TimeoutProcessor>());
 
-                // Wrap with builder-level exception handlers
-                if (allExceptionDefs.Count > 0)
-                {
-                    foreach (var exDef in allExceptionDefs)
-                    {
-                        var handlerBody = Definitions.TryCatchDefinition.BuildPipeline(exDef.Outputs, this);
-                        var oeLogger = _loggerFactory?.CreateLogger<OnExceptionProcessor>();
-                        var oeProc = new OnExceptionProcessor(finalProcessor, oeLogger);
-                        foreach (var exType in exDef.ExceptionTypes)
-                        {
-                            // Pass the full handler configuration, mirroring OnExceptionDefinition.WrapBody
-                            // (the route-level path). Previously only redeliveries + handled/continued were
-                            // forwarded, so a context/builder-level OnException silently dropped OnWhen,
-                            // RetryWhile, OnRedelivery, OnPrepareFailure, the log levels and LogExhausted —
-                            // and even Handled(true) still logged "Retries exhausted ... after 0 attempts".
-                            oeProc.Handle(exType, handlerBody,
-                                maxRedeliveries: exDef.MaxRedeliveries,
-                                redeliveryDelay: exDef.RedeliveryDelayValue,
-                                backoffMultiplier: exDef.BackoffMultiplierValue,
-                                useExponentialBackoff: exDef.UseExponentialBackoffValue,
-                                handled: exDef.IsHandled,
-                                continued: exDef.IsContinued,
-                                onWhenPredicate: exDef.OnWhenPredicate,
-                                retryAttemptedLogLevel: exDef.RetryAttemptedLogLevelValue,
-                                retriesExhaustedLogLevel: exDef.RetriesExhaustedLogLevelValue,
-                                onExceptionOccurred: exDef.OnExceptionOccurredAction,
-                                retryWhile: exDef.RetryWhilePredicate,
-                                onRedelivery: exDef.OnRedeliveryAction,
-                                onPrepareFailure: exDef.OnPrepareFailureAction,
-                                useOriginalBody: exDef.IsUseOriginalBody,
-                                logStackTrace: exDef.LogStackTraceValue,
-                                logExhausted: exDef.LogExhaustedValue,
-                                onExceptionOccurredProcessor: exDef.OnExceptionOccurredProcessor,
-                                onRedeliveryProcessor: exDef.OnRedeliveryProcessor,
-                                onPrepareFailureProcessor: exDef.OnPrepareFailureProcessor);
-                        }
-                        finalProcessor = oeProc;
-                    }
-                }
+                // The rest of the route's error scope, around the route policy and the timeout: the OnException blocks
+                // of this route's builder (that builder's only — Camel's RouteBuilder scope), then the context's error
+                // handling for a failure no OnException took. Also completes the detached bodies of the route.
+                finalProcessor = errorScope.WrapOuter(finalProcessor);
 
                 // Telemetry / metrics: outside every error handler, as the statistics below, so a redelivered exchange is
                 // one span and one measurement with its final outcome — not one per attempt. Route-level .Tracing()
@@ -1128,6 +1320,10 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                 // Outermost of all: IExchange.Context points at the context whose route is
                 // executing, for exactly as long as it is executing — so even lifecycle listeners
                 // see a stamped exchange, and the caller gets its own view back afterwards.
+                // Beside it, the inbound span of the transport, for .SpanTag(..., SpanTarget.Inbound): on entry it is the
+                // ambient activity, opened by the consumer around this pipeline. No inbound span opens with telemetry off.
+                if (_options.EnableTelemetry)
+                    finalProcessor = new InboundSpanProcessor(finalProcessor);
                 finalProcessor = new ContextStampProcessor(finalProcessor, this);
 
                 var consumer = endpoint.CreateConsumer(finalProcessor);
@@ -1564,19 +1760,23 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         _consumers.Clear();
         _endpoints.Clear();
         lock (_producersLock) _producers.Clear();
-        _globalExceptionHandlers.Clear();
-        _localExceptionHandlers.Clear();
+        // Only what the compiler derived; the handlers the user registered are configuration, like the components,
+        // and a stopped context that is started again must still have them.
+        _errorScopes.Clear();
     }
 
     private void ClearAll()
     {
         ClearRuntimeState();
+        _globalExceptionHandlers.Clear();
+        _localExceptionHandlers.Clear();
         _routes.Clear();
         _components.Clear();
         _properties.Clear();
         _registry.Clear();
         _services.Clear();
         _builders.Clear();
+        _discoveredBuilderTypes.Clear();
     }
 
     // ── Private helpers ──
@@ -1736,6 +1936,25 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The error scope a detached body compiled now is wrapped by (<c>.Threads()</c> for an in-only exchange): the
+    /// scope of the route being compiled, or <c>null</c> outside a route, inside a handler body and inside a detached
+    /// block (<c>OnCompletion</c>) — those run outside the route's error handling.
+    /// </summary>
+    internal RouteErrorScope? DetachedErrorScope => _detachedCompileDepth > 0 ? null : _compilingErrorScope;
+
+    /// <summary>
+    /// Compiles the steps of an <c>OnException</c> handler for <see cref="RouteErrorScope"/>. A detached body inside a
+    /// handler is not wrapped by the route's scope again: a failure of the handler is not handled by the handler.
+    /// </summary>
+    internal IProcessor CompileHandlerBody(IList<IProcessorDefinition> outputs)
+    {
+        var scope = _compilingErrorScope;
+        _compilingErrorScope = null;
+        try { return TryCatchDefinition.BuildPipeline(outputs, this); }
+        finally { _compilingErrorScope = scope; }
     }
 
     // ── Lifecycle listener notifications ──

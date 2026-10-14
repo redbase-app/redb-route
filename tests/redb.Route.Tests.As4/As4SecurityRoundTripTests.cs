@@ -41,6 +41,57 @@ public class As4SecurityRoundTripTests
     }
 
     [Fact]
+    public void WhatWeSend_NamesExactlyTheAlgorithmsAndTransformsOfTheProfile()
+    {
+        // What a conformance test driver reads off a message the SUT sent (eDelivery AS4 1.16 §3.2.6; testing service
+        // 2026.06: encryption algorithm, signature algorithm, attachment signing and encryption transforms, WSS 1.1).
+        var envelope = Build(As4KeyReference.BinarySecurityToken, timestamp: false).Message.Envelope;
+        string[] Algorithms(string localName, string ns) => envelope.GetElementsByTagName(localName, ns)
+            .Cast<XmlElement>().Select(e => e.GetAttribute("Algorithm")).ToArray();
+
+        envelope.DocumentElement!.NamespaceURI.Should().Be("http://www.w3.org/2003/05/soap-envelope", "SOAP 1.2");
+        // Payloads travel as attachments: the SOAP body is empty, and it is signed all the same (AS4_CP_TA05, TA12).
+        var body = (XmlElement)envelope.GetElementsByTagName("Body", "http://www.w3.org/2003/05/soap-envelope")[0]!;
+        body.HasChildNodes.Should().BeFalse();
+        var bodyId = body.GetAttribute("Id", WsSecurityNames.Wsu);
+        envelope.GetElementsByTagName("Reference", WsSecurityNames.Ds).Cast<XmlElement>().Select(r => r.GetAttribute("URI"))
+            .Should().Contain("#" + bodyId);
+
+        // Signature: RSA-SHA256 over SHA-256 digests, exclusive canonicalization; the attachment by its content.
+        Algorithms("SignatureMethod", WsSecurityNames.Ds).Should().Equal("http://www.w3.org/2001/04/xmldsig-more#rsa-sha256");
+        Algorithms("CanonicalizationMethod", WsSecurityNames.Ds).Should().Equal("http://www.w3.org/2001/10/xml-exc-c14n#");
+        Algorithms("DigestMethod", WsSecurityNames.Ds).Should().OnlyContain(a => a == "http://www.w3.org/2001/04/xmlenc#sha256");
+        var references = envelope.GetElementsByTagName("Reference", WsSecurityNames.Ds).Cast<XmlElement>().ToList();
+        references.Select(r => r.GetAttribute("URI")).Should().Contain("cid:payload-1@redb.test");
+        references.Single(r => r.GetAttribute("URI").StartsWith("cid:", StringComparison.Ordinal))
+            .GetElementsByTagName("Transform", WsSecurityNames.Ds).Cast<XmlElement>().Select(t => t.GetAttribute("Algorithm"))
+            .Should().Equal("http://docs.oasis-open.org/wss/oasis-wss-SwAProfile-1.1#Attachment-Content-Signature-Transform");
+
+        // Key transport: RSA-OAEP with MGF1-SHA256 and a SHA-256 digest (XML Encryption 1.1).
+        var encryptedKey = (XmlElement)envelope.GetElementsByTagName("EncryptedKey", WsSecurityNames.Xenc)[0]!;
+        var keyMethod = (XmlElement)encryptedKey.GetElementsByTagName("EncryptionMethod", WsSecurityNames.Xenc)[0]!;
+        keyMethod.GetAttribute("Algorithm").Should().Be("http://www.w3.org/2009/xmlenc11#rsa-oaep");
+        ((XmlElement)keyMethod.GetElementsByTagName("MGF", WsSecurityNames.Xenc11)[0]!).GetAttribute("Algorithm")
+            .Should().Be("http://www.w3.org/2009/xmlenc11#mgf1sha256");
+        ((XmlElement)keyMethod.GetElementsByTagName("DigestMethod", WsSecurityNames.Ds)[0]!).GetAttribute("Algorithm")
+            .Should().Be("http://www.w3.org/2001/04/xmlenc#sha256");
+
+        // Payload: AES-128-GCM, the ciphertext in place of the attachment's content, the attachment content only.
+        var encryptedData = (XmlElement)envelope.GetElementsByTagName("EncryptedData", WsSecurityNames.Xenc)[0]!;
+        encryptedData.GetAttribute("Type").Should().Be("http://docs.oasis-open.org/wss/oasis-wss-SwAProfile-1.1#Attachment-Content-Only");
+        ((XmlElement)encryptedData.GetElementsByTagName("EncryptionMethod", WsSecurityNames.Xenc)[0]!).GetAttribute("Algorithm")
+            .Should().Be("http://www.w3.org/2009/xmlenc11#aes128-gcm");
+        var cipherReference = (XmlElement)encryptedData.GetElementsByTagName("CipherReference", WsSecurityNames.Xenc)[0]!;
+        cipherReference.GetAttribute("URI").Should().Be("cid:payload-1@redb.test");
+        cipherReference.GetElementsByTagName("Transform", WsSecurityNames.Ds).Cast<XmlElement>().Select(t => t.GetAttribute("Algorithm"))
+            .Should().Equal("http://docs.oasis-open.org/wss/oasis-wss-SwAProfile-1.1#Attachment-Ciphertext-Transform");
+
+        // Only the payload is encrypted: the ebMS header travels in the clear (profile §3.2.6).
+        envelope.GetElementsByTagName("Messaging", WsSecurityNames.Eb).Count.Should().Be(1);
+        envelope.GetElementsByTagName("EncryptedData", WsSecurityNames.Xenc).Count.Should().Be(1);
+    }
+
+    [Fact]
     public void Sign_ReturnsTheReferencesTheReceiverSees()
     {
         var sent = Build(As4KeyReference.BinarySecurityToken, timestamp: false);

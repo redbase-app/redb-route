@@ -280,6 +280,127 @@ public class As4ConsumerTests
         payloads!.Should().OnlyContain(p => p.ContentType == "text/xml" && !p.Content.CanRead);
     }
 
+    [Fact]
+    public async Task Loopback_AListOfPayloads_ArrivesInOrder_WithContentIdsAndPartProperties()
+    {
+        List<(string? Id, string Type, string Text, string? CharacterSet)>? received = null;
+        await using var stand = await Stand.StartAsync(e =>
+        {
+            received = ((IReadOnlyList<As4Payload>)e.In.Body!)
+                .Select(p => (p.ContentId, p.ContentType, new StreamReader(p.Content, leaveOpen: true).ReadToEnd(),
+                    p.Properties.TryGetValue("CharacterSet", out var set) ? set : null))
+                .ToList();
+            return Task.CompletedTask;
+        });
+
+        var exchange = NewExchange();
+        exchange.In.Body = new List<As4Payload>
+        {
+            new("invoice@a.example", "application/xml", new MemoryStream(Encoding.UTF8.GetBytes("<invoice/>")),
+                new Dictionary<string, string> { ["CharacterSet"] = "utf-8" }),
+            new(null, "application/octet-stream", new MemoryStream(Encoding.UTF8.GetBytes("scan-1")), new Dictionary<string, string>()),
+            new("scan2@a.example", "application/octet-stream", new MemoryStream(Encoding.UTF8.GetBytes("scan-2")), new Dictionary<string, string>()),
+        };
+        await stand.Send(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        received!.Select(p => p.Text).Should().Equal("<invoice/>", "scan-1", "scan-2");
+        received!.Select(p => p.Type).Should().Equal("application/xml", "application/octet-stream", "application/octet-stream");
+        received![0].Id.Should().Be("invoice@a.example");
+        received[0].CharacterSet.Should().Be("utf-8");
+        received[1].Id.Should().EndWith("@a.example");
+        received[2].Id.Should().Be("scan2@a.example");
+    }
+
+    [Fact]
+    public async Task PayloadList_HandsASinglePayloadAsAList_WithItsContentId()
+    {
+        IReadOnlyList<As4Payload>? payloads = null;
+        string? text = null;
+        string? contentType = "unset";
+        await using var stand = await Stand.StartAsync(e =>
+        {
+            payloads = (IReadOnlyList<As4Payload>)e.In.Body!;
+            text = new StreamReader(payloads[0].Content, leaveOpen: true).ReadToEnd();
+            contentType = e.In.ContentType;
+            return Task.CompletedTask;
+        }, payloadList: true);
+
+        var (_, errorCode, receipt) = await stand.PostRaw(SecuredMessage(Encoding.UTF8.GetBytes(Payload)).Message);
+
+        errorCode.Should().BeNull();
+        receipt.Should().BeTrue();
+        payloads.Should().ContainSingle();
+        payloads![0].ContentId.Should().Be("p0@a.example");
+        payloads[0].ContentType.Should().Be("text/xml");
+        text.Should().Be(Payload);
+        contentType.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Loopback_AnEmptyPayloadList_IsAMessageWithoutPayloads_AndIsAcknowledged()
+    {
+        object? body = "unset";
+        string? action = null;
+        await using var stand = await Stand.StartAsync(e =>
+        {
+            body = e.In.Body;
+            action = e.In.GetHeader<string>(As4Headers.Action);
+            return Task.CompletedTask;
+        });
+
+        var exchange = NewExchange();
+        exchange.In.Body = Array.Empty<As4Payload>();
+        await stand.Send(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        body.Should().BeNull();
+        action.Should().Be("Submit");
+    }
+
+    [Fact]
+    public async Task PayloadList_OfAMessageWithoutPayloads_IsAnEmptyList()
+    {
+        object? body = null;
+        await using var stand = await Stand.StartAsync(e => { body = e.In.Body; return Task.CompletedTask; }, payloadList: true);
+
+        var exchange = NewExchange();
+        exchange.In.Body = Array.Empty<As4Payload>();
+        await stand.Send(exchange);
+
+        body.Should().BeAssignableTo<IReadOnlyList<As4Payload>>().Which.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WithoutFourCornerProperties_IsDelivered_WhenTheAgreementDoesNotRequireThem()
+    {
+        IExchange? received = null;
+        await using var stand = await Stand.StartAsync(e => { received = e; return Task.CompletedTask; },
+            agreement: p => p.RequireFourCornerProperties = false);
+
+        var exchange = new Exchange(new Message(Payload) { ContentType = "text/xml" });
+        await stand.Send(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        received.Should().NotBeNull();
+        received!.In.Headers.Should().NotContainKey(As4Headers.OriginalSender);
+    }
+
+    [Fact]
+    public async Task Loopback_APropertyType_TravelsWithItsProperty()
+    {
+        IExchange? received = null;
+        await using var stand = await Stand.StartAsync(e => { received = e; return Task.CompletedTask; });
+
+        var exchange = NewExchange();
+        exchange.In.Headers[As4Headers.PropertyTypePrefix + "originalSender"] = "urn:oasis:names:tc:ebcore:partyid-type:unregistered";
+        await stand.Send(exchange);
+
+        received!.In.GetHeader<string>(As4Headers.OriginalSender).Should().Be("C1");
+        received.In.GetHeader<string>(As4Headers.PropertyTypePrefix + "originalSender").Should().Be("urn:oasis:names:tc:ebcore:partyid-type:unregistered");
+        received.In.Headers.Should().NotContainKey(As4Headers.PropertyTypePrefix + "finalRecipient");
+    }
+
     // ── Raw requests ─────────────────────────────────────────────────────────
 
     [Fact]
@@ -506,6 +627,226 @@ public class As4ConsumerTests
         (await response.Content.ReadAsStringAsync()).Should().Contain("soapenv:MustUnderstand");
     }
 
+    // ── eDelivery conformance assertions, as the test driver's simulated sender sends them ──
+    // (Test Assertions Description v1.5, common profile; the id of the assertion is in each name.)
+
+    [Fact]
+    public async Task TA04_AnUncompressedPayload_IsAcknowledgedAndDelivered()
+    {
+        string? delivered = null;
+        await using var stand = await Stand.StartAsync(e => { delivered = Encoding.UTF8.GetString((byte[])e.In.Body!); return Task.CompletedTask; });
+
+        var message = Conformance(Encoding.UTF8.GetBytes(Payload), uncompressedMimeType: "text/xml");
+        var (_, errorCode, receipt) = await stand.PostRaw(message);
+
+        errorCode.Should().BeNull();
+        receipt.Should().BeTrue("a receiving MSH MUST NOT reject messages with payloads that are not compressed");
+        delivered.Should().Be(Payload);
+    }
+
+    [Fact]
+    public async Task TA08_APayloadHyperlinkReference_IsAnsweredWithAnError_AndNotDelivered()
+    {
+        var reached = false;
+        await using var stand = await Stand.StartAsync(_ => { reached = true; return Task.CompletedTask; });
+
+        // No attachment: the only eb:PartInfo points outside the message.
+        var message = Conformance(content: null, beforeSigning: envelope =>
+            ((XmlElement)envelope.GetElementsByTagName("PartInfo", EbmsNamespaces.Eb)[0]!).SetAttribute("href", "http://example.com/invoice.xml"));
+        var (status, errorCode, receipt) = await stand.PostRaw(message);
+
+        status.Should().Be(HttpStatusCode.OK);
+        errorCode.Should().Be("EBMS:0011");
+        receipt.Should().BeFalse();
+        reached.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TA20_TA44_MessageAndPartProperties_WithAndWithoutAType_AreAcknowledged()
+    {
+        IExchange? received = null;
+        await using var stand = await Stand.StartAsync(e => { received = e; return Task.CompletedTask; });
+
+        var message = Conformance(As4TestMessages.Gzip(Encoding.UTF8.GetBytes(Payload)), beforeSigning: envelope =>
+        {
+            // One property with a type and one without, among the message properties and among the part properties.
+            ((XmlElement)envelope.GetElementsByTagName("MessageProperties", EbmsNamespaces.Eb)[0]!.FirstChild!).SetAttribute("type", "urn:example:party-type");
+            var partProperties = (XmlElement)envelope.GetElementsByTagName("PartProperties", EbmsNamespaces.Eb)[0]!;
+            ((XmlElement)partProperties.FirstChild!).SetAttribute("type", "urn:example:media-type");
+        });
+        var (_, errorCode, receipt) = await stand.PostRaw(message);
+
+        errorCode.Should().BeNull();
+        receipt.Should().BeTrue();
+        received!.In.GetHeader<string>(As4Headers.PropertyTypePrefix + "originalSender").Should().Be("urn:example:party-type");
+        received.In.Headers.Should().NotContainKey(As4Headers.PropertyTypePrefix + "finalRecipient");
+    }
+
+    [Theory]
+    [InlineData("!utf*", "EBMS:0003")]
+    [InlineData("8bit", "EBMS:0003")]      // an encoding name starts with a letter
+    [InlineData("", "EBMS:0003")]
+    [InlineData("UTF-16", null)]
+    [InlineData("ISO-8859-1", null)]
+    public async Task TA29_ACharacterSetThatIsNotAnEncodingName_IsAnsweredWithAnError(string characterSet, string? expectedError)
+    {
+        var reached = false;
+        await using var stand = await Stand.StartAsync(_ => { reached = true; return Task.CompletedTask; });
+
+        var message = Conformance(As4TestMessages.Gzip(Encoding.UTF8.GetBytes(Payload)), beforeSigning: envelope =>
+        {
+            var partProperties = (XmlElement)envelope.GetElementsByTagName("PartProperties", EbmsNamespaces.Eb)[0]!;
+            var property = envelope.CreateElement("eb", "Property", EbmsNamespaces.Eb);
+            property.SetAttribute("name", "CharacterSet");
+            property.InnerText = characterSet;
+            partProperties.AppendChild(property);
+        });
+        var (_, errorCode, receipt) = await stand.PostRaw(message);
+
+        errorCode.Should().Be(expectedError);
+        receipt.Should().Be(expectedError is null);
+        reached.Should().Be(expectedError is null);
+    }
+
+    [Fact]
+    public async Task TA30_ADamagedCompressedPayload_IsDecompressionFailure()
+    {
+        var reached = false;
+        await using var stand = await Stand.StartAsync(_ => { reached = true; return Task.CompletedTask; });
+
+        // Declared gzip, correctly signed and encrypted, but the bytes do not inflate.
+        var damaged = As4TestMessages.Gzip(Encoding.UTF8.GetBytes(Payload));
+        Array.Fill<byte>(damaged, 0x5A, 10, damaged.Length - 10);
+        var (status, errorCode, receipt) = await stand.PostRaw(Conformance(damaged));
+
+        status.Should().Be(HttpStatusCode.OK);
+        errorCode.Should().Be("EBMS:0303");
+        receipt.Should().BeFalse();
+        reached.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TA35_APayloadSignedBeforeItWasCompressed_IsAnsweredWithAnError()
+    {
+        var reached = false;
+        await using var stand = await Stand.StartAsync(_ => { reached = true; return Task.CompletedTask; });
+
+        // Signed over the plain bytes, compressed afterwards: the digest in the signature is not the one of the part.
+        var plain = Encoding.UTF8.GetBytes(Payload);
+        var message = Conformance(plain, afterSigning: part => part.Replace(new MemoryStream(As4TestMessages.Gzip(plain), writable: false)));
+        var (_, errorCode, receipt) = await stand.PostRaw(message);
+
+        errorCode.Should().Be("EBMS:0101");
+        receipt.Should().BeFalse();
+        reached.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TA37_APayloadEncryptedBeforeItWasCompressed_IsAnsweredWithAnError()
+    {
+        var reached = false;
+        await using var stand = await Stand.StartAsync(_ => { reached = true; return Task.CompletedTask; });
+
+        // Compressed after encryption: what arrives under the content id is gzip, not the ciphertext.
+        var message = Conformance(As4TestMessages.Gzip(Encoding.UTF8.GetBytes(Payload)),
+            afterEncryption: part => part.Replace(new MemoryStream(As4TestMessages.Gzip(part.ToArray()), writable: false)));
+        var (_, errorCode, receipt) = await stand.PostRaw(message);
+
+        errorCode.Should().NotBeNull();
+        errorCode.Should().BeOneOf("EBMS:0102", "EBMS:0101");
+        receipt.Should().BeFalse();
+        reached.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task EmptyBodyNotReferencedInSignature_IsAnsweredWithAnError_AndNotDelivered()
+    {
+        // The conformance test of that name (testing service 2026.06). The AS4 profile has the sender sign the body
+        // (§5.1.4, §5.1.5); answered as Domibus, the reference implementation, answers it: EBMS:0103, its policy lists
+        // sp:Body among the signed parts (As4HarmonyLiveTests).
+        var reached = false;
+        await using var stand = await Stand.StartAsync(_ => { reached = true; return Task.CompletedTask; });
+
+        var (_, errorCode, receipt) = await stand.PostRaw(Conformance(As4TestMessages.Gzip(Encoding.UTF8.GetBytes(Payload)), coverBody: false));
+
+        errorCode.Should().Be("EBMS:0103");
+        receipt.Should().BeFalse();
+        reached.Should().BeFalse();
+    }
+
+    [Theory]
+    // Testing service 2026.06, "encryption algorithm" and "signature algorithm": only the profile's own are accepted.
+    [InlineData("payload encryption", "http://www.w3.org/2009/xmlenc11#aes256-gcm", "EBMS:0102")]
+    [InlineData("payload encryption", "http://www.w3.org/2001/04/xmlenc#aes128-cbc", "EBMS:0102")]
+    [InlineData("key transport", "http://www.w3.org/2001/04/xmlenc#rsa-oaep-mgf1p", "EBMS:0102")]
+    [InlineData("key transport", "http://www.w3.org/2001/04/xmlenc#rsa-1_5", "EBMS:0102")]
+    [InlineData("signature", "http://www.w3.org/2000/09/xmldsig#rsa-sha1", "EBMS:0101")]
+    [InlineData("signature", "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512", "EBMS:0101")]
+    [InlineData("digest", "http://www.w3.org/2000/09/xmldsig#sha1", "EBMS:0101")]
+    public async Task AnAlgorithmOutsideTheProfile_IsAnsweredWithAnError_AndNotDelivered(string what, string algorithm, string expectedError)
+    {
+        var reached = false;
+        await using var stand = await Stand.StartAsync(_ => { reached = true; return Task.CompletedTask; });
+
+        var message = Conformance(As4TestMessages.Gzip(Encoding.UTF8.GetBytes(Payload)), afterSecuring: envelope =>
+        {
+            XmlElement First(string localName, string ns, XmlElement? within = null) =>
+                (XmlElement)(within ?? envelope.DocumentElement!).GetElementsByTagName(localName, ns)[0]!;
+            var target = what switch
+            {
+                "payload encryption" => First("EncryptionMethod", WsSecurityNames.Xenc, First("EncryptedData", WsSecurityNames.Xenc)),
+                "key transport" => First("EncryptionMethod", WsSecurityNames.Xenc, First("EncryptedKey", WsSecurityNames.Xenc)),
+                "signature" => First("SignatureMethod", WsSecurityNames.Ds),
+                _ => First("DigestMethod", WsSecurityNames.Ds, First("SignedInfo", WsSecurityNames.Ds)),
+            };
+            target.SetAttribute("Algorithm", algorithm);
+        });
+        var (_, errorCode, receipt) = await stand.PostRaw(message);
+
+        errorCode.Should().Be(expectedError);
+        receipt.Should().BeFalse();
+        reached.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ASoap11Envelope_IsNotAnAs4Message_AndIsAnsweredWithASoapFault()
+    {
+        // Testing service 2026.06, "SOAP 1.2": AS4 is SOAP 1.2; a SOAP 1.1 envelope is not read as one.
+        var reached = false;
+        await using var stand = await Stand.StartAsync(_ => { reached = true; return Task.CompletedTask; });
+        var body = Encoding.UTF8.GetBytes(
+            "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"><soap:Header/><soap:Body/></soap:Envelope>");
+
+        var response = await stand.PostBytes("text/xml", body);
+
+        ((int)response.StatusCode).Should().BeOneOf(400, 415);
+        reached.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// A user message from A to B as a simulated sender builds it: one attachment with <paramref name="content"/> as
+    /// its bytes (none when null), declared gzip unless <paramref name="uncompressedMimeType"/> is given, signed and
+    /// encrypted as A sends it, with a hook at each stage to bend it away from the profile.
+    /// </summary>
+    private static (string ContentType, byte[] Body) Conformance(byte[]? content, string? uncompressedMimeType = null,
+        Action<XmlDocument>? beforeSigning = null, Action<SwaPart>? afterSigning = null, Action<SwaPart>? afterEncryption = null,
+        bool coverBody = true, Action<XmlDocument>? afterSecuring = null)
+    {
+        const string contentId = "p1@a.example";
+        var envelope = As4TestMessages.UserMessage(Guid.NewGuid().ToString("N") + "@a.example", contentId,
+            from: "urn:redb:a", to: "urn:redb:b", service: "urn:example", action: "Submit", uncompressedMimeType: uncompressedMimeType);
+        beforeSigning?.Invoke(envelope);
+        var message = SwaMessage.Create(envelope);
+        var part = content is null ? null : message.AddPart(contentId, uncompressedMimeType ?? "application/gzip", content);
+
+        As4Signature.Sign(message, NodeA, As4KeyReference.BinarySecurityToken, null, DateTimeOffset.UtcNow, coverBody);
+        if (part is not null) afterSigning?.Invoke(part);
+        As4SecurityEngine.Encrypt(message, As4TestMessages.PublicOnly(NodeB), As4KeyReference.BinarySecurityToken);
+        if (part is not null) afterEncryption?.Invoke(part);
+        afterSecuring?.Invoke(message.Envelope);
+        return message.Write();
+    }
+
     // ── Fixtures ─────────────────────────────────────────────────────────────
 
     private static Exchange NewExchange()
@@ -594,19 +935,26 @@ public class As4ConsumerTests
 
         public static async Task<Stand> StartAsync(Func<IExchange, Task> route, IIdempotentRepository? duplicates = null,
             bool streamBody = false, redb.Route.Configuration.StreamCacheOptions? spool = null,
-            redb.Route.Configuration.RouteEngineOptions? engine = null)
+            redb.Route.Configuration.RouteEngineOptions? engine = null, bool payloadList = false,
+            Action<As4Partner>? agreement = null)
         {
             var port = global::redb.Route.Tests.Shared.TestPorts.Next();
             var context = new RouteContext(options: engine);
             context.AddComponent(new As4Component());
             context.AddIdempotentRepository("dedup", duplicates ?? new InMemoryIdempotentRepository());
             if (spool is not null) context.AddService(typeof(redb.Route.Configuration.StreamCacheOptions), spool);
-            context.AddToRegistry("b", Node("b", NodeB, Partner("a", NodeA)));
-            context.AddToRegistry("a", Node("a", NodeA, Partner("b", NodeB)));
+            // The agreement between A and B, as each side holds it.
+            var aAtB = Partner("a", NodeA);
+            var bAtA = Partner("b", NodeB);
+            agreement?.Invoke(aAtB);
+            agreement?.Invoke(bAtA);
+            context.AddToRegistry("b", Node("b", NodeB, aAtB));
+            context.AddToRegistry("a", Node("a", NodeA, bAtA));
             context.AddToRegistry("c", Node("c", Stranger, Partner("b", NodeB)));
 
             var receive = As4Dsl.Receive("/as4/in").Host("127.0.0.1").Port(port).ConnectionFactory("b").IdempotentRepository("dedup");
             if (streamBody) receive.StreamBody();
+            if (payloadList) receive.PayloadList();
             context.AddRoutes(r => r.From(receive)
                 .Process((e, _) => route(e)));
             await context.Start();

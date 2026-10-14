@@ -1,4 +1,5 @@
 ﻿#pragma warning disable CS0619
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using redb.Route.Abstractions;
@@ -131,8 +132,14 @@ public sealed class RedbRouteBuilder
     /// </summary>
     /// <typeparam name="TBuilder">Concrete route builder type.</typeparam>
     /// <returns>This builder for chaining.</returns>
+    /// <exception cref="InvalidOperationException"><typeparamref name="TBuilder"/> was already added by <see cref="AddRouteBuilders(Assembly[])"/>.</exception>
     public RedbRouteBuilder AddRouteBuilder<TBuilder>() where TBuilder : RouteBuilder
     {
+        if (IsDiscovered(typeof(TBuilder)))
+            throw new InvalidOperationException(
+                $"Route builder '{typeof(TBuilder).FullName}' was already added by AddRouteBuilders. " +
+                "Leave it out of the discovery with the filter, or do not add it again.");
+
         // Register the CONCRETE type (the configurator resolves TBuilder) and expose the SAME singleton as the
         // base RouteBuilder for enumeration. Registering only the base left GetRequiredService<TBuilder>()
         // unresolvable, so host startup threw "No service for type '…' has been registered".
@@ -145,6 +152,63 @@ public sealed class RedbRouteBuilder
 
         return this;
     }
+
+    /// <summary>
+    /// Registers every route builder of <paramref name="assemblies"/> — each public, non-abstract, closed class
+    /// deriving from <see cref="RouteBuilder"/> — as <see cref="AddRouteBuilder{TBuilder}"/> does, so constructor
+    /// injection works (Apache Camel's routes discovery).
+    /// </summary>
+    /// <param name="assemblies">Assemblies to scan; at least one.</param>
+    /// <returns>This builder for chaining.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// A builder type is already registered, or an assembly's types cannot all be loaded. Nothing is registered then.
+    /// </exception>
+    public RedbRouteBuilder AddRouteBuilders(params Assembly[] assemblies)
+        => AddDiscoveredRouteBuilders(assemblies, filter: null);
+
+    /// <summary>
+    /// <see cref="AddRouteBuilders(Assembly[])"/> with a filter choosing which builders to take — the place for a
+    /// condition (environment, configuration) and for leaving a builder out.
+    /// </summary>
+    /// <param name="assemblies">Assemblies to scan; at least one.</param>
+    /// <param name="filter">Returns <c>true</c> for a builder type to register.</param>
+    /// <returns>This builder for chaining.</returns>
+    /// <exception cref="InvalidOperationException">As <see cref="AddRouteBuilders(Assembly[])"/>.</exception>
+    public RedbRouteBuilder AddRouteBuilders(IEnumerable<Assembly> assemblies, Func<Type, bool> filter)
+    {
+        ArgumentNullException.ThrowIfNull(filter);
+        return AddDiscoveredRouteBuilders(assemblies, filter);
+    }
+
+    private RedbRouteBuilder AddDiscoveredRouteBuilders(IEnumerable<Assembly> assemblies, Func<Type, bool>? filter)
+    {
+        var types = RouteBuilderDiscovery.FindBuilderTypes(assemblies, filter);
+
+        // A type already registered would add its routes twice and fail only at host start with a duplicate route
+        // id; said now, with the type's name. Checked for all before any is registered.
+        foreach (var type in types)
+        {
+            if (_services.Any(d => d.ServiceType == type) || IsDiscovered(type))
+                throw new InvalidOperationException(
+                    $"Route builder '{type.FullName}' is already registered. " +
+                    "Leave it out of the discovery with the filter, or do not register it explicitly.");
+        }
+
+        foreach (var type in types)
+        {
+            // The AddRouteBuilder<T> shape: the concrete type, the same singleton as RouteBuilder, a configurator
+            // that adds it to the context — the container builds it, so its constructor may take services.
+            _services.AddSingleton(type);
+            _services.AddSingleton<RouteBuilder>(sp => (RouteBuilder)sp.GetRequiredService(type));
+            _services.AddSingleton<IRouteContextConfigurator>(sp => new DiscoveredRouteBuilderConfigurator(sp, type));
+            _services.AddSingleton(new DiscoveredRouteBuilder(type));
+        }
+
+        return this;
+    }
+
+    private bool IsDiscovered(Type builderType)
+        => _services.Any(d => d.ImplementationInstance is DiscoveredRouteBuilder discovered && discovered.BuilderType == builderType);
 
     /// <summary>
     /// Registers a component for a custom URI scheme.
@@ -203,6 +267,25 @@ internal sealed class RouteBuilderConfigurator<TBuilder> : IRouteContextConfigur
         context.AddRoutes(builder);
     }
 }
+
+/// <summary>Adds a route builder registered by <see cref="RedbRouteBuilder.AddRouteBuilders(Assembly[])"/> to the context.</summary>
+internal sealed class DiscoveredRouteBuilderConfigurator : IRouteContextConfigurator
+{
+    private readonly IServiceProvider _sp;
+    private readonly Type _builderType;
+
+    public DiscoveredRouteBuilderConfigurator(IServiceProvider sp, Type builderType)
+    {
+        _sp = sp;
+        _builderType = builderType;
+    }
+
+    public void Configure(RouteContext context)
+        => context.AddRoutes((RouteBuilder)_sp.GetRequiredService(_builderType));
+}
+
+/// <summary>Marks a route builder type registered by assembly discovery, so a second registration of it is refused.</summary>
+internal sealed record DiscoveredRouteBuilder(Type BuilderType);
 
 internal sealed class ComponentConfigurator<TComponent> : IRouteContextConfigurator
     where TComponent : class, IComponent

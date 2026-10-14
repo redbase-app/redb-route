@@ -16,6 +16,14 @@ public enum As4KeyReference
 
     /// <summary>The certificate is named by its Subject Key Identifier; the receiver must already hold it.</summary>
     KeyIdentifier,
+
+    /// <summary>
+    /// The certificate travels with its certification path in a <c>wsse:BinarySecurityToken</c> of type
+    /// <c>X509PKIPathv1</c> (WS-Security X.509 Token Profile §3.1.2), the authorities of
+    /// <see cref="As4ConnectionFactory.SigningCertificateChain"/> first and our certificate last. For a receiver that
+    /// trusts an authority instead of holding our certificate (eDelivery AS4 1.16 §4.3.3).
+    /// </summary>
+    PkiPath,
 }
 
 /// <summary>Whether the receive server asks the trading partner for a TLS client certificate.</summary>

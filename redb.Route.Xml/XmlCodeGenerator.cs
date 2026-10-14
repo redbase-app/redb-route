@@ -80,6 +80,9 @@ public static class XmlCodeGenerator
                      is "onException" or "intercept" or "interceptFrom" or "interceptSendToEndpoint" or "onCompletion"))
             PrintContainerHandler(handler, writer);
 
+        foreach (var configuration in root.Elements().Where(e => e.Name.LocalName == XmlRouteLoader.RouteConfigurationElement))
+            PrintRouteConfiguration(configuration, writer);
+
         foreach (var element in root.Elements())
         {
             if (registry.Find(element.Name.LocalName) is { Kind: XmlElementKind.TopLevel } topLevel)
@@ -182,6 +185,27 @@ public static class XmlCodeGenerator
         }
     }
 
+    /// <summary>
+    /// A route configuration: one variable for the configuration, then each <c>&lt;onException&gt;</c> as statements
+    /// on a variable of its own, the shapes of a builder-level handler.
+    /// </summary>
+    private static void PrintRouteConfiguration(XElement configuration, XmlCodeWriter writer)
+    {
+        var id = configuration.Attribute("id")?.Value is { Length: > 0 } value ? XmlCodeWriter.Str(value) : "";
+        var name = writer.PushRoot($"RouteConfiguration({id})", configuration, "configuration");
+        writer.PopReceiver();
+        foreach (var handler in configuration.Elements().Where(e => e.Name.LocalName == "onException"))
+        {
+            var types = (handler.Attribute("exceptions")?.Value ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            writer.PushRoot($"{name}.OnException({string.Join(", ", types.Select(XmlCodeWriter.TypeRef))})", handler, "handler");
+            if (handler.Attribute("description")?.Value is { Length: > 0 } description)
+                writer.Config($"Description({XmlCodeWriter.Str(description)})");
+            CoreElements.CoreContributions.PrintOnException(handler, writer);
+            writer.PopReceiver();
+        }
+    }
+
     private static void PrintRoute(XElement route, XmlCodeWriter writer)
     {
         // enabled= is a load-time decision from live configuration; generated code has no
@@ -226,6 +250,8 @@ public static class XmlCodeGenerator
             writer.Config($"ProcessingTimeout({XmlCodeWriter.Ts(TimeSpan.Parse(timeout, System.Globalization.CultureInfo.InvariantCulture))})");
         if (route.Attribute("routePolicy")?.Value is { Length: > 0 } policy)
             writer.Config($"RoutePolicy({XmlCodeWriter.Str(policy)})");
+        if (route.Attribute("routeConfigurationId")?.Value is { Length: > 0 } configurations)
+            writer.Config($"RouteConfigurationId({XmlCodeWriter.Str(configurations)})");
 
         foreach (var step in route.Elements().Where(e => e.Name.LocalName != "from"))
             writer.PrintStep(step);

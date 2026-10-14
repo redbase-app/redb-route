@@ -702,6 +702,8 @@ public class CatalogContributionsTests : IAsyncDisposable
                 <rollbackAll/>
                 <exceptionHandled/>
                 <wireTap uri="direct://cat-all-2"/>
+                <spanTag key="cat.all" value="x"/>
+                <spanTag key="cat.all.expr" expr="${body}" target="Inbound"/>
                 <removeHeader name="a"/>
                 <removeProperty name="p"/>
                 <removeHeaders pattern="X-*" except="X-Keep"/>

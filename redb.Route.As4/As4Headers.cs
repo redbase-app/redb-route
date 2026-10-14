@@ -78,10 +78,16 @@ public static class As4Headers
     /// <summary>Prefix of message properties: <c>redbAs4.property.originalSender</c> is <c>eb:Property[@name='originalSender']</c>.</summary>
     public const string PropertyPrefix = Prefix + "property.";
 
-    /// <summary>The eDelivery four-corner <c>originalSender</c> property (mandatory).</summary>
+    /// <summary>
+    /// Prefix of the <c>@type</c> of a message property: <c>redbAs4.propertyType.originalSender</c> is the <c>type</c>
+    /// attribute of <c>eb:Property[@name='originalSender']</c>. Absent when the property has no type.
+    /// </summary>
+    public const string PropertyTypePrefix = Prefix + "propertyType.";
+
+    /// <summary>The eDelivery four-corner <c>originalSender</c> property (mandatory unless the agreement says otherwise).</summary>
     public const string OriginalSender = PropertyPrefix + "originalSender";
 
-    /// <summary>The eDelivery four-corner <c>finalRecipient</c> property (mandatory).</summary>
+    /// <summary>The eDelivery four-corner <c>finalRecipient</c> property (mandatory unless the agreement says otherwise).</summary>
     public const string FinalRecipient = PropertyPrefix + "finalRecipient";
 
     // ── Computed by the connector ────────────────────────────────────────────

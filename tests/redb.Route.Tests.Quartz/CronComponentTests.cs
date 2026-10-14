@@ -145,6 +145,7 @@ public class CronComponentTests
         var component = new CronComponent();
         var context = new RouteContext("cron-test-1");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("cron://tick?schedule=0/1 * * * * ?");
         var endpoint = component.CreateEndpoint(uri);
@@ -157,14 +158,16 @@ public class CronComponentTests
         // Start should not throw
         await consumer.Start();
 
-        // Consumer should be registered
-        QuartzConsumerRegistry.Get(endpoint.Uri.NormalizedKey).Should().NotBeNull();
+        // Consumer should be registered under the job it claimed on the context's scheduler
+        var scheduler = context.GetService<global::Quartz.IScheduler>()!;
+        var jobKey = new global::Quartz.JobKey("tick", "redb");
+        QuartzConsumerRegistry.Get(scheduler, jobKey).Should().NotBeNull();
 
         // Stop should not throw
         await consumer.Stop();
 
         // Consumer should be unregistered
-        QuartzConsumerRegistry.Get(endpoint.Uri.NormalizedKey).Should().BeNull();
+        QuartzConsumerRegistry.Get(scheduler, jobKey).Should().BeNull();
 
         context.Dispose();
     }
@@ -189,6 +192,7 @@ public class CronComponentTests
         var component = new CronComponent();
         var context = new RouteContext("cron-fire-test");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         // Every second
         var uri = EndpointUriParser.Parse("cron://rapid?schedule=* * * * * ?");
@@ -231,6 +235,7 @@ public class CronComponentTests
         var component = new CronComponent();
         var context = new RouteContext("cron-pattern-test");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("cron://check?schedule=* * * * * ?");
         var endpoint = component.CreateEndpoint(uri);
@@ -260,6 +265,7 @@ public class CronComponentTests
         var component = new CronComponent();
         var context = new RouteContext("cron-shared-scheduler");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri1 = EndpointUriParser.Parse("cron://job1?schedule=* * * * * ?");
         var uri2 = EndpointUriParser.Parse("cron://job2?schedule=* * * * * ?");
@@ -291,6 +297,7 @@ public class CronComponentTests
         var component = new CronComponent();
         var context = new RouteContext("cron-stop-idem");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("cron://idem?schedule=* * * * * ?");
         var endpoint = component.CreateEndpoint(uri);
@@ -315,6 +322,7 @@ public class CronComponentTests
         var component = new CronComponent();
         var context = new RouteContext("cron-error-test");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("cron://errJob?schedule=* * * * * ?");
         var endpoint = component.CreateEndpoint(uri);
@@ -441,6 +449,7 @@ public class CronComponentTests
         var component = new CronComponent();
         var context = new RouteContext("cron-group-test");
         context.AddComponent(component);
+        await context.Start(); // the context runs: a consumer started now starts the scheduler
 
         var uri = EndpointUriParser.Parse("cron://billing/invoice?schedule=* * * * * ?");
         var endpoint = component.CreateEndpoint(uri);

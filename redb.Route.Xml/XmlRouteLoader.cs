@@ -107,9 +107,10 @@ public sealed class XmlRouteLoader
 
         var containerElements = new List<XElement>();
         var topLevelElements = new List<(XElement Element, IXmlTopLevelContribution Contribution)>();
+        var configurationElements = root.Elements().Where(e => e.Name.LocalName == RouteConfigurationElement).ToList();
         foreach (var element in root.Elements())
         {
-            if (element.Name.LocalName is "bean" or "route")
+            if (element.Name.LocalName is "bean" or "route" or RouteConfigurationElement)
                 continue;
             if (element.Name.LocalName
                 is "onException" or "intercept" or "interceptFrom" or "interceptSendToEndpoint" or "onCompletion")
@@ -134,10 +135,12 @@ public sealed class XmlRouteLoader
         // builder, so definitions must be born there. Building eagerly here surfaces every error
         // at Load; IsBuilt then keeps Start() from re-running the parse.
         var routeElements = root.Elements().Where(e => e.Name.LocalName == "route").ToList();
-        var builder = new XmlRoutesBuilder(b =>
+        var builder = new XmlRoutesBuilder(sourceName, b =>
         {
             foreach (var element in containerElements)
                 ParseContainerHandler(element, b, ctx);
+            foreach (var element in configurationElements)
+                ParseRouteConfiguration(element, b, ctx);
             foreach (var (element, contribution) in topLevelElements)
             {
                 try
@@ -216,6 +219,43 @@ public sealed class XmlRouteLoader
         }
     }
 
+    /// <summary>The element of a route configuration, in a routes file and in <c>context.xml</c>.</summary>
+    internal const string RouteConfigurationElement = "routeConfiguration";
+
+    /// <summary>
+    /// <c>&lt;routeConfiguration id="…"&gt;</c> (Apache Camel's Route Configuration): its <c>&lt;onException&gt;</c>
+    /// blocks apply to the routes of every file and builder of the context — to the routes that name the id with
+    /// <c>routeConfigurationId</c>, or, without an id, to every route that names none. Declared on the builder the
+    /// document loads into; the handlers are configured by the helpers the route-level <c>&lt;onException&gt;</c> uses.
+    /// </summary>
+    internal static void ParseRouteConfiguration(XElement element, RouteBuilder builder, XmlParseContext ctx)
+    {
+        var id = ctx.Attr(element, "id");
+        if (id is { Length: 0 })
+        {
+            ctx.AddError(element, "<routeConfiguration id=\"\">: leave the attribute out for the default configuration.");
+            return;
+        }
+
+        var configuration = builder.AddRouteConfiguration(id);
+        foreach (var child in element.Elements())
+        {
+            if (child.Name.LocalName != "onException")
+            {
+                ctx.AddError(child, $"<routeConfiguration> takes <onException> blocks, found <{child.Name.LocalName}>.");
+                continue;
+            }
+            var types = CoreElements.CoreContributions.ExceptionTypes(child, ctx);
+            if (types.Length == 0)
+                continue;
+            var handler = configuration.OnException(types);
+            ctx.ApplyBranchIdentity(child, handler);
+            CoreElements.CoreContributions.ConfigureOnException(handler, child, ctx);
+        }
+        if (configuration.ExceptionDefinitions.Count == 0 && !element.Elements().Any())
+            ctx.AddError(element, "<routeConfiguration> declares nothing: add an <onException>.");
+    }
+
     private static void ParseRoute(XElement element, XmlRoutesBuilder builder, XmlParseContext ctx)
     {
         var from = element.Elements().FirstOrDefault(e => e.Name.LocalName == "from");
@@ -292,6 +332,8 @@ public sealed class XmlRouteLoader
             route.ProcessingTimeout(timeout);
         if (ctx.Attr(element, "routePolicy") is { Length: > 0 } policy)
             route.RoutePolicy(policy);
+        if (ctx.Attr(element, "routeConfigurationId") is { Length: > 0 } configurations)
+            route.RouteConfigurationId(configurations);
     }
 
     /// <summary>
@@ -299,8 +341,9 @@ public sealed class XmlRouteLoader
     /// loader so every error surfaces at Load; <see cref="RouteBuilder.IsBuilt"/> then keeps
     /// Start() from re-running it (InternalBuild clears a builder before configuring).
     /// </summary>
-    private sealed class XmlRoutesBuilder(Action<XmlRoutesBuilder> parse) : RouteBuilder
+    internal sealed class XmlRoutesBuilder(string sourceName, Action<XmlRoutesBuilder> parse) : RouteBuilder
     {
+        internal override string SourceName => sourceName;
         protected override void Configure() => parse(this);
         internal void BuildNow(IRouteContext context) => InternalBuild(context);
     }

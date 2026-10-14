@@ -135,6 +135,8 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.Metered(string stepName, Action<IExchange> action) => Metered(stepName, action);
     IRouteDefinition IRouteDefinition.Metered(string stepName, Func<IExchange, CancellationToken, Task> action) => Metered(stepName, action);
     IRouteDefinition IRouteDefinition.Metered(string stepName, IProcessor processor) => Metered(stepName, processor);
+    IRouteDefinition IRouteDefinition.SpanTag(string key, string value, Telemetry.SpanTarget target) => SpanTag(key, value, target);
+    IRouteDefinition IRouteDefinition.SpanTag(string key, IExpression value, Telemetry.SpanTarget target) => SpanTag(key, value, target);
 
     // ── Enrichment ──
     IRouteDefinition IRouteDefinition.WireTap(string uri) => WireTap(uri);
@@ -194,4 +196,5 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.Tracing(bool value) => Tracing(value);
     IRouteDefinition IRouteDefinition.RoutePolicy(IRoutePolicy policy) => RoutePolicy(policy);
     IRouteDefinition IRouteDefinition.RoutePolicy(string policyName) => RoutePolicy(policyName);
+    IRouteDefinition IRouteDefinition.RouteConfigurationId(string ids) => RouteConfigurationId(ids);
 }
