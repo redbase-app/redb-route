@@ -207,6 +207,16 @@ to TA51, named among the topics of the Common Profile tests of testing service 2
   doc said "every route it defines". They apply to the routes of the declaring builder now — Apache Camel's
   RouteBuilder scope. Two builders may declare an `OnException` for the same type: that threw "Global exception
   handler for X is already registered" at `Start()`; each builder's handler is its own now.
+- **`OnException` for the whole context is still there**, in its own form: a route configuration (below). The
+  three levels are:
+
+  | Declared | Applies to |
+  |---|---|
+  | in a route: `From(...).OnException<X>()...End()` | that route |
+  | in a `RouteBuilder`: `OnException<X>()` | the routes of that builder |
+  | in a route configuration: `RouteConfiguration().OnException<X>()` | every route of the context (or the routes that name its id) |
+
+  Where several match, the nearest exception type wins (see "the nearest `OnException` wins" below).
 - A builder's `OnException` is no longer registered as a context-wide handler (`AddGlobalExceptionHandler`); it is a
   layer of the error scope of each of its routes (see below). The handler body is compiled once per route instead
   of twice.
@@ -225,7 +235,7 @@ to TA51, named among the topics of the Common Profile tests of testing service 2
 - Covered by `BuilderScopeTests` (intercept, completion and exception of one builder against the routes of
   another; two builders with the same exception type; the detached path).
 
-### Added — route configurations: `OnException` declared once for the routes of every builder
+### Added — route configurations: `OnException` for the whole context, with the full DSL
 
 Apache Camel's Route Configuration. A builder's `OnException` reaches its own routes only, so error handling kept
 apart from the routes — one class or one file of handlers for the whole module — had no home with the full DSL: the
