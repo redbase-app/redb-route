@@ -10,13 +10,11 @@
   </PropertyGroup>
 
   <!--
-    References the in-repo redb.Route + SQS connector by project (the connector is not yet
-    published to NuGet). In a real app you would add the package instead:
-        dotnet add package redb.Route.Sqs
+    References the redb.Route + SQS connector packages (redb.Route.Sqs on nuget.org).
   -->
   <ItemGroup>
-    <PackageReference Include="redb.Route.csproj" />
-    <ProjectReference Include=".." Version="4.3.0" />
+    <PackageReference Include="redb.Route" Version="4.3.0" />
+    <PackageReference Include="redb.Route.Core" Version="4.3.0" />
     <PackageReference Include="redb.Route.Sqs" Version="4.3.0" />
   </ItemGroup>
 
@@ -25,4 +23,3 @@
   </ItemGroup>
 
 </Project>
-

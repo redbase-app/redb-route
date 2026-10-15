@@ -10,13 +10,13 @@
   </PropertyGroup>
 
   <!--
-    References the in-repo redb.Route + SQS connector by project (the connector is published as
-    redb.Route.Sqs). AWSSDK.SQS arrives transitively via the connector — used here only to create
+    References the redb.Route + SQS connector packages (redb.Route.Sqs on nuget.org).
+    AWSSDK.SQS arrives transitively via the connector — used here only to create
     the queues up front and read their ARNs for the SNS subscription.
   -->
   <ItemGroup>
-    <PackageReference Include="redb.Route.csproj" />
-    <ProjectReference Include=".." Version="4.3.0" />
+    <PackageReference Include="redb.Route" Version="4.3.0" />
+    <PackageReference Include="redb.Route.Core" Version="4.3.0" />
     <PackageReference Include="redb.Route.Sqs" Version="4.3.0" />
   </ItemGroup>
 
@@ -25,4 +25,3 @@
   </ItemGroup>
 
 </Project>
-

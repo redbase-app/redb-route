@@ -11,12 +11,12 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
-  <!-- The demo builds against the sources of this repository.
-       A standalone copy can use PackageReference (as EchoModule references its packages). -->
+  <!-- Pre-built redb NuGet packages. The connectors also ship in the Tsak worker's shared Libs,
+       so the .tpkg carries only the module DLL (see PackTpkg). -->
   <ItemGroup>
-    <ProjectReference Include="..\..\..\src\redb.Route\redb.Route.csproj" />
-    <ProjectReference Include="..\..\..\src\redb.Route.As4\redb.Route.As4.csproj" />
-    <ProjectReference Include="..\..\..\src\redb.Route.File\redb.Route.File.csproj" />
+    <PackageReference Include="redb.Route" Version="4.3.0" />
+    <PackageReference Include="redb.Route.As4" Version="4.3.0" />
+    <PackageReference Include="redb.Route.File" Version="4.3.0" />
   </ItemGroup>
 
   <!-- After build: zip manifest.json + the module DLL into output/As4Module.tpkg. -->
