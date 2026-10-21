@@ -69,7 +69,7 @@ Pending changes live in `changelog/unreleased/` until the release; `pwsh scripts
 
 ### Fixed
 
-- **`seda:` works after `Stop()` and `Start()` of the same route context** (broken in 4.2.2 to 4.4.0). The stop closed
+- **`seda:` works after `Stop()` and `Start()` of the same route context** (issue #12; broken in 4.2.2 to 4.4.0). The stop closed
   the queue for good: every send behind a seda hop failed with `ChannelClosedException` while the routes reported
   Started. On redb.Tsak this hit `/stop` then `/start`, `/restart` and the watchdog's automatic restart: the context
   looked healthy, but nothing behind a seda hop was processed. A consumer that starts again now opens a new queue. On an
