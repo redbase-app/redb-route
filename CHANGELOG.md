@@ -65,7 +65,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Pending changes live in `changelog/unreleased/` until the release; `pwsh scripts/changelog.ps1 -Preview` shows them.
 
+## [4.4.1] — 2026-10-21
+
+### Fixed
+
+- **`seda:` works after `Stop()` and `Start()` of the same route context** (broken in 4.2.2 to 4.4.0). The stop closed
+  the queue for good: every send behind a seda hop failed with `ChannelClosedException` while the routes reported
+  Started. On redb.Tsak this hit `/stop` then `/start`, `/restart` and the watchdog's automatic restart: the context
+  looked healthy, but nothing behind a seda hop was processed. A consumer that starts again now opens a new queue. On an
+  older version, recreate the context instead of restarting it (on Tsak, stop it and touch its `.tpkg`). Packages: `redb.Route`.
+
 ## [4.4.0] — 2026-10-21
+
+> **Withdrawn on the day of release because of the seda restart bug in redb.Route; use 4.4.1.**
 
 ### Breaking
 

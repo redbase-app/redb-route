@@ -225,6 +225,29 @@ public sealed class SignalRSharedListenerTests : IAsyncLifetime
             "после перезапуска отвечает новый приёмник, а не разметка прежнего экземпляра");
     }
 
+    [Fact]
+    public async Task SameContext_StoppedAndStartedAgain_ServesTheHubAndTheBroadcast()
+    {
+        var port = GetFreePort();
+        var omni = await StartHttpContextAsync(port);
+        var api = await StartHubContextAsync(port, broadcast: true);
+        (await InvokeAsync(await ConnectAsync(port))).Should().Be("api:x");
+
+        // The same instance, not a new context: its components and cached endpoints outlive the restart.
+        await api.Stop();
+        (await NegotiateAsync(port)).Should().Be(HttpStatusCode.NotFound, "остановленный хаб уходит со слушателя");
+        await api.Start();
+
+        ShouldBeHealthy(omni, api);
+        (await NegotiateAsync(port)).Should().Be(HttpStatusCode.OK);
+        var client = await ConnectAsync(port);
+        (await InvokeAsync(client)).Should().Be("api:x", "хаб того же контекста после рестарта отвечает");
+        var received = Receive(client);
+        await BroadcastAsync(api, "api", "changed");
+        (await received.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("changed",
+            "рассылка того же контекста после рестарта доходит");
+    }
+
     // ── Hubs of two contexts on one listener ──
 
     [Fact]

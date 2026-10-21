@@ -1409,6 +1409,11 @@ Each transport ships a type-safe fluent builder. Builders implement `implicit op
 .To(MockDsl.Endpoint("result").ExpectedMessageCount(3))         // mock:result?...
 ```
 
+A `seda:` queue belongs to its consumer's run. When the consumer stops (`context.Stop()`, a stop of its route), it
+finishes the exchanges already queued and a send fails with `ChannelClosedException` until the consumer starts again,
+which opens a new queue: a `Stop()` and `Start()` of the same context leaves every seda hop working. An exchange the
+stop did not get to within its drain timeout is released with a warning in the log when the consumer starts again.
+
 ### Selected transport builders
 
 ```csharp

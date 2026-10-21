@@ -67,24 +67,69 @@ public class SedaEndpointOptions : EndpointOptions
 /// </summary>
 public class SedaEndpoint : EndpointBase<SedaEndpointOptions>
 {
-    internal readonly Channel<IExchange> Queue;
+    private readonly object _queueGate = new();
+    private Channel<IExchange> _queue;
+    private bool _closed;
+
+    /// <summary>
+    /// The queue of the endpoint. A stopping consumer closes it (<see cref="Close"/>) and the next start of a consumer
+    /// opens a new one (<see cref="Reopen"/>): the endpoint is cached by its component and outlives a
+    /// <c>Stop()</c> and <c>Start()</c> of the route context, while a closed channel cannot take writes again.
+    /// </summary>
+    internal Channel<IExchange> Queue => Volatile.Read(ref _queue);
 
     /// <summary>Creates a SEDA endpoint.</summary>
     public SedaEndpoint(EndpointUri uri, SedaComponent component, SedaEndpointOptions options)
         : base(uri, component, options)
     {
-        Queue = options.Size > 0
-            ? Channel.CreateBounded<IExchange>(new BoundedChannelOptions(options.Size)
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleReader = options.ResolvedConcurrentConsumers == 1,
-                SingleWriter = false
-            })
-            : Channel.CreateUnbounded<IExchange>(new UnboundedChannelOptions
-            {
-                SingleReader = options.ResolvedConcurrentConsumers == 1,
-                SingleWriter = false
-            });
+        _queue = CreateQueue(options);
+    }
+
+    private static Channel<IExchange> CreateQueue(SedaEndpointOptions options) => options.Size > 0
+        ? Channel.CreateBounded<IExchange>(new BoundedChannelOptions(options.Size)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = options.ResolvedConcurrentConsumers == 1,
+            SingleWriter = false
+        })
+        : Channel.CreateUnbounded<IExchange>(new UnboundedChannelOptions
+        {
+            SingleReader = options.ResolvedConcurrentConsumers == 1,
+            SingleWriter = false
+        });
+
+    /// <summary>
+    /// Stops the queue taking new exchanges: a send fails with <see cref="ChannelClosedException"/>, and the consumer
+    /// finishes what is already queued.
+    /// </summary>
+    internal void Close()
+    {
+        lock (_queueGate)
+        {
+            _closed = true;
+            _queue.Writer.TryComplete();
+        }
+    }
+
+    /// <summary>
+    /// Opens a new queue in place of a closed one, for a consumer that starts again. Exchanges the stopping consumer
+    /// did not get to (its drain timed out) cannot be read from the closed queue by anyone: they are returned to be
+    /// released, and never handed over silently to the new one.
+    /// </summary>
+    internal IReadOnlyList<IExchange> Reopen()
+    {
+        lock (_queueGate)
+        {
+            if (!_closed)
+                return [];
+
+            var left = new List<IExchange>();
+            while (_queue.Reader.TryRead(out var exchange))
+                left.Add(exchange);
+            Volatile.Write(ref _queue, CreateQueue(Options));
+            _closed = false;
+            return left;
+        }
     }
 
     /// <summary>Gets the current approximate queue size.</summary>
@@ -192,9 +237,27 @@ public class SedaConsumer : DrainableConsumer
     }
 
     /// <inheritdoc />
+    protected override async Task OnStarting(CancellationToken ct)
+    {
+        // A consumer that starts again after a stop (a Stop() and Start() of the route context, a restart of the route)
+        // gets a new queue: the stop closed the old one for good.
+        var left = _endpoint.Reopen();
+        if (left.Count == 0)
+            return;
+
+        Logger?.LogWarning(
+            "{Consumer}: {Count} exchange(s) were still queued when the consumer last stopped and are dropped.",
+            ConsumerName, left.Count);
+        foreach (var exchange in left)
+            await exchange.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     protected override Task OnStopAccepting()
     {
-        _endpoint.Queue.Writer.TryComplete();
+        // Sends fail from here on, and the workers finish what is already queued (ReadAllAsync reads buffered
+        // exchanges without looking at the poll token).
+        _endpoint.Close();
         return Task.CompletedTask;
     }
 
