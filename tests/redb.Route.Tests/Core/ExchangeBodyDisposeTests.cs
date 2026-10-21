@@ -1,5 +1,5 @@
 using redb.Route.Core;
-using FluentAssertions;
+using AwesomeAssertions;
 
 namespace redb.Route.Tests.Core;
 

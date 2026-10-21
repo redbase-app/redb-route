@@ -160,10 +160,11 @@ public sealed class ElasticsearchTraceTests : IAsyncLifetime
         await ctx.Start();
         using var template = new ProducerTemplate(ctx);
         template.Start();
-        var exchange = new Exchange(new Message(null));
-        exchange.In.Headers[ElasticsearchHeaders.DocumentId] = "no-such-document";
+        // A query clause the server does not know: Elasticsearch answers 400. A delete of a missing
+        // document no longer serves here, the client takes its 404 for a valid response.
+        var exchange = new Exchange(new Message("{\"no_such_query\":{}}"));
 
-        var act = () => template.SendAsync($"elasticsearch://Delete:{_index}?nodes={Nodes}", exchange);
+        var act = () => template.SendAsync($"elasticsearch://Search:{_index}?nodes={Nodes}", exchange);
 
         await act.Should().ThrowAsync<Exception>();
         if (telemetry)

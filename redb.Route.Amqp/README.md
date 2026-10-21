@@ -79,6 +79,26 @@ The broker must support AMQP local transactions: ActiveMQ Artemis, Apache Qpid, 
 `System.Transactions` support is not used: its discharge never got an answer from Artemis, while the same transaction
 driven through the protocol's own frames is answered at once.
 
+## Headers
+
+Exchange headers become application-properties of a sent message and of a reply, and the application-properties of
+a delivery or a reply come back as exchange headers. The standard property names (`MessageId`, `CorrelationId`,
+`Subject`...) go into the message properties instead; `redbAmqp.*` headers are exchange metadata and stay back.
+
+`headerFilterStrategy=#name` names an `IHeaderFilterStrategy` in the registry that decides which headers the
+endpoint carries, as in Apache Camel, in both directions of a request and a reply. It replaces the default,
+`AmqpHeaderFilterStrategy`, entirely; derive from that class to add to it. The standard properties, the consumer's
+`redbAmqp.*` metadata and the trace context are set whatever the strategy says.
+
+```csharp
+ctx.AddToRegistry("correlationOnly", new DefaultHeaderFilterStrategy
+{
+    OutFilter = ["Correlation-ID"],
+    FilterOnMatch = false,   // a whitelist: only the listed headers go out
+});
+// amqp://orders?host=localhost&headerFilterStrategy=#correlationOnly
+```
+
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
@@ -114,6 +134,19 @@ Anything else — `0`, a negative, a typo — fails at endpoint creation naming 
 int-typed option silently fell back to 1). Raising the value trades ordering for throughput:
 messages from the same queue are processed out of order, and your processors must be safe to
 run in parallel.
+
+A MULTICAST address (`routingType=MULTICAST` or the `topic` capability) and a dynamic node
+(`dynamic=true`) run one receiver link whatever the value, with a warning: there every link is a
+subscription or a node of its own, so N links would process each message N times instead of
+sharing them, as IBM MQ topics do.
+
+## Dynamic node
+
+`dynamic=true` with no address asks the broker to create a node and name it (AMQP 1.0, 3.5.3). The
+consumer reads that node, and `AmqpConsumer.Address` and the `redbAmqp.Address` header carry its
+name once the consumer has started, for senders to reach it. A producer with `dynamic=true` sends to
+a node the broker creates for it and logs its name. An endpoint with both an address and
+`dynamic=true` is refused.
 
 ## Tracing
 

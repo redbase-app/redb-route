@@ -48,7 +48,11 @@ public sealed class AmqpProducer : ConnectableProducer
     private SenderLink? _controller;
 
     // ── RPC infrastructure ──
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<IMessage>> _pendingResponses = new();
+    private readonly ConcurrentDictionary<string, PendingReply> _pendingResponses = new();
+    private readonly IHeaderFilterStrategy _headerFilter;
+
+    /// <summary>A request waiting for its reply: the reply's headers are filtered against the request exchange.</summary>
+    private sealed record PendingReply(TaskCompletionSource<IMessage> Reply, IExchange Request);
     private ReceiverLink? _replyReceiver;
     private string? _replyAddress;
     private readonly SemaphoreSlim _rpcLock = new(1, 1);
@@ -61,6 +65,7 @@ public sealed class AmqpProducer : ConnectableProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _headerFilter = endpoint.HeaderFilterStrategy;
 
         // A request-reply send cannot wait for the commit: the reply it waits for would never come.
         if (_options.ReplyTo && _options.Transacted == true)
@@ -103,7 +108,7 @@ public sealed class AmqpProducer : ConnectableProducer
     protected override async Task DisconnectAsync(CancellationToken ct)
     {
         foreach (var pending in _pendingResponses)
-            pending.Value.TrySetCanceled(ct);
+            pending.Value.Reply.TrySetCanceled(ct);
         _pendingResponses.Clear();
 
         _rpcCts?.Cancel();
@@ -379,7 +384,7 @@ public sealed class AmqpProducer : ConnectableProducer
         msg.Properties.ReplyTo = _replyAddress;
 
         var tcs = new TaskCompletionSource<IMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _pendingResponses[correlationId] = tcs;
+        _pendingResponses[correlationId] = new PendingReply(tcs, exchange);
 
         try
         {
@@ -469,18 +474,18 @@ public sealed class AmqpProducer : ConnectableProducer
                 if (rMsg == null) continue;
 
                 var cid = rMsg.Properties?.CorrelationId?.ToString();
-                if (!string.IsNullOrEmpty(cid) && _pendingResponses.TryRemove(cid, out var tcs))
+                if (!string.IsNullOrEmpty(cid) && _pendingResponses.TryRemove(cid, out var pending))
                 {
                     try
                     {
                         var body = AmqpMessageHelper.ExtractBody(rMsg);
                         var response = new RouteMessage(body);
-                        AmqpMessageHelper.CopyApplicationProperties(rMsg, response);
-                        tcs.TrySetResult(response);
+                        AmqpMessageHelper.CopyApplicationProperties(rMsg, response, _headerFilter, pending.Request);
+                        pending.Reply.TrySetResult(response);
                     }
                     catch (Exception ex)
                     {
-                        tcs.TrySetException(ex);
+                        pending.Reply.TrySetException(ex);
                     }
                 }
 
@@ -569,12 +574,14 @@ public sealed class AmqpProducer : ConnectableProducer
         if (!string.IsNullOrEmpty(groupId))
             msg.Properties.GroupId = groupId;
 
-        // Copy exchange headers → AMQP application-properties
+        // Exchange headers → AMQP application-properties: standard property names go into the properties below,
+        // the endpoint's strategy decides the rest.
         var appProps = new ApplicationProperties();
         foreach (var (key, value) in exchange.In.Headers)
         {
-            if (AmqpHeaders.IsRedbHeader(key) || StandardPropertyNames.Contains(key)) continue;
+            if (StandardPropertyNames.Contains(key)) continue;
             if (value is null) continue;
+            if (_headerFilter.FilterOutgoing(key, value, exchange)) continue;
 
             appProps[key] = value switch
             {

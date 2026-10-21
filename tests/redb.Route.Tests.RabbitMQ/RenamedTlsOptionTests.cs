@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.RabbitMQ;
 
 namespace redb.Route.Tests.RabbitMQ;

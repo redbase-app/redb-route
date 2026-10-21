@@ -36,7 +36,10 @@ public class GrpcProducer : ConnectableProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
+
+    private readonly IHeaderFilterStrategy _headerFilter;
 
     /// <inheritdoc />
     protected override IEndpoint ProducerEndpoint => _endpoint;
@@ -155,10 +158,10 @@ public class GrpcProducer : ConnectableProducer
         foreach (var (key, value) in exchange.In.Headers)
         {
             if (value is null) continue;
-            if (GrpcHeaders.IsRedbHeader(key)) continue;
             // gRPC metadata keys must be lowercase ASCII
             var metaKey = key.ToLowerInvariant();
             if (metaKey.StartsWith("grpc-")) continue; // reserved
+            if (_headerFilter.FilterOutgoing(key, value, exchange)) continue;
 
             // Exchange headers are whatever upstream put there: copied HTTP request headers, keys a
             // processor derived from data. gRPC's alphabet is far narrower, and Metadata.Add throws on
@@ -211,7 +214,7 @@ public class GrpcProducer : ConnectableProducer
             using var call = _invoker!.AsyncUnaryCall(_method!, host: null, callOptions, request);
             var response = await call.ResponseAsync.ConfigureAwait(false);
 
-            exchange.Out = BuildOutMessage(response);
+            exchange.Out = BuildOutMessage(response, exchange);
             exchange.Out.Headers[GrpcHeaders.StatusCode] = (int)StatusCode.OK;
         }
         catch (RpcException rpcEx)
@@ -275,8 +278,11 @@ public class GrpcProducer : ConnectableProducer
         }
     }
 
-    /// <summary>Turns the reply bytes into the exchange's Out message.</summary>
-    private Message BuildOutMessage(byte[] response)
+    /// <summary>
+    /// Turns the reply bytes into the exchange's Out message; the envelope headers come in as the endpoint's strategy
+    /// lets them, against the request <paramref name="exchange"/>.
+    /// </summary>
+    private Message BuildOutMessage(byte[] response, IExchange exchange)
     {
         if (!_options.UseEnvelope)
             return new Message(response.Length == 0 ? null : response);
@@ -285,7 +291,10 @@ public class GrpcProducer : ConnectableProducer
         var outMessage = new Message(envelope.Payload.IsEmpty ? null : envelope.Payload.ToByteArray());
 
         foreach (var (key, value) in envelope.Headers)
+        {
+            if (_headerFilter.FilterIncoming(key, value, exchange)) continue;
             outMessage.Headers[key] = value;
+        }
 
         if (envelope.Headers.TryGetValue("Content-Type", out var contentType))
             outMessage.ContentType = contentType;
@@ -314,11 +323,11 @@ public class GrpcProducer : ConnectableProducer
             };
         }
 
-        // Copy non-redb headers to proto headers
+        // Exchange headers → envelope headers, as the endpoint's strategy lets them out
         foreach (var (key, value) in exchange.In.Headers)
         {
             if (value is null) continue;
-            if (GrpcHeaders.IsRedbHeader(key)) continue;
+            if (_headerFilter.FilterOutgoing(key, value, exchange)) continue;
             request.Headers[key] = value.ToString() ?? string.Empty;
         }
 

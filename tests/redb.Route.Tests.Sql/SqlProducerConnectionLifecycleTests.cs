@@ -1,6 +1,6 @@
 using System.Data;
 using System.Data.Common;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Sql.Connection;

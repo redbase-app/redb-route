@@ -18,7 +18,17 @@ internal sealed class AzureServiceBusEndpoint : EndpointBase<AzureServiceBusEndp
         AzureServiceBusEndpointOptions options)
         : base(uri, component, options)
     {
+        _headerFilter = new EndpointHeaderFilter(this, options.HeaderFilterStrategy);
     }
+
+    private readonly EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The header filter strategy of this endpoint: the one <c>headerFilterStrategy=#name</c> names, or
+    /// <see cref="AzureServiceBusHeaderFilterStrategy.Default"/>. A name the registry does not hold fails when the
+    /// producer or consumer is built.
+    /// </summary>
+    internal IHeaderFilterStrategy HeaderFilterStrategy => _headerFilter.Or(AzureServiceBusHeaderFilterStrategy.Default);
 
     /// <summary>Queue or topic name resolved from options or URI path.</summary>
     internal string EntityName => Options.QueueName ?? Options.TopicName ?? Uri.Path;

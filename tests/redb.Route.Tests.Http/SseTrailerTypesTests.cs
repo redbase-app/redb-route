@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Http;

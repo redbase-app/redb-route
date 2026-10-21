@@ -1,5 +1,5 @@
 using System.Xml.Linq;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Xml;
 
 namespace redb.Route.Tests.Xml.Examples;

@@ -16,6 +16,7 @@ internal sealed class AzureServiceBusConsumer : IConsumer
     private readonly AzureServiceBusEndpoint _endpoint;
     private readonly IProcessor _pipeline;
     private readonly AzureServiceBusEndpointOptions _options;
+    private readonly IHeaderFilterStrategy _headerFilter;
     private readonly InflightDrainGuard _drain = new();
 
     private ServiceBusProcessor? _processor;
@@ -33,6 +34,7 @@ internal sealed class AzureServiceBusConsumer : IConsumer
         _endpoint = endpoint;
         _pipeline = pipeline;
         _options = options;
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
 
     public async Task Start(CancellationToken ct = default)
@@ -231,14 +233,16 @@ internal sealed class AzureServiceBusConsumer : IConsumer
         SetIfNotEmpty(message, AzureServiceBusHeaders.DeadLetterReason, msg.DeadLetterReason);
         SetIfNotEmpty(message, AzureServiceBusHeaders.DeadLetterErrorDescription, msg.DeadLetterErrorDescription);
 
-        // Application properties → exchange headers
+        // Application properties → exchange headers, as the endpoint's strategy lets them in
+        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         foreach (var kv in msg.ApplicationProperties)
         {
-            if (kv.Value is not null)
-                message.Headers[kv.Key] = kv.Value;
+            if (kv.Value is null) continue;
+            if (_headerFilter.FilterIncoming(kv.Key, kv.Value, exchange)) continue;
+            message.Headers[kv.Key] = kv.Value;
         }
 
-        return Exchange.Create(message, _endpoint.ScopeFactory);
+        return exchange;
     }
 
     private static void SetIfNotEmpty(IMessage message, string key, string? value)

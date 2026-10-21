@@ -23,7 +23,7 @@
        the same one the AS2 industry (camel-as2, OpenAS2, Mendelson) interoperates on. See docs/as2/02-DESIGN §5.
        Version aligned with redb.Route.Mail's MailKit 4.16.0 (which depends on MimeKit 4.16.0). -->
   <ItemGroup>
-    <PackageReference Include="MimeKit" Version="4.16.0" />
+    <PackageReference Include="MimeKit" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

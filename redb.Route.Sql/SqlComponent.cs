@@ -60,7 +60,18 @@ public class SqlEndpoint : EndpointBase<SqlEndpointOptions>
     public SqlEndpoint(EndpointUri uri, SqlComponent component, SqlEndpointOptions options)
         : base(uri, component, options)
     {
+        _outputMapping = new Lazy<Mapping.SqlRowMapperFactory.PocoMapping?>(() => Mapping.SqlRowMapperFactory.Resolve(
+            Options.OutputClass,
+            component.Context?.GetService<IBeanTypeResolver>() ?? redb.Route.Components.Bean.DefaultBeanTypeResolver.Instance));
     }
+
+    private readonly Lazy<Mapping.SqlRowMapperFactory.PocoMapping?> _outputMapping;
+
+    /// <summary>
+    /// The POCO mapping of <c>outputClass</c>, or null without one: resolved once for this endpoint, through the type
+    /// resolver of its route context, on first use (a type that cannot be resolved fails the first exchange).
+    /// </summary>
+    internal Mapping.SqlRowMapperFactory.PocoMapping? OutputMapping => _outputMapping.Value;
 
     /// <summary>Gets the SQL component that owns this endpoint.</summary>
     internal SqlComponent SqlComponent => (SqlComponent)Component;

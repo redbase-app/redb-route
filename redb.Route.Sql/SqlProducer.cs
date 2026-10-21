@@ -239,7 +239,7 @@ internal sealed class SqlProducer : IProducer
     /// </summary>
     private async Task<SqlOutputType> ExecuteAuto(DbCommand cmd, IExchange exchange, CancellationToken ct)
     {
-        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var poco = _endpoint.OutputMapping;
 
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (reader.FieldCount > 0)
@@ -261,7 +261,7 @@ internal sealed class SqlProducer : IProducer
 
     private async Task ExecuteSelectList(DbCommand cmd, IExchange exchange, CancellationToken ct)
     {
-        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var poco = _endpoint.OutputMapping;
 
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         await ReadRowsAsync(reader, poco, exchange, ct).ConfigureAwait(false);
@@ -294,7 +294,7 @@ internal sealed class SqlProducer : IProducer
 
     private async Task ExecuteSelectOne(DbCommand cmd, IExchange exchange, CancellationToken ct)
     {
-        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var poco = _endpoint.OutputMapping;
         var mapper = new DictionaryRowMapper();
 
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -327,7 +327,7 @@ internal sealed class SqlProducer : IProducer
         // which closes the result set on exchange completion — it is registered with the exchange: whatever the route does
         // with the body, the connection is returned when the exchange ends.
         // The row type is resolved before the reader is open: a bad outputClass must not leave a reader behind.
-        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var poco = _endpoint.OutputMapping;
         var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
 
         object body;

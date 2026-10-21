@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
-using FluentAssertions;
+using AwesomeAssertions;
 using NSubstitute;
 using redb.Route.Abstractions;
 using redb.Route.Core;

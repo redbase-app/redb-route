@@ -1,5 +1,5 @@
 using System.Security.Claims;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 

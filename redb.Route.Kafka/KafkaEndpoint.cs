@@ -23,7 +23,17 @@ public sealed class KafkaEndpoint : EndpointBase<KafkaEndpointOptions>
     {
         TopicName = uri.Path;
         ResolvedFactory = resolvedFactory;
+        _headerFilter = new redb.Route.Core.EndpointHeaderFilter(this, options.HeaderFilterStrategy);
     }
+
+    private readonly redb.Route.Core.EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The header filter strategy of this endpoint: the one <c>headerFilterStrategy=#name</c> names, or
+    /// <see cref="KafkaHeaderFilterStrategy.Default"/>. A name the registry does not hold fails when the producer or
+    /// consumer is built.
+    /// </summary>
+    internal redb.Route.Abstractions.IHeaderFilterStrategy HeaderFilterStrategy => _headerFilter.Or(KafkaHeaderFilterStrategy.Default);
 
     /// <inheritdoc />
     public override IProducer CreateProducer() => new KafkaProducer(this, Options);

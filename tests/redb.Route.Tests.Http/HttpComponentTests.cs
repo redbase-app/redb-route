@@ -54,7 +54,7 @@ public class HttpComponentTests
             ["timeout"] = "60000",
             ["throwOnError"] = "false",
             ["contentType"] = "text/xml",
-            ["bridgeHeaders"] = "false"
+            ["skipRequestHeaders"] = "true"
         };
         var uri = new EndpointUri("http", "/api.example.com/data", "http:api.example.com/data", parameters);
 
@@ -64,7 +64,7 @@ public class HttpComponentTests
         endpoint.EndpointOptions.Timeout.Should().Be(60000);
         endpoint.EndpointOptions.ThrowOnError.Should().BeFalse();
         endpoint.EndpointOptions.ContentType.Should().Be("text/xml");
-        endpoint.EndpointOptions.BridgeHeaders.Should().BeFalse();
+        endpoint.EndpointOptions.SkipRequestHeaders.Should().BeTrue();
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class HttpComponentTests
             ["password"] = "secret",
             ["followRedirects"] = "false",
             ["maxRedirects"] = "5",
-            ["copyResponseHeaders"] = "false"
+            ["skipResponseHeaders"] = "true"
         };
         var uri = new EndpointUri("http", "/api.example.com/secure", "http:api.example.com/secure", parameters);
 
@@ -118,7 +118,7 @@ public class HttpComponentTests
         endpoint.EndpointOptions.Password.Should().Be("secret");
         endpoint.EndpointOptions.FollowRedirects.Should().BeFalse();
         endpoint.EndpointOptions.MaxRedirects.Should().Be(5);
-        endpoint.EndpointOptions.CopyResponseHeaders.Should().BeFalse();
+        endpoint.EndpointOptions.SkipResponseHeaders.Should().BeTrue();
     }
 
     [Fact]

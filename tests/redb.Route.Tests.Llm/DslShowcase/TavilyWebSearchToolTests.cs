@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Tests.Llm.TestHelpers;
 
 namespace redb.Route.Tests.Llm.DslShowcase;

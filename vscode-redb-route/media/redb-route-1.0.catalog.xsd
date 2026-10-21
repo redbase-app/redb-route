@@ -2036,6 +2036,7 @@
     <xs:attribute name="expiryPolicy" type="xs:string" />
     <xs:attribute name="filterSelector" type="xs:string" />
     <xs:attribute name="groupId" type="xs:string" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="localTransactions" type="xs:boolean" />
     <xs:attribute name="messageDurable" type="xs:boolean" />
@@ -2095,6 +2096,7 @@
     <xs:attribute name="expiryPolicy" type="xs:string" />
     <xs:attribute name="filterSelector" type="xs:string" />
     <xs:attribute name="groupId" type="xs:string" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="localTransactions" type="xs:boolean" />
     <xs:attribute name="messageDurable" type="xs:boolean" />
@@ -2133,6 +2135,7 @@
     <xs:attribute name="connectionFactory" type="xs:string" />
     <xs:attribute name="encrypt" type="xs:boolean" />
     <xs:attribute name="encryptAlg" type="xs:string" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="idempotentRepository" type="xs:string" />
     <xs:attribute name="maxConcurrentRequests" type="xs:int" />
@@ -2203,6 +2206,7 @@
     <xs:attribute name="connectionFactory" type="xs:string" />
     <xs:attribute name="encrypt" type="xs:boolean" />
     <xs:attribute name="encryptAlg" type="xs:string" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="idempotentRepository" type="xs:string" />
     <xs:attribute name="maxConcurrentRequests" type="xs:int" />
@@ -2349,6 +2353,7 @@
     <xs:attribute name="deadLetterReason" type="xs:string" />
     <xs:attribute name="enableBatch" type="xs:boolean" />
     <xs:attribute name="enableSessions" type="xs:boolean" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="maxAutoLockRenewalDuration" type="xs:int" />
     <xs:attribute name="maxConcurrentCalls" type="xs:string" />
     <xs:attribute name="maxConcurrentSessions" type="xs:int" />
@@ -2402,6 +2407,7 @@
     <xs:attribute name="deadLetterReason" type="xs:string" />
     <xs:attribute name="enableBatch" type="xs:boolean" />
     <xs:attribute name="enableSessions" type="xs:boolean" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="maxAutoLockRenewalDuration" type="xs:int" />
     <xs:attribute name="maxConcurrentCalls" type="xs:string" />
     <xs:attribute name="maxConcurrentSessions" type="xs:int" />
@@ -2647,6 +2653,7 @@
       <xs:any namespace="##targetNamespace" processContents="lax" />
     </xs:choice>
     <xs:attribute name="path" type="xs:string" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:anyAttribute namespace="##other" processContents="lax" />
   </xs:complexType>
   <xs:complexType name="direct-vmConsumer" mixed="true">
@@ -3612,6 +3619,7 @@
         </xs:union>
       </xs:simpleType>
     </xs:attribute>
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="health" type="xs:boolean" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="inOut" type="xs:boolean" />
@@ -3703,6 +3711,7 @@
         </xs:union>
       </xs:simpleType>
     </xs:attribute>
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="health" type="xs:boolean" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="inOut" type="xs:boolean" />
@@ -3752,15 +3761,14 @@
       </xs:simpleType>
     </xs:attribute>
     <xs:attribute name="authToken" type="xs:string" />
-    <xs:attribute name="bridgeHeaders" type="xs:boolean" />
     <xs:attribute name="connectionFactory" type="xs:string" />
     <xs:attribute name="contentType" type="xs:string" />
-    <xs:attribute name="copyResponseHeaders" type="xs:boolean" />
     <xs:attribute name="cors" type="xs:boolean" />
     <xs:attribute name="corsCredentials" type="xs:boolean" />
     <xs:attribute name="corsOrigins" type="xs:string" />
     <xs:attribute name="corsOriginsResolver" type="xs:string" />
     <xs:attribute name="followRedirects" type="xs:boolean" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="inOut" type="xs:boolean" />
     <xs:attribute name="inboundAuth" type="r:consumerOnlyOption" />
@@ -3802,6 +3810,9 @@
     <xs:attribute name="requestQueueLimit" type="xs:int" />
     <xs:attribute name="responseCode" type="xs:int" />
     <xs:attribute name="retryAfterSeconds" type="xs:int" />
+    <xs:attribute name="skipControlHeaders" type="xs:boolean" />
+    <xs:attribute name="skipRequestHeaders" type="xs:boolean" />
+    <xs:attribute name="skipResponseHeaders" type="xs:boolean" />
     <xs:attribute name="ssl" type="xs:boolean" />
     <xs:attribute name="sslCertPassword" type="xs:string" />
     <xs:attribute name="sslCertPath" type="xs:string" />
@@ -3820,15 +3831,14 @@
     <xs:attribute name="path" type="xs:string" />
     <xs:attribute name="authScheme" type="r:producerOnlyOption" />
     <xs:attribute name="authToken" type="r:producerOnlyOption" />
-    <xs:attribute name="bridgeHeaders" type="xs:boolean" />
     <xs:attribute name="connectionFactory" type="xs:string" />
     <xs:attribute name="contentType" type="xs:string" />
-    <xs:attribute name="copyResponseHeaders" type="xs:boolean" />
     <xs:attribute name="cors" type="xs:boolean" />
     <xs:attribute name="corsCredentials" type="xs:boolean" />
     <xs:attribute name="corsOrigins" type="xs:string" />
     <xs:attribute name="corsOriginsResolver" type="xs:string" />
     <xs:attribute name="followRedirects" type="xs:boolean" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="inOut" type="xs:boolean" />
     <xs:attribute name="inboundAuth">
@@ -3887,6 +3897,9 @@
     <xs:attribute name="requestQueueLimit" type="xs:int" />
     <xs:attribute name="responseCode" type="xs:int" />
     <xs:attribute name="retryAfterSeconds" type="xs:int" />
+    <xs:attribute name="skipControlHeaders" type="r:producerOnlyOption" />
+    <xs:attribute name="skipRequestHeaders" type="r:producerOnlyOption" />
+    <xs:attribute name="skipResponseHeaders" type="r:producerOnlyOption" />
     <xs:attribute name="ssl" type="xs:boolean" />
     <xs:attribute name="sslCertPassword" type="xs:string" />
     <xs:attribute name="sslCertPath" type="xs:string" />
@@ -3922,15 +3935,14 @@
       </xs:simpleType>
     </xs:attribute>
     <xs:attribute name="authToken" type="xs:string" />
-    <xs:attribute name="bridgeHeaders" type="xs:boolean" />
     <xs:attribute name="connectionFactory" type="xs:string" />
     <xs:attribute name="contentType" type="xs:string" />
-    <xs:attribute name="copyResponseHeaders" type="xs:boolean" />
     <xs:attribute name="cors" type="xs:boolean" />
     <xs:attribute name="corsCredentials" type="xs:boolean" />
     <xs:attribute name="corsOrigins" type="xs:string" />
     <xs:attribute name="corsOriginsResolver" type="xs:string" />
     <xs:attribute name="followRedirects" type="xs:boolean" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="inOut" type="xs:boolean" />
     <xs:attribute name="inboundAuth" type="r:consumerOnlyOption" />
@@ -3972,6 +3984,9 @@
     <xs:attribute name="requestQueueLimit" type="xs:int" />
     <xs:attribute name="responseCode" type="xs:int" />
     <xs:attribute name="retryAfterSeconds" type="xs:int" />
+    <xs:attribute name="skipControlHeaders" type="xs:boolean" />
+    <xs:attribute name="skipRequestHeaders" type="xs:boolean" />
+    <xs:attribute name="skipResponseHeaders" type="xs:boolean" />
     <xs:attribute name="ssl" type="xs:boolean" />
     <xs:attribute name="sslCertPassword" type="xs:string" />
     <xs:attribute name="sslCertPath" type="xs:string" />
@@ -3990,15 +4005,14 @@
     <xs:attribute name="path" type="xs:string" />
     <xs:attribute name="authScheme" type="r:producerOnlyOption" />
     <xs:attribute name="authToken" type="r:producerOnlyOption" />
-    <xs:attribute name="bridgeHeaders" type="xs:boolean" />
     <xs:attribute name="connectionFactory" type="xs:string" />
     <xs:attribute name="contentType" type="xs:string" />
-    <xs:attribute name="copyResponseHeaders" type="xs:boolean" />
     <xs:attribute name="cors" type="xs:boolean" />
     <xs:attribute name="corsCredentials" type="xs:boolean" />
     <xs:attribute name="corsOrigins" type="xs:string" />
     <xs:attribute name="corsOriginsResolver" type="xs:string" />
     <xs:attribute name="followRedirects" type="xs:boolean" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="inOut" type="xs:boolean" />
     <xs:attribute name="inboundAuth">
@@ -4057,6 +4071,9 @@
     <xs:attribute name="requestQueueLimit" type="xs:int" />
     <xs:attribute name="responseCode" type="xs:int" />
     <xs:attribute name="retryAfterSeconds" type="xs:int" />
+    <xs:attribute name="skipControlHeaders" type="r:producerOnlyOption" />
+    <xs:attribute name="skipRequestHeaders" type="r:producerOnlyOption" />
+    <xs:attribute name="skipResponseHeaders" type="r:producerOnlyOption" />
     <xs:attribute name="ssl" type="xs:boolean" />
     <xs:attribute name="sslCertPassword" type="xs:string" />
     <xs:attribute name="sslCertPath" type="xs:string" />
@@ -4318,6 +4335,7 @@
     <xs:attribute name="enableIdempotence" type="xs:boolean" />
     <xs:attribute name="groupId" type="xs:string" />
     <xs:attribute name="groupInstanceId" type="xs:string" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="heartbeatIntervalMs" type="xs:int" />
     <xs:attribute name="isolationLevel" type="xs:string" />
     <xs:attribute name="key" type="xs:string" />
@@ -4381,6 +4399,7 @@
     <xs:attribute name="enableIdempotence" type="xs:boolean" />
     <xs:attribute name="groupId" type="xs:string" />
     <xs:attribute name="groupInstanceId" type="xs:string" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="heartbeatIntervalMs" type="xs:int" />
     <xs:attribute name="isolationLevel" type="xs:string" />
     <xs:attribute name="key" type="xs:string" />
@@ -5060,6 +5079,7 @@
     <xs:attribute name="exchangeType" type="xs:string" />
     <xs:attribute name="exclusive" type="xs:boolean" />
     <xs:attribute name="expires" type="xs:int" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="heartbeat" type="xs:int" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="mandatory" type="xs:boolean" />
@@ -5192,6 +5212,7 @@
     <xs:attribute name="exchangeType" type="xs:string" />
     <xs:attribute name="exclusive" type="xs:boolean" />
     <xs:attribute name="expires" type="xs:int" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="heartbeat" type="xs:int" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="mandatory" type="xs:boolean" />
@@ -6267,6 +6288,7 @@
     <xs:attribute name="autoCreateTopic" type="xs:boolean" />
     <xs:attribute name="connectionFactory" type="xs:string" />
     <xs:attribute name="connectionTimeout" type="xs:int" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="messageDeduplicationId" type="xs:string" />
     <xs:attribute name="messageGroupId" type="xs:string" />
     <xs:attribute name="messageStructure" type="xs:string" />
@@ -6296,6 +6318,7 @@
     <xs:attribute name="autoCreateTopic" type="xs:boolean" />
     <xs:attribute name="connectionFactory" type="xs:string" />
     <xs:attribute name="connectionTimeout" type="xs:int" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="messageDeduplicationId" type="xs:string" />
     <xs:attribute name="messageGroupId" type="xs:string" />
     <xs:attribute name="messageStructure" type="xs:string" />
@@ -6649,6 +6672,7 @@
     <xs:attribute name="delaySeconds" type="xs:int" />
     <xs:attribute name="enableBatch" type="xs:boolean" />
     <xs:attribute name="extendMessageVisibility" type="xs:boolean" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="initialDelay" type="xs:int" />
     <xs:attribute name="maxNumberOfMessages" type="xs:int" />
     <xs:attribute name="messageAttributeNames" type="xs:string" />
@@ -6703,6 +6727,7 @@
     <xs:attribute name="delaySeconds" type="xs:int" />
     <xs:attribute name="enableBatch" type="xs:boolean" />
     <xs:attribute name="extendMessageVisibility" type="xs:boolean" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="initialDelay" type="xs:int" />
     <xs:attribute name="maxNumberOfMessages" type="xs:int" />
     <xs:attribute name="messageAttributeNames" type="xs:string" />
@@ -6936,6 +6961,7 @@
     </xs:choice>
     <xs:attribute name="path" type="xs:string" />
     <xs:attribute name="concurrentConsumers" type="xs:string" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="size" type="xs:int" />
     <xs:anyAttribute namespace="##other" processContents="lax" />
   </xs:complexType>
@@ -6998,6 +7024,7 @@
     </xs:attribute>
     <xs:attribute name="expiry" type="xs:int" />
     <xs:attribute name="expiryExpression" type="xs:string" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="messageType">
       <xs:simpleType>
@@ -7135,6 +7162,7 @@
     </xs:attribute>
     <xs:attribute name="expiry" type="xs:int" />
     <xs:attribute name="expiryExpression" type="xs:string" />
+    <xs:attribute name="headerFilterStrategy" type="xs:string" />
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="messageType">
       <xs:simpleType>

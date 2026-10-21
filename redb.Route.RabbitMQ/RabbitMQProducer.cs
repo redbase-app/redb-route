@@ -29,7 +29,11 @@ public sealed class RabbitMQProducer : ConnectableProducer
     private IChannel? _channel;
 
     // ── RPC infrastructure ──
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<IMessage>> _pendingResponses = new();
+    private readonly ConcurrentDictionary<string, PendingReply> _pendingResponses = new();
+    private readonly IHeaderFilterStrategy _headerFilter;
+
+    /// <summary>An RPC request waiting for its reply: the reply's headers are filtered against the request exchange.</summary>
+    private sealed record PendingReply(TaskCompletionSource<IMessage> Reply, IExchange Request);
     private string? _replyQueueName;
     private AsyncEventingBasicConsumer? _responseConsumer;
     private string? _responseConsumerTag;
@@ -72,6 +76,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _headerFilter = endpoint.HeaderFilterStrategy;
 
         // A request-reply send cannot wait for the commit: the reply it waits for would never come.
         if (_options.ReplyTo && _options.Transacted == true)
@@ -89,7 +94,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
         try
         {
             // Declare topology if requested
-            await _endpoint.DeclareTopologyAsync(_channel, ct).ConfigureAwait(false);
+            await _endpoint.DeclareTopologyAsync(_channel, RabbitMQConnectionUse.Publish, ct).ConfigureAwait(false);
 
             // RPC: set up reply queue eagerly
             if (_options.ReplyTo)
@@ -113,7 +118,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
         // Cancel pending RPC responses
         foreach (var pending in _pendingResponses)
         {
-            pending.Value.TrySetCanceled(ct);
+            pending.Value.Reply.TrySetCanceled(ct);
         }
         _pendingResponses.Clear();
 
@@ -321,7 +326,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
         properties.ReplyTo = _replyQueueName;
 
         var tcs = new TaskCompletionSource<IMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _pendingResponses[correlationId] = tcs;
+        _pendingResponses[correlationId] = new PendingReply(tcs, exchange);
 
         try
         {
@@ -423,7 +428,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
             var oldQueue = _replyQueueName;
             foreach (var pending in _pendingResponses)
             {
-                pending.Value.TrySetException(new InvalidOperationException(
+                pending.Value.Reply.TrySetException(new InvalidOperationException(
                     $"RabbitMQ RPC reply queue '{oldQueue}' was lost (cluster failover); request must be retried"));
             }
             _pendingResponses.Clear();
@@ -488,17 +493,20 @@ public sealed class RabbitMQProducer : ConnectableProducer
         {
             var correlationId = ea.BasicProperties.CorrelationId;
 
-            if (!string.IsNullOrEmpty(correlationId) && _pendingResponses.TryRemove(correlationId, out var tcs))
+            if (!string.IsNullOrEmpty(correlationId) && _pendingResponses.TryRemove(correlationId, out var pending))
             {
                 try
                 {
                     // The reply is mapped as a consumed message is: the body stays bytes (a binary reply is not
-                    // decoded as text), and ContentType and the other basic properties come along.
-                    tcs.TrySetResult(RabbitMQConsumer.MessageFrom(ea, ea.Body.ToArray()));
+                    // decoded as text), ContentType and the other basic properties come along, and the producer's
+                    // strategy decides which AMQP headers come in.
+                    var message = new Message(ea.Body.ToArray());
+                    RabbitMQConsumer.Fill(message, ea, _headerFilter, pending.Request);
+                    pending.Reply.TrySetResult(message);
                 }
                 catch (Exception ex)
                 {
-                    tcs.TrySetException(ex);
+                    pending.Reply.TrySetException(ex);
                 }
             }
 
@@ -530,13 +538,13 @@ public sealed class RabbitMQProducer : ConnectableProducer
             Persistent = true
         };
 
-        // Copy message headers → AMQP headers (skip rabbitmq.* and basic property names)
+        // Basic property names never become AMQP headers; the endpoint's strategy decides the rest.
         var headers = new Dictionary<string, object?>();
         foreach (var (key, value) in exchange.In.Headers)
         {
-            if (RmqHeaders.IsRedbHeader(key)) continue;
             if (BasicPropertyNames.Contains(key)) continue;
             if (value is null) continue;
+            if (_headerFilter.FilterOutgoing(key, value, exchange)) continue;
 
             headers[key] = value switch
             {
@@ -638,7 +646,7 @@ public sealed class RabbitMQProducer : ConnectableProducer
             var closed = _channel;
             _channel = await _endpoint.CreateChannelAsync(RabbitMQConnectionUse.Publish, ct: ct).ConfigureAwait(false);
             await _endpoint.ReleaseChannelAsync(closed, ct).ConfigureAwait(false);
-            await _endpoint.DeclareTopologyAsync(_channel, ct).ConfigureAwait(false);
+            await _endpoint.DeclareTopologyAsync(_channel, RabbitMQConnectionUse.Publish, ct).ConfigureAwait(false);
             Logger?.LogWarning("RabbitMQ producer '{Producer}': the broker had closed its channel ({Reason}); a new one is open",
                 ProducerName, closed?.CloseReason?.ReplyText ?? "unknown reason");
         }

@@ -1,4 +1,5 @@
 using IBM.XMS;
+using redb.Route.Abstractions;
 using RouteMessage = redb.Route.Core.Message;
 using XmsMessage = IBM.XMS.IMessage;
 
@@ -17,7 +18,12 @@ namespace redb.Route.IbmMq;
 /// </summary>
 internal static class IbmMqXmsHeaderMapper
 {
-    public static void CopyToHeaders(XmsMessage msg, RouteMessage routeMsg, string destination, IbmMqEndpointOptions options)
+    /// <summary>
+    /// The metadata and the user headers <paramref name="headerFilter"/> lets in; <paramref name="exchange"/> is the
+    /// one they come into (for a request-reply's reply, the request's).
+    /// </summary>
+    public static void CopyToHeaders(XmsMessage msg, RouteMessage routeMsg, string destination, IbmMqEndpointOptions options,
+        IHeaderFilterStrategy headerFilter, IExchange exchange)
     {
         // MQMD-equivalent metadata — gated by MqmdReadEnabled exactly like the poll path.
         if (options.MqmdReadEnabled)
@@ -46,11 +52,11 @@ internal static class IbmMqXmsHeaderMapper
                 routeMsg.Headers[IbmMqHeaders.BackoutCount] = deliveryCount.Value - 1;
         }
 
-        CopyUserHeaders(msg, routeMsg);
+        CopyUserHeaders(msg, routeMsg, headerFilter, exchange);
     }
 
-    /// <summary>Reads the redb producer's JSON header catalogue and applies each user header.</summary>
-    private static void CopyUserHeaders(XmsMessage msg, RouteMessage routeMsg)
+    /// <summary>Reads the redb producer's JSON header catalogue and applies each user header the strategy lets in.</summary>
+    private static void CopyUserHeaders(XmsMessage msg, RouteMessage routeMsg, IHeaderFilterStrategy headerFilter, IExchange exchange)
     {
         var json = TryGet(() => msg.GetStringProperty(IbmMqHeaders.HeaderCatalogue));
 
@@ -62,7 +68,10 @@ internal static class IbmMqXmsHeaderMapper
             if (dict is null) return;
 
             foreach (var (key, value) in dict)
+            {
+                if (headerFilter.FilterIncoming(key, value, exchange)) continue;
                 routeMsg.Headers[key] = value;
+            }
         }
         catch { /* malformed JSON — skip, matching the poll path */ }
     }

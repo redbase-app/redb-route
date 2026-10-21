@@ -19,6 +19,7 @@ internal sealed class SnsProducer : ConnectableProducer
 {
     private readonly SnsEndpoint _endpoint;
     private readonly SnsEndpointOptions _options;
+    private readonly IHeaderFilterStrategy _headerFilter;
     private IAmazonSimpleNotificationService? _client;
     private string _topicArn = "";
 
@@ -26,6 +27,7 @@ internal sealed class SnsProducer : ConnectableProducer
     {
         _endpoint = endpoint;
         _options = options;
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
 
     /// <inheritdoc />
@@ -151,6 +153,9 @@ internal sealed class SnsProducer : ConnectableProducer
             if (value is null) continue;
             var name = AwsClientSupport.MapHeaderToAttributeName(key);
             if (name is null) continue;
+            // A redbSqs.attr.<name> header is an explicit request; the strategy decides the plain headers.
+            if (!key.StartsWith(SqsHeaders.MessageAttributePrefix, StringComparison.Ordinal)
+                && _headerFilter.FilterOutgoing(key, value, exchange)) continue;
             attrs[name] = new MessageAttributeValue
             {
                 DataType = "String",

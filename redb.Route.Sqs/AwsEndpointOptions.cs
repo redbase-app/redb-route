@@ -18,6 +18,13 @@ public abstract class AwsEndpointOptions : EndpointOptions
     /// <summary>AWS region (e.g. <c>us-east-1</c>, <c>eu-west-1</c>). Default <c>us-east-1</c>.</summary>
     public string Region { get; set; } = "us-east-1";
 
+    /// <summary>
+    /// A registry reference (<c>#name</c>) to an <see cref="redb.Route.Abstractions.IHeaderFilterStrategy"/> that
+    /// decides which headers this endpoint carries between the exchange and message attributes, in place of
+    /// <see cref="SqsHeaderFilterStrategy"/> (SQS) or <see cref="SnsHeaderFilterStrategy"/> (SNS).
+    /// </summary>
+    public string? HeaderFilterStrategy { get; set; }
+
     /// <summary>AWS access key ID. Required unless <see cref="UseDefaultCredentialsProvider"/> or <see cref="ProfileName"/> is used.</summary>
     [Sensitive]
     public string AccessKey { get; set; } = "";

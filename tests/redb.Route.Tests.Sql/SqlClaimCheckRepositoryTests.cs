@@ -1,5 +1,5 @@
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Sql.Repositories;
 
 namespace redb.Route.Tests.Sql;

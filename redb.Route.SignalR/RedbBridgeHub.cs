@@ -18,7 +18,7 @@ namespace redb.Route.SignalR;
 /// the Out body as the method result (when InOut is enabled).
 /// </para>
 /// </summary>
-internal sealed class RedbBridgeHub : Hub
+internal sealed class RedbBridgeHub(SignalREndpoint endpoint) : Hub
 {
     private const string HandshakeTraceItem = "__redb_handshake_trace";
 
@@ -208,20 +208,10 @@ internal sealed class RedbBridgeHub : Hub
     }
 
     /// <summary>
-    /// Finds the consumer behind this hub request. Since hubs share one listener with each other
-    /// and with HTTP, the container can hold several consumers, so the lookup goes by request path
-    /// (<c>/chatHub</c>, <c>/chatHub/negotiate</c>) through the component's registry.
+    /// The consumer behind this hub. Each hub has a container of its own (<see cref="SignalRHubHost"/>)
+    /// holding its endpoint, so the hub knows its consumer without looking at the request path.
     /// </summary>
-    private SignalRConsumer? ResolveConsumer()
-    {
-        var http = Context.GetHttpContext();
-        if (http is null) return null;
-
-        var component = http.RequestServices.GetService<SignalRComponent>();
-        // The listener's own port is part of the identity: one component can serve the same hub
-        // path on several ports, and those are different hubs.
-        return component?.GetConsumerByRequestPath(http.Connection.LocalPort, http.Request.Path.Value);
-    }
+    private SignalRConsumer? ResolveConsumer() => endpoint.ServingConsumer;
 
     private async Task HandleGroupCommands(IExchange exchange)
     {

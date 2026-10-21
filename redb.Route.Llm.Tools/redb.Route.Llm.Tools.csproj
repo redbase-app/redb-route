@@ -11,7 +11,7 @@
   </ItemGroup>
   <ItemGroup>
     <!-- Own reference: JsonPathDsl promises the full Newtonsoft JsonPath dialect; the core no longer carries Newtonsoft. -->
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Newtonsoft.Json" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

@@ -467,3 +467,41 @@ A few behaviours are easy to get wrong from reading a single method, so they are
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Header filter strategy
+
+
+Apache Camel's `HeaderFilterStrategy`. A transport carried headers by a rule of its own, fixed in code: HTTP sent every
+exchange header but a fixed list, or none (`bridgeHeaders`); the brokers sent every one. There was no way to send one
+header, such as `Correlation-ID`, and keep the rest at home.
+
+- `redb.Route.Abstractions.IHeaderFilterStrategy`: `FilterOutgoing` (an exchange header about to go into an outgoing
+  message: a producer's request, a consumer's reply) and `FilterIncoming` (a header of an incoming message about to come
+  into the exchange); `true` drops the header, as in Camel.
+- `DefaultHeaderFilterStrategy`: per direction a list of names, a regular expression (the whole name) and name
+  prefixes; `FilterOnMatch=false` turns it into a whitelist; `CaseInsensitive` (on by default, as in Camel),
+  `LowerCase`, `AllowNullValues`. Declared as a bean in C# or in markup.
+- An endpoint names its strategy with `headerFilterStrategy=#name`; it replaces the transport's default on every point
+  of the endpoint. A name the registry does not hold fails when the producer or consumer is built.
+- Every transport keeps its behaviour by default: its rule became its default strategy. The fields a transport sets
+  itself (trace context, content type, the native properties of a message) and its protocol fields do not go through a
+  strategy.
+- Transports with the option: HTTP, Kafka, RabbitMQ, AMQP 1.0, Azure Service Bus, IBM MQ, gRPC, SQS/SNS, AS2. Each
+  default is a public class (`KafkaHeaderFilterStrategy`, `RabbitMQHeaderFilterStrategy`, ...) to derive from. On a
+  request-reply (RabbitMQ, AMQP, IBM MQ, gRPC) the strategy is asked about the reply too: a producer's strategy for
+  the headers that come back, a consumer's for the headers it answers with.
+- A transport's own guards stay outside every strategy: gRPC refuses a caller's header with a transport-reserved
+  prefix unless `allowClientReservedHeaders=true`; AS2 never forwards another hop's credentials; an SQS
+  `redbSqs.attr.X` header is an explicit request and is sent as attribute `X`.
+- `direct-vm:` and `vm:`, the calls between contexts, take the option on the calling side (`.To`), as Apache Camel 3's
+  `direct-vm` does; a consumer URI with it is refused. `direct-vm:` with a strategy runs the called context on a copy
+  that shares the caller's DI scope and unit of work: the callee sees the headers the strategy lets out, and the
+  caller keeps its own headers and takes the reply's body, the reply headers the strategy lets in, the properties, the
+  exception and a stop. Unlike Camel, which replaces the caller's message with the reply, the caller's own headers
+  survive the call. Without the option nothing changes: the callee works on the caller's own exchange. `vm:` filters
+  the copy it hands over; Camel's `vm` has no such option.
+- The markup package gate (`redb-route-xml check --bin`) holds a `headerFilterStrategy=#name` bean against
+  `IHeaderFilterStrategy`, as it holds `repository=#name` against the repository interfaces.
+- Transports that send only what a route names with a prefix (SOAP, S3, AS4, FCM, Mail, LLM, Redis Streams, MQTT) do
+  not take a strategy: nothing crosses there without that consent.
+  characterization tests that pin what every transport carried before (`*HeaderMappingCharacterizationTests`).

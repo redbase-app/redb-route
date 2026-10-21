@@ -12,8 +12,8 @@
     <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="RabbitMQ.Client" Version="7.2.1" />
-    <PackageReference Include="RabbitMQ.Client.OAuth2" Version="2.0.0" />
+    <PackageReference Include="RabbitMQ.Client" />
+    <PackageReference Include="RabbitMQ.Client.OAuth2" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

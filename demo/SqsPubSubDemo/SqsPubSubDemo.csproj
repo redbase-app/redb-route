@@ -15,13 +15,13 @@
     the queues up front and read their ARNs for the SNS subscription.
   -->
   <ItemGroup>
-    <PackageReference Include="redb.Route" Version="4.3.0" />
-    <PackageReference Include="redb.Route.Core" Version="4.3.0" />
-    <PackageReference Include="redb.Route.Sqs" Version="4.3.0" />
+    <PackageReference Include="redb.Route" />
+    <PackageReference Include="redb.Route.Core" />
+    <PackageReference Include="redb.Route.Sqs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
   </ItemGroup>
 
 </Project>

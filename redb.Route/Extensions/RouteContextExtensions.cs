@@ -111,4 +111,17 @@ public static class RouteContextExtensions
 
         return context;
     }
+
+    /// <summary>
+    /// Registers a <c>${prefix.rest}</c> resolver for the expressions of this context only (<paramref name="prefix"/>
+    /// ends with a dot). It lives with the context: no unregistering when the context goes, and an unloaded module's
+    /// delegate stays nowhere. It is consulted before the process-wide resolvers of
+    /// <see cref="Expressions.ExpressionResolver.RegisterPrefixResolver"/>.
+    /// </summary>
+    public static IRouteContext RegisterPrefixResolver(this IRouteContext context, string prefix,
+        Func<IExchange, string, object?> resolver)
+    {
+        Expressions.ExpressionPrefixResolvers.For(context).Register(prefix, resolver);
+        return context;
+    }
 }

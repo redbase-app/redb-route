@@ -86,6 +86,27 @@ Raw URIs work too: `sqs://orders?waitTimeSeconds=20&concurrentConsumers=4`,
 | `subscribeSnsToSqs` + `subscribeQueueArn` | SNS | subscribe a queue to the topic on start |
 | `rawMessageDelivery` | SNS | on that auto-subscription, deliver the bare payload + map SNS attrs → SQS attrs (default `false` = JSON envelope) |
 
+## Headers
+
+A producer sends exchange headers as string message attributes of the same name; a `redbSqs.attr.X` header goes out
+as attribute `X`, and the other `redbSqs.*` / `redbSns.*` headers never go out. A consumer puts each attribute under
+`redbSqs.attr.X`, so a received attribute cannot pose as a control header of the route.
+
+`headerFilterStrategy=#name` (SQS and SNS) names an `IHeaderFilterStrategy` in the registry that decides which plain
+headers go out and which attributes come in, as in Apache Camel. It replaces the default, `SqsHeaderFilterStrategy`
+or `SnsHeaderFilterStrategy`, entirely; derive from that class to add to it. On the way in the strategy is asked
+with the attribute's own name (`X`, not `redbSqs.attr.X`). A `redbSqs.attr.X` header is an explicit request and goes
+out whatever the strategy says.
+
+```csharp
+ctx.AddToRegistry("correlationOnly", new DefaultHeaderFilterStrategy
+{
+    OutFilter = ["Correlation-ID"],
+    FilterOnMatch = false,   // a whitelist: only the listed headers go out
+});
+// sqs://orders?region=eu-west-1&headerFilterStrategy=#correlationOnly
+```
+
 ## Part of
 
 Part of the [redb.Route](https://github.com/redbase-app/redb) enterprise integration framework.

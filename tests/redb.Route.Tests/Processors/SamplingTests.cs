@@ -1,7 +1,7 @@
 using System;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentAssertions;
+using AwesomeAssertions;
 using NSubstitute;
 using redb.Route.Abstractions;
 using redb.Route.Core;

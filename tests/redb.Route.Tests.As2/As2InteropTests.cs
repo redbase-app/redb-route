@@ -1,7 +1,7 @@
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Abstractions;
 using redb.Route.As2;
 using redb.Route.Core;

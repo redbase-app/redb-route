@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using FluentValidation;
 using redb.Route.Core;
 using redb.Route.Validation;

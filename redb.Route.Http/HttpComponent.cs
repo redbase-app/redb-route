@@ -206,6 +206,18 @@ public class HttpEndpoint : EndpointBase<HttpEndpointOptions>
         _hasMethodPrefix = hasMethodPrefix;
     }
 
+    private redb.Route.Core.EndpointHeaderFilter? _headerFilter;
+
+    /// <summary>
+    /// The header filter strategy of this endpoint on the given side: the one <c>headerFilterStrategy=#name</c> names,
+    /// or the component's default for that side (<see cref="HttpHeaderFilterStrategy"/>). A name the registry does
+    /// not hold fails here, when the producer or consumer is built.
+    /// </summary>
+    internal redb.Route.Abstractions.IHeaderFilterStrategy HeaderFilterStrategy(EndpointRole role)
+        => LazyInitializer.EnsureInitialized(ref _headerFilter,
+                () => new redb.Route.Core.EndpointHeaderFilter(this, EndpointOptions.HeaderFilterStrategy))
+            .Or(role == EndpointRole.Producer ? HttpHeaderFilterStrategy.Producer : HttpHeaderFilterStrategy.Consumer);
+
     /// <summary>Whether this endpoint uses HTTPS.</summary>
     public bool IsHttps => Uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase);
 

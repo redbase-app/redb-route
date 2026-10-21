@@ -43,11 +43,11 @@ public class HttpEndpointOptionsTests
         options.Timeout.Should().Be(30_000);
         options.ContentType.Should().Be("application/json");
         options.ThrowOnError.Should().BeTrue();
-        options.BridgeHeaders.Should().BeTrue();
+        options.SkipRequestHeaders.Should().BeFalse();
         options.AuthScheme.Should().Be(HttpAuthScheme.None);
         options.FollowRedirects.Should().BeTrue();
         options.MaxRedirects.Should().Be(50);
-        options.CopyResponseHeaders.Should().BeTrue();
+        options.SkipResponseHeaders.Should().BeFalse();
         options.PreserveHostHeader.Should().BeFalse();
         options.Host.Should().Be("0.0.0.0");
         options.Port.Should().Be(8080);

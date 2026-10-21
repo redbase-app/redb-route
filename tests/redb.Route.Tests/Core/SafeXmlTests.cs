@@ -1,7 +1,7 @@
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Core;
 
 namespace redb.Route.Tests.Core;

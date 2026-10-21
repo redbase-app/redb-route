@@ -1,5 +1,5 @@
 using System.Diagnostics.Metrics;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Components;
 using redb.Route.Core;
 using redb.Route.Telemetry;

@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Net;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.As2;
 using redb.Route.As2.Crypto;
 using redb.Route.As2.Mdn;

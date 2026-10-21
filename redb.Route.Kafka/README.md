@@ -187,6 +187,23 @@ passing consumed records on keeps their keys (their partition and compaction), a
 Spring Kafka do. `keyFromHeader=false` sends them without a key; `partitionNumber` sends without a
 key in any case.
 
+### Header filter strategy
+
+`headerFilterStrategy=#name` names an `IHeaderFilterStrategy` in the registry that decides which headers the
+endpoint carries, as in Apache Camel: on a producer, which exchange headers go into the record; on a consumer, which
+record headers come into the exchange. It replaces the default, `KafkaHeaderFilterStrategy` (keeps `redbKafka.*`
+back, lets everything else through), entirely; derive from that class to add to it. `content-type` and the
+consumer's `redbKafka.*` metadata are set whatever the strategy says.
+
+```csharp
+ctx.AddToRegistry("correlationOnly", new DefaultHeaderFilterStrategy
+{
+    OutFilter = ["Correlation-ID"],
+    FilterOnMatch = false,   // a whitelist: only the listed headers go out
+});
+// kafka:orders?brokers=localhost:9092&headerFilterStrategy=#correlationOnly
+```
+
 ## Tracing
 
 The connector traces on the shared `redb.Route` activity source, through the core's transport contract

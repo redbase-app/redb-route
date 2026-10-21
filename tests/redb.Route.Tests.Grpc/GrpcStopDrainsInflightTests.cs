@@ -1,6 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
-using FluentAssertions;
+using AwesomeAssertions;
 using Google.Protobuf;
 using Grpc.Net.Client;
 using redb.Route.Abstractions;

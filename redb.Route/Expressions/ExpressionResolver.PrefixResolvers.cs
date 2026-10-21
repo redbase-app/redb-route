@@ -51,7 +51,15 @@ public static partial class ExpressionResolver
     /// </summary>
     internal static (bool Handled, object? Value) TryResolveByPrefix(IExchange exchange, string propertyName)
     {
-        if (_prefixResolvers.IsEmpty || string.IsNullOrEmpty(propertyName))
+        if (string.IsNullOrEmpty(propertyName))
+            return (false, null);
+
+        // The exchange's own context first: a prefix a module registered there goes with the context.
+        if (exchange.Context?.GetService<ExpressionPrefixResolvers>() is { } contextResolvers
+            && contextResolvers.TryResolve(exchange, propertyName, out var contextValue))
+            return (true, contextValue);
+
+        if (_prefixResolvers.IsEmpty)
             return (false, null);
 
         foreach (var (prefix, resolver) in _prefixResolvers)
@@ -65,5 +73,70 @@ public static partial class ExpressionResolver
         }
 
         return (false, null);
+    }
+}
+
+/// <summary>
+/// The prefix resolvers of one route context: <c>${prefix.rest}</c> roots that the context's own code (a module
+/// loaded for it) contributes. They live as a service of the context, so they go when the context is disposed and
+/// keep no delegate of an unloaded module alive; an expression evaluated on an exchange of the context consults
+/// them before the process-wide ones of <see cref="ExpressionResolver.RegisterPrefixResolver"/>. Register through
+/// <c>context.RegisterPrefixResolver(prefix, resolver)</c>.
+/// </summary>
+public sealed class ExpressionPrefixResolvers
+{
+    private static readonly object CreateGate = new();
+    private readonly ConcurrentDictionary<string, Func<IExchange, string, object?>> _resolvers =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The resolvers of <paramref name="context"/>, created on first use.</summary>
+    public static ExpressionPrefixResolvers For(IRouteContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.GetService<ExpressionPrefixResolvers>() is { } existing)
+            return existing;
+
+        lock (CreateGate)
+        {
+            if (context.GetService<ExpressionPrefixResolvers>() is { } raced)
+                return raced;
+            var created = new ExpressionPrefixResolvers();
+            context.AddService(typeof(ExpressionPrefixResolvers), created);
+            return created;
+        }
+    }
+
+    /// <summary>
+    /// Registers <paramref name="resolver"/> for <paramref name="prefix"/> (ending with a dot, e.g. <c>"order."</c>);
+    /// a second registration of the prefix replaces the first.
+    /// </summary>
+    public void Register(string prefix, Func<IExchange, string, object?> resolver)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
+        ArgumentNullException.ThrowIfNull(resolver);
+        if (!prefix.EndsWith('.'))
+            throw new ArgumentException("Prefix must end with a dot, e.g. \"order.\"", nameof(prefix));
+
+        _resolvers[prefix] = resolver;
+    }
+
+    /// <summary>Removes the resolver of <paramref name="prefix"/>; true when there was one.</summary>
+    public bool Unregister(string prefix) => !string.IsNullOrWhiteSpace(prefix) && _resolvers.TryRemove(prefix, out _);
+
+    internal bool TryResolve(IExchange exchange, string propertyName, out object? value)
+    {
+        value = null;
+        if (_resolvers.IsEmpty)
+            return false;
+
+        foreach (var (prefix, resolver) in _resolvers)
+        {
+            if (!propertyName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            value = resolver(exchange, propertyName[prefix.Length..]);
+            return true;
+        }
+
+        return false;
     }
 }

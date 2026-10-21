@@ -63,7 +63,17 @@ public sealed class SqsEndpoint : EndpointBase<SqsEndpointOptions>, IDisposable
         QueueName = uri.Path.TrimStart('/');
         if (string.IsNullOrEmpty(QueueName) && string.IsNullOrEmpty(options.QueueUrl))
             throw new ArgumentException("SQS URI must include a queue name in the path (sqs://queue-name).");
+        _headerFilter = new EndpointHeaderFilter(this, options.HeaderFilterStrategy);
     }
+
+    private readonly EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The header filter strategy of this endpoint: the one <c>headerFilterStrategy=#name</c> names, or
+    /// <see cref="SqsHeaderFilterStrategy.Default"/>. A name the registry does not hold fails when the producer or
+    /// consumer is built.
+    /// </summary>
+    internal IHeaderFilterStrategy HeaderFilterStrategy => _headerFilter.Or(SqsHeaderFilterStrategy.Default);
 
     /// <inheritdoc />
     public override IProducer CreateProducer() => new SqsProducer(this, Options);

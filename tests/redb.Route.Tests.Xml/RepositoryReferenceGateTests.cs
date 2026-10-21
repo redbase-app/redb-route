@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.RedbCore.Xml;
 using redb.Route.Xml;
 using redb.Route.Xml.Packaging;

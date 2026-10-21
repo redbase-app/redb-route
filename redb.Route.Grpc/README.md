@@ -123,6 +123,22 @@ Inbound headers carrying a transport-reserved prefix (`redbHttp.`, `redbGrpc.`, 
 a caller must not be able to forge the metadata upstream processors trust, such as the client IP that drives
 rate limiting. `allowClientReservedHeaders=true` opts out, and says so in the log.
 
+`headerFilterStrategy=#name` names an `IHeaderFilterStrategy` in the registry that decides which headers cross, as
+in Apache Camel: on a producer, which exchange headers go out as call metadata and envelope headers and which reply
+envelope headers come back; on a consumer, which request headers come in and which go out in the reply envelope. It
+replaces the default, `GrpcHeaderFilterStrategy` (keeps `redbGrpc.*` back), entirely; derive from that class to add
+to it. The reserved prefixes above, `grpc-*`, the pseudo-headers, the call metadata the consumer sets and the
+`redbGrpc.Trailer.*` trailers are not the strategy's.
+
+```csharp
+ctx.AddToRegistry("correlationOnly", new DefaultHeaderFilterStrategy
+{
+    OutFilter = ["Correlation-ID"],
+    FilterOnMatch = false,   // a whitelist: only the listed headers go out
+});
+// grpc://billing:5001?plaintext=true&headerFilterStrategy=#correlationOnly
+```
+
 ## Apache Camel parity
 
 | camel-grpc | redb.Route.Grpc |

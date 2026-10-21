@@ -38,7 +38,10 @@ public sealed class KafkaConsumer : DrainableConsumer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
+
+    private readonly redb.Route.Abstractions.IHeaderFilterStrategy _headerFilter;
 
     /// <inheritdoc />
     protected override Task OnStarting(CancellationToken ct)
@@ -509,24 +512,23 @@ public sealed class KafkaConsumer : DrainableConsumer
 
     private Exchange CreateExchange(ConsumeResult<string, byte[]> result)
     {
-        var exchange = Exchange.Create(MessageOf(result), _endpoint.ScopeFactory);
+        var message = new Message();
+        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         exchange.Pattern = ExchangePattern.InOnly;
+        Fill(message, result, exchange);
         return exchange;
     }
 
     /// <summary>
-    /// One record as a message: its headers, <see cref="Message.ContentType"/> from its content-type header, and the
-    /// redbKafka.* metadata. The single and the batch path both build it here, so one topic gives one message shape
-    /// whatever maxPollRecords is.
+    /// One record into a message: its headers as the header filter strategy lets them, <see cref="Message.ContentType"/>
+    /// from its content-type header, and the redbKafka.* metadata. The single and the batch path both fill it here, so
+    /// one topic gives one message shape whatever maxPollRecords is.
     /// </summary>
-    private Message MessageOf(ConsumeResult<string, byte[]> result)
+    private void Fill(Message message, ConsumeResult<string, byte[]> result, IExchange exchange)
     {
-        var message = new Message
-        {
-            Body = result.Message.Value
-        };
+        message.Body = result.Message.Value;
 
-        // Transfer Kafka headers
+        // Kafka headers into the message, as the header filter strategy lets them
         if (result.Message.Headers is not null)
         {
             foreach (var header in result.Message.Headers)
@@ -534,11 +536,13 @@ public sealed class KafkaConsumer : DrainableConsumer
                 try
                 {
                     var headerValue = Encoding.UTF8.GetString(header.GetValueBytes());
-                    message.Headers[header.Key] = headerValue;
 
-                    // Restore ContentType from Kafka header if present
+                    // The content type is the record's, whatever the strategy says about the header itself.
                     if (string.Equals(header.Key, "content-type", StringComparison.OrdinalIgnoreCase))
                         message.ContentType = headerValue;
+
+                    if (_headerFilter.FilterIncoming(header.Key, headerValue, exchange)) continue;
+                    message.Headers[header.Key] = headerValue;
                 }
                 catch (Exception ex) { Logger?.LogDebug(ex, "Kafka: malformed header '{Key}'", header.Key); }
             }
@@ -552,21 +556,26 @@ public sealed class KafkaConsumer : DrainableConsumer
             message.Headers[KafkaHeaders.Timestamp] = result.Message.Timestamp.UtcDateTime;
         if (!string.IsNullOrEmpty(result.Message.Key))
             message.Headers[KafkaHeaders.Key] = result.Message.Key;
-
-        return message;
     }
 
     private Exchange CreateBatchExchange(List<ConsumeResult<string, byte[]>> batch)
     {
-        var messages = new List<IMessage>(batch.Count);
-        foreach (var result in batch)
-            messages.Add(MessageOf(result));
-
-        var batchMessage = new Message { Body = messages };
-        batchMessage.Headers[KafkaHeaders.BatchSize] = batch.Count;
-
+        var batchMessage = new Message();
         var exchange = Exchange.Create(batchMessage, _endpoint.ScopeFactory);
         exchange.Pattern = ExchangePattern.InOnly;
+
+        // One record, one message, built here like a single record's: one topic gives one message shape whatever
+        // maxPollRecords is.
+        var messages = new List<IMessage>(batch.Count);
+        foreach (var result in batch)
+        {
+            var message = new Message();
+            Fill(message, result, exchange);
+            messages.Add(message);
+        }
+
+        batchMessage.Body = messages;
+        batchMessage.Headers[KafkaHeaders.BatchSize] = batch.Count;
         return exchange;
     }
 

@@ -120,4 +120,49 @@ them only when given a logger (`new SharedHttpServerManager(options, logger)`). 
 hand without a `ServerManager` falls back to a private manager with default options and does not see this
 setting.
 
+## Endpoints of a component's own
+
+Routes go into the route table (`RegisterRoute`). A component that brings ASP.NET endpoints instead, a SignalR hub,
+a framework's handlers, maps them with `RegisterEndpoints`, onto a listener that may already be serving:
+
+```csharp
+public sealed class StatusComponent(SharedHttpServerManager manager) : IAsyncDisposable
+{
+    private ServiceProvider? _services;
+    private EndpointRegistration? _registration;
+
+    public void Start(string host, int port)
+    {
+        // The component's own container: the listener's is the manager's and stays closed.
+        _services = new ServiceCollection().AddRouting().AddSingleton<StatusSource>().BuildServiceProvider();
+
+        _registration = manager.RegisterEndpoints(host, port, _services, endpoints =>
+            endpoints.MapGet("/status", (StatusSource status) => status.Current())
+                // A gate of the component's own is an endpoint convention, not middleware.
+                .AddEndpointFilter(async (ctx, next) => IsAllowed(ctx.HttpContext) ? await next(ctx) : Results.StatusCode(403)));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _registration?.Dispose();                       // the endpoints leave the listener
+        if (_services is not null) await _services.DisposeAsync();
+    }
+}
+```
+
+- `map` runs on an `IEndpointRouteBuilder` whose `ServiceProvider` is the container you pass, so a framework that
+  takes its pieces from there (`MapHub`, `MapConnections`) builds them from your container.
+- Every request to those endpoints runs in a scope of that container: `HttpContext.RequestServices` and minimal API
+  parameters resolve from it.
+- The endpoints join a running listener through endpoint routing and leave it the same way when the registration is
+  disposed; the connections the listener already serves are not touched. A literal path of theirs wins over the route
+  table, whose catch-all comes last.
+- A registration occupies the listener like a route: the listener stays up while any route or registration is on it.
+- A registration brings no middleware. The pipeline (trusted proxies, CORS, the caller's principal, WebSocket
+  upgrades) is fixed when the listener starts; the first route or registration on a port decides its TLS.
+
+Every listener accepts WebSocket upgrades (`UseWebSockets` is part of every pipeline and acts on upgrade requests
+only), so endpoints mapped later can accept sockets. `EnableWebSockets(host, port, keepAlive)` sets the keep-alive of a
+listener that has not started yet.
+
 Part of the redb.Route family.

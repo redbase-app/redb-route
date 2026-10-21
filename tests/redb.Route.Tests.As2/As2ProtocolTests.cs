@@ -1,6 +1,6 @@
 using System.Net;
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using MimeKit;
 using MimeKit.Cryptography;
 using redb.Route.As2;

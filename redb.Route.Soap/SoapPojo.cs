@@ -13,9 +13,10 @@ namespace redb.Route.Soap;
 /// </summary>
 internal static class SoapPojo
 {
-    private static readonly ConcurrentDictionary<Type, XmlSerializer> Cache = new();
+    // Weak per type: a type of an unloadable module (collectible load context) does not stay alive in this cache.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, XmlSerializer> Cache = new();
 
-    private static XmlSerializer For(Type t) => Cache.GetOrAdd(t, static x => new XmlSerializer(x));
+    private static XmlSerializer For(Type t) => Cache.GetValue(t, static x => new XmlSerializer(x));
 
     /// <summary>Serializes a CLR object to an XML fragment (no declaration) for embedding in the SOAP body.</summary>
     public static string Serialize(object body)

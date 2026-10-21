@@ -1581,6 +1581,7 @@ flowchart TB
 | `Soap` | `System.Xml` + Kestrel | SOAP 1.1/1.2, WS-Security, MTOM, `?wsdl` |
 | `WebSocket` | `ClientWebSocket` + Kestrel | Text/binary, reconnect |
 | `SignalR` | `Microsoft.AspNetCore.SignalR` | Hub consumer + producer/broadcast |
+| `SignalR.StackExchangeRedis` | `Microsoft.AspNetCore.SignalR.StackExchangeRedis` | Redis backplane for the hubs, channels keyed on the hub path |
 | `Tcp` | `System.Net.Sockets` | Text-line, length-prefixed, TLS |
 | `File` | File system | Polling, atomic writes, glob, locking |
 | `Ftp` | `FluentFTP` | FTP/FTPS, passive/active |

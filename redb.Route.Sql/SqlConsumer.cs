@@ -178,7 +178,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         var rows = new List<Dictionary<string, object?>>();
         var bodies = new List<object?>();
         var mapper = new DictionaryRowMapper();
-        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var poco = _endpoint.OutputMapping;
 
         await using (var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false))
         {
@@ -250,7 +250,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         string sql, Stopwatch stopwatch, CancellationToken ct)
     {
         var mapper = new DictionaryRowMapper();
-        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var poco = _endpoint.OutputMapping;
         var rowCount = 0;
         var inTransaction = tx != null || Transaction.Current != null;
         long executionMs = 0;
@@ -343,7 +343,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         DbCommand cmd, DbConnection connection, DbTransaction? tx,
         string sql, Stopwatch stopwatch, CancellationToken ct)
     {
-        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var poco = _endpoint.OutputMapping;
         var mapper = new DictionaryRowMapper();
         var rows = poco?.CreateList() ?? new List<Dictionary<string, object?>>();
 
@@ -384,7 +384,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         DbCommand cmd, DbConnection connection, DbTransaction? tx,
         string sql, Stopwatch stopwatch, CancellationToken ct)
     {
-        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var poco = _endpoint.OutputMapping;
         var mapper = new DictionaryRowMapper();
         var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var executionMs = stopwatch.ElapsedMilliseconds;
@@ -534,7 +534,7 @@ internal sealed class SqlConsumer : DrainableConsumer
         string sql, Stopwatch stopwatch, CancellationToken ct)
     {
         var mapper = new DictionaryRowMapper();
-        var poco = SqlRowMapperFactory.Resolve(_options.OutputClass);
+        var poco = _endpoint.OutputMapping;
         Dictionary<string, object?>? row = null;
         object? body = null;
 

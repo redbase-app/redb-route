@@ -22,6 +22,7 @@
     <Project Path="redb.Route.Sql/redb.Route.Sql.csproj" />
     <Project Path="redb.Route.MqttNet/redb.Route.MqttNet.csproj" />
     <Project Path="redb.Route.SignalR/redb.Route.SignalR.csproj" />
+    <Project Path="redb.Route.SignalR.StackExchangeRedis/redb.Route.SignalR.StackExchangeRedis.csproj" />
     <Project Path="redb.Route.Soap/redb.Route.Soap.csproj" />
     <Project Path="redb.Route.IbmMq/redb.Route.IbmMq.csproj" />
     <Project Path="redb.Route.AzureServiceBus/redb.Route.AzureServiceBus.csproj" />

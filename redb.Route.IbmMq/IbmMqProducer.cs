@@ -28,7 +28,11 @@ public sealed class IbmMqProducer : ConnectableProducer
     private MQQueueManager? _qm;
 
     // ── RPC infrastructure ──
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<IMessage>> _pendingResponses = new();
+    private readonly ConcurrentDictionary<string, PendingReply> _pendingResponses = new();
+    private readonly IHeaderFilterStrategy _headerFilter;
+
+    /// <summary>A request waiting for its reply: the reply's headers are filtered against the request exchange.</summary>
+    private sealed record PendingReply(TaskCompletionSource<IMessage> Reply, IExchange Request);
     private MQQueue? _replyQueue;
     private readonly SemaphoreSlim _rpcLock = new(1, 1);
     // The deferred puts of a block go out as one batch per producer; its commits take turns on the shared connection.
@@ -48,6 +52,7 @@ public sealed class IbmMqProducer : ConnectableProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _headerFilter = endpoint.HeaderFilterStrategy;
 
         // A request-reply send cannot wait for the commit: the reply it waits for would never come.
         if (_options.ReplyTo && _options.Transacted == true)
@@ -91,7 +96,7 @@ public sealed class IbmMqProducer : ConnectableProducer
     protected override async Task DisconnectAsync(CancellationToken ct)
     {
         foreach (var pending in _pendingResponses)
-            pending.Value.TrySetCanceled(ct);
+            pending.Value.Reply.TrySetCanceled(ct);
         _pendingResponses.Clear();
 
         if (_xmsReply != null)
@@ -157,7 +162,7 @@ public sealed class IbmMqProducer : ConnectableProducer
         if (activity is { IsAllDataRequested: true })
             activity.SetTag("messaging.ibmmq.queue_manager", _options.QueueManager);
 
-        var msg = IbmMqMessageHelper.BuildOutgoingMessage(exchange, _options);
+        var msg = IbmMqMessageHelper.BuildOutgoingMessage(exchange, _options, _headerFilter);
 
         // Inject W3C trace context into MQ message properties (RFH2 usr folder) - not in
         // targetClient=Mq mode, where a legacy app must see raw MQMD+body with no properties.
@@ -257,7 +262,7 @@ public sealed class IbmMqProducer : ConnectableProducer
             : IbmMqMessageHelper.BytesToHex(msg.MessageId);
 
         var tcs = new TaskCompletionSource<IMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _pendingResponses[correlKey] = tcs;
+        _pendingResponses[correlKey] = new PendingReply(tcs, exchange);
 
         Logger?.LogDebug("IBM MQ RPC request sent: correlKey={CorrelKey}, replyTo={ReplyTo}",
             correlKey, replyToQueue);
@@ -307,10 +312,17 @@ public sealed class IbmMqProducer : ConnectableProducer
             // Event-driven path: an XMS listener on the reply queue replaces the WMQ poll loop below.
             if (UseXmsReply)
             {
-                _xmsReply = new IbmMqXmsReplyReceiver(_options, Logger, (correlKey, response) =>
+                _xmsReply = new IbmMqXmsReplyReceiver(_options, Logger, _headerFilter, (correlKey, buildResponse) =>
                 {
-                    if (_pendingResponses.TryRemove(correlKey, out var tcs))
-                        tcs.TrySetResult(response);
+                    if (!_pendingResponses.TryRemove(correlKey, out var pending)) return;
+                    try
+                    {
+                        pending.Reply.TrySetResult(buildResponse(pending.Request));
+                    }
+                    catch (Exception ex)
+                    {
+                        pending.Reply.TrySetException(ex);
+                    }
                 });
                 await _xmsReply.StartAsync(ct).ConfigureAwait(false);
 
@@ -383,7 +395,7 @@ public sealed class IbmMqProducer : ConnectableProducer
                     ? IbmMqMessageHelper.BytesToHex(replyMsg.CorrelationId)
                     : IbmMqMessageHelper.BytesToHex(replyMsg.CorrelationId); // Reply always has correlId
 
-                if (_pendingResponses.TryRemove(correlKey, out var tcs))
+                if (_pendingResponses.TryRemove(correlKey, out var pending))
                 {
                     try
                     {
@@ -395,13 +407,13 @@ public sealed class IbmMqProducer : ConnectableProducer
                                 _replyQueue.Name.Trim(), _options.QueueManager);
 
                         // Pick up user headers that the responder stamped via RFH2
-                        IbmMqMessageHelper.CopyRfh2UserProperties(replyMsg, response);
+                        IbmMqMessageHelper.CopyRfh2UserProperties(replyMsg, response, _headerFilter, pending.Request);
 
-                        tcs.TrySetResult(response);
+                        pending.Reply.TrySetResult(response);
                     }
                     catch (Exception ex)
                     {
-                        tcs.TrySetException(ex);
+                        pending.Reply.TrySetException(ex);
                     }
                 }
             }

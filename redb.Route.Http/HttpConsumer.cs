@@ -23,6 +23,7 @@ public class HttpConsumer : IConsumer
     public IEndpoint Endpoint => _endpoint;
     private readonly IProcessor _processor;
     private readonly HttpEndpointOptions _options;
+    private readonly redb.Route.Abstractions.IHeaderFilterStrategy _headerFilter;
     private readonly SharedHttpServerManager _serverManager;
     private ILogger? _logger;
     private RouteRegistration? _registration;
@@ -42,6 +43,7 @@ public class HttpConsumer : IConsumer
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _serverManager = serverManager ?? throw new ArgumentNullException(nameof(serverManager));
         _logger = (endpoint.Component as ComponentBase)?.Logger;
+        _headerFilter = endpoint.HeaderFilterStrategy(EndpointRole.Consumer);
     }
 
     /// <summary>The inbound check (<c>inboundAuth</c>); <c>null</c> when the endpoint accepts every caller.</summary>
@@ -303,6 +305,9 @@ public class HttpConsumer : IConsumer
             message.Headers[HttpHeaders.RemoteAddress] = httpContext.Connection.RemoteIpAddress.ToString();
         }
 
+        // The exchange the header filter strategy is asked about; the headers below go into its message.
+        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
+
         // Copy all HTTP headers to exchange, and remember which ones came from
         // the request so they are not accidentally echoed in the response.
         var requestHeaderNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -323,18 +328,19 @@ public class HttpConsumer : IConsumer
             // under a name it may later write for the response (Set-Cookie, Location, WWW-Authenticate, ...).
             if (HttpHeaders.ResponseOnlyHeaders.Contains(header.Key)) continue;
 
-            requestHeaderNames.Add(header.Key);
             var received = header.Value.Count switch
             {
                 0 => string.Empty,
                 1 => (object)header.Value[0]!,
                 _ => string.Join(", ", header.Value!)
             };
+            if (_headerFilter.FilterIncoming(header.Key, received, exchange)) continue;
+
+            requestHeaderNames.Add(header.Key);
             message.Headers[header.Key] = received;
             requestHeaderValues[header.Key] = received;
         }
 
-        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         exchange.Properties["redbHttp.RequestHeaderNames"] = requestHeaderNames;
         exchange.Properties[RequestHeaderValuesKey] = requestHeaderValues;
         ExchangePrincipal.Set(exchange, SharedHttpServerManager.GetResolvedPrincipal(httpContext));
@@ -390,12 +396,13 @@ public class HttpConsumer : IConsumer
 
             foreach (var (key, value) in responseMsg.Headers)
             {
-                if (value is null) continue;
                 if (requestHeaderValues is not null && requestHeaderValues.TryGetValue(key, out var sent)
                     && ReferenceEquals(sent, value)) continue;
-                if (HttpHeaders.NonBridgedHeaders.Contains(key)) continue;
+                // The protocol fields and the component's own namespace are the transport's, whatever the strategy says.
+                if (HttpHeaders.ProtocolHeaders.Contains(key)) continue;
                 if (HttpHeaders.IsRedbHeader(key)) continue;
-                if (IsInternalHeader(key)) continue;
+                if (_headerFilter.FilterOutgoing(key, value, exchange)) continue;
+                if (value is null) continue;
 
                 // Headers like Set-Cookie can carry multiple values. Use StringValues so
                 // ASP.NET emits one header line per entry instead of stringifying the array.
@@ -576,12 +583,6 @@ public class HttpConsumer : IConsumer
             };
         }
         return payload is null ? null : System.Text.Json.JsonSerializer.Serialize(payload);
-    }
-
-    private static bool IsInternalHeader(string key)
-    {
-        return key.StartsWith("redb", StringComparison.OrdinalIgnoreCase)
-               || key.StartsWith("Camel", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ContainsInvalidHeaderValueCharacters(Microsoft.Extensions.Primitives.StringValues values)

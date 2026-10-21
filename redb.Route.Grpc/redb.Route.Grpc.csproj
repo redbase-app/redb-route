@@ -26,9 +26,9 @@
       restart on hot-reload, and a header-based route selector instead of the method address. We keep
       only the message layer (Google.Protobuf + Grpc.Tools) and the client channel (Grpc.Net.Client).
     -->
-    <PackageReference Include="Google.Protobuf" Version="3.31.1" />
-    <PackageReference Include="Grpc.Tools" Version="2.76.0" PrivateAssets="all" />
-    <PackageReference Include="Grpc.Net.Client" Version="2.76.0" />
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools" PrivateAssets="all" />
+    <PackageReference Include="Grpc.Net.Client" />
   </ItemGroup>
   <ItemGroup>
     <!-- Client stubs only: the server side is ours. -->

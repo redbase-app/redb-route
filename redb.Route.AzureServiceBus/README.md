@@ -368,6 +368,24 @@ All headers use the `redbAsb.` prefix.
 | `SessionState` | `redbAsb.SessionState` | — | Declared, not set |
 | `BatchMessageCount` | `redbAsb.BatchMessageCount` | Out | Producer (batch) |
 
+### Header filter strategy
+
+Every other exchange header goes out as an application property, and every application property of a received
+message comes in. `headerFilterStrategy=#name` names an `IHeaderFilterStrategy` in the registry that decides which
+headers cross, as in Apache Camel: on a producer, which exchange headers become application properties; on a
+consumer (plain and session alike), which application properties come in. It replaces the default,
+`AzureServiceBusHeaderFilterStrategy` (keeps `redbAsb.*` back), entirely; derive from that class to add to it. The
+system properties above and the trace context are set whatever the strategy says.
+
+```csharp
+ctx.AddToRegistry("correlationOnly", new DefaultHeaderFilterStrategy
+{
+    OutFilter = ["Correlation-ID"],
+    FilterOnMatch = false,   // a whitelist: only the listed headers go out
+});
+// asb://orders?connectionString=...&headerFilterStrategy=#correlationOnly
+```
+
 ## Requirements
 
 - **Azure Service Bus** or Azure Service Bus Emulator

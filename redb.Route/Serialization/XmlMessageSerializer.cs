@@ -14,7 +14,9 @@ namespace redb.Route.Serialization;
 /// </summary>
 public sealed class XmlMessageSerializer : IMessageSerializer
 {
-    private static readonly ConcurrentDictionary<Type, XmlSerializer> SerializerCache = new();
+    // Weak per type: a type of an unloadable module (collectible load context) does not stay alive in this cache,
+    // and the serializer .NET generates for it lives in that same load context.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, XmlSerializer> SerializerCache = new();
 
     private readonly XmlWriterSettings _writerSettings;
     private readonly XmlReaderSettings _readerSettings;
@@ -87,5 +89,5 @@ public sealed class XmlMessageSerializer : IMessageSerializer
     }
 
     private static XmlSerializer GetOrCreateSerializer(Type type)
-        => SerializerCache.GetOrAdd(type, static t => new XmlSerializer(t));
+        => SerializerCache.GetValue(type, static t => new XmlSerializer(t));
 }

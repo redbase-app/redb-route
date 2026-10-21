@@ -1,11 +1,8 @@
 using System.Collections.Concurrent;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.SignalR;
 using System.Security.Claims;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Extensions;
@@ -24,7 +21,6 @@ namespace redb.Route.SignalR;
 public class SignalRComponent : ComponentBase
 {
     private readonly ConcurrentDictionary<string, SignalRConsumer> _consumers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, SignalRConsumer> _consumersByHubPath = new(StringComparer.OrdinalIgnoreCase);
     private SharedHttpServerManager? _ownedServerManager;
 
     /// <inheritdoc />
@@ -50,12 +46,12 @@ public class SignalRComponent : ComponentBase
         ?? (_ownedServerManager ??= new SharedHttpServerManager());
 
     /// <summary>
-    /// Extra service registrations for the hub's listener, supplied by the host: a SignalR
-    /// backplane for scale-out (<c>AddStackExchangeRedis</c>, Azure SignalR), extra protocols,
-    /// anything else the hub needs. Kept as a delegate on purpose — the connector stays free of
-    /// those dependencies and the host picks its own.
+    /// Extra service registrations for the container of each hub, supplied by the host: a SignalR
+    /// backplane for scale-out, extra protocols, anything else the hub needs. Runs once per hub, with
+    /// the hub it is for. Kept as a delegate on purpose: the connector stays free of those
+    /// dependencies and the host picks its own.
     /// </summary>
-    public Action<IServiceCollection>? HubServicesConfigurator { get; set; }
+    public Action<IServiceCollection, SignalRHubDescriptor>? HubServicesConfigurator { get; set; }
 
     /// <summary>
     /// Authenticates hub connections. Without it the hub accepts anonymous connections and
@@ -101,7 +97,7 @@ public class SignalRComponent : ComponentBase
     }
 
     /// <summary>
-    /// Registers a consumer for server-mode producer lookup and for hub dispatch.
+    /// Registers a running consumer for the bridge hub and for server-mode producer lookup.
     /// <para>
     /// The lookup key is the listener address plus the hub path, NOT the endpoint's normalized
     /// key: that one carries the sorted query parameters, and a server-mode producer always
@@ -110,68 +106,17 @@ public class SignalRComponent : ComponentBase
     /// </para>
     /// </summary>
     internal void RegisterConsumer(SignalRConsumer consumer)
-    {
-        _consumers[ConsumerKey(consumer.EndpointOptions.Host, consumer.EndpointOptions.Port, consumer.HubPath)] = consumer;
-        _consumersByHubPath[DispatchKey(consumer.EndpointOptions.Port, consumer.HubPath)] = consumer;
-    }
+        => _consumers[ConsumerKey(consumer.EndpointOptions.Host, consumer.EndpointOptions.Port, consumer.HubPath)] = consumer;
 
     /// <summary>Unregisters a consumer.</summary>
     internal void UnregisterConsumer(SignalRConsumer consumer)
-    {
-        _consumers.TryRemove(ConsumerKey(consumer.EndpointOptions.Host, consumer.EndpointOptions.Port, consumer.HubPath), out _);
-        _consumersByHubPath.TryRemove(DispatchKey(consumer.EndpointOptions.Port, consumer.HubPath), out _);
-    }
+        => _consumers.TryRemove(ConsumerKey(consumer.EndpointOptions.Host, consumer.EndpointOptions.Port, consumer.HubPath), out _);
 
     internal static string ConsumerKey(string host, int port, string hubPath) => $"{host}:{port}{hubPath}";
-
-    // Dispatch is per listener, so the port is part of the key: two hubs sharing a path on
-    // different ports are different hubs, and keying on the path alone let the later one answer
-    // for both.
-    private static string DispatchKey(int port, string hubPath) => $"{port}{hubPath}";
-
-    /// <summary>
-    /// Finds the consumer serving a hub request. Several hubs can share one listener now, so the
-    /// bridge hub resolves its consumer by the request path (<c>/chatHub</c>, <c>/chatHub/negotiate</c>)
-    /// rather than by being the only one in the container. Longest prefix wins.
-    /// </summary>
-    internal SignalRConsumer? GetConsumerByRequestPath(int localPort, string? requestPath)
-    {
-        if (string.IsNullOrEmpty(requestPath)) return null;
-
-        var prefix = localPort.ToString();
-        if (_consumersByHubPath.TryGetValue(DispatchKey(localPort, requestPath), out var exact))
-            return exact;
-
-        SignalRConsumer? best = null;
-        var bestLength = -1;
-        foreach (var (key, consumer) in _consumersByHubPath)
-        {
-            if (!key.StartsWith(prefix, StringComparison.Ordinal)) continue;
-
-            var hubPath = key[prefix.Length..];
-            if (hubPath.Length > bestLength
-                && requestPath.StartsWith(hubPath, StringComparison.OrdinalIgnoreCase))
-            {
-                best = consumer;
-                bestLength = hubPath.Length;
-            }
-        }
-        return best;
-    }
 
     /// <summary>Gets the running consumer serving a hub, by listener address and hub path.</summary>
     internal SignalRConsumer? GetConsumer(string host, int port, string hubPath)
         => _consumers.TryGetValue(ConsumerKey(host, port, hubPath), out var c) ? c : null;
-
-    private readonly ConcurrentDictionary<string, IServiceProvider> _hubServices = new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>Captures the listener's services when the shared host builds it.</summary>
-    internal void RegisterHubServices(string host, int port, IServiceProvider services)
-        => _hubServices[$"{host}:{port}"] = services;
-
-    /// <summary>Services of the listener serving hubs on this host:port, if it has been built.</summary>
-    internal IServiceProvider? GetHubServices(string host, int port)
-        => _hubServices.TryGetValue($"{host}:{port}", out var sp) ? sp : null;
 
     /// <summary>
     /// Parses "host:port/hubPath" from the URI path segment.
@@ -226,132 +171,76 @@ public class SignalREndpoint : EndpointBase<SignalREndpointOptions>
     internal SharedHttpServerManager ServerManager => ((SignalRComponent)Component).EffectiveServerManager;
 
     /// <summary>
-    /// Registers the hub with the shared listener BEFORE any consumer starts it: SignalR services
-    /// have to be in the container before <c>Build()</c>, and <c>MapHub</c> before the catch-all,
-    /// neither of which can be done to a running server. The route context starts every endpoint
-    /// before it starts consumers, and only the consumer calls EnsureStarted, so this ordering
-    /// holds without any extra coordination.
+    /// Registers the hub with the shared listener, when this endpoint serves one: a consumer was created on it (the
+    /// route context creates every consumer while it compiles the routes, before it starts any endpoint). A producer
+    /// endpoint (<c>mode=server</c> broadcast, <c>mode=client</c> connection) maps nothing: the server-mode producer
+    /// sends through the hub its consumer registered, and a second registration of one hub path would map it twice.
     /// </summary>
-    public override Task Start(CancellationToken ct = default)
+    public override async Task Start(CancellationToken ct = default)
     {
-        EnsureHubRegistered();
-        return Task.CompletedTask;
+        if (Volatile.Read(ref _servesHub))
+            await EnsureHubRegisteredAsync(ct).ConfigureAwait(false);
     }
 
-    private readonly object _hubRegistrationLock = new();
-    private ServerConfiguratorRegistration? _hubRegistration;
+    // Set by CreateConsumer: this endpoint is a hub, not a producer that talks to one.
+    private bool _servesHub;
+
+    // Serializes putting the hub on the listener and taking it off; _hub itself is read without it.
+    private readonly SemaphoreSlim _hubGate = new(1, 1);
+    private SignalRHubHost? _hub;
 
     /// <summary>
-    /// Registers the hub with the listener exactly once per run. Called from <see cref="Start"/>
-    /// when the route context owns the lifecycle, and again from the consumer so a hand-built
-    /// consumer (tests, embedded use) works without anyone having started the endpoint first.
+    /// The hub's own container while the hub is on the listener: the server-mode producer resolves
+    /// <c>IHubContext</c> from here.
     /// </summary>
-    internal void EnsureHubRegistered()
+    internal IServiceProvider? HubServices
     {
-        lock (_hubRegistrationLock)
+        get { return Volatile.Read(ref _hub)?.Services; }
+    }
+
+    /// <summary>The consumer this hub dispatches to, while it runs.</summary>
+    internal SignalRConsumer? ServingConsumer
+        => ((SignalRComponent)Component).GetConsumer(Options.Host, Options.Port, HubPath);
+
+    /// <summary>
+    /// Puts the hub on the listener exactly once per run, with a container of its own (see
+    /// <see cref="SignalRHubHost"/>), whether the listener is already serving or not. Called from
+    /// <see cref="Start"/> when the route context owns the lifecycle, and again from the consumer so a
+    /// hand-built consumer (tests, embedded use) works without anyone having started the endpoint first.
+    /// </summary>
+    internal async Task EnsureHubRegisteredAsync(CancellationToken ct)
+    {
+        await _hubGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            if (_hubRegistration is not null) return;
-            _hubRegistration = BuildHubRegistration();
+            if (_hub is null)
+                Volatile.Write(ref _hub, await SignalRHubHost.StartAsync(this, ct).ConfigureAwait(false));
+        }
+        finally
+        {
+            _hubGate.Release();
         }
     }
 
     /// <summary>
-    /// Gives the listener's configurator back when the consumer stops, so the listener can shut
-    /// down once nothing occupies it — and so a later Start registers the hub again instead of
-    /// finding a listener that no longer exists.
+    /// Takes the hub off the listener when the consumer stops: its endpoints go, its connections are
+    /// closed and its container is disposed, while the other hubs and routes on the listener keep
+    /// serving. The listener can then shut down once nothing occupies it, and a later Start puts the
+    /// hub back instead of finding a listener that no longer exists.
     /// </summary>
-    internal void ReleaseHubRegistration()
+    internal async Task ReleaseHubRegistrationAsync()
     {
-        lock (_hubRegistrationLock)
+        await _hubGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            if (_hubRegistration is null) return;
-            ((SignalRComponent)Component).EffectiveServerManager.UnregisterServerConfigurator(_hubRegistration);
-            _hubRegistration = null;
+            var hub = Interlocked.Exchange(ref _hub, null);
+            if (hub is not null)
+                await hub.DisposeAsync().ConfigureAwait(false);
         }
-    }
-
-    private ServerConfiguratorRegistration BuildHubRegistration()
-    {
-        var component = (SignalRComponent)Component;
-        var hubPath = HubPath;
-
-        return component.EffectiveServerManager.RegisterServerConfigurator(
-            Options.Host, Options.Port,
-            services =>
-            {
-                var signalR = services.AddSignalR(hub =>
-                {
-                    // Волна В4 плана лимитов: SignalR's own per-client invocation parallelism.
-                    // 0 keeps SignalR's default (1 = per-client serial).
-                    if (Options.MaxParallelInvocationsPerClient > 0)
-                        hub.MaximumParallelInvocationsPerClient = Options.MaxParallelInvocationsPerClient;
-                });
-                if (Options.MessagePack)
-                    signalR.AddMessagePackProtocol();
-
-                // The bridge hub resolves its consumer through the component.
-                services.TryAddSingleton(component);
-
-                // Host-supplied extras: backplane for scale-out, custom protocols, and so on.
-                component.HubServicesConfigurator?.Invoke(services);
-            },
-            app =>
-            {
-                // Authentication gate in front of the hub path: the host's own validator decides,
-                // and a rejected handshake gets 401 before the connection is upgraded. Placed here
-                // (not as ASP.NET authentication) because the process hosting the route context is
-                // a generic host, not an ASP.NET application. Without the component's own delegate,
-                // the caller is whoever the shared host's resolver identified (it runs earlier in the
-                // pipeline), and that principal is handed to SignalR the same way.
-                var authenticate = component.Authenticate;
-                if (authenticate is not null || component.EffectiveServerManager.Options.ResolvePrincipal is not null)
-                {
-                    app.Use(async (ctx, next) =>
-                    {
-                        if (!ctx.Request.Path.StartsWithSegments(hubPath))
-                        {
-                            await next().ConfigureAwait(false);
-                            return;
-                        }
-
-                        if (authenticate is not null)
-                        {
-                            var principal = await authenticate(ctx).ConfigureAwait(false);
-                            if (principal is null)
-                            {
-                                ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                                return;
-                            }
-
-                            // SignalR reads UserIdentifier from HttpContext.User.
-                            ctx.User = principal;
-                        }
-                        else if (SharedHttpServerManager.GetResolvedPrincipal(ctx) is { } resolved)
-                        {
-                            ctx.User = resolved;
-                        }
-
-                        await next().ConfigureAwait(false);
-                    });
-                }
-
-                app.MapHub<RedbBridgeHub>(hubPath, ConfigureHubOptions);
-                // The server-mode producer resolves IHubContext from these services.
-                component.RegisterHubServices(Options.Host, Options.Port, app.Services);
-            },
-            // A hub maps itself instead of calling RegisterRoute, so this is where the listener
-            // learns it has to terminate TLS.
-            Options.Ssl, Options.SslCertPath, Options.SslCertPassword);
-    }
-
-    private void ConfigureHubOptions(HttpConnectionDispatcherOptions options)
-    {
-        options.Transports = Options.Transport switch
+        finally
         {
-            SignalRTransport.ServerSentEvents => HttpTransportType.ServerSentEvents,
-            SignalRTransport.LongPolling => HttpTransportType.LongPolling,
-            _ => HttpTransportType.WebSockets | HttpTransportType.ServerSentEvents | HttpTransportType.LongPolling
-        };
+            _hubGate.Release();
+        }
     }
 
     /// <summary>The endpoint options for external access.</summary>
@@ -379,6 +268,7 @@ public class SignalREndpoint : EndpointBase<SignalREndpointOptions>
     public override IConsumer CreateConsumer(IProcessor processor)
     {
         ArgumentNullException.ThrowIfNull(processor);
+        Volatile.Write(ref _servesHub, true);
         return new SignalRConsumer(this, processor, Options);
     }
 }

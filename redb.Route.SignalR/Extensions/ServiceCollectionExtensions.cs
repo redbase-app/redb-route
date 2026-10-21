@@ -17,17 +17,17 @@ public static class ServiceCollectionExtensions
         => AddRedbRouteSignalR(services, null);
 
     /// <summary>
-    /// Registers the SignalR component and lets the host configure the hub's listener.
+    /// Registers the SignalR component and lets the host configure its hubs.
     /// <para>
     /// This is the seam for everything the connector deliberately does not depend on: a backplane
     /// for scale-out, and authentication. A hub keeps its connections and groups in the memory of
-    /// one process, so <b>with more than one replica a backplane is required</b> — without it a
+    /// one process, so <b>with more than one replica a backplane is required</b>: without it a
     /// broadcast only reaches the clients attached to the replica that sent it.
     /// </para>
     /// <example><code>
     /// services.AddRedbRouteSignalR(o =>
     /// {
-    ///     o.ConfigureHubServices(s => s.AddStackExchangeRedis("redis:6379"));
+    ///     o.UseRedisBackplane("redis:6379"); // redb.Route.SignalR.StackExchangeRedis
     ///     o.Authenticate = async ctx => await myJwtValidator.ValidateAsync(
     ///         ctx.Request.Query["access_token"]);
     /// });
@@ -60,13 +60,13 @@ public static class ServiceCollectionExtensions
 }
 
 /// <summary>
-/// Host-supplied configuration for the SignalR hub listener. Everything here is a delegate on
+/// Host-supplied configuration for the SignalR hubs. Everything here is a delegate on
 /// purpose: the connector stays free of Redis, Azure and authentication dependencies, and the
 /// host, which knows its own infrastructure, supplies them.
 /// </summary>
 public sealed class SignalRRegistrationOptions
 {
-    internal Action<IServiceCollection>? HubServices { get; private set; }
+    internal Action<IServiceCollection, SignalRHubDescriptor>? HubServices { get; private set; }
 
     /// <summary>
     /// Authenticates a hub connection. Returns the principal to attach to the request (its
@@ -86,18 +86,26 @@ public sealed class SignalRRegistrationOptions
     public Func<Microsoft.AspNetCore.Http.HttpContext, Task<System.Security.Claims.ClaimsPrincipal?>>? Authenticate { get; set; }
 
     /// <summary>
-    /// Adds services to the hub's listener container: a SignalR backplane
-    /// (<c>AddStackExchangeRedis</c>, Azure SignalR), extra protocols, and so on. Note that this
-    /// container is built by the shared host and does NOT see the services of the application
-    /// hosting the route context, so anything needed here must be registered here.
+    /// Adds services to the container of each hub: a SignalR backplane, extra protocols, an
+    /// <c>IUserIdProvider</c>, hosted services, and so on. Every consumer endpoint has a container of
+    /// its own, so <paramref name="configure"/> runs once per hub, with the hub it is for. The container
+    /// does NOT see the services of the application hosting the route context: anything the hub needs
+    /// must be registered here.
+    /// <para>
+    /// For a Redis backplane prefer <c>UseRedisBackplane</c> from the
+    /// <c>redb.Route.SignalR.StackExchangeRedis</c> package: it keys the channels on the hub path. A
+    /// backplane added here by hand shares its channels between every hub of the same hub class, so
+    /// the hubs of one listener would see each other's broadcasts; keying its channels on
+    /// <see cref="SignalRHubDescriptor.Path"/> is then the host's job.
+    /// </para>
     /// </summary>
-    public SignalRRegistrationOptions ConfigureHubServices(Action<IServiceCollection> configure)
+    public SignalRRegistrationOptions ConfigureHubServices(Action<IServiceCollection, SignalRHubDescriptor> configure)
     {
         ArgumentNullException.ThrowIfNull(configure);
         var previous = HubServices;
         HubServices = previous is null
             ? configure
-            : s => { previous(s); configure(s); };
+            : (s, hub) => { previous(s, hub); configure(s, hub); };
         return this;
     }
 }

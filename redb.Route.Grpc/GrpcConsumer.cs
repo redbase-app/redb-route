@@ -52,7 +52,10 @@ public class GrpcConsumer : IConsumer
         _processor = processor ?? throw new ArgumentNullException(nameof(processor));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = (endpoint.Component as ComponentBase)?.Logger;
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
+
+    private readonly IHeaderFilterStrategy _headerFilter;
 
     /// <inheritdoc />
     public IEndpoint Endpoint => _endpoint;
@@ -264,7 +267,7 @@ public class GrpcConsumer : IConsumer
             // call, so writing it would just be bytes nobody reads. Detail travels in grpc-message and
             // any redbGrpc.Trailer.* headers.
             if (status == StatusCode.OK)
-                await WriteReply(http, outMessage, streaming, compressReply, ct).ConfigureAwait(false);
+                await WriteReply(http, outMessage, exchange, streaming, compressReply, ct).ConfigureAwait(false);
 
             Interlocked.Increment(ref _processedCount);
         }
@@ -309,7 +312,8 @@ public class GrpcConsumer : IConsumer
     /// any <c>IEnumerable</c> / <c>IAsyncEnumerable</c> body that is not itself a payload
     /// (<c>string</c>, <c>byte[]</c>) is written element by element as its own frame.
     /// </summary>
-    private async Task WriteReply(HttpContext http, IMessage outMessage, bool streaming, bool compress, CancellationToken ct)
+    private async Task WriteReply(HttpContext http, IMessage outMessage, IExchange exchange, bool streaming, bool compress,
+        CancellationToken ct)
     {
         if (!streaming && TryGetStreamItems(outMessage.Body, out _))
         {
@@ -327,13 +331,13 @@ public class GrpcConsumer : IConsumer
         {
             await foreach (var item in items!.WithCancellation(ct).ConfigureAwait(false))
             {
-                var frame = Encode(item, outMessage);
+                var frame = Encode(item, outMessage, exchange);
                 await GrpcWire.WriteMessageAsync(http.Response, frame, compress, ct).ConfigureAwait(false);
             }
             return;
         }
 
-        var single = Encode(outMessage.Body, outMessage);
+        var single = Encode(outMessage.Body, outMessage, exchange);
         await GrpcWire.WriteMessageAsync(http.Response, single, compress, ct).ConfigureAwait(false);
         // MessagesOut per exchange is the core's; frame-level counting doubled it.
     }
@@ -355,9 +359,9 @@ public class GrpcConsumer : IConsumer
     /// <summary>
     /// Encodes one reply item. In envelope mode it becomes a <c>RedbMessage</c> carrying the body plus
     /// the message headers; in raw mode the bytes go on the wire untouched, which is what a typed
-    /// <c>.proto</c> client expects.
+    /// <c>.proto</c> client expects. The envelope carries the headers the endpoint's strategy lets out.
     /// </summary>
-    private byte[] Encode(object? body, IMessage outMessage)
+    private byte[] Encode(object? body, IMessage outMessage, IExchange exchange)
     {
         if (!_options.UseEnvelope)
             return GrpcWire.ToBytes(body);
@@ -370,7 +374,7 @@ public class GrpcConsumer : IConsumer
         foreach (var (key, value) in outMessage.Headers)
         {
             if (value is null) continue;
-            if (GrpcHeaders.IsRedbHeader(key)) continue;
+            if (_headerFilter.FilterOutgoing(key, value, exchange)) continue;
             reply.Headers[key] = value.ToString() ?? string.Empty;
         }
 
@@ -451,11 +455,14 @@ public class GrpcConsumer : IConsumer
         }
 
         var message = new Message(body) { ContentType = GrpcWire.ProtoContentType };
+        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
 
-        // 1. Caller-supplied headers first — so our own metadata below cannot be overwritten by them.
+        // 1. Caller-supplied headers first — so our own metadata below cannot be overwritten by them. The reserved
+        //    prefixes are refused whatever the strategy says; the strategy decides the rest.
         foreach (var (key, value) in headers)
         {
             if (!Accept(key)) continue;
+            if (_headerFilter.FilterIncoming(key, value, exchange)) continue;
             message.Headers[key] = value;
         }
 
@@ -465,7 +472,9 @@ public class GrpcConsumer : IConsumer
             if (key.StartsWith(':')) continue;                                    // HTTP/2 pseudo-headers
             if (key.StartsWith("grpc-", StringComparison.OrdinalIgnoreCase)) continue;  // protocol plane
             if (!Accept(key)) continue;
-            message.Headers[key] = entry.Value.ToString();
+            var value = entry.Value.ToString();
+            if (_headerFilter.FilterIncoming(key, value, exchange)) continue;
+            message.Headers[key] = value;
         }
 
         // 2. Transport metadata last: it is ours, and it is what upstream processors trust.
@@ -504,7 +513,6 @@ public class GrpcConsumer : IConsumer
             message.Headers[GrpcHeaders.ClientCertNotAfter] = clientCert.NotAfter.ToUniversalTime().ToString("O");
         }
 
-        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         ExchangePrincipal.Set(exchange, SharedHttpServerManager.GetResolvedPrincipal(http));
         return exchange;
 

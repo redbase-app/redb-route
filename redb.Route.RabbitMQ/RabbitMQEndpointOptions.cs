@@ -13,6 +13,13 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
     [ConnectionParameter]
     public string Host { get; set; } = "localhost";
 
+    /// <summary>
+    /// A registry reference (<c>#name</c>) to an <see cref="redb.Route.Abstractions.IHeaderFilterStrategy"/> that
+    /// decides which headers this endpoint carries between the exchange and an AMQP message (a request, a consumed
+    /// message, an RPC reply both ways), in place of <see cref="RabbitMQHeaderFilterStrategy"/>.
+    /// </summary>
+    public string? HeaderFilterStrategy { get; set; }
+
     /// <summary>RabbitMQ port (default: 5672).</summary>
     [ConnectionParameter]
     public int Port { get; set; } = 5672;
@@ -57,7 +64,11 @@ public sealed class RabbitMQEndpointOptions : EndpointOptions
 
     // ── Queue ──
 
-    /// <summary>Queue name (empty = auto-generated exclusive queue).</summary>
+    /// <summary>
+    /// Queue name. Empty on a consumer: a temporary queue of its own (exclusive, auto-delete), named by the broker,
+    /// bound to the exchange and read under that name; it needs <c>declare=true</c>. Empty on a producer: no queue is
+    /// declared, the message goes to the exchange.
+    /// </summary>
     public string Queue { get; set; } = string.Empty;
 
     /// <summary>Whether queue survives broker restart.</summary>

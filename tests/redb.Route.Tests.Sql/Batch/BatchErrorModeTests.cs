@@ -43,7 +43,7 @@ public sealed class BatchErrorModeTests
         var producer = CreateProducer(context, connection, breakOnError: true);
         var exchange = new Exchange(new Message(Items(3)));
 
-        // Outcome.Of, not ThrowAsync<T>: FluentAssertions looks inside AggregateException, which would hide the wrapping.
+        // Outcome.Of, not ThrowAsync<T>: AwesomeAssertions looks inside AggregateException, which would hide the wrapping.
         var thrown = await Outcome.Of(() => producer.Process(exchange, CancellationToken.None));
 
         thrown.Should().BeOfType<FakeDbException>(

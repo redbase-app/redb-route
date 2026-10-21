@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using FluentAssertions;
+using AwesomeAssertions;
 using MimeKit;
 using MimeKit.Cryptography;
 using redb.Route.As2.Crypto;

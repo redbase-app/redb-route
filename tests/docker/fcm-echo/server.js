@@ -3,6 +3,7 @@
 //
 //   POST /v1/projects/{project}/messages:send  -> {"name":"projects/{project}/messages/{id}"}
 //     ?validate_only=true (dryRun) is accepted and recorded.
+//   POST/DELETE /v1/projects/{project}/registrations/{token}/topicSubscriptions[...] -> {} (topic management)
 //   GET    /messages  -> JSON array of every recorded send (envelope + received dryRun flag)
 //   DELETE /messages  -> clear the store (test isolation)
 //   GET    /healthz   -> ok
@@ -36,29 +37,30 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Topic management (FirebaseAdmin SubscribeToTopic/UnsubscribeFromTopic → IID batch API):
-  // POST /iid/v1:batchAdd | /iid/v1:batchRemove  body {to:"/topics/x", registration_tokens:[...]}
-  // Response: {"results":[{}...]} — one empty object per token = success.
-  if (req.method === 'POST' && (req.url === '/iid/v1:batchAdd' || req.url === '/iid/v1:batchRemove')) {
-    let body = '';
-    req.on('data', (chunk) => { body += chunk; });
+  // Topic management (FirebaseAdmin 3.7+ SubscribeToTopic/UnsubscribeFromTopic → FCM v1, one request per token):
+  //   POST   /v1/projects/{project}/registrations/{token}/topicSubscriptions?topic_name={topic}  body {}
+  //   DELETE /v1/projects/{project}/registrations/{token}/topicSubscriptions/{topic}?allow_missing=true
+  // Response: {} = success for that token. Each call is recorded as {project, envelope:{topicOp, topic, token}}.
+  const url = new URL(req.url, 'http://localhost');
+  const subscribeMatch = url.pathname.match(/^\/v1\/projects\/([^/]+)\/registrations\/([^/]+)\/topicSubscriptions$/);
+  const unsubscribeMatch = url.pathname.match(/^\/v1\/projects\/([^/]+)\/registrations\/([^/]+)\/topicSubscriptions\/([^/]+)$/);
+  const topicMatch = req.method === 'POST' ? subscribeMatch : req.method === 'DELETE' ? unsubscribeMatch : null;
+
+  if (topicMatch) {
+    req.resume();
     req.on('end', () => {
-      let parsed;
-      try {
-        parsed = JSON.parse(body);
-      } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'invalid JSON: ' + e.message }));
-        return;
-      }
+      const topic = req.method === 'POST' ? url.searchParams.get('topic_name') : decodeURIComponent(topicMatch[3]);
       messages.push({
-        project: (parsed.to || '').replace('/topics/', 'topic:'),
-        envelope: { topicOp: req.url.endsWith('batchAdd') ? 'add' : 'remove', request: parsed },
+        project: topicMatch[1],
+        envelope: {
+          topicOp: req.method === 'POST' ? 'add' : 'remove',
+          topic,
+          token: decodeURIComponent(topicMatch[2]),
+        },
         receivedAt: new Date().toISOString(),
       });
-      const results = (parsed.registration_tokens || []).map(() => ({}));
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ results }));
+      res.end('{}');
     });
     return;
   }

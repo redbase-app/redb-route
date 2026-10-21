@@ -45,7 +45,10 @@ public sealed class KafkaProducer : ConnectableProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
+
+    private readonly redb.Route.Abstractions.IHeaderFilterStrategy _headerFilter;
 
     /// <inheritdoc />
     protected override IEndpoint ProducerEndpoint => _endpoint;
@@ -429,10 +432,10 @@ public sealed class KafkaProducer : ConnectableProducer
         // Propagate headers (skip kafka.* internal ones)
         foreach (var (key, value) in exchange.In.Headers)
         {
-            if (KafkaHeaders.IsRedbHeader(key))
-                continue;
             // A consumed record keeps its content-type header next to ContentType: one on the wire, ContentType's.
             if (hasContentType && string.Equals(key, "content-type", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (_headerFilter.FilterOutgoing(key, value, exchange))
                 continue;
 
             try

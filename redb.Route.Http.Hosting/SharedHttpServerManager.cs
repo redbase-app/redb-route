@@ -181,16 +181,11 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Declares that the listener on <paramref name="host"/>:<paramref name="port"/> serves WebSocket
-    /// upgrades, so <c>UseWebSockets()</c> is installed when the server is built. Opt-in per listener:
-    /// a listener nobody asked for WebSockets on keeps the pipeline the HTTP-only transports have
-    /// always had, byte for byte.
-    /// <para>
-    /// Must be called BEFORE the server starts. Middleware cannot be added to a built
-    /// <see cref="WebApplication"/>, and silently ignoring the call would produce a listener that
-    /// rejects every upgrade with no explanation. In a route context this is satisfied naturally:
-    /// endpoints start before consumers, and only a consumer calls <see cref="EnsureStarted"/>.
-    /// </para>
+    /// Declares the listener on <paramref name="host"/>:<paramref name="port"/> for a transport that serves WebSocket
+    /// upgrades, with its TLS settings when this is the listener's first registration, and its keep-alive. Every
+    /// listener accepts upgrades (<c>UseWebSockets()</c> is part of every pipeline: endpoints mapped onto a running
+    /// listener, a SignalR hub, cannot add it later, and it touches only upgrade requests). The keep-alive is read
+    /// when the listener is built; on a running listener the call changes nothing.
     /// </summary>
     /// <param name="host">Listener host.</param>
     /// <param name="port">Listener port.</param>
@@ -198,6 +193,9 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
     /// Ping interval for idle connections. It is a property of the listener, not of a route, so the
     /// first non-null value wins and later ones are ignored.
     /// </param>
+    /// <param name="ssl">The listener terminates TLS, when this is its first registration.</param>
+    /// <param name="sslCertPath">Server certificate of a TLS listener.</param>
+    /// <param name="sslCertPassword">Password of <paramref name="sslCertPath"/>.</param>
     public void EnableWebSockets(string host, int port, TimeSpan? keepAliveInterval = null,
         bool ssl = false, string? sslCertPath = null, string? sslCertPassword = null)
     {
@@ -211,88 +209,83 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
             var entry = _servers.GetOrAdd(key, _ => new ServerEntry(host, port, ssl, sslCertPath, sslCertPassword,
                 0, HttpProtocol.Http1And2, null, null));
 
-            // Idempotent: asking again for something the listener already has is a no-op, so a
-            // consumer may repeat the call its endpoint already made. Only a listener that was
-            // built WITHOUT the middleware is a real problem, and that one fails loud.
-            if (entry.IsStarted)
-            {
-                if (entry.WebSocketsEnabled) return;
-
-                throw new InvalidOperationException(
-                    $"Server on {host}:{port} is already started without WebSocket support. " +
-                    "Enable it before the listener starts — from the endpoint's Start, which the route " +
-                    "context runs before any consumer.");
-            }
-
-            entry.WebSocketsEnabled = true;
-            entry.WebSocketKeepAlive ??= keepAliveInterval;
+            // Every listener accepts WebSocket upgrades (a hub mapped onto it later needs them, and
+            // middleware cannot be added to a running pipeline); what this call still decides is the
+            // keep-alive, read when the listener is built. A running listener keeps its own.
+            if (!entry.IsStarted)
+                entry.WebSocketKeepAlive ??= keepAliveInterval;
         }
     }
 
     /// <summary>
-    /// Registers configuration applied when the listener's <see cref="WebApplication"/> is built:
-    /// <paramref name="services"/> before <c>Build()</c>, <paramref name="endpoints"/> after it and
-    /// before the catch-all route. This is what lets a transport bring its own framework pieces
-    /// (SignalR hubs, authentication middleware, a backplane) without this package taking a
-    /// dependency on any of them.
+    /// Maps endpoints of a transport's own onto the listener on <paramref name="host"/>:<paramref name="port"/>, before
+    /// or after it started: a SignalR hub, a gRPC service, minimal API handlers. <paramref name="map"/> runs on an
+    /// <see cref="IEndpointRouteBuilder"/> whose <see cref="IEndpointRouteBuilder.ServiceProvider"/> is
+    /// <paramref name="services"/>, so a framework that takes its pieces from there (MapHub, MapConnections) builds
+    /// them from the transport's container and not from the listener's, which this package keeps to itself. Every
+    /// request to the endpoints runs in a scope of <paramref name="services"/> (<c>HttpContext.RequestServices</c>).
     /// <para>
-    /// Note that the shared host builds its own service container: it does not see the services of
-    /// the application that hosts the route context, so everything a configurator needs must be
-    /// registered by that configurator.
+    /// The endpoints join the running listener through endpoint routing, beside the route table: literal paths of
+    /// theirs win over the catch-all of the route table, and the connections the listener already serves are left
+    /// alone. Disposing the returned registration removes them the same way. The listener stays up while any route or
+    /// registration occupies it.
     /// </para>
-    /// <para>Must be called BEFORE the server starts, for the same reason as <see cref="EnableWebSockets"/>.</para>
+    /// <para>
+    /// A registration brings no middleware: the listener's pipeline (trusted proxies, CORS, the caller's principal,
+    /// WebSocket upgrades) is fixed when it is built. A gate of the transport's own belongs on its endpoints, as an
+    /// endpoint convention inside <paramref name="map"/>.
+    /// </para>
     /// </summary>
-    public ServerConfiguratorRegistration RegisterServerConfigurator(
+    /// <param name="host">Listener host.</param>
+    /// <param name="port">Listener port.</param>
+    /// <param name="services">The transport's container: the services its endpoints are built and served with.</param>
+    /// <param name="map">Maps the endpoints.</param>
+    /// <param name="ssl">The listener terminates TLS, when this is its first registration.</param>
+    /// <param name="sslCertPath">Server certificate of a TLS listener.</param>
+    /// <param name="sslCertPassword">Password of <paramref name="sslCertPath"/>.</param>
+    public EndpointRegistration RegisterEndpoints(
         string host,
         int port,
-        Action<IServiceCollection>? services = null,
-        Action<WebApplication>? endpoints = null,
+        IServiceProvider services,
+        Action<IEndpointRouteBuilder> map,
         bool ssl = false,
         string? sslCertPath = null,
         string? sslCertPassword = null)
     {
-        if (services is null && endpoints is null)
-            throw new ArgumentException("At least one of services/endpoints must be supplied.");
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(map);
+
+        var builder = new RegistrationRouteBuilder(services);
+        map(builder);
+        var endpoints = builder.Build();
+        if (endpoints.Count == 0)
+            throw new ArgumentException("The map callback mapped no endpoint.", nameof(map));
 
         var key = BuildKey(host, port);
-
         lock (_lock)
         {
-            // A transport that maps its own endpoints (a SignalR hub) may never call RegisterRoute,
-            // so this can be the only place its TLS settings ever reach the listener.
+            // A transport that maps its own endpoints may never call RegisterRoute, so this can be the only place its
+            // TLS settings ever reach the listener.
             var entry = _servers.GetOrAdd(key, _ => new ServerEntry(host, port, ssl, sslCertPath, sslCertPassword,
                 0, HttpProtocol.Http1And2, null, null));
 
             if (ssl && !entry.Ssl)
                 throw new InvalidOperationException(
-                    $"Server on {host}:{port} is already registered as HTTP. Cannot add an HTTPS hub to the same port.");
+                    $"Server on {host}:{port} is already registered as HTTP. Cannot add HTTPS endpoints to the same port.");
 
-            if (entry.IsStarted)
-                throw new InvalidOperationException(
-                    $"Server on {host}:{port} is already started — configurators must be registered before it starts. " +
-                    "Register them from the endpoint's Start (which runs before consumers).");
-
-            var registration = new ServerConfiguratorRegistration(host, port, services, endpoints);
-            entry.Configurators.Add(registration);
+            var registration = new EndpointRegistration(this, host, port, services, endpoints);
+            entry.Endpoints.Add(registration);
             return registration;
         }
     }
 
-    /// <summary>
-    /// Removes a configurator, so a transport that maps itself onto the listener can leave it the
-    /// way an HTTP consumer leaves by unregistering its route. The listener keeps running until
-    /// the last route AND the last configurator are gone.
-    /// </summary>
-    public void UnregisterServerConfigurator(ServerConfiguratorRegistration registration)
+    /// <summary>Removes the endpoints of a registration (<see cref="EndpointRegistration.Dispose"/>).</summary>
+    internal void UnregisterEndpoints(EndpointRegistration registration)
     {
-        ArgumentNullException.ThrowIfNull(registration);
-
-        var key = BuildKey(registration.Host, registration.Port);
-
         lock (_lock)
         {
-            if (_servers.TryGetValue(key, out var entry))
-                entry.Configurators.Remove(registration);
+            if (_servers.TryGetValue(BuildKey(registration.Host, registration.Port), out var entry))
+                entry.Endpoints.Remove(registration);
         }
     }
 
@@ -375,9 +368,9 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
             if (!_servers.TryGetValue(key, out entry))
                 return;
 
-            // A hub occupies the listener without registering a route, so both have to be empty
-            // before the socket can go away under a transport that is still serving.
-            if (entry.Routes.Count > 0 || entry.Configurators.Count > 0)
+            // Endpoints of a transport's own (a hub) occupy the listener without a route, so both have to
+            // be empty before the socket can go away under a transport that is still serving.
+            if (entry.Routes.Count > 0 || entry.Endpoints.Count > 0)
                 return;
 
             _servers.TryRemove(key, out _);
@@ -540,11 +533,8 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
 
         builder.Logging.ClearProviders();
 
-        // Transport-supplied service registrations (SignalR hubs, authentication, a backplane).
-        // Applied before Build() because that is the only moment a container can still be changed.
-        foreach (var registration in entry.Configurators.ToArray())
-            registration.Services?.Invoke(builder.Services);
-
+        // The listener's container is its own: a transport's endpoints come with their own container
+        // (RegisterEndpoints), so nothing has to be added to this one before Build().
         var app = builder.Build();
 
         // Trusted-proxy resolution. Installed first, before anything reads the connection: every
@@ -574,31 +564,27 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
             app.Use(PrincipalMiddleware(resolvePrincipal, _logger));
         }
 
-        // WebSocket upgrades, opt-in per listener (see EnableWebSockets). Installed after the
-        // proxy/CORS middleware so an upgrade request is seen with its real client address, and
-        // before the catch-all so a handler can accept the socket.
-        if (entry.WebSocketsEnabled)
-        {
-            var wsOptions = new WebSocketOptions();
-            if (entry.WebSocketKeepAlive is { } keepAlive)
-                wsOptions.KeepAliveInterval = keepAlive;
-            app.UseWebSockets(wsOptions);
-        }
+        // WebSocket upgrades, on every listener: endpoints mapped onto it later (a SignalR hub) cannot add the
+        // middleware to a running pipeline, and it acts on upgrade requests only. Installed after the proxy/CORS
+        // middleware so an upgrade request is seen with its real client address, and before the endpoints so a
+        // handler can accept the socket.
+        var wsOptions = new WebSocketOptions();
+        if (entry.WebSocketKeepAlive is { } keepAlive)
+            wsOptions.KeepAliveInterval = keepAlive;
+        app.UseWebSockets(wsOptions);
 
-        // Transport-supplied endpoints (SignalR MapHub and friends). Registered before the
-        // catch-all: the catch-all matches every path, and relying on route precedence to sort
-        // that out is not something to leave implicit.
-        foreach (var registration in entry.Configurators.ToArray())
-            registration.Endpoints?.Invoke(app);
+        // Endpoints of the transports' own (RegisterEndpoints), added and removed while the listener runs.
+        ((IEndpointRouteBuilder)app).DataSources.Add(entry.Endpoints);
 
-        // Single catch-all handler — our RouteTable dispatches dynamically
-        app.Map("/{**path}", (HttpContext ctx) => HandleCatchAll(entry, ctx));
+        // Single catch-all handler — our RouteTable dispatches dynamically. Last in order: a registered endpoint
+        // that matches a path as well as the catch-all does is the one that serves it.
+        app.Map("/{**path}", (HttpContext ctx) => HandleCatchAll(entry, ctx)).WithOrder(int.MaxValue);
         // Also handle root path
-        app.MapGet("/", (HttpContext ctx) => HandleCatchAll(entry, ctx));
-        app.MapPost("/", (HttpContext ctx) => HandleCatchAll(entry, ctx));
-        app.MapPut("/", (HttpContext ctx) => HandleCatchAll(entry, ctx));
-        app.MapDelete("/", (HttpContext ctx) => HandleCatchAll(entry, ctx));
-        app.MapMethods("/", ["PATCH", "HEAD", "OPTIONS"], (HttpContext ctx) => HandleCatchAll(entry, ctx));
+        app.MapGet("/", (HttpContext ctx) => HandleCatchAll(entry, ctx)).WithOrder(int.MaxValue);
+        app.MapPost("/", (HttpContext ctx) => HandleCatchAll(entry, ctx)).WithOrder(int.MaxValue);
+        app.MapPut("/", (HttpContext ctx) => HandleCatchAll(entry, ctx)).WithOrder(int.MaxValue);
+        app.MapDelete("/", (HttpContext ctx) => HandleCatchAll(entry, ctx)).WithOrder(int.MaxValue);
+        app.MapMethods("/", ["PATCH", "HEAD", "OPTIONS"], (HttpContext ctx) => HandleCatchAll(entry, ctx)).WithOrder(int.MaxValue);
 
         entry.App = app;
         await app.StartAsync(ct).ConfigureAwait(false);
@@ -866,22 +852,15 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
         /// </summary>
         public bool CorsEnabled { get; set; }
 
-        /// <summary>
-        /// True when a transport on this listener needs WebSocket upgrades (ws, wss, SignalR).
-        /// Opt-in per listener: without it the pipeline stays exactly what the HTTP-only
-        /// transports have always had.
-        /// </summary>
-        public bool WebSocketsEnabled { get; set; }
-
         /// <summary>Keep-alive interval for the WebSocket middleware; null leaves the framework default.</summary>
         public TimeSpan? WebSocketKeepAlive { get; set; }
 
         /// <summary>
-        /// Transports that configure the listener itself instead of registering a route (a SignalR
-        /// hub maps itself). They are occupants of the listener just like routes: the server stays
-        /// up while any of them is present, and stops when the last one leaves.
+        /// Endpoints of the transports' own (a SignalR hub), each with its container. They are occupants of the
+        /// listener just like routes: the server stays up while any of them is present, and stops when the last
+        /// one leaves.
         /// </summary>
-        public List<ServerConfiguratorRegistration> Configurators { get; } = [];
+        public DynamicEndpointSource Endpoints { get; } = new();
 
         private readonly TemplateMatcher[] _matchers = [];
         private volatile (TemplateMatcher matcher, RouteRegistration reg, string[]? methods)[]? _compiled;
@@ -1057,32 +1036,6 @@ public sealed class RouteRegistration
     }
 }
 
-/// <summary>
-/// Handle for a listener configurator: what a transport that maps itself onto the shared host
-/// (a SignalR hub) holds instead of a <see cref="RouteRegistration"/>. Holding one keeps the
-/// listener alive, and giving it back is how the transport leaves.
-/// </summary>
-public sealed class ServerConfiguratorRegistration
-{
-    /// <summary>Bind host of the listener this configurator belongs to.</summary>
-    public string Host { get; }
-
-    /// <summary>Bind port of the listener this configurator belongs to.</summary>
-    public int Port { get; }
-
-    internal Action<IServiceCollection>? Services { get; }
-
-    internal Action<WebApplication>? Endpoints { get; }
-
-    internal ServerConfiguratorRegistration(string host, int port,
-        Action<IServiceCollection>? services, Action<WebApplication>? endpoints)
-    {
-        Host = host;
-        Port = port;
-        Services = services;
-        Endpoints = endpoints;
-    }
-}
 
 /// <summary>
 /// Per-route CORS configuration applied by the shared HTTP server's dispatch middleware.

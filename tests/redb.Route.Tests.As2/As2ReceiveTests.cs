@@ -4,7 +4,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using MimeKit;
 using redb.Route.Abstractions;
 using redb.Route.As2;

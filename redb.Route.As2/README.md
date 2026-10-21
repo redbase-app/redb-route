@@ -309,6 +309,28 @@ and asynchronous MDNs already in flight, and cancels them when the drain times o
 
 ---
 
+## Headers
+
+The producer sends the exchange's own headers as HTTP headers of the message, except the MIME, AS2 and hop-by-hop
+fields it sets itself, `Host`, and the credentials of another hop (`Authorization`, `Cookie`, `Set-Cookie`). The
+receiver takes the request headers, except the pseudo-headers, the S/MIME wrapper and hop-by-hop fields and the
+credentials that authenticated the hop.
+
+`headerFilterStrategy=#name` names an `IHeaderFilterStrategy` in the registry that decides, within those limits,
+which headers cross, as in Apache Camel. It replaces the default, `As2HeaderFilterStrategy` (keeps `redbAs2.*` back),
+entirely; derive from that class to add to it. The excluded fields above stay excluded whatever the strategy says.
+
+```csharp
+ctx.AddToRegistry("correlationOnly", new DefaultHeaderFilterStrategy
+{
+    OutFilter = ["Correlation-ID"],
+    FilterOnMatch = false,   // a whitelist: only the listed headers go out
+});
+// as2://partner.example/as2?connectionFactory=acme&headerFilterStrategy=#correlationOnly
+```
+
+---
+
 ## Limits and known gaps
 
 - **Revocation** of certificates (CRL/OCSP) is not checked, nor is the chain: the pin is the trust. Validity periods

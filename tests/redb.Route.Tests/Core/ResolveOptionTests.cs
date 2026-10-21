@@ -1,7 +1,7 @@
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Expressions;
-using FluentAssertions;
+using AwesomeAssertions;
 
 namespace redb.Route.Tests.Core;
 

@@ -13,6 +13,13 @@ public sealed class KafkaEndpointOptions : EndpointOptions
     /// <summary>Comma-separated list of Kafka broker addresses (required).</summary>
     public string Brokers { get; set; } = string.Empty;
 
+    /// <summary>
+    /// A registry reference (<c>#name</c>) to an <see cref="redb.Route.Abstractions.IHeaderFilterStrategy"/> that decides
+    /// which headers this endpoint carries between the exchange and a record, in place of
+    /// <see cref="KafkaHeaderFilterStrategy"/>.
+    /// </summary>
+    public string? HeaderFilterStrategy { get; set; }
+
     /// <summary>Security protocol for broker communication.</summary>
     public string SecurityProtocol { get; set; } = "Plaintext";
 

@@ -30,7 +30,9 @@ public class VmComponent : ComponentBase
         var options = new VmEndpointOptions();
         options.BindFromUri(uri.RawParameters);
         options.Validate();
-        return _endpoints.GetOrAdd(uri.BaseKey, _ => new VmEndpoint(uri, this, options));
+        // Keyed with the parameters: a producer's headerFilterStrategy must not be lost to, or leak into, a consumer of
+        // the same name in this context. Both find the queue by name (Uri.BaseKey) in the shared registry.
+        return _endpoints.GetOrAdd(uri.NormalizedKey, _ => new VmEndpoint(uri, this, options));
     }
 
     /// <summary>Resolves the shared registry from DI. Returns null if not registered.</summary>
@@ -57,6 +59,14 @@ public class VmEndpointOptions : EndpointOptions
     /// an explicit choice: a consumer slower than its senders then grows the queue without limit.
     /// </summary>
     public int Size { get; set; } = 1000;
+
+    /// <summary>
+    /// Producer only: a registry reference (<c>#name</c>) to an <see cref="IHeaderFilterStrategy"/> deciding which
+    /// headers the copy handed to the other context carries (its outgoing direction). Without it every header goes.
+    /// Apache Camel's <c>vm</c> has no such option (its <c>direct-vm</c> has); a vm call has no reply to filter.
+    /// </summary>
+    [EndpointRole(EndpointRole.Producer)]
+    public string? HeaderFilterStrategy { get; set; }
 
     /// <inheritdoc />
     public override void Validate()
@@ -97,7 +107,16 @@ public class VmEndpoint : EndpointBase<VmEndpointOptions>
     public VmEndpoint(EndpointUri uri, VmComponent component, VmEndpointOptions options)
         : base(uri, component, options)
     {
+        _headerFilter = new EndpointHeaderFilter(this, options.HeaderFilterStrategy);
     }
+
+    private readonly EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The strategy <c>headerFilterStrategy=#name</c> names, or <c>null</c>: vm has no default strategy. A name the
+    /// registry does not hold fails when the producer is built.
+    /// </summary>
+    internal IHeaderFilterStrategy? HeaderFilterStrategy => _headerFilter.Configured;
 
     /// <inheritdoc />
     public override IProducer CreateProducer() => new VmProducer(this);
@@ -106,6 +125,11 @@ public class VmEndpoint : EndpointBase<VmEndpointOptions>
     public override IConsumer CreateConsumer(IProcessor processor)
     {
         ArgumentNullException.ThrowIfNull(processor);
+        var written = EndpointOptions.WrittenForOtherRole(Options.GetType(), Uri, EndpointRole.Consumer);
+        if (written.Count > 0)
+            throw new InvalidOperationException(
+                $"vm consumer '{EndpointUri.Sanitize(Uri.NormalizedKey)}' sets {string.Join(", ", written)}, which " +
+                "applies to the sending side (.To); a consumer has nothing to filter. Move it to the producer URI.");
         return new VmConsumer(this, processor, Options);
     }
 }
@@ -116,6 +140,7 @@ public class VmEndpoint : EndpointBase<VmEndpointOptions>
 public class VmProducer : IProducer
 {
     private readonly VmEndpoint _endpoint;
+    private readonly IHeaderFilterStrategy? _headerFilter;
     private ILogger? _logger;
 
     /// <summary>Creates a VM producer.</summary>
@@ -123,12 +148,21 @@ public class VmProducer : IProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _logger = (endpoint.Component as ComponentBase)?.Logger;
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
 
     /// <inheritdoc />
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
         var copy = exchange.Clone();
+        if (_headerFilter is not null)
+        {
+            foreach (var (name, value) in copy.In.Headers.ToList())
+            {
+                if (_headerFilter.FilterOutgoing(name, value, copy))
+                    copy.In.Headers.Remove(name);
+            }
+        }
         // The copy runs later on the vm consumer, a unit of work of its own: it must not see the sending
         // .Transacted() block as its own.
         TransactedActions.DetachFromBlock(copy);

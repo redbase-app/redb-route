@@ -22,11 +22,11 @@
   <!-- MIME: SOAP with Attachments on MimeKit, the same library redb.Route.As2 and redb.Route.Mail use
        (docs/as4/09-OPEN-QUESTIONS.md, No. 7). -->
   <ItemGroup>
-    <PackageReference Include="System.Security.Cryptography.Xml" Version="9.0.18" />
-    <PackageReference Include="MimeKit" Version="4.16.0" />
+    <PackageReference Include="System.Security.Cryptography.Xml" />
+    <PackageReference Include="MimeKit" />
     <!-- Streamed AES-GCM (GcmBlockCipher): .NET AesGcm needs whole buffers. The version MimeKit 4.16.0 brings,
          declared because the connector calls it directly (docs/as4/09-OPEN-QUESTIONS.md). -->
-    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+    <PackageReference Include="BouncyCastle.Cryptography" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

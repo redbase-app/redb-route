@@ -15,9 +15,9 @@
     <!-- Pro, the tier the module runs on under Tsak (Tsak:Redb:UsePro is true by default). It is free
          through redb 4.x and needs no license key; ChangeTracking saves are a Pro feature. -->
     <PackageReference Include="redb.MSSql.Pro" Version="$(RedbVersion)" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.3" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.3" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.3" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.13" />
   </ItemGroup>
 
   <ItemGroup>

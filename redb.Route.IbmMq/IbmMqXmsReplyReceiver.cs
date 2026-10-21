@@ -1,5 +1,6 @@
 using IBM.XMS;
 using Microsoft.Extensions.Logging;
+using redb.Route.Abstractions;
 using RouteMessage = redb.Route.Core.Message;
 using XmsMessage = IBM.XMS.IMessage;
 
@@ -24,7 +25,10 @@ internal sealed class IbmMqXmsReplyReceiver
 {
     private readonly IbmMqEndpointOptions _options;
     private readonly ILogger? _logger;
-    private readonly Action<string, RouteMessage> _onReply; // (correlationKey, response)
+    private readonly IHeaderFilterStrategy _headerFilter;
+    // (correlationKey, build): build makes the response for the request exchange the key belongs to, whose strategy
+    // lets the reply's user headers in against that exchange.
+    private readonly Action<string, Func<IExchange, RouteMessage>> _onReply;
 
     private IConnection? _connection;
     private ISession? _session;
@@ -34,10 +38,12 @@ internal sealed class IbmMqXmsReplyReceiver
     /// <summary>Bare MQ queue name to set on outgoing requests' <c>ReplyToQueueName</c>.</summary>
     public string ReplyQueueName { get; private set; } = string.Empty;
 
-    public IbmMqXmsReplyReceiver(IbmMqEndpointOptions options, ILogger? logger, Action<string, RouteMessage> onReply)
+    public IbmMqXmsReplyReceiver(IbmMqEndpointOptions options, ILogger? logger, IHeaderFilterStrategy headerFilter,
+        Action<string, Func<IExchange, RouteMessage>> onReply)
     {
         _options = options;
         _logger = logger;
+        _headerFilter = headerFilter;
         _onReply = onReply;
     }
 
@@ -101,7 +107,7 @@ internal sealed class IbmMqXmsReplyReceiver
             try { corr = message.JMSCorrelationIDAsBytes; } catch { /* no correlation */ }
             var correlKey = IbmMqMessageHelper.BytesToHex(corr ?? Array.Empty<byte>());
 
-            _onReply(correlKey, BuildResponse(message));
+            _onReply(correlKey, request => BuildResponse(message, request));
         }
         catch (Exception ex)
         {
@@ -109,7 +115,7 @@ internal sealed class IbmMqXmsReplyReceiver
         }
     }
 
-    private RouteMessage BuildResponse(XmsMessage message)
+    private RouteMessage BuildResponse(XmsMessage message, IExchange request)
     {
         object body;
         string? contentType;
@@ -136,7 +142,7 @@ internal sealed class IbmMqXmsReplyReceiver
         var response = new RouteMessage(body) { ContentType = contentType };
 
         // Same redbIbmMq.* metadata and user headers the poll reply path stamps on the response.
-        IbmMqXmsHeaderMapper.CopyToHeaders(message, response, ReplyQueueName, _options);
+        IbmMqXmsHeaderMapper.CopyToHeaders(message, response, ReplyQueueName, _options, _headerFilter, request);
 
         return response;
     }

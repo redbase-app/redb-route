@@ -12,10 +12,14 @@
     <!-- One place for the redb package version. -->
     <RedbVersion>4.3.0</RedbVersion>
 
+    <!-- Versions live in these files: the demo is copied out as it is, where no central
+         Directory.Packages.props applies (the one of redb.Route, found walking up in this tree, is not used). -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+
     <!-- EF Core for the part of the model that stays in an EF Core DbContext. Its SQL Server provider
-         must accept the Microsoft.Data.SqlClient version redb.MSSql and the Tsak worker ship (7.0.3):
-         EF Core 10.0.12 needs 6.1.6 or later. -->
-    <EfCoreVersion>10.0.12</EfCoreVersion>
+         must accept the Microsoft.Data.SqlClient version redb.MSSql and the Tsak worker ship (7.1.1):
+         EF Core 10.0.13 needs 6.1.6 or later. -->
+    <EfCoreVersion>10.0.13</EfCoreVersion>
   </PropertyGroup>
 
 </Project>

@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Mail;
 
 namespace redb.Route.Tests.Mail;

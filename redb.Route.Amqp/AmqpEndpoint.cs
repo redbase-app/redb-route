@@ -35,7 +35,22 @@ public sealed class AmqpEndpoint : EndpointBase<AmqpEndpointOptions>
         _component = component;
         Logger = component.Logger;
         Address = uri.Path;
+        // AMQP 1.0 (3.5.3): a terminus that asks the peer for a dynamic node carries no address.
+        if (options.Dynamic && !string.IsNullOrEmpty(Address))
+            throw new ArgumentException(
+                $"AMQP endpoint '{uri}': 'dynamic=true' asks the broker to create a node and name it, so the URI names "
+                + $"no address; drop '{Address}' or 'dynamic'.");
+        _headerFilter = new EndpointHeaderFilter(this, options.HeaderFilterStrategy);
     }
+
+    private readonly EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The header filter strategy of this endpoint: the one <c>headerFilterStrategy=#name</c> names, or
+    /// <see cref="AmqpHeaderFilterStrategy.Default"/>. A name the registry does not hold fails when the producer or
+    /// consumer is built.
+    /// </summary>
+    internal IHeaderFilterStrategy HeaderFilterStrategy => _headerFilter.Or(AmqpHeaderFilterStrategy.Default);
 
     /// <summary>Typed access to options.</summary>
     internal new AmqpEndpointOptions Options => base.Options;
@@ -59,7 +74,8 @@ public sealed class AmqpEndpoint : EndpointBase<AmqpEndpointOptions>
     /// </summary>
     internal Target BuildTargetTerminus() => new()
     {
-        Address = Address,
+        Address = Options.Dynamic ? null : Address,
+        Dynamic = Options.Dynamic,
         Durable = Options.Durable,
         ExpiryPolicy = Options.ResolveExpiryPolicy(),
         Timeout = Options.TerminusTimeout,
@@ -68,7 +84,8 @@ public sealed class AmqpEndpoint : EndpointBase<AmqpEndpointOptions>
     /// <summary>Terminus for the receiver side — same wiring as <see cref="BuildTargetTerminus"/>.</summary>
     internal Source BuildSourceTerminus() => new()
     {
-        Address = Address,
+        Address = Options.Dynamic ? null : Address,
+        Dynamic = Options.Dynamic,
         Durable = Options.Durable,
         ExpiryPolicy = Options.ResolveExpiryPolicy(),
         Timeout = Options.TerminusTimeout,
@@ -93,7 +110,12 @@ public sealed class AmqpEndpoint : EndpointBase<AmqpEndpointOptions>
             RcvSettleMode = (ReceiverSettleMode)Options.ReceiverSettleMode,
         };
 
-        var sender = new SenderLink(_session!, linkName, attach, null);
+        // A dynamic target is a node the broker creates and names; the attach answer carries that name.
+        OnAttached? onAttached = Options.Dynamic
+            ? (_, remote) => Logger?.LogInformation("AMQP sender link {Name} sends to the dynamic node {Address}",
+                linkName, (remote.Target as Target)?.Address)
+            : null;
+        var sender = new SenderLink(_session!, linkName, attach, onAttached);
 
         Logger?.LogDebug("AMQP sender link created: address={Address}, name={Name}", Address, linkName);
         return sender;
@@ -119,13 +141,13 @@ public sealed class AmqpEndpoint : EndpointBase<AmqpEndpointOptions>
     /// </para>
     /// </summary>
     internal async Task<(Session Session, ReceiverLink Receiver)> CreateDedicatedReceiverAsync(
-        string? name = null, CancellationToken ct = default)
+        string? name = null, OnAttached? onAttached = null, CancellationToken ct = default)
     {
         var connection = await _component.GetOrCreateConnectionAsync(this, ct).ConfigureAwait(false);
         var session = new Session(connection);
         try
         {
-            var receiver = BuildReceiver(session, name);
+            var receiver = BuildReceiver(session, name, onAttached);
             return (session, receiver);
         }
         catch
@@ -136,7 +158,7 @@ public sealed class AmqpEndpoint : EndpointBase<AmqpEndpointOptions>
     }
 
     /// <summary>Builds a configured <see cref="ReceiverLink"/> (source, filters, credit) on the given session.</summary>
-    private ReceiverLink BuildReceiver(Session session, string? name)
+    private ReceiverLink BuildReceiver(Session session, string? name, OnAttached? onAttached = null)
     {
         var linkName = name ?? $"receiver-{Address}-{Guid.NewGuid():N}";
 
@@ -169,7 +191,7 @@ public sealed class AmqpEndpoint : EndpointBase<AmqpEndpointOptions>
             RcvSettleMode = (ReceiverSettleMode)Options.ReceiverSettleMode,
         };
 
-        var receiver = new ReceiverLink(session, linkName, attach, null);
+        var receiver = new ReceiverLink(session, linkName, attach, onAttached);
         receiver.SetCredit(Options.Credit, true);
 
         Logger?.LogDebug("AMQP receiver link created: address={Address}, name={Name}, credit={Credit}",

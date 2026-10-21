@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Xml;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Soap;
 
 namespace redb.Route.Tests.Soap;

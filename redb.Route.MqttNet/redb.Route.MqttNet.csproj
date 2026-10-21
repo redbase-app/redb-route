@@ -12,7 +12,7 @@
     <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="MQTTnet" Version="5.1.0.1559" />
+    <PackageReference Include="MQTTnet" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

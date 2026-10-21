@@ -38,8 +38,15 @@ internal enum ItemLookup
 /// </summary>
 internal static class BatchItemAccessor
 {
-    private static readonly ConcurrentDictionary<Type, PropertyInfo[]?> PocoProperties = new();
-    private static readonly ConcurrentDictionary<(Type Type, string Name), PropertyInfo?> PocoMatches = new();
+    // Weak per type: a POCO of an unloadable module (collectible load context) does not stay alive in this cache.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, PocoShape> PocoShapes = new();
+
+    /// <summary>A POCO type's readable properties (null: no named values) and the property each name matched.</summary>
+    private sealed class PocoShape(PropertyInfo[]? properties)
+    {
+        public PropertyInfo[]? Properties { get; } = properties;
+        public ConcurrentDictionary<string, PropertyInfo?> Matches { get; } = new(StringComparer.Ordinal);
+    }
 
     /// <summary>Looks <paramref name="name"/> up in a batch item: by key in a map or JSON object, by property in a POCO.</summary>
     internal static ItemLookup Find(object? item, string name, out object? value) => Find(item, name, readProperties: true, out value);
@@ -141,11 +148,11 @@ internal static class BatchItemAccessor
     {
         value = null;
         var type = item.GetType();
-        var properties = PocoProperties.GetOrAdd(type, ReadableProperties);
-        if (properties is null)
+        var shape = PocoShapes.GetValue(type, static t => new PocoShape(ReadableProperties(t)));
+        if (shape.Properties is not { } properties)
             return ItemLookup.NoNamedValues;
 
-        var property = PocoMatches.GetOrAdd((type, name), static (key, all) => ColumnNameMatcher.Find(all, key.Name), properties);
+        var property = shape.Matches.GetOrAdd(name, static (key, all) => ColumnNameMatcher.Find(all, key), properties);
         if (property is null)
             return ItemLookup.Missing;
 

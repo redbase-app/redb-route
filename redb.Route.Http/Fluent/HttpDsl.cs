@@ -82,7 +82,9 @@ public sealed class HttpBuilder
 
     // Producer
     private bool? _throwOnError;
-    private bool? _bridgeHeaders;
+    private bool _skipRequestHeaders;
+    private bool _skipControlHeaders;
+    private string? _headerFilterStrategy;
     private string? _authScheme;
     private string? _authToken;
     private string? _username;
@@ -90,7 +92,7 @@ public sealed class HttpBuilder
     private string? _connectionFactory;
     private bool? _followRedirects;
     private string? _maxRedirects;
-    private bool? _copyResponseHeaders;
+    private bool _skipResponseHeaders;
     private bool _preserveHostHeader;
 
     // Query-string parameters
@@ -141,8 +143,25 @@ public sealed class HttpBuilder
     /// <summary>Disable throwing on non-success HTTP status codes. Default is to throw.</summary>
     public HttpBuilder NoThrowOnError() { _throwOnError = false; return this; }
 
-    /// <summary>Disable bridging headers from the exchange to the HTTP request. Default is on.</summary>
-    public HttpBuilder NoBridgeHeaders() { _bridgeHeaders = false; return this; }
+    /// <summary>Do not map exchange headers to request headers (<c>skipRequestHeaders=true</c>).</summary>
+    public HttpBuilder SkipRequestHeaders() { _skipRequestHeaders = true; return this; }
+
+    /// <summary>
+    /// Do not let <c>redbHttp.Method</c> / <c>redbHttp.Query</c> on the exchange steer the request
+    /// (<c>skipControlHeaders=true</c>).
+    /// </summary>
+    public HttpBuilder SkipControlHeaders() { _skipControlHeaders = true; return this; }
+
+    /// <summary>
+    /// The header filter strategy of the endpoint, by registry name (<c>headerFilterStrategy=#name</c>): an
+    /// <see cref="redb.Route.Abstractions.IHeaderFilterStrategy"/> registered in the context.
+    /// </summary>
+    public HttpBuilder HeaderFilterStrategy(string registryName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(registryName);
+        _headerFilterStrategy = registryName.TrimStart('#');
+        return this;
+    }
 
     /// <summary>Use HTTP Basic authentication.</summary>
     public HttpBuilder BasicAuth(IExpression username, IExpression password)
@@ -180,8 +199,8 @@ public sealed class HttpBuilder
     /// <summary>Maximum number of redirects from an expression.</summary>
     public HttpBuilder MaxRedirects(IExpression max) { _maxRedirects = max.ToTemplateString(); return this; }
 
-    /// <summary>Disable copying response headers to the exchange. Default is on.</summary>
-    public HttpBuilder NoCopyResponseHeaders() { _copyResponseHeaders = false; return this; }
+    /// <summary>Do not map response headers to exchange headers (<c>skipResponseHeaders=true</c>).</summary>
+    public HttpBuilder SkipResponseHeaders() { _skipResponseHeaders = true; return this; }
 
     /// <summary>Preserve the original Host header when proxying.</summary>
     public HttpBuilder PreserveHostHeader() { _preserveHostHeader = true; return this; }
@@ -348,7 +367,9 @@ public sealed class HttpBuilder
 
         // Producer
         AppendBoolFalse("throwOnError", _throwOnError);
-        AppendBoolFalse("bridgeHeaders", _bridgeHeaders);
+        AppendBool("skipRequestHeaders", _skipRequestHeaders);
+        AppendBool("skipControlHeaders", _skipControlHeaders);
+        AppendIf("headerFilterStrategy", _headerFilterStrategy);
         AppendIf("authScheme", _authScheme);
         AppendIf("authToken", _authToken);
         AppendIf("username", _username);
@@ -356,7 +377,7 @@ public sealed class HttpBuilder
         AppendIf("connectionFactory", _connectionFactory);
         AppendBoolFalse("followRedirects", _followRedirects);
         AppendIf("maxRedirects", _maxRedirects);
-        AppendBoolFalse("copyResponseHeaders", _copyResponseHeaders);
+        AppendBool("skipResponseHeaders", _skipResponseHeaders);
         AppendBool("preserveHostHeader", _preserveHostHeader);
 
         // Consumer host/port as query params (producer embeds them in URL path)

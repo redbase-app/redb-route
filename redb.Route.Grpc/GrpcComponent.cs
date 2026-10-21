@@ -201,7 +201,17 @@ public class GrpcEndpoint : EndpointBase<GrpcEndpointOptions>
     public GrpcEndpoint(EndpointUri uri, GrpcComponent component, GrpcEndpointOptions options)
         : base(uri, component, options)
     {
+        _headerFilter = new EndpointHeaderFilter(this, options.HeaderFilterStrategy);
     }
+
+    private readonly EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The header filter strategy of this endpoint: the one <c>headerFilterStrategy=#name</c> names, or
+    /// <see cref="GrpcHeaderFilterStrategy.Default"/>. A name the registry does not hold fails when the producer or
+    /// consumer is built.
+    /// </summary>
+    internal IHeaderFilterStrategy HeaderFilterStrategy => _headerFilter.Or(GrpcHeaderFilterStrategy.Default);
 
     /// <summary>The endpoint options for external access.</summary>
     internal GrpcEndpointOptions EndpointOptions => Options;

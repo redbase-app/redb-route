@@ -7,6 +7,7 @@ import { scanRoutes, RouteEntry } from "./routescan";
 import { elementPosition } from "./elementposition";
 import { skeletonsFor } from "./skeletons";
 import { skeletonPlace } from "./skeletonscope";
+import { beanNames, referencePosition } from "./beanref";
 import { buildIndex, ElementInfo, ElementIndex } from "./graphmodel";
 import { RouteGraphEditorProvider } from "./grapheditor";
 
@@ -36,6 +37,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.commands.registerCommand("redbRoute.showMermaid", showMermaid),
         vscode.languages.registerCompletionItemProvider(
             "xml", new SkeletonCompletionProvider(buildIndex(elements)), "<"),
+        vscode.languages.registerCompletionItemProvider(
+            "xml", new BeanReferenceCompletionProvider(), "#"),
         RouteGraphEditorProvider.register(context),
         vscode.commands.registerCommand("redbRoute.openGraph", async (uri?: vscode.Uri) => {
             const target = uri ?? vscode.window.activeTextEditor?.document.uri;
@@ -108,6 +111,32 @@ class SkeletonCompletionProvider implements vscode.CompletionItemProvider {
                 skeleton.label, vscode.CompletionItemKind.Snippet);
             item.detail = skeleton.detail;
             item.insertText = new vscode.SnippetString(skeleton.body);
+            item.range = range;
+            return item;
+        });
+    }
+}
+
+// ── registry references: `#` offers the beans the document declares ──
+
+/**
+ * The names of the document's `<bean name>` at a registry-reference position (beanref.ts). No
+ * type filter and no diagnostics: a wrong or missing bean is the pack gate's finding.
+ */
+class BeanReferenceCompletionProvider implements vscode.CompletionItemProvider {
+    provideCompletionItems(
+        document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem[] {
+        const text = document.getText();
+        if (sniff(text)?.kind !== "routes")
+            return [];
+        const where = referencePosition(text, document.offsetAt(position));
+        if (!where.ok)
+            return [];
+
+        const range = new vscode.Range(document.positionAt(where.replaceFrom), position);
+        return beanNames(text).map(name => {
+            const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Reference);
+            item.detail = "<bean> of this document";
             item.range = range;
             return item;
         });

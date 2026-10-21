@@ -335,6 +335,35 @@ public sealed class ElasticsearchIntegrationTests : IAsyncLifetime
         await getProducer.Stop();
     }
 
+    [Fact]
+    public async Task Delete_MissingDocument_CompletesWithNotFoundResult()
+    {
+        var index = UniqueIndex();
+
+        // The index must exist, so the only thing missing is the document.
+        var ep = CreateEndpoint(index, "refresh=wait_for");
+        var producer = ep.CreateProducer();
+        await producer.Start();
+        var indexExchange = new Exchange(new Message(new JsonObject { ["title"] = "Kept" }.ToJsonString()));
+        indexExchange.In.Headers[ElasticsearchHeaders.DocumentId] = "kept-1";
+        await producer.Process(indexExchange);
+        await producer.Stop();
+
+        var delEp = CreateEndpointWithOp(ElasticsearchOperationType.Delete, index, "refresh=wait_for");
+        var delProducer = delEp.CreateProducer();
+        await delProducer.Start();
+
+        var delExchange = new Exchange(new Message());
+        delExchange.In.Headers[ElasticsearchHeaders.DocumentId] = "no-such-document";
+        var act = () => delProducer.Process(delExchange);
+
+        // Elastic.Clients.Elasticsearch 8.19.27 takes the 404 of a delete for a valid response:
+        // the exchange goes on, and the result header is the way to tell the miss.
+        await act.Should().NotThrowAsync();
+        delExchange.In.Headers[ElasticsearchHeaders.Result].Should().Be("NotFound");
+        await delProducer.Stop();
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  COUNT
     // ═══════════════════════════════════════════════════════════════════

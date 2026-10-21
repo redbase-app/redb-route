@@ -9,9 +9,9 @@
     <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Chr.Avro" Version="10.13.1" />
-    <PackageReference Include="Chr.Avro.Binary" Version="10.13.1" />
-    <PackageReference Include="Chr.Avro.Json" Version="10.13.1" />
+    <PackageReference Include="Chr.Avro" />
+    <PackageReference Include="Chr.Avro.Binary" />
+    <PackageReference Include="Chr.Avro.Json" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

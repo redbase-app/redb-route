@@ -1,0 +1,164 @@
+<Project>
+  <!--
+    redb security baseline: the patched versions of the packages that guard security or parse foreign input, for every
+    redb project of this repository and of its public mirrors (the mirror scripts copy this file to the root of each).
+
+    Why a baseline and not a version in each csproj: on 2026-10-13 Microsoft fixed XML signature, CMS and SignalR, and
+    every one of those packages was pinned here, by hand, at the last vulnerable version of its .NET line. Pkcs was
+    pinned nowhere: it came in transitively, in four versions. One file now raises the direct references, pins the
+    transitive one where it enters the graph, and the build refuses a vulnerable package (NuGetAudit below).
+    Plan and audit of 2026-10-15: redb.Route/docs/as4/11-XML-HARDENING.md.
+
+    Two branches, by how the project manages its package versions (RELEASE_ARTIFACTS.md, E28):
+    - central package management (Directory.Packages.props of a module): the guarded packages get their PackageVersion
+      HERE and nowhere else. A module file that lists one of them again fails the build (NU1506 as an error below):
+      the module's entry is evaluated first and would win, and a lower version passed in Debug with a warning only.
+      Transitive pinning puts Pkcs at the baseline version wherever it enters the graph, and the published package
+      names it as a dependency (checked with dotnet pack on 2026-10-19), so no direct Pkcs reference is added.
+    - no central management (the templates, which unfold on the user's machine without our props, and any project not
+      moved yet): the direct references are raised with PackageReference Update, Pkcs is referenced directly.
+    A Version on a PackageReference is an error under central management (NU1008), hence the split.
+
+    A project opts out with <RedbSecurityBaseline>false</RedbSecurityBaseline>. Projects whose name does not start
+    with "redb" (other products that live in this tree) are left alone.
+
+    Raising a version: change it here, list the vulnerable packages of the four solutions (dotnet list package with
+    the vulnerable and include-transitive options, or scripts/check-vulnerable-packages.ps1), compile. Never lower a
+    version here to make a build pass.
+  -->
+
+  <PropertyGroup Condition="'$(RedbSecurityBaseline)' == '' and $(MSBuildProjectName.ToLowerInvariant().StartsWith('redb'))">
+    <RedbSecurityBaseline>true</RedbSecurityBaseline>
+  </PropertyGroup>
+
+  <!--
+    Under central management the guarded versions are a rule of the whole module, not of redb-named projects only: a
+    demo with another name that references MailKit would otherwise make the module file list it, and that entry would
+    then repeat ours for every redb project of the module (NU1506). Only an explicit opt-out keeps a project out.
+  -->
+  <PropertyGroup Condition="'$(ManagePackageVersionsCentrally)' == 'true' and '$(RedbSecurityBaseline)' != 'false'">
+    <_RedbCentral>true</_RedbCentral>
+  </PropertyGroup>
+
+  <!-- The .NET line of the inner build; empty in the outer build of a multi-targeted project, which restores nothing. -->
+  <PropertyGroup Condition="('$(RedbSecurityBaseline)' == 'true' or '$(_RedbCentral)' == 'true') and '$(TargetFramework)' != '' and '$(TargetFrameworkIdentifier)' == '.NETCoreApp'">
+    <_RedbNetMajor>$([System.Version]::Parse('$(TargetFrameworkVersion.TrimStart(`v`))').Major)</_RedbNetMajor>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(RedbSecurityBaseline)' == 'true' or '$(_RedbCentral)' == 'true'">
+    <RedbSecMessagePackVersion>3.1.12</RedbSecMessagePackVersion>
+    <RedbSecMimeKitVersion>4.18.1</RedbSecMimeKitVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(_RedbNetMajor)' != ''">
+    <!--
+      ASP.NET Core packages follow the line of the framework they talk to (the SignalR client must match the hub's
+      framework line): each .NET line gets its own patch.
+    -->
+    <RedbSecAspNetCoreVersion Condition="'$(_RedbNetMajor)' == '8'">8.0.32</RedbSecAspNetCoreVersion>
+    <RedbSecAspNetCoreVersion Condition="'$(_RedbNetMajor)' == '9'">9.0.21</RedbSecAspNetCoreVersion>
+    <RedbSecAspNetCoreVersion Condition="'$(_RedbNetMajor)' == '10'">10.0.13</RedbSecAspNetCoreVersion>
+
+    <!--
+      The same line for the packages that only run on top of the ASP.NET Core shared framework of the target and are
+      not guarded for security (the Redis backplane of SignalR): one source of the numbers, a name of its own.
+    -->
+    <RedbAspNetCoreLineVersion>$(RedbSecAspNetCoreVersion)</RedbAspNetCoreLineVersion>
+
+    <!--
+      System.Security.Cryptography.Xml and .Pkcs: one version for every line. MimeKit 4.18 requires Pkcs 10.0 or later
+      on every framework, net8.0 included (NU1109 with 9.0.x), and the 10.0 packages run on net8.0 and net9.0;
+      Microsoft.AspNetCore.DataProtection 9.x (redb.Identity) accepts 10.0 too.
+    -->
+    <RedbSecCryptoVersion>10.0.13</RedbSecCryptoVersion>
+  </PropertyGroup>
+
+  <!-- ============ Central package management: the guarded versions live here ============ -->
+
+  <PropertyGroup Condition="'$(_RedbCentral)' == 'true'">
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1506</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(_RedbCentral)' == 'true'">
+    <PackageVersion Include="MessagePack" Version="$(RedbSecMessagePackVersion)" />
+    <PackageVersion Include="MailKit" Version="$(RedbSecMimeKitVersion)" />
+    <PackageVersion Include="MimeKit" Version="$(RedbSecMimeKitVersion)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(_RedbCentral)' == 'true' and '$(RedbSecAspNetCoreVersion)' != ''">
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="$(RedbSecAspNetCoreVersion)" />
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Common" Version="$(RedbSecAspNetCoreVersion)" />
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="$(RedbSecAspNetCoreVersion)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(_RedbCentral)' == 'true' and '$(_RedbNetMajor)' != ''">
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="$(RedbSecCryptoVersion)" />
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="$(RedbSecCryptoVersion)" />
+  </ItemGroup>
+
+  <!-- ============ No central management: raise the direct references, reference Pkcs ============ -->
+
+  <!-- Direct references: raised wherever a project declares them, whatever version the csproj names. -->
+  <ItemGroup Condition="'$(RedbSecurityBaseline)' == 'true' and '$(_RedbCentral)' != 'true'">
+    <PackageReference Update="MessagePack" Version="$(RedbSecMessagePackVersion)" />
+    <PackageReference Update="MailKit" Version="$(RedbSecMimeKitVersion)" />
+    <PackageReference Update="MimeKit" Version="$(RedbSecMimeKitVersion)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(RedbSecAspNetCoreVersion)' != '' and '$(_RedbCentral)' != 'true'">
+    <PackageReference Update="Microsoft.AspNetCore.SignalR.Client" Version="$(RedbSecAspNetCoreVersion)" />
+    <PackageReference Update="Microsoft.AspNetCore.SignalR.Common" Version="$(RedbSecAspNetCoreVersion)" />
+    <PackageReference Update="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="$(RedbSecAspNetCoreVersion)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(_RedbNetMajor)' != '' and '$(_RedbCentral)' != 'true'">
+    <PackageReference Update="System.Security.Cryptography.Xml" Version="$(RedbSecCryptoVersion)" />
+    <PackageReference Update="System.Security.Cryptography.Pkcs" Version="$(RedbSecCryptoVersion)" />
+  </ItemGroup>
+
+  <!--
+    ============ Packages of the ASP.NET Core line of the target framework ============
+    Not a security baseline: packages that run on top of the ASP.NET Core shared framework the project targets, so
+    each target framework takes the package of its own line (RELEASE_ARTIFACTS.md, E28). A module file cannot say
+    that: its PackageVersion is one version for every target, and a multi-targeted package then builds for one line
+    only. Same two branches as above; a module file that lists one of these again fails the build (NU1506).
+  -->
+  <ItemGroup Condition="'$(_RedbCentral)' == 'true' and '$(RedbAspNetCoreLineVersion)' != ''">
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.StackExchangeRedis" Version="$(RedbAspNetCoreLineVersion)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(RedbAspNetCoreLineVersion)' != '' and '$(_RedbCentral)' != 'true'">
+    <PackageReference Update="Microsoft.AspNetCore.SignalR.StackExchangeRedis" Version="$(RedbAspNetCoreLineVersion)" />
+  </ItemGroup>
+
+  <!--
+    Pkcs is never referenced directly: it enters with SqlClient, MimeKit / MailKit, the XML signature package and
+    ASP.NET Core DataProtection. It is pinned in the projects that reference one of those, so the package they publish
+    names the patched version; a project that reaches it through a project reference gets the nearest one. A project
+    that takes redb.MSSql as an already published package (the documentation site does) gets whatever Pkcs that
+    release named, so redb.MSSql and redb.MSSql.Pro count as packages that bring it.
+  -->
+  <ItemGroup Condition="'$(_RedbNetMajor)' != '' and '$(_RedbCentral)' != 'true'
+                        and '@(PackageReference->AnyHaveMetadataValue('Identity', 'System.Security.Cryptography.Pkcs'))' != 'true'
+                        and ('@(PackageReference->AnyHaveMetadataValue('Identity', 'Microsoft.Data.SqlClient'))' == 'true'
+                          or '@(PackageReference->AnyHaveMetadataValue('Identity', 'redb.MSSql'))' == 'true'
+                          or '@(PackageReference->AnyHaveMetadataValue('Identity', 'redb.MSSql.Pro'))' == 'true'
+                          or '@(PackageReference->AnyHaveMetadataValue('Identity', 'MimeKit'))' == 'true'
+                          or '@(PackageReference->AnyHaveMetadataValue('Identity', 'MailKit'))' == 'true'
+                          or '@(PackageReference->AnyHaveMetadataValue('Identity', 'System.Security.Cryptography.Xml'))' == 'true'
+                          or '@(PackageReference->AnyHaveMetadataValue('Identity', 'Microsoft.AspNetCore.DataProtection'))' == 'true')">
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="$(RedbSecCryptoVersion)" />
+  </ItemGroup>
+
+  <!--
+    The gate: restore reports vulnerable packages, transitive ones included, from moderate up; a Release build refuses
+    them. A Debug build only warns, so local work goes on while a fresh advisory is being handled.
+  -->
+  <PropertyGroup Condition="'$(RedbSecurityBaseline)' == 'true'">
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>moderate</NuGetAuditLevel>
+    <WarningsAsErrors Condition="'$(Configuration)' == 'Release'">$(WarningsAsErrors);NU1902;NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+</Project>

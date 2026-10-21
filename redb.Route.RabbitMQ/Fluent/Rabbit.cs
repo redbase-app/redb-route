@@ -15,7 +15,29 @@ namespace redb.Route.RabbitMQ;
 public static class Rabbit
 {
     /// <summary>Creates a RabbitMQ endpoint for the given queue name.</summary>
-    public static RabbitBuilder Queue(string name) => new(name);
+    public static RabbitBuilder Queue(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException(
+                "A queue name is required. For an endpoint on an exchange without a queue name (a producer that publishes "
+                + "to the exchange, a consumer on a temporary queue of its own) use Rabbit.Exchange(name, type).",
+                nameof(name));
+        return new RabbitBuilder(name);
+    }
+
+    /// <summary>
+    /// Creates a RabbitMQ endpoint on an exchange, without a queue name (<c>rabbitmq:?exchange=...</c>). A producer
+    /// publishes to the exchange with the routing key. A consumer reads a temporary queue of its own (exclusive,
+    /// auto-delete) that the broker names and that is bound to the exchange, so every consumer of a fanout exchange
+    /// gets its copy of each message; it needs <see cref="RabbitBuilder.Declare"/>, and fails at start without it.
+    /// </summary>
+    /// <param name="name">Exchange name (template string, supports <c>${...}</c>).</param>
+    /// <param name="type">Exchange type: direct, topic, fanout or headers.</param>
+    public static RabbitBuilder Exchange(string name, string? type = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return new RabbitBuilder(string.Empty).Exchange(name, type);
+    }
 }
 
 /// <summary>
@@ -93,11 +115,8 @@ public sealed class RabbitBuilder
     private bool _revocationSoftFail;
     private RabbitMQAuthMechanism _authMechanism;
 
-    internal RabbitBuilder(string queue)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(queue);
-        _queue = queue;
-    }
+    // The entry points check the name: Rabbit.Queue requires one, Rabbit.Exchange passes none.
+    internal RabbitBuilder(string queue) => _queue = queue;
 
     // ── Connection ────────────────────────────────────────────────────
 

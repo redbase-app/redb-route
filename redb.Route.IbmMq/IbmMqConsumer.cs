@@ -58,7 +58,10 @@ public sealed class IbmMqConsumer : IConsumer
         _processor = processor ?? throw new ArgumentNullException(nameof(processor));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = endpoint.Logger;
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
+
+    private readonly IHeaderFilterStrategy _headerFilter;
 
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
@@ -428,15 +431,15 @@ public sealed class IbmMqConsumer : IConsumer
         if (_options.MqmdReadEnabled)
             IbmMqMessageHelper.CopyMqmdToHeaders(mqMsg, routeMsg, _endpoint.Destination, _options.QueueManager);
 
-        // Copy RFH2 user properties → headers
-        IbmMqMessageHelper.CopyRfh2UserProperties(mqMsg, routeMsg);
+        // Copy RFH2 user properties → headers, as the endpoint's strategy lets them in
+        var exchange = Exchange.Create(routeMsg, _endpoint.ScopeFactory);
+        IbmMqMessageHelper.CopyRfh2UserProperties(mqMsg, routeMsg, _headerFilter, exchange);
 
         // Determine exchange pattern
         var hasReplyTo = !string.IsNullOrWhiteSpace(mqMsg.ReplyToQueueName);
         var isRequest = mqMsg.MessageType == MQC.MQMT_REQUEST;
         var pattern = hasReplyTo && isRequest ? ExchangePattern.InOut : ExchangePattern.InOnly;
 
-        var exchange = Exchange.Create(routeMsg, _endpoint.ScopeFactory);
         exchange.Pattern = pattern;
         return exchange;
     }
@@ -474,7 +477,7 @@ public sealed class IbmMqConsumer : IConsumer
             if (_options.TargetClient != IbmMqTargetClient.Mq)
             {
                 var headerSource = exchange.HasOut ? exchange.Out! : exchange.In;
-                IbmMqMessageHelper.CopyHeadersToRfh2(reply, headerSource);
+                IbmMqMessageHelper.CopyHeadersToRfh2(reply, headerSource, _headerFilter, exchange);
             }
 
             var replyQueueName = originalMsg.ReplyToQueueName.Trim();

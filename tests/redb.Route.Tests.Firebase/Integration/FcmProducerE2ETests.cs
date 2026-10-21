@@ -197,8 +197,9 @@ public sealed class FcmProducerE2ETests : IAsyncLifetime
 
     // ═══ Д6: topic management ═══
 
+    // FirebaseAdmin 3.7 manages topics through FCM v1: one topicSubscriptions request per token.
     [Fact]
-    public async Task Fcm_SubscribeToTopic_SendsIidBatchAdd()
+    public async Task Fcm_SubscribeToTopic_SendsOneSubscriptionPerToken()
     {
         var topic = $"news-{Guid.NewGuid():N}";
         using var cred = new FcmEchoCredentialProvider(ProjectId);
@@ -214,15 +215,15 @@ public sealed class FcmProducerE2ETests : IAsyncLifetime
         exchange.In.Headers[FcmHeaders.FailureCount].Should().Be(0);
 
         var ops = await FetchTopicOpsAsync(topic);
-        ops.Should().HaveCount(1);
-        ops[0].GetProperty("envelope").GetProperty("topicOp").GetString().Should().Be("add");
-        ops[0].GetProperty("envelope").GetProperty("request")
-            .GetProperty("registration_tokens").EnumerateArray()
-            .Select(t => t.GetString()).Should().BeEquivalentTo(["sub-1", "sub-2"]);
+        ops.Should().HaveCount(2, "one FCM v1 subscription request per token");
+        ops.Select(op => op.GetProperty("envelope").GetProperty("topicOp").GetString())
+            .Should().AllBe("add");
+        ops.Select(op => op.GetProperty("envelope").GetProperty("token").GetString())
+            .Should().BeEquivalentTo(["sub-1", "sub-2"]);
     }
 
     [Fact]
-    public async Task Fcm_UnsubscribeFromTopic_SendsIidBatchRemove()
+    public async Task Fcm_UnsubscribeFromTopic_SendsOneRemovalPerToken()
     {
         var topic = $"news-{Guid.NewGuid():N}";
         using var cred = new FcmEchoCredentialProvider(ProjectId);
@@ -239,6 +240,7 @@ public sealed class FcmProducerE2ETests : IAsyncLifetime
         var ops = await FetchTopicOpsAsync(topic);
         ops.Should().HaveCount(1);
         ops[0].GetProperty("envelope").GetProperty("topicOp").GetString().Should().Be("remove");
+        ops[0].GetProperty("envelope").GetProperty("token").GetString().Should().Be("un-1");
     }
 
     // ── Helpers ──
@@ -247,8 +249,9 @@ public sealed class FcmProducerE2ETests : IAsyncLifetime
     {
         var json = await _echo.GetStringAsync($"{EchoBase}/messages");
         return JsonSerializer.Deserialize<List<JsonElement>>(json)!
-            .Where(m => m.GetProperty("envelope").TryGetProperty("request", out var r)
-                        && r.GetProperty("to").GetString() == $"/topics/{topic}")
+            .Where(m => m.GetProperty("project").GetString() == ProjectId
+                        && m.GetProperty("envelope").TryGetProperty("topic", out var t)
+                        && t.GetString() == topic)
             .ToList();
     }
 

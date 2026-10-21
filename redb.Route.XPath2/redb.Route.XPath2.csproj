@@ -16,7 +16,7 @@
     <!-- MS-PL, and the only dependency in the graph: the base package has none of its own.
          XPath2.Extensions is deliberately NOT referenced — it is MIT but pulls Newtonsoft.Json,
          which this framework removed on purpose, and it adds only non-official extras we do not use. -->
-    <PackageReference Include="XPath2" Version="1.1.5" />
+    <PackageReference Include="XPath2" />
   </ItemGroup>
 
 </Project>

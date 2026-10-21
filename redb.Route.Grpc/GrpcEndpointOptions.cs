@@ -57,6 +57,13 @@ public class GrpcEndpointOptions : EndpointOptions
 
     // ── Common ──────────────────────────────────────────
 
+    /// <summary>
+    /// A registry reference (<c>#name</c>) to an <see cref="redb.Route.Abstractions.IHeaderFilterStrategy"/> that
+    /// decides which headers this endpoint carries between the exchange and call metadata or envelope headers (a
+    /// call, a request, a reply both ways), in place of <see cref="GrpcHeaderFilterStrategy"/>.
+    /// </summary>
+    public string? HeaderFilterStrategy { get; set; }
+
     /// <summary>Deadline (timeout) in milliseconds. Default: 30000 (30s). 0 = no deadline.</summary>
     public int Deadline { get; set; } = 30_000;
 

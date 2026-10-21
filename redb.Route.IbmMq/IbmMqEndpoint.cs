@@ -32,7 +32,17 @@ public sealed class IbmMqEndpoint : EndpointBase<IbmMqEndpointOptions>
         _component = component;
         Logger = component.Logger;
         Destination = uri.Path;
+        _headerFilter = new EndpointHeaderFilter(this, options.HeaderFilterStrategy);
     }
+
+    private readonly EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The header filter strategy of this endpoint: the one <c>headerFilterStrategy=#name</c> names, or
+    /// <see cref="IbmMqHeaderFilterStrategy.Default"/>. A name the registry does not hold fails when the producer or
+    /// consumer is built.
+    /// </summary>
+    internal IHeaderFilterStrategy HeaderFilterStrategy => _headerFilter.Or(IbmMqHeaderFilterStrategy.Default);
 
     /// <summary>Typed access to options.</summary>
     internal new IbmMqEndpointOptions Options => base.Options;

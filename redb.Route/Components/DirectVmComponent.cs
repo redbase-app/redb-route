@@ -24,7 +24,12 @@ public class DirectVmComponent : ComponentBase
     public override IEndpoint CreateEndpoint(EndpointUri uri)
     {
         ArgumentNullException.ThrowIfNull(uri);
-        return _endpoints.GetOrAdd(uri.BaseKey, _ => new DirectVmEndpoint(uri, this));
+        var options = new DirectVmEndpointOptions();
+        options.BindFromUri(uri.RawParameters);
+        options.Validate();
+        // Keyed with the parameters: a producer's headerFilterStrategy must not be lost to, or leak into, a consumer of
+        // the same name in this context. The call itself finds its target by name (Uri.BaseKey) in the shared registry.
+        return _endpoints.GetOrAdd(uri.NormalizedKey, _ => new DirectVmEndpoint(uri, this, options));
     }
 
     /// <summary>Resolves the shared registry from DI. Returns null if not registered.</summary>
@@ -35,10 +40,20 @@ public class DirectVmComponent : ComponentBase
 }
 
 /// <summary>
-/// Options for direct-vm endpoints. Currently no parameters needed.
+/// Options for direct-vm endpoints.
 /// </summary>
 public class DirectVmEndpointOptions : EndpointOptions
 {
+    /// <summary>
+    /// Producer only, as in Apache Camel 3: a registry reference (<c>#name</c>) to an
+    /// <see cref="IHeaderFilterStrategy"/> for the call, in both directions. With it the called context works on a
+    /// copy of the exchange that carries the headers the strategy lets out; when the call returns, the caller keeps
+    /// its own headers and takes the reply's body and the reply headers the strategy lets in. Without it (the
+    /// default) the called context works on the caller's own exchange and every header crosses both ways.
+    /// </summary>
+    [EndpointRole(EndpointRole.Producer)]
+    public string? HeaderFilterStrategy { get; set; }
+
     /// <inheritdoc />
     public override void Validate() { }
 }
@@ -55,10 +70,19 @@ public class DirectVmEndpoint : EndpointBase<DirectVmEndpointOptions>
     internal string Name => Uri.BaseKey;
 
     /// <summary>Creates a new direct-vm endpoint.</summary>
-    public DirectVmEndpoint(EndpointUri uri, DirectVmComponent component)
-        : base(uri, component, new DirectVmEndpointOptions())
+    public DirectVmEndpoint(EndpointUri uri, DirectVmComponent component, DirectVmEndpointOptions options)
+        : base(uri, component, options)
     {
+        _headerFilter = new EndpointHeaderFilter(this, options.HeaderFilterStrategy);
     }
+
+    private readonly EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The strategy <c>headerFilterStrategy=#name</c> names, or <c>null</c>: direct-vm has no default strategy. A name
+    /// the registry does not hold fails when the producer is built.
+    /// </summary>
+    internal IHeaderFilterStrategy? HeaderFilterStrategy => _headerFilter.Configured;
 
     /// <inheritdoc />
     public override IProducer CreateProducer() => new DirectVmProducer(this);
@@ -67,6 +91,12 @@ public class DirectVmEndpoint : EndpointBase<DirectVmEndpointOptions>
     public override IConsumer CreateConsumer(IProcessor processor)
     {
         ArgumentNullException.ThrowIfNull(processor);
+        var written = EndpointOptions.WrittenForOtherRole(Options.GetType(), Uri, EndpointRole.Consumer);
+        if (written.Count > 0)
+            throw new InvalidOperationException(
+                $"direct-vm consumer '{EndpointUri.Sanitize(Uri.NormalizedKey)}' sets {string.Join(", ", written)}, " +
+                "which applies to the calling side (.To), as in Apache Camel; a consumer has nothing to filter. " +
+                "Move it to the producer URI.");
         return new DirectVmConsumer(this, processor);
     }
 }
@@ -77,6 +107,7 @@ public class DirectVmEndpoint : EndpointBase<DirectVmEndpointOptions>
 public class DirectVmProducer : IProducer
 {
     private readonly DirectVmEndpoint _endpoint;
+    private readonly IHeaderFilterStrategy? _headerFilter;
     private ILogger? _logger;
 
     /// <summary>Creates a direct-vm producer.</summary>
@@ -84,6 +115,7 @@ public class DirectVmProducer : IProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _logger = (_endpoint.Component as ComponentBase)?.Logger;
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
 
     /// <inheritdoc />
@@ -98,6 +130,12 @@ public class DirectVmProducer : IProducer
                 $"No consumer registered for direct-vm endpoint '{_endpoint.Name}'. " +
                 "Ensure the consumer route is started before sending.");
 
+        if (_headerFilter is not null)
+        {
+            await ProcessFiltered(processor, exchange, _headerFilter, ct).ConfigureAwait(false);
+            return;
+        }
+
         // direct-vm: runs the target route — in another context — on THIS exchange, and the target's
         // first step stamps exchange.RouteId; nothing restores it, so after the call the caller would
         // carry the callee's id and its own route span and step metrics would be attributed to the callee.
@@ -111,6 +149,64 @@ public class DirectVmProducer : IProducer
         finally
         {
             exchange.RouteId = callerRouteId;
+        }
+    }
+
+    /// <summary>
+    /// The call under a header filter strategy, Apache Camel 3's <c>DirectVmProducer</c>: the called context works on a
+    /// copy, so dropping a header there never takes it from the caller. The copy shares the caller's DI scope, unit of
+    /// work and properties (<see cref="IExchange.CloneLinked"/>), as the zero-copy call does. When it returns, the
+    /// caller keeps its own headers and takes the reply's body, content type and the reply headers the strategy lets
+    /// in, plus the copy's properties, exception and stop, which the zero-copy call would have left on it.
+    /// </summary>
+    private static async Task ProcessFiltered(IProcessor processor, IExchange exchange, IHeaderFilterStrategy headerFilter,
+        CancellationToken ct)
+    {
+        var submitted = exchange.CloneLinked();
+        try
+        {
+            foreach (var (name, value) in submitted.In.Headers.ToList())
+            {
+                if (headerFilter.FilterOutgoing(name, value, submitted))
+                    submitted.In.Headers.Remove(name);
+            }
+
+            try
+            {
+                await processor.Process(submitted, ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                var reply = submitted.HasOut ? submitted.Out! : submitted.In;
+                exchange.In.Body = reply.Body;
+                exchange.In.ContentType = reply.ContentType;
+                foreach (var (name, value) in reply.Headers)
+                {
+                    if (!headerFilter.FilterIncoming(name, value, submitted))
+                        exchange.In.Headers[name] = value;
+                }
+
+                foreach (var (key, value) in submitted.Properties)
+                {
+                    if (!ExchangeResources.IsOwnedByExchange(key))
+                        exchange.Properties[key] = value;
+                }
+
+                if (submitted.Exception is not null)
+                {
+                    exchange.Exception = submitted.Exception;
+                    exchange.ExceptionHandled = submitted.ExceptionHandled;
+                }
+
+                if (submitted.IsStopped)
+                    exchange.Stop();
+            }
+        }
+        finally
+        {
+            // A streamed reply body now on the caller keeps its connection until the caller ends, as with Enrich.
+            ExchangeResources.HandOver(submitted, exchange);
+            await submitted.DisposeAsync().ConfigureAwait(false);
         }
     }
 

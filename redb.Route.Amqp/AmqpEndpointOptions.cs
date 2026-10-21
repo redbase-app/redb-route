@@ -22,6 +22,13 @@ public sealed class AmqpEndpointOptions : EndpointOptions
     /// <summary>Broker host. Comma-separated for failover. (default: localhost)</summary>
     public string Host { get; set; } = "localhost";
 
+    /// <summary>
+    /// A registry reference (<c>#name</c>) to an <see cref="redb.Route.Abstractions.IHeaderFilterStrategy"/> that
+    /// decides which headers this endpoint carries between the exchange and AMQP application-properties (a request,
+    /// a consumed message, a reply both ways), in place of <see cref="AmqpHeaderFilterStrategy"/>.
+    /// </summary>
+    public string? HeaderFilterStrategy { get; set; }
+
     /// <summary>Broker port. (default: 5672)</summary>
     public int Port { get; set; } = 5672;
 

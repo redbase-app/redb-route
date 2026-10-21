@@ -31,7 +31,18 @@ public sealed class As2Endpoint : EndpointBase<As2EndpointOptions>
         // URL from the scheme + path. Consumer URIs are path-style ("/inbound/orders") and skip this.
         if (string.IsNullOrEmpty(options.PartnerUrl) && uri.Path.Length > 0 && !uri.Path.StartsWith('/'))
             options.PartnerUrl = (options.UseTls ? "https://" : "http://") + uri.Path;
+
+        _headerFilter = new EndpointHeaderFilter(this, options.HeaderFilterStrategy);
     }
+
+    private readonly EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The header filter strategy of this endpoint: the one <c>headerFilterStrategy=#name</c> names, or
+    /// <see cref="As2HeaderFilterStrategy.Default"/>. A name the registry does not hold fails when the producer or
+    /// consumer is built.
+    /// </summary>
+    internal IHeaderFilterStrategy HeaderFilterStrategy => _headerFilter.Or(As2HeaderFilterStrategy.Default);
 
     /// <inheritdoc />
     public override IProducer CreateProducer() => new As2Producer(this, Options);

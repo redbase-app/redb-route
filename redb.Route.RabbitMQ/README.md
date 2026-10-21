@@ -22,7 +22,7 @@ rabbitmq://queue-name?host=localhost&exchange=my-exchange&routingKey=order.*
 ### Fluent DSL
 
 ```csharp
-using redb.Route.RabbitMQ.Fluent;
+using redb.Route.RabbitMQ;
 
 // Consumer with exchange binding
 From(Rabbit.Queue("orders")
@@ -44,6 +44,24 @@ From("direct://outbound")
         .DeadLetterExchange("dlx")
         .DeadLetterRoutingKey("failed"));
 ```
+
+### An exchange without a queue name
+
+`Rabbit.Exchange(name, type)` builds an endpoint with no queue name (`rabbitmq:?exchange=...`). A producer publishes to
+the exchange; a consumer reads a temporary queue of its own (exclusive, auto-delete) that the broker names and that is
+bound to the exchange, so every instance of a fanout consumer gets its copy of each message. The consumer needs
+`.Declare()`: without it nothing creates and binds the temporary queue, and it fails at start.
+
+```csharp
+// Every instance of the application gets each notification
+From(Rabbit.Exchange("ui-notify", "fanout").ConnectionFactory("rabbit").Declare())
+    .To("direct://push-to-browsers");
+
+From("direct://notify")
+    .To(Rabbit.Exchange("ui-notify", "fanout").ConnectionFactory("rabbit").Declare());
+```
+
+`Rabbit.Queue("")` is refused and names `Rabbit.Exchange`: an empty queue name is a different endpoint, not a queue.
 
 ## Fluent Builder API
 
@@ -91,6 +109,27 @@ From("direct://outbound")
 
 See the framework-wide **Transactions** guide (`TRANSACTIONS.md` in the
 [redb.Route repository](https://github.com/redbase-app/redb)).
+
+## Headers
+
+Exchange headers become AMQP headers of a published message and of an RPC reply, and the AMQP headers of a delivery
+or an RPC reply come back as exchange headers. A header named after a basic property (`MessageId`, `CorrelationId`,
+`ReplyTo`...) goes into that property instead; `redbRmq.*` headers are exchange metadata and stay back.
+
+`headerFilterStrategy=#name` names an `IHeaderFilterStrategy` in the registry that decides which headers the
+endpoint carries, as in Apache Camel: outgoing for a published request and a consumer's RPC reply, incoming for a
+delivery and the reply a request-reply producer receives. It replaces the default, `RabbitMQHeaderFilterStrategy`,
+entirely; derive from that class to add to it. The basic properties and the consumer's `redbRmq.*` metadata are set
+whatever the strategy says.
+
+```csharp
+ctx.AddToRegistry("correlationOnly", new DefaultHeaderFilterStrategy
+{
+    OutFilter = ["Correlation-ID"],
+    FilterOnMatch = false,   // a whitelist: only the listed headers go out
+});
+// rabbitmq://orders?host=localhost&headerFilterStrategy=#correlationOnly
+```
 
 ## Part of
 

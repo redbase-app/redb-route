@@ -28,6 +28,15 @@ public sealed class AmqpConsumer : IConsumer
     // session + receiver link and drives a single serial receive loop. AMQPNetLite sessions/links are
     // not thread-safe, so concurrency comes from N independent workers, never from sharing one link.
     private readonly List<Worker> _workers = new();
+
+    // The node the consumer reads: the URI address, or the name the broker gave a dynamic node.
+    private string _address;
+
+    /// <summary>
+    /// The node this consumer reads: the address of the URI, or, with <c>dynamic=true</c>, the name the broker gave
+    /// the node it created (known once <see cref="Start"/> has returned). Senders reach the consumer at this address.
+    /// </summary>
+    public string Address => _address;
     private CancellationTokenSource? _cts;
     private readonly InflightDrainGuard _drain = new();
 
@@ -51,12 +60,31 @@ public sealed class AmqpConsumer : IConsumer
         _processor = processor ?? throw new ArgumentNullException(nameof(processor));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = endpoint.Logger;
+        _address = endpoint.Address;
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
+
+    private readonly IHeaderFilterStrategy _headerFilter;
 
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
         var workerCount = Math.Max(1, _options.ResolvedConcurrentConsumers);
+        _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
+
+        // Each worker is a receiver link of its own. On a MULTICAST (topic) address every link is a subscription
+        // that gets a COPY of each message, and every dynamic link gets a node of its own: N workers would not
+        // share the work, they would process each message N times or read N different nodes. One link, as IBM MQ
+        // does for a topic.
+        var multicast = _options.ResolveCapabilities().Contains("topic", StringComparer.OrdinalIgnoreCase);
+        if (workerCount > 1 && (multicast || _options.Dynamic))
+        {
+            _logger?.LogWarning(
+                "AMQP: ConcurrentConsumers({N}) ignored for {Kind} {Address}: each receiver link would get a copy of "
+                + "every message instead of a share of them, so the consumer runs one link",
+                workerCount, multicast ? "MULTICAST address" : "a dynamic node", _address);
+            workerCount = 1;
+        }
 
         _cts = new CancellationTokenSource();
         _drain.Start(ct);
@@ -65,12 +93,29 @@ public sealed class AmqpConsumer : IConsumer
         {
             for (var i = 0; i < workerCount; i++)
             {
+                var assigned = _options.Dynamic
+                    ? new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously)
+                    : null;
                 var (session, receiver) = await _endpoint
-                    .CreateDedicatedReceiverAsync($"receiver-{_endpoint.Address}-{i}-{Guid.NewGuid():N}", ct)
+                    .CreateDedicatedReceiverAsync($"receiver-{_endpoint.Address}-{i}-{Guid.NewGuid():N}",
+                        assigned is null ? null : (_, remote) => assigned.TrySetResult((remote.Source as Source)?.Address),
+                        ct)
                     .ConfigureAwait(false);
                 var worker = new Worker(session, receiver);
-                worker.Loop = Task.Run(() => ReceiveLoopAsync(worker, _cts.Token), _cts.Token);
                 _workers.Add(worker);
+
+                if (assigned is not null)
+                {
+                    // The broker names the dynamic node in its attach answer; the route reads that node.
+                    var address = await assigned.Task
+                        .WaitAsync(TimeSpan.FromSeconds(_options.Timeout), ct).ConfigureAwait(false);
+                    if (string.IsNullOrEmpty(address))
+                        throw new InvalidOperationException(
+                            $"AMQP consumer '{_endpoint.Uri}': the broker created no dynamic node for the receiver link.");
+                    _address = address;
+                }
+
+                worker.Loop = Task.Run(() => ReceiveLoopAsync(worker, _cts.Token), _cts.Token);
             }
         }
         catch
@@ -83,10 +128,9 @@ public sealed class AmqpConsumer : IConsumer
             throw;
         }
 
-        _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
         _logger?.LogInformation(
             "AMQP consumer started: address={Address}, credit={Credit}, concurrent={Concurrent}",
-            _endpoint.Address, _options.Credit, workerCount);
+            _address, _options.Credit, workerCount);
     }
 
     /// <inheritdoc />
@@ -107,7 +151,7 @@ public sealed class AmqpConsumer : IConsumer
         }
 
         // Step 2: drain in-flight processing
-        await _drain.DrainAsync(ct, _logger, $"amqp:{_endpoint.Address}").ConfigureAwait(false);
+        await _drain.DrainAsync(ct, _logger, $"amqp:{_address}").ConfigureAwait(false);
 
         await StopWorkersAsync(ct).ConfigureAwait(false);
 
@@ -116,7 +160,7 @@ public sealed class AmqpConsumer : IConsumer
         _drain.Dispose();
 
         _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
-        _logger?.LogInformation("AMQP consumer stopped: address={Address}", _endpoint.Address);
+        _logger?.LogInformation("AMQP consumer stopped: address={Address}", _address);
     }
 
     /// <summary>Awaits every worker loop and closes its receiver + dedicated session.</summary>
@@ -188,7 +232,7 @@ public sealed class AmqpConsumer : IConsumer
                 // endpoint records it itself. Pipeline errors stay with StatisticsProcessor.
                 _endpoint.RecordError(ex);
                 _logger?.LogError(ex, "Error in AMQP receive loop: address={Address}",
-                    _endpoint.Address);
+                    _address);
 
                 if (msg != null && receiver is { IsClosed: false })
                 {
@@ -261,7 +305,7 @@ public sealed class AmqpConsumer : IConsumer
             if (!pipelineFailed)
                 _endpoint.RecordError(ex);
             _logger?.LogError(ex, "AMQP message processing error: address={Address}, messageId={MessageId}",
-                _endpoint.Address, msg.Properties?.MessageId);
+                _address, msg.Properties?.MessageId);
 
             if (receiver is { IsClosed: false })
             {
@@ -281,11 +325,11 @@ public sealed class AmqpConsumer : IConsumer
     {
         var span = RouteTelemetryExtensions.StartConsumerSpan(
             (_endpoint.Component as ComponentBase)?.Context,
-            $"{_endpoint.Address} receive", ActivityKind.Consumer,
+            $"{_address} receive", ActivityKind.Consumer,
             "messaging.system", "amqp", _endpoint.Uri.NormalizedKey,
             msg.ApplicationProperties?.Map,
             static (map, name) => map is not null && map.TryGetValue(name, out var raw) ? raw?.ToString() : null,
-            destination: _endpoint.Address, operation: "receive");
+            destination: _address, operation: "receive");
 
         if (span.Activity is { IsAllDataRequested: true } activity)
         {
@@ -304,12 +348,13 @@ public sealed class AmqpConsumer : IConsumer
     {
         var body = AmqpMessageHelper.ExtractBody(msg);
         var routeMsg = new RouteMessage(body);
+        var exchange = Exchange.Create(routeMsg, _endpoint.ScopeFactory);
 
-        AmqpMessageHelper.CopyApplicationProperties(msg, routeMsg);
+        AmqpMessageHelper.CopyApplicationProperties(msg, routeMsg, _headerFilter, exchange);
 
         // Standard AMQP properties → bare header names (self-documenting, round-trip via the producer);
         // transport metadata (Address/DeliveryCount/FirstAcquirer) → redbAmqp.* (no standard name).
-        routeMsg.Headers[AmqpHeaders.Address] = _endpoint.Address;
+        routeMsg.Headers[AmqpHeaders.Address] = _address;
 
         if (msg.Properties != null)
         {
@@ -358,7 +403,6 @@ public sealed class AmqpConsumer : IConsumer
             ? ExchangePattern.InOnly
             : ExchangePattern.InOut;
 
-        var exchange = Exchange.Create(routeMsg, _endpoint.ScopeFactory);
         exchange.Pattern = pattern;
         return exchange;
     }
@@ -389,13 +433,13 @@ public sealed class AmqpConsumer : IConsumer
             if (!string.IsNullOrEmpty(correlationId))
                 reply.Properties.CorrelationId = correlationId;
 
-            // Copy response headers
+            // Response headers → application-properties, as the endpoint's strategy lets them out
             var responseHeaders = exchange.HasOut ? exchange.Out!.Headers : exchange.In.Headers;
             var appProps = new ApplicationProperties();
             foreach (var (key, value) in responseHeaders)
             {
-                if (AmqpHeaders.IsRedbHeader(key)) continue;
                 if (value is null) continue;
+                if (_headerFilter.FilterOutgoing(key, value, exchange)) continue;
                 appProps[key] = value switch
                 {
                     string s => s,

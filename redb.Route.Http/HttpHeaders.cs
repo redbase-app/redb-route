@@ -61,14 +61,26 @@ public static class HttpHeaders
     /// <summary>Prefix for query string parameters. Example: "redbHttp.QueryParam.sort".</summary>
     public const string QueryParamPrefix = "redbHttp.QueryParam.";
 
-    // ── Standard HTTP headers that are bridged when BridgeHeaders=true ──
+    // ── What is never carried, and what the default strategy keeps back ──
 
-    /// <summary>Set of header names that are NOT bridged from exchange to HTTP request (internal/hop-by-hop).</summary>
-    internal static readonly HashSet<string> NonBridgedHeaders = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>
+    /// The control headers of this component — the request it builds and the exchange a consumer fills. The default
+    /// strategy of a producer (<see cref="HttpHeaderFilterStrategy"/>) does not send them as request headers; a
+    /// consumer never takes a received <c>redbHttp.*</c> header and never answers with one.
+    /// </summary>
+    public static readonly IReadOnlySet<string> ControlHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        // Internal redb headers
         StatusCode, StatusText, Url, Method, Query, Path, RemoteAddress, Port,
         ResponseContentType, ResponseCode,
+    };
+
+    /// <summary>
+    /// Fields of the protocol, never carried between an exchange and a message whatever the header filter strategy
+    /// says: the hop-by-hop fields, <c>Host</c> (only <c>preserveHostHeader=true</c> carries the original one) and the
+    /// content fields, which describe the body and are set from it.
+    /// </summary>
+    public static readonly IReadOnlySet<string> ProtocolHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
         // Hop-by-hop HTTP headers
         "Connection", "Keep-Alive", "Transfer-Encoding", "TE",
         "Trailer", "Upgrade", "Proxy-Authorization", "Proxy-Authenticate",

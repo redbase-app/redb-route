@@ -15,8 +15,10 @@ public abstract class EndpointOptions
     private Dictionary<string, string>? _unmapped;
 
     // Options types whose [Sensitive] properties have already been registered. Reflection runs
-    // once per type, not per endpoint.
-    private static readonly ConcurrentDictionary<Type, byte> _sensitiveScanned = new();
+    // once per type, not per endpoint. Weak per type: the options of a component an unloadable module
+    // (collectible load context) declares do not stay alive here.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, object> _sensitiveScanned = new();
+    private static readonly object Scanned = new();
 
     /// <summary>
     /// Feeds every <see cref="SensitiveAttribute"/>-marked property name of <paramref name="type"/>
@@ -33,7 +35,7 @@ public abstract class EndpointOptions
     /// </summary>
     private static void RegisterSensitiveKeys(Type type)
     {
-        if (!_sensitiveScanned.TryAdd(type, 0)) return;
+        if (!_sensitiveScanned.TryAdd(type, Scanned)) return;
 
         var names = type
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -114,7 +116,10 @@ public abstract class EndpointOptions
         return optionsType.IsDefined(typeof(LenientPropertiesAttribute), inherit: true);
     }
 
-    private static readonly ConcurrentDictionary<Type, (PropertyInfo? Reference, HashSet<string> Parameters)> _connectionDeclarations = new();
+    // Weak per options type, as _sensitiveScanned.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, ConnectionDeclaration> _connectionDeclarations = new();
+
+    private sealed record ConnectionDeclaration(PropertyInfo? Reference, HashSet<string> Parameters);
 
     /// <summary>
     /// The parameters <paramref name="uri"/> wrote, as written, that a connection factory sets
@@ -139,8 +144,8 @@ public abstract class EndpointOptions
         return parameters.Keys.Where(connectionParameters.Contains).ToList();
     }
 
-    private static (PropertyInfo? Reference, HashSet<string> Parameters) ConnectionDeclarations(Type optionsType)
-        => _connectionDeclarations.GetOrAdd(optionsType, static type =>
+    private static ConnectionDeclaration ConnectionDeclarations(Type optionsType)
+        => _connectionDeclarations.GetValue(optionsType, static type =>
         {
             var props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
             var parameters = props.Where(p => p.IsDefined(typeof(ConnectionParameterAttribute), inherit: true))
@@ -153,7 +158,7 @@ public abstract class EndpointOptions
                 throw new InvalidOperationException(
                     $"{type.Name} declares [ConnectionParameter] options but no [ConnectionFactoryReference] option: the core " +
                     "does not guess which option names the connection factory.");
-            return (references.FirstOrDefault(), parameters);
+            return new ConnectionDeclaration(references.FirstOrDefault(), parameters);
         });
 
     private ArgumentException BesideConnectionFactory(IReadOnlyDictionary<string, string> parameters, IReadOnlyList<string> beside)

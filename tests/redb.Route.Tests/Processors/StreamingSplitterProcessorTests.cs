@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Processors;
-using FluentAssertions;
+using AwesomeAssertions;
 
 namespace redb.Route.Tests.Processors;
 

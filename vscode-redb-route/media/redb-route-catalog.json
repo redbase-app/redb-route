@@ -88,6 +88,11 @@
         "sensitive": false
       },
       {
+        "name": "HeaderFilterStrategy",
+        "type": "string",
+        "sensitive": false
+      },
+      {
         "name": "Host",
         "type": "string",
         "default": "localhost",
@@ -271,6 +276,11 @@
         "name": "EncryptAlg",
         "type": "string",
         "default": "aes-128-cbc",
+        "sensitive": false
+      },
+      {
+        "name": "HeaderFilterStrategy",
+        "type": "string",
         "sensitive": false
       },
       {
@@ -655,6 +665,11 @@
         "sensitive": false
       },
       {
+        "name": "HeaderFilterStrategy",
+        "type": "string",
+        "sensitive": false
+      },
+      {
         "name": "MaxAutoLockRenewalDuration",
         "type": "int",
         "default": "300",
@@ -1018,7 +1033,14 @@
     "package": "redb.Route",
     "optionsType": "redb.Route.Components.DirectVmEndpointOptions",
     "pathIsText": false,
-    "options": [],
+    "options": [
+      {
+        "name": "HeaderFilterStrategy",
+        "type": "string",
+        "sensitive": false,
+        "role": "producer"
+      }
+    ],
     "lenient": false
   },
   {
@@ -2506,6 +2528,11 @@
         ]
       },
       {
+        "name": "HeaderFilterStrategy",
+        "type": "string",
+        "sensitive": false
+      },
+      {
         "name": "Health",
         "type": "bool",
         "default": "false",
@@ -2667,12 +2694,6 @@
         "role": "producer"
       },
       {
-        "name": "BridgeHeaders",
-        "type": "bool",
-        "default": "true",
-        "sensitive": false
-      },
-      {
         "name": "ConnectionFactory",
         "type": "string",
         "sensitive": false
@@ -2681,12 +2702,6 @@
         "name": "ContentType",
         "type": "string",
         "default": "application/json",
-        "sensitive": false
-      },
-      {
-        "name": "CopyResponseHeaders",
-        "type": "bool",
-        "default": "true",
         "sensitive": false
       },
       {
@@ -2715,6 +2730,11 @@
         "name": "FollowRedirects",
         "type": "bool",
         "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "HeaderFilterStrategy",
+        "type": "string",
         "sensitive": false
       },
       {
@@ -2852,6 +2872,27 @@
         "type": "int",
         "default": "1",
         "sensitive": false
+      },
+      {
+        "name": "SkipControlHeaders",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "SkipRequestHeaders",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "SkipResponseHeaders",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false,
+        "role": "producer"
       },
       {
         "name": "Ssl",
@@ -2934,12 +2975,6 @@
         "role": "producer"
       },
       {
-        "name": "BridgeHeaders",
-        "type": "bool",
-        "default": "true",
-        "sensitive": false
-      },
-      {
         "name": "ConnectionFactory",
         "type": "string",
         "sensitive": false
@@ -2948,12 +2983,6 @@
         "name": "ContentType",
         "type": "string",
         "default": "application/json",
-        "sensitive": false
-      },
-      {
-        "name": "CopyResponseHeaders",
-        "type": "bool",
-        "default": "true",
         "sensitive": false
       },
       {
@@ -2982,6 +3011,11 @@
         "name": "FollowRedirects",
         "type": "bool",
         "default": "true",
+        "sensitive": false
+      },
+      {
+        "name": "HeaderFilterStrategy",
+        "type": "string",
         "sensitive": false
       },
       {
@@ -3119,6 +3153,27 @@
         "type": "int",
         "default": "1",
         "sensitive": false
+      },
+      {
+        "name": "SkipControlHeaders",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "SkipRequestHeaders",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
+        "name": "SkipResponseHeaders",
+        "type": "bool",
+        "default": "false",
+        "sensitive": false,
+        "role": "producer"
       },
       {
         "name": "Ssl",
@@ -3574,6 +3629,11 @@
       },
       {
         "name": "GroupInstanceId",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "HeaderFilterStrategy",
         "type": "string",
         "sensitive": false
       },
@@ -4796,6 +4856,11 @@
         "name": "Expires",
         "type": "int",
         "default": "0",
+        "sensitive": false
+      },
+      {
+        "name": "HeaderFilterStrategy",
+        "type": "string",
         "sensitive": false
       },
       {
@@ -6647,6 +6712,11 @@
         "sensitive": false
       },
       {
+        "name": "HeaderFilterStrategy",
+        "type": "string",
+        "sensitive": false
+      },
+      {
         "name": "MessageDeduplicationId",
         "type": "string",
         "sensitive": false
@@ -7165,6 +7235,11 @@
         "sensitive": false
       },
       {
+        "name": "HeaderFilterStrategy",
+        "type": "string",
+        "sensitive": false
+      },
+      {
         "name": "InitialDelay",
         "type": "int",
         "default": "0",
@@ -7632,6 +7707,12 @@
         "sensitive": false
       },
       {
+        "name": "HeaderFilterStrategy",
+        "type": "string",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
         "name": "Size",
         "type": "int",
         "default": "1000",
@@ -7725,6 +7806,11 @@
       },
       {
         "name": "ExpiryExpression",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "HeaderFilterStrategy",
         "type": "string",
         "sensitive": false
       },

@@ -30,7 +30,7 @@ internal sealed class SqlBatchProcessor(SqlEndpoint endpoint, SqlEndpointOptions
     internal async Task ProcessAsync(IExchange exchange, BatchItemReader items, string sql, Activity? activity, CancellationToken ct)
     {
         var stopwatch = Stopwatch.StartNew();
-        var keys = BatchRowCollector.Create(options, sql);
+        var keys = BatchRowCollector.Create(options, endpoint.OutputMapping, sql);
         ClearResultHeaders(exchange);
 
         bool hasItems;

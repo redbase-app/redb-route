@@ -17,6 +17,13 @@ public sealed class AzureServiceBusEndpointOptions : EndpointOptions
     /// <summary>Named connection factory from route context registry.</summary>
     public string? ConnectionFactory { get; set; }
 
+    /// <summary>
+    /// A registry reference (<c>#name</c>) to an <see cref="redb.Route.Abstractions.IHeaderFilterStrategy"/> that
+    /// decides which headers this endpoint carries between the exchange and a message's application properties, in
+    /// place of <see cref="AzureServiceBusHeaderFilterStrategy"/>.
+    /// </summary>
+    public string? HeaderFilterStrategy { get; set; }
+
     // ── Entity ──
 
     /// <summary>Explicit queue name (overrides URI path).</summary>

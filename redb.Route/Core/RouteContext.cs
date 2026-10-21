@@ -158,6 +158,9 @@ public class RouteContext : IRouteContext, IAsyncDisposable
         _logger = loggerFactory?.CreateLogger<RouteContext>();
         _options = options ?? new RouteEngineOptions();
 
+        // A collectible load context of a host's module unloads only once the .NET library caches let its types go.
+        CollectibleContextCleanup.EnsureWatching(_logger);
+
         if (_logger is not null)
             _services[typeof(ILogger)] = _logger;
 

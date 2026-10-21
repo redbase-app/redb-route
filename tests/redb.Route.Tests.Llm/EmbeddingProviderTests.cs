@@ -2,7 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 
-using FluentAssertions;
+using AwesomeAssertions;
 
 using redb.Route.Llm;
 using redb.Route.Llm.Providers;

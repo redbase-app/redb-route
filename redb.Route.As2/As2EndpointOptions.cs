@@ -24,6 +24,13 @@ public sealed class As2EndpointOptions : EndpointOptions
     /// <summary>Partner endpoint URL the producer POSTs to. Reconstructed from the URI when absent.</summary>
     public string? PartnerUrl { get; set; }
 
+    /// <summary>
+    /// A registry reference (<c>#name</c>) to an <see cref="redb.Route.Abstractions.IHeaderFilterStrategy"/> that
+    /// decides which headers this endpoint carries between the exchange and the HTTP headers of an AS2 message, in
+    /// place of <see cref="As2HeaderFilterStrategy"/>.
+    /// </summary>
+    public string? HeaderFilterStrategy { get; set; }
+
     /// <summary>Use HTTPS/TLS. Set automatically when the URI scheme is <c>as2s</c>.</summary>
     public bool UseTls { get; set; }
 

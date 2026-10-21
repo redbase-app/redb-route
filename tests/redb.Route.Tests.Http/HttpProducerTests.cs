@@ -358,13 +358,13 @@ public class HttpProducerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Producer_CopyResponseHeaders_False_SkipsHeaders()
+    public async Task Producer_SkipResponseHeaders_SkipsHeaders()
     {
         _responseHeaders["X-Custom-Header"] = "test-value";
 
         var endpoint = CreateEndpointWithPath("/api/test", new Dictionary<string, string>
         {
-            ["copyResponseHeaders"] = "false"
+            ["skipResponseHeaders"] = "true"
         });
         var producer = new HttpProducer(endpoint, endpoint.EndpointOptions);
         await producer.Start();
@@ -487,7 +487,7 @@ public class HttpProducerTests : IAsyncLifetime
     // ── Header bridging ──
 
     [Fact]
-    public async Task Producer_BridgeHeaders_True_SendsExchangeHeaders()
+    public async Task Producer_ByDefault_SendsExchangeHeaders()
     {
         var endpoint = CreateEndpointWithPath("/api/test");
         var producer = new HttpProducer(endpoint, endpoint.EndpointOptions);
@@ -507,11 +507,11 @@ public class HttpProducerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Producer_BridgeHeaders_False_DoesNotSendExchangeHeaders()
+    public async Task Producer_SkipRequestHeaders_DoesNotSendExchangeHeaders()
     {
         var endpoint = CreateEndpointWithPath("/api/test", new Dictionary<string, string>
         {
-            ["bridgeHeaders"] = "false"
+            ["skipRequestHeaders"] = "true"
         });
         var producer = new HttpProducer(endpoint, endpoint.EndpointOptions);
         await producer.Start();
@@ -852,13 +852,13 @@ public class HttpProducerTests : IAsyncLifetime
     [Fact]
     public async Task PreserveHostHeader_WorksWithoutHeaderBridging()
     {
-        // The explicit Host set used to live inside the bridgeHeaders block, so
-        // bridgeHeaders=false silently killed the just-revived option. The two options are
+        // The explicit Host set used to live inside the header-bridging block, so
+        // skipping the request headers silently killed the just-revived option. The two options are
         // independent in camel-http and must be independent here.
         var endpoint = CreateEndpointWithPath("/api/proxied", new Dictionary<string, string>
         {
             ["preserveHostHeader"] = "true",
-            ["bridgeHeaders"] = "false",
+            ["skipRequestHeaders"] = "true",
         });
         var producer = (HttpProducer)endpoint.CreateProducer();
         await producer.Start();
@@ -870,7 +870,7 @@ public class HttpProducerTests : IAsyncLifetime
 
         _lastRequestHeaders.Should().ContainKey("Host")
             .WhoseValue.Should().Be("upstream.example.com",
-                "preserveHostHeader не должен зависеть от bridgeHeaders");
+                "preserveHostHeader does not depend on skipRequestHeaders");
     }
 
     [Fact]

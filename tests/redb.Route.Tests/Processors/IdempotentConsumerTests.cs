@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using NSubstitute;
 using redb.Route.Abstractions;
 using redb.Route.Components;

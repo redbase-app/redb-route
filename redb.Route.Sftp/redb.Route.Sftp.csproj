@@ -14,7 +14,7 @@
   </ItemGroup>
   <ItemGroup>
     <!-- 2025.1.0 is flagged by NU1903 / GHSA-q939-rpr3-3284 (high). 2026.0.0 is the patched release. -->
-    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+    <PackageReference Include="SSH.NET" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

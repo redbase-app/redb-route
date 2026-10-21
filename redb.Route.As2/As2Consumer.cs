@@ -45,6 +45,7 @@ internal sealed class As2Consumer : IConsumer
     private readonly As2Endpoint _endpoint;
     private readonly IProcessor _processor;
     private readonly As2EndpointOptions _options;
+    private readonly IHeaderFilterStrategy _headerFilter;
     private readonly IAs2CryptoEngine _engine = new As2CryptoEngine();
     private readonly ILogger? _logger;
     private RouteRegistration? _registration;
@@ -65,6 +66,7 @@ internal sealed class As2Consumer : IConsumer
         _processor = processor ?? throw new ArgumentNullException(nameof(processor));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = endpoint.Logger;
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
 
     /// <inheritdoc />
@@ -300,7 +302,8 @@ internal sealed class As2Consumer : IConsumer
                 // Build the exchange. Content-Type comes from the INNER part (Message.ContentType); the wrapper
                 // Content-Type is deliberately NOT copied into the headers.
                 var message = new Message(payload) { ContentType = payloadContentType };
-                CopyInboundHeaders(request, message);
+                exchange = Exchange.Create(message, _endpoint.ScopeFactory);
+                CopyInboundHeaders(request, message, _headerFilter, exchange);
                 // The header reports a verification: an unsigned message had none.
                 message.Headers[As2Headers.SignatureValid] = wasSigned && signatureValid;
                 if (mic is not null)
@@ -313,7 +316,6 @@ internal sealed class As2Consumer : IConsumer
                 if (!string.IsNullOrEmpty(_options.ConnectionFactory))
                     message.Headers[As2Headers.PartnerName] = _options.ConnectionFactory;
 
-                exchange = Exchange.Create(message, _endpoint.ScopeFactory);
                 exchange.Pattern = ExchangePattern.InOut;
                 ExchangePrincipal.Set(exchange, SharedHttpServerManager.GetResolvedPrincipal(http));
 
@@ -587,15 +589,21 @@ internal sealed class As2Consumer : IConsumer
         }
     }
 
-    /// <summary>Copies AS2/business request headers verbatim, skipping the S/MIME wrapper + hop-by-hop set.</summary>
-    private static void CopyInboundHeaders(HttpRequest request, IMessage message)
+    /// <summary>
+    /// Copies AS2/business request headers verbatim, skipping the S/MIME wrapper + hop-by-hop set and the hop's
+    /// credentials; <paramref name="headerFilter"/> decides the rest.
+    /// </summary>
+    private static void CopyInboundHeaders(HttpRequest request, IMessage message, IHeaderFilterStrategy headerFilter,
+        IExchange exchange)
     {
         foreach (var header in request.Headers)
         {
             if (header.Key.StartsWith(':')) continue;              // pseudo-headers
             if (WrapperHeaders.Contains(header.Key)) continue;      // wrapper / hop-by-hop
             if (CredentialHeaders.Contains(header.Key)) continue;   // they authenticated the hop, not the document
-            message.Headers[header.Key] = header.Value.Count == 1 ? header.Value[0] : header.Value.ToString();
+            var value = header.Value.Count == 1 ? header.Value[0] : header.Value.ToString();
+            if (headerFilter.FilterIncoming(header.Key, value, exchange)) continue;
+            message.Headers[header.Key] = value;
         }
     }
 }

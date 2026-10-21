@@ -1,6 +1,6 @@
 using System.Security.Authentication;
 using System.Xml.Linq;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Xml;

@@ -1,6 +1,6 @@
 using System.Text;
 using redb.Route.Expressions.Tokenizers;
-using FluentAssertions;
+using AwesomeAssertions;
 
 namespace redb.Route.Tests.Expressions.Tokenizers;
 

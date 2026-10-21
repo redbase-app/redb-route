@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Xml.Linq;
 using System.Xml.Schema;
-using FluentAssertions;
+using AwesomeAssertions;
 using Json.Schema;
 using redb.Route.Abstractions;
 using redb.Route.Core;

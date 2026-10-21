@@ -245,6 +245,31 @@ public static class RoutePackage
         }
     }
 
+    /// <summary>
+    /// URI options whose <c>#name</c> must name an object of a given type, held against the declared beans like the
+    /// typed element attributes (<see cref="AttributeSpec.References"/>). The option is the same on every transport.
+    /// </summary>
+    private static readonly Dictionary<string, string> TypedUriOptions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["headerFilterStrategy"] =
+            $"{typeof(redb.Route.Abstractions.IHeaderFilterStrategy).FullName}, {typeof(redb.Route.Abstractions.IHeaderFilterStrategy).Assembly.GetName().Name}",
+    };
+
+    /// <summary>The typed URI options of <paramref name="value"/> that name a registry object.</summary>
+    private static IEnumerable<(string Option, string Name, string TypeName)> TypedUriReferences(string value)
+    {
+        var query = value.IndexOf('?');
+        if (query < 0 || !UriScheme.IsMatch(value[..query]))
+            yield break;
+        foreach (var pair in value[(query + 1)..].Split('&'))
+        {
+            var equals = pair.IndexOf('=');
+            if (equals > 0 && TypedUriOptions.TryGetValue(pair[..equals], out var typeName)
+                && LeadingReference.Match(pair[(equals + 1)..]) is { Success: true } reference)
+                yield return (pair[..equals], reference.Groups[1].Value, typeName);
+        }
+    }
+
     private static IReadOnlyList<string> RunChecks(string projectDir, List<string> artifacts, List<PackageFinding> findings,
         Func<string, Type?>? typeResolver,
         IReadOnlyList<IXmlElementContribution>? extensions = null,
@@ -256,6 +281,7 @@ public static class RoutePackage
         var beanDeclarations = new List<(string File, BeanDeclaration Bean)>();
         var beanMethodCalls = new List<(string File, string Bean, string Method)>();
         var referencedBeans = new List<(string File, string Name)>();
+        var typedReferences = new List<TypedReference>();
         var documents = new List<(string File, XDocument Document)>();
 
         var contextPath = Path.Combine(projectDir, ContextFile);
@@ -289,6 +315,9 @@ public static class RoutePackage
                     ScanPlaceholders(attribute.Value, requiredKeys);
                     foreach (var reference in RegistryReferences(attribute.Value))
                         referencedBeans.Add((file, reference));
+                    foreach (var (option, name, typeName) in TypedUriReferences(attribute.Value))
+                        typedReferences.Add(new TypedReference(file, element,
+                            $"{attribute.Name.LocalName}=…{option}", name, typeName));
                     if (attribute.Value.StartsWith("bean:#", StringComparison.Ordinal)
                         && BeanMethodOption.Match(attribute.Value) is { Success: true } methodMatch)
                     {
@@ -312,7 +341,6 @@ public static class RoutePackage
         // name>) declare that name like a <bean> does; references that must name an object of a
         // given type (<idempotentConsumer repository>) are held against it once types are known.
         var registered = new Dictionary<string, string>(StringComparer.Ordinal);
-        var typedReferences = new List<TypedReference>();
         foreach (var (file, document) in documents)
             foreach (var element in document.Root?.Elements() ?? [])
                 CollectRegistryAttributes(file, element, registry.Find(element.Name.LocalName)?.Spec, registry,

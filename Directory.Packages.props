@@ -1,0 +1,158 @@
+<Project>
+  <!--
+    Central package versions for every redb.Route project (src, tests, demos, tools) and for the public redb-route
+    mirror, which carries this file next to Directory.Build.props (RELEASE_ARTIFACTS.md, E28). Projects name a package
+    without a version; the version lives here.
+
+    Versions shared with other redb modules (Microsoft.Extensions.*, the database drivers, the test stack) are written
+    in each module's own Directory.Packages.props and must stay equal across them.
+
+    The packages that guard security (System.Security.Cryptography.Xml / .Pkcs, MailKit / MimeKit, MessagePack, the
+    SignalR client, protocols and Redis backplane) get their PackageVersion from the redb security baseline (Directory.Build.targets at
+    the repository root) and nowhere else: this file must not list them (NU1506 is an error).
+
+    Not under central management: the demo SerialNumbersDemo (it is cut off from this tree on purpose, to be copied out
+    as it is) and the templates, which keep their versions in their own files.
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally Condition="'$(ManagePackageVersionsCentrally)' == ''">true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <!-- Microsoft.Extensions.* and Microsoft.AspNetCore.* (the .NET 10 servicing line shared by all modules). -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.13" />
+  </ItemGroup>
+
+  <!-- .NET runtime packages referenced directly. -->
+  <ItemGroup>
+    <PackageVersion Include="System.IO.Pipelines" Version="10.0.13" />
+    <PackageVersion Include="System.Text.Encoding.CodePages" Version="10.0.13" />
+  </ItemGroup>
+
+  <!--
+    Database drivers: the versions of the redb core packages (root Directory.Packages.props). The native SQLite
+    library is pinned directly (GHSA-2m69-gcr7-jv3q). redb.Route.Tests.Sql can still run against another SqlClient
+    line: dotnet test -p:RouteSqlClientVersion=6.0.1 (a VersionOverride in that project).
+  -->
+  <ItemGroup>
+    <PackageVersion Include="FirebirdSql.Data.FirebirdClient" Version="10.3.4" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.1" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.13" />
+    <PackageVersion Include="MySqlConnector" Version="2.6.2" />
+    <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <PackageVersion Include="Oracle.ManagedDataAccess.Core" Version="23.26.301" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
+  </ItemGroup>
+
+  <!-- Connectors. -->
+  <ItemGroup>
+    <PackageVersion Include="AMQPNetLite.Core" Version="2.5.4" />
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.104.4" />
+    <PackageVersion Include="AWSSDK.SimpleNotificationService" Version="4.0.100.19" />
+    <PackageVersion Include="AWSSDK.SQS" Version="4.0.100.18" />
+    <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.21.0" />
+    <PackageVersion Include="BouncyCastle.Cryptography" Version="2.7.0" />
+    <PackageVersion Include="Chr.Avro" Version="10.13.1" />
+    <PackageVersion Include="Chr.Avro.Binary" Version="10.13.1" />
+    <PackageVersion Include="Chr.Avro.Json" Version="10.13.1" />
+    <PackageVersion Include="Confluent.Kafka" Version="2.16.0" />
+    <PackageVersion Include="CsvHelper" Version="33.1.0" />
+    <!-- 8.x: the 9.x client does not talk to an Elasticsearch 8 server. -->
+    <PackageVersion Include="Elastic.Clients.Elasticsearch" Version="8.19.27" />
+    <PackageVersion Include="FirebaseAdmin" Version="3.7.0" />
+    <PackageVersion Include="FluentFTP" Version="55.1.0" />
+    <PackageVersion Include="FluentValidation" Version="12.2.0" />
+    <PackageVersion Include="Google.Cloud.Firestore" Version="4.5.0" />
+    <PackageVersion Include="Google.Cloud.Storage.V1" Version="5.0.0" />
+    <PackageVersion Include="Google.Protobuf" Version="3.36.2" />
+    <PackageVersion Include="Grpc.Net.Client" Version="2.84.0" />
+    <PackageVersion Include="Grpc.Tools" Version="2.84.0" />
+    <!-- 9.x: the 10.x client targets .NET 10 only. -->
+    <PackageVersion Include="IBMXMSDotnetClient" Version="9.4.5.1" />
+    <PackageVersion Include="Jsonata.Net.Native" Version="3.0.0" />
+    <PackageVersion Include="Jsonata.Net.Native.SystemTextJson" Version="3.0.0" />
+    <!-- 2.2.0 and 7.3.4: the last releases under MIT; the later ones carry the Open Source Maintenance Fee EULA. -->
+    <PackageVersion Include="JsonPath.Net" Version="2.2.0" />
+    <PackageVersion Include="JsonSchema.Net" Version="7.3.4" />
+    <PackageVersion Include="librdkafka.redist" Version="2.16.0" />
+    <PackageVersion Include="MQTTnet" Version="5.2.0.1603" />
+    <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageVersion Include="Novell.Directory.Ldap.NETStandard" Version="4.0.0" />
+    <!-- 3.x: Quartz 4 targets .NET 10 only. -->
+    <PackageVersion Include="Quartz" Version="3.22.6" />
+    <PackageVersion Include="Quartz.Serialization.Json" Version="3.22.6" />
+    <PackageVersion Include="RabbitMQ.Client" Version="7.2.2" />
+    <PackageVersion Include="RabbitMQ.Client.OAuth2" Version="2.0.0" />
+    <PackageVersion Include="Scriban" Version="7.5.1" />
+    <PackageVersion Include="SSH.NET" Version="2026.0.0" />
+    <!-- 2.x: the SignalR backplane and the distributed cache of ASP.NET Core are built against 2.x. -->
+    <PackageVersion Include="StackExchange.Redis" Version="2.13.17" />
+    <PackageVersion Include="Telegram.Bot" Version="22.10.3.3" />
+    <PackageVersion Include="XPath2" Version="1.1.5" />
+    <PackageVersion Include="YamlDotNet" Version="18.1.0" />
+  </ItemGroup>
+
+  <!--
+    The redb packages the demos take from nuget.org: the release of this tree. Taken from Version here, while this
+    file is imported (before the body of a csproj), so a project that sets a Version of its own does not change it.
+  -->
+  <PropertyGroup>
+    <RedbPackagesVersion Condition="'$(RedbPackagesVersion)' == ''">$(Version)</RedbPackagesVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="redb.Core" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.SQLite.Pro" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route.As4" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route.Core" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route.Exec" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route.File" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route.Http" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route.Ldap" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route.Llm" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route.Llm.Abstractions" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route.Llm.Mcp" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route.Sqs" Version="$(RedbPackagesVersion)" />
+    <PackageVersion Include="redb.Route.Xml" Version="$(RedbPackagesVersion)" />
+  </ItemGroup>
+
+  <!--
+    Tests. AwesomeAssertions (Apache 2.0) replaces FluentAssertions, which is under a commercial licence from 8.0.
+    xunit.runner.visualstudio 4.x still runs xunit v2 tests.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="AwesomeAssertions" Version="9.6.0" />
+    <PackageVersion Include="coverlet.collector" Version="10.1.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageVersion Include="NSubstitute" Version="6.2.0" />
+    <PackageVersion Include="OpenTelemetry" Version="1.20.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.InMemory" Version="1.20.0" />
+    <PackageVersion Include="Testcontainers.Kafka" Version="4.16.0" />
+    <PackageVersion Include="Testcontainers.RabbitMq" Version="4.16.0" />
+    <PackageVersion Include="Testcontainers.Redis" Version="4.16.0" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
+  </ItemGroup>
+
+  <!-- redb packages: the monorepo ProjectReferences, rewritten for the public repository. -->
+  <ItemGroup>
+    <PackageVersion Include="redb.Core.Pro" Version="4.4.0" />
+    <PackageVersion Include="redb.MSSql" Version="4.4.0" />
+    <PackageVersion Include="redb.MSSql.Pro" Version="4.4.0" />
+    <PackageVersion Include="redb.Postgres" Version="4.4.0" />
+    <PackageVersion Include="redb.Postgres.Pro" Version="4.4.0" />
+  </ItemGroup>
+</Project>
+

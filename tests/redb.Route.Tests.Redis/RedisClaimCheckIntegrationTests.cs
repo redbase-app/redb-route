@@ -1,5 +1,5 @@
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Redis;
 using redb.Route.Redis.Repositories;
 using Xunit.Abstractions;

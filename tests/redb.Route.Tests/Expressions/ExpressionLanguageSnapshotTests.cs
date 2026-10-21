@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Expressions;
 
 namespace redb.Route.Tests.Expressions;

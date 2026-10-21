@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Xml.Linq;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using SoapDsl = redb.Route.Soap.Fluent.Soap;

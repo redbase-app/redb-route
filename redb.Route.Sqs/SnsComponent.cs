@@ -63,7 +63,17 @@ public sealed class SnsEndpoint : EndpointBase<SnsEndpointOptions>, IDisposable
         TopicName = uri.Path.TrimStart('/');
         if (string.IsNullOrEmpty(TopicName) && string.IsNullOrEmpty(options.TopicArn))
             throw new ArgumentException("SNS URI must include a topic name in the path (sns://topic-name).");
+        _headerFilter = new EndpointHeaderFilter(this, options.HeaderFilterStrategy);
     }
+
+    private readonly EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The header filter strategy of this endpoint: the one <c>headerFilterStrategy=#name</c> names, or
+    /// <see cref="SnsHeaderFilterStrategy.Default"/>. A name the registry does not hold fails when the producer is
+    /// built.
+    /// </summary>
+    internal IHeaderFilterStrategy HeaderFilterStrategy => _headerFilter.Or(SnsHeaderFilterStrategy.Default);
 
     /// <inheritdoc />
     public override IProducer CreateProducer() => new SnsProducer(this, Options);

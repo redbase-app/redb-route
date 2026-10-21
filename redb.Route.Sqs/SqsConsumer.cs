@@ -24,6 +24,7 @@ internal sealed class SqsConsumer : DrainableConsumer
 {
     private readonly SqsEndpoint _endpoint;
     private readonly SqsEndpointOptions _options;
+    private readonly IHeaderFilterStrategy _headerFilter;
     private IAmazonSQS? _client;
     private string _queueUrl = "";
     private readonly List<string> _systemAttributeNames;
@@ -37,6 +38,7 @@ internal sealed class SqsConsumer : DrainableConsumer
     {
         _endpoint = endpoint;
         _options = options;
+        _headerFilter = endpoint.HeaderFilterStrategy;
         _systemAttributeNames = SplitCsv(options.AttributeNames);
         _messageAttributeNames = SplitCsv(options.MessageAttributeNames);
     }
@@ -219,11 +221,16 @@ internal sealed class SqsConsumer : DrainableConsumer
                 headers[SqsHeaders.SequenceNumber] = seq;
         }
 
+        // Message attributes, as the endpoint's strategy lets them in (asked with the attribute's own name)
+        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         if (msg.MessageAttributes is not null)
             foreach (var (name, value) in msg.MessageAttributes)
+            {
+                if (_headerFilter.FilterIncoming(name, value.StringValue, exchange)) continue;
                 headers[SqsHeaders.MessageAttributePrefix + name] = value.StringValue;
+            }
 
-        return Exchange.Create(message, _endpoint.ScopeFactory);
+        return exchange;
     }
 
     private TransportSpan StartConsumerSpan(SqsMessage msg)

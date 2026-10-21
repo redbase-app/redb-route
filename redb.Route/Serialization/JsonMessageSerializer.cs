@@ -33,6 +33,9 @@ public sealed class JsonMessageSerializer : IMessageSerializer
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
+    // The static options build metadata over every message type; a module's type in them is let go on unload.
+    static JsonMessageSerializer() => Core.CollectibleContextCleanup.EnsureWatching();
+
     /// <summary>Creates a JSON serializer with default options.</summary>
     public JsonMessageSerializer()
         : this(DefaultOptions, contentType: "application/json", mediaTypes: null)

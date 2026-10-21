@@ -15,7 +15,8 @@ InOut exchange pattern, lifecycle events, auto-reconnect, and TLS.
 |---|---|
 | **Scheme** | `signalr` |
 | **NuGet** | `redb.Route.SignalR` |
-| **Dependencies** | Microsoft.AspNetCore.App, Microsoft.AspNetCore.SignalR.Client 9.0.3 |
+| **Dependencies** | Microsoft.AspNetCore.App, Microsoft.AspNetCore.SignalR.Client and .Protocols.MessagePack (the ASP.NET Core line of the target framework) |
+| **Backplane** | [redb.Route.SignalR.StackExchangeRedis](../redb.Route.SignalR.StackExchangeRedis/README.md) |
 | **Namespace** | `redb.Route.SignalR` |
 
 ---
@@ -67,14 +68,44 @@ From("signalr://0.0.0.0:8080/hub")       // push, same port
 From("signalr://0.0.0.0:8080/admin")     // another hub, same port again
 ```
 
-Several hubs on one listener are routed to their own consumer by request path.
-
 Clients call `Invoke("MethodName", arg1, arg2, ...)` on the hub. The hub creates an exchange
 with the method name and arguments, processes it through the route pipeline, and optionally returns
 the `Out` body as the method result (when `InOut` is enabled).
 
 Lifecycle events (`OnConnectedAsync`, `OnDisconnectedAsync`) are also dispatched as exchanges
 with the `redbSignalR.Event` header set to `"Connected"` or `"Disconnected"`.
+
+### Hubs on a shared listener
+
+Only a consumer endpoint (`SignalR.Hub(...)`, `From("signalr:...")`) puts a hub on the listener. A broadcast endpoint
+(`SignalR.Broadcast(...)`, `mode=server`) sends through the hub of the consumer on the same address and maps nothing
+of its own.
+
+Every hub is served from a **service container of its own**, built when its consumer starts and disposed when it
+stops. That container holds what SignalR keeps per hub: the connection manager, the lifetime manager behind
+`Clients.All`, `Group` and `User`, the protocols, the hub options and the backplane. As a result:
+
+- **A hub joins a listener that is already serving**, whoever started it. On a Tsak worker several route contexts take
+  one `SharedHttpServerManager` from the worker's container, and the order they start in does not matter: the hub of
+  one context goes onto the port the HTTP routes of another context already serve, and the other way round.
+- **A hub leaves without touching anything else.** When its context stops or reloads, its endpoints come off the
+  listener, its own connections are closed, and the other hubs and routes on the port keep their connections. The
+  hub of the restarted context is a new one; nothing answers from the mapping of the previous instance.
+- **Hubs are isolated from each other.** A broadcast of `/orders` (All, Group or User) reaches the clients of `/orders`
+  only, even when `/alerts` on the same port has the same users in groups of the same name.
+- **Protocols and transports belong to one hub.** `messagePack=true` and `transport=LongPolling` apply to that hub;
+  another hub on the same port keeps its own.
+- **The hub path wins over the route table.** A hub on `/hub/ui` is served by the hub even when an HTTP route of the
+  same port matches `/hub/ui/negotiate`; when the hub leaves, the route table serves the path again.
+
+What a hub does not change is the listener itself. Its pipeline (trusted proxies, CORS, the caller's principal,
+WebSocket upgrades) is built when the listener starts, and so is its TLS: the first route or hub registered on a port
+decides whether it is HTTPS. Every listener accepts WebSocket upgrades.
+
+The hub's container does **not** see the services of the application hosting the route context. A hub request runs in
+a scope of the hub's container, so `Context.GetHttpContext().RequestServices` resolves from there, not from the
+application; what the pipeline needs from the application it takes from the exchange (`Exchange.Create` with the
+consumer's scope factory), and what the hub itself needs is registered with `ConfigureHubServices`.
 
 ### Producer — Client Mode (default)
 
@@ -354,17 +385,30 @@ A hub keeps its connections and groups in the memory of one process. With two re
 load balancer, a broadcast from one reaches only the clients attached to that one — the other
 replica's clients hear nothing.
 
-The connector does not depend on Redis or Azure SignalR; it publishes the seam and the host fills
-it in:
+For Redis, add [redb.Route.SignalR.StackExchangeRedis](../redb.Route.SignalR.StackExchangeRedis/README.md):
 
 ```csharp
-services.AddRedbRouteSignalR(o =>
-    o.ConfigureHubServices(s => s.AddSignalR().AddStackExchangeRedis("redis:6379")));
+services.AddRedbRouteSignalR(o => o.UseRedisBackplane("redis:6379"));
 ```
 
-The container this configures belongs to the shared listener and does **not** see the services of
-the application hosting the route context, so anything the backplane needs must be registered
-here.
+It keys the Redis channels of every hub on its path, so the hubs of one listener stay apart on one Redis, and it
+refuses to start a second hub of the process that would share the channels of another.
+
+The connector itself does not depend on Redis or Azure SignalR. `ConfigureHubServices` is the seam for any other
+backplane, protocol or service a hub needs; it runs once per hub, with that hub's description:
+
+```csharp
+services.AddRedbRouteSignalR(o => o.ConfigureHubServices((services, hub) =>
+    services.AddSignalR().AddStackExchangeRedis("redis:6379", redis =>
+        redis.Configuration.ChannelPrefix = RedisChannel.Literal("myapp" + hub.Path))));
+```
+
+A backplane added by hand is the host's responsibility: SignalR names its channels after the hub class, every hub of
+this connector is the same class, so without a prefix that includes `hub.Path` the hubs of one listener would see each
+other's broadcasts through Redis.
+
+The container `ConfigureHubServices` fills belongs to the hub and does **not** see the services of the application
+hosting the route context, so anything the hub needs must be registered here.
 
 ---
 

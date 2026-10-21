@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using System.Text.Json.Nodes;
 using redb.Route.Abstractions;
 using redb.Route.Core;

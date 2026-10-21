@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.SignalR.StackExchangeRedis</PackageId>
+    <Description>Redis backplane for the redb.Route SignalR transport. Scales hubs out across replicas and keys the Redis channels on the hub path, so the hubs of one listener never see each other's broadcasts on a shared Redis.</Description>
+    <PackageTags>esb;messaging;signalr;redis;backplane;scale-out;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.SignalR" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route.SignalR\redb.Route.SignalR.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <!-- The package runs on the SignalR hub of the shared framework, so its major follows the target framework like
+       the other SignalR packages: the redb security baseline (Directory.Build.targets at the repository root) gives
+       each target framework its version. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.StackExchangeRedis" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

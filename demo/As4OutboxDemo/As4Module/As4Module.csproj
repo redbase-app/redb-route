@@ -14,9 +14,9 @@
   <!-- Pre-built redb NuGet packages. The connectors also ship in the Tsak worker's shared Libs,
        so the .tpkg carries only the module DLL (see PackTpkg). -->
   <ItemGroup>
-    <PackageReference Include="redb.Route" Version="4.3.0" />
-    <PackageReference Include="redb.Route.As4" Version="4.3.0" />
-    <PackageReference Include="redb.Route.File" Version="4.3.0" />
+    <PackageReference Include="redb.Route" />
+    <PackageReference Include="redb.Route.As4" />
+    <PackageReference Include="redb.Route.File" />
   </ItemGroup>
 
   <!-- After build: zip manifest.json + the module DLL into output/As4Module.tpkg. -->

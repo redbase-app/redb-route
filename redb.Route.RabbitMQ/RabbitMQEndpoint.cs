@@ -39,7 +39,18 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
         {
             options.RoutingKey = QueueName;
         }
+
+        _headerFilter = new EndpointHeaderFilter(this, options.HeaderFilterStrategy);
     }
+
+    private readonly EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The header filter strategy of this endpoint: the one <c>headerFilterStrategy=#name</c> names, or
+    /// <see cref="RabbitMQHeaderFilterStrategy.Default"/>. A name the registry does not hold fails when the producer or
+    /// consumer is built.
+    /// </summary>
+    internal IHeaderFilterStrategy HeaderFilterStrategy => _headerFilter.Or(RabbitMQHeaderFilterStrategy.Default);
 
     /// <inheritdoc />
     public override IProducer CreateProducer() => new RabbitMQProducer(this, Options);
@@ -246,9 +257,16 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
     /// <summary>
     /// Declares exchange, queue, and bindings according to endpoint options.
     /// </summary>
-    internal async Task DeclareTopologyAsync(IChannel channel, CancellationToken ct = default)
+    /// <summary>
+    /// Declares the exchange, the queue and its binding when <c>declare=true</c>. An empty queue name is a temporary
+    /// queue that only a consumer has: the broker names it, it is bound and returned, and the consumer reads that
+    /// name. A producer with an empty queue name declares the exchange only, a queue of its own would take copies of
+    /// what it publishes and nobody would read them.
+    /// </summary>
+    /// <returns>The name of the declared queue, or <c>null</c> when no queue was declared.</returns>
+    internal async Task<string?> DeclareTopologyAsync(IChannel channel, RabbitMQConnectionUse use, CancellationToken ct = default)
     {
-        if (!Options.Declare) return;
+        if (!Options.Declare) return null;
 
         var exchangeName = Options.Exchange;
         var queueName = QueueName;
@@ -270,6 +288,9 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
 
         // 2. Declare queue
         var isTemporary = string.IsNullOrEmpty(queueName);
+        if (isTemporary && use != RabbitMQConnectionUse.Consume)
+            return null;
+
         var queueArgs = Options.BuildQueueArguments();
 
         var result = await channel.QueueDeclareAsync(
@@ -295,6 +316,8 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
             Logger?.LogDebug("RabbitMQ queue bound: {Queue} → {Exchange} (routingKey={RoutingKey})",
                 result.QueueName, exchangeName, routingKey);
         }
+
+        return result.QueueName;
     }
 
     /// <inheritdoc />

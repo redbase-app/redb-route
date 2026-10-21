@@ -29,7 +29,10 @@ internal sealed class As2Producer : ConnectableProducer
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
+
+    private readonly IHeaderFilterStrategy _headerFilter;
 
     protected override IEndpoint ProducerEndpoint => _endpoint;
     // Same invariant as HttpProducer: the name reaches started/stopped logs, and a partner URL
@@ -136,7 +139,7 @@ internal sealed class As2Producer : ConnectableProducer
         }
 
         // Bridge non-reserved exchange headers (AS2 semantics + MIME headers are set explicitly, not bridged).
-        BridgeHeaders(exchange.In, request);
+        BridgeHeaders(exchange, request);
 
         // Content + its MIME headers.
         var content = new ByteArrayContent(body);
@@ -327,17 +330,17 @@ internal sealed class As2Producer : ConnectableProducer
     }
 
     /// <summary>
-    /// Bridges the exchange's own headers onto the outgoing request, skipping redb metadata
-    /// (<see cref="As2Headers.IsRedbHeader"/>) and the reserved set (MIME + AS2 semantics + hop-by-hop)
-    /// that we set explicitly — so a passthrough can never silently corrupt them.
+    /// Bridges the exchange's own headers onto the outgoing request, skipping the reserved set (MIME + AS2
+    /// semantics + hop-by-hop + credentials) that we set explicitly or never forward, so a passthrough can never
+    /// silently corrupt them; the endpoint's strategy decides the rest (by default, redb metadata stays back).
     /// </summary>
-    private static void BridgeHeaders(IMessage message, HttpRequestMessage request)
+    private void BridgeHeaders(IExchange exchange, HttpRequestMessage request)
     {
-        foreach (var (key, value) in message.Headers)
+        foreach (var (key, value) in exchange.In.Headers)
         {
             if (value is null) continue;
-            if (As2Headers.IsRedbHeader(key)) continue;
             if (As2Headers.NonBridgedHeaders.Contains(key)) continue;
+            if (_headerFilter.FilterOutgoing(key, value, exchange)) continue;
             request.Headers.TryAddWithoutValidation(key, value.ToString());
         }
     }

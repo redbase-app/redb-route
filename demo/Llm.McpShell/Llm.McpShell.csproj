@@ -10,12 +10,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="redb.Route" Version="4.3.0" />
-    <PackageReference Include="redb.Route.Http" Version="4.3.0" />
-    <PackageReference Include="redb.Route.Llm" Version="4.3.0" />
-    <PackageReference Include="redb.Route.Llm.Abstractions" Version="4.3.0" />
-    <PackageReference Include="redb.Route.Llm.Mcp" Version="4.3.0" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.3" />
+    <PackageReference Include="redb.Route" />
+    <PackageReference Include="redb.Route.Http" />
+    <PackageReference Include="redb.Route.Llm" />
+    <PackageReference Include="redb.Route.Llm.Abstractions" />
+    <PackageReference Include="redb.Route.Llm.Mcp" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
   </ItemGroup>
 
 </Project>

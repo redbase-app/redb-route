@@ -21,12 +21,14 @@ public class HttpProducer : ConnectableProducer
     private readonly HttpEndpointOptions _options;
     private HttpClient? _httpClient;
     private HttpClientHandler? _handler;
+    private readonly redb.Route.Abstractions.IHeaderFilterStrategy _headerFilter;
 
     /// <summary>Creates an HTTP producer.</summary>
     public HttpProducer(HttpEndpoint endpoint, HttpEndpointOptions options)
     {
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _headerFilter = endpoint.HeaderFilterStrategy(EndpointRole.Producer);
     }
 
     /// <inheritdoc />
@@ -97,8 +99,8 @@ public class HttpProducer : ConnectableProducer
             SetRequestBody(request, exchange);
         }
 
-        // Bridge exchange headers to HTTP headers
-        if (_options.BridgeHeaders)
+        // Exchange headers to request headers, as the header filter strategy lets them (skipRequestHeaders: none).
+        if (!_options.SkipRequestHeaders)
         {
             BridgeExchangeHeaders(request, exchange);
         }
@@ -106,7 +108,7 @@ public class HttpProducer : ConnectableProducer
         // preserveHostHeader=true: the reverse-proxy case - the target sees the ORIGINAL
         // request's Host. Off (default): the target sees its own host, like any plain client.
         // Host is excluded from the header bridge, so this explicit set is the only path.
-        // Independent of bridgeHeaders, like in camel-http.
+        // Independent of skipRequestHeaders, like in camel-http.
         if (_options.PreserveHostHeader
             && exchange.In.Headers.TryGetValue("Host", out var originalHost)
             && originalHost?.ToString() is { Length: > 0 } hostValue)
@@ -201,8 +203,8 @@ public class HttpProducer : ConnectableProducer
         // Resolve {name} named parameters from .Param() bindings
         baseUrl = ResolveNamedParams(baseUrl, exchange);
 
-        // Check for query string parameters in exchange headers
-        if (exchange.In.Headers.TryGetValue(HttpHeaders.Query, out var query) && query is string qs && qs.Length > 0)
+        // Check for query string parameters in exchange headers (a control header: skipControlHeaders ignores it)
+        if (!_options.SkipControlHeaders && exchange.In.Headers.TryGetValue(HttpHeaders.Query, out var query) && query is string qs && qs.Length > 0)
         {
             var separator = baseUrl.Contains('?') ? "&" : "?";
             return $"{baseUrl}{separator}{qs}";
@@ -234,8 +236,8 @@ public class HttpProducer : ConnectableProducer
 
     private SysHttpMethod ResolveMethod(IExchange exchange)
     {
-        // Allow override from exchange header
-        if (exchange.In.Headers.TryGetValue(HttpHeaders.Method, out var hm) && hm is string methodStr)
+        // Allow override from exchange header (a control header: skipControlHeaders ignores it)
+        if (!_options.SkipControlHeaders && exchange.In.Headers.TryGetValue(HttpHeaders.Method, out var hm) && hm is string methodStr)
         {
             return new SysHttpMethod(methodStr.ToUpperInvariant());
         }
@@ -296,15 +298,15 @@ public class HttpProducer : ConnectableProducer
         request.Content = content;
     }
 
-    private static void BridgeExchangeHeaders(HttpRequestMessage request, IExchange exchange)
+    private void BridgeExchangeHeaders(HttpRequestMessage request, IExchange exchange)
     {
         foreach (var (key, value) in exchange.In.Headers)
         {
-            if (value is null) continue;
-            if (HttpHeaders.NonBridgedHeaders.Contains(key)) continue;
+            // The protocol fields are the transport's, whatever the strategy says.
+            if (HttpHeaders.ProtocolHeaders.Contains(key)) continue;
+            if (_headerFilter.FilterOutgoing(key, value, exchange)) continue;
 
-            var strValue = value.ToString();
-            if (string.IsNullOrEmpty(strValue)) continue;
+            var strValue = value?.ToString() ?? string.Empty;
 
             // Try to add as request header (some headers may already be set)
             if (!request.Headers.TryAddWithoutValidation(key, strValue))
@@ -375,12 +377,14 @@ public class HttpProducer : ConnectableProducer
         outMessage.Headers[HttpHeaders.StatusText] = response.ReasonPhrase ?? string.Empty;
         outMessage.Headers[HttpHeaders.Url] = response.RequestMessage?.RequestUri?.ToString() ?? string.Empty;
 
-        // Copy response headers to exchange
-        if (_options.CopyResponseHeaders)
+        // Response headers to the exchange, as the header filter strategy lets them (skipResponseHeaders: none)
+        if (!_options.SkipResponseHeaders)
         {
             foreach (var header in response.Headers)
             {
-                outMessage.Headers[header.Key] = string.Join(", ", header.Value);
+                var value = string.Join(", ", header.Value);
+                if (_headerFilter.FilterIncoming(header.Key, value, exchange)) continue;
+                outMessage.Headers[header.Key] = value;
             }
 
             if (response.Content.Headers.ContentType is not null)

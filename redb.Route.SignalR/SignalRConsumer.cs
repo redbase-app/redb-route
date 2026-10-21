@@ -90,11 +90,10 @@ public class SignalRConsumer : IConsumer
     internal IServiceScopeFactory? ScopeFactory => _endpoint.ScopeFactory;
 
     /// <summary>
-    /// Services of the listener this hub is mapped on. The server-mode producer resolves
-    /// <c>IHubContext</c> from here; it is captured when the shared listener is built.
+    /// The hub's own container (see <see cref="SignalRHubHost"/>). The server-mode producer resolves
+    /// <c>IHubContext</c> from here, so it reaches the clients of this hub and of no other.
     /// </summary>
-    internal IServiceProvider? HubServices =>
-        (_endpoint.Component as SignalRComponent)?.GetHubServices(_options.Host, _options.Port);
+    internal IServiceProvider? HubServices => _endpoint.HubServices;
 
     /// <summary>
     /// Processes an exchange through the pipeline. Called by <see cref="RedbBridgeHub"/>.
@@ -150,14 +149,13 @@ public class SignalRConsumer : IConsumer
         // host default together.
         _drain.Start(ct);
 
-        // The hub itself was registered with the listener during the endpoint's Start (SignalR
-        // services must exist before Build(), MapHub before the catch-all). Here we only make sure
-        // the listener is running — it may already be serving HTTP, gRPC, SOAP or another hub.
+        // The hub itself was put on the listener during the endpoint's Start. Here we only make sure
+        // the listener is running: it may already be serving HTTP, gRPC, SOAP or another hub.
         _serverManager = _endpoint.ServerManager;
 
         // Idempotent: the endpoint already did this during its own Start when the route context
         // owns the lifecycle. Repeating it keeps a hand-built consumer working.
-        _endpoint.EnsureHubRegistered();
+        await _endpoint.EnsureHubRegisteredAsync(ct).ConfigureAwait(false);
 
         // Registered before the listener starts: a client can connect the moment it is up.
         if (_endpoint.Component is SignalRComponent comp)
@@ -171,7 +169,7 @@ public class SignalRConsumer : IConsumer
         {
             if (_endpoint.Component is SignalRComponent failed)
                 failed.UnregisterConsumer(this);
-            _endpoint.ReleaseHubRegistration();
+            await _endpoint.ReleaseHubRegistrationAsync().ConfigureAwait(false);
             _drain.Dispose();
             throw;
         }
@@ -192,9 +190,10 @@ public class SignalRConsumer : IConsumer
         // so a deploy does not cut them mid-flight.
         await _drain.DrainAsync(ct, _logger, $"signalr://{_endpoint.HubPath}").ConfigureAwait(false);
 
-        // Give the hub's place on the listener back before asking it to stop: until then the
-        // listener has an occupant, and a later Start must register the hub again.
-        _endpoint.ReleaseHubRegistration();
+        // Take the hub off the listener before asking it to stop: until then the listener has an
+        // occupant, and a later Start must put the hub back. Its connections close; the other hubs
+        // and routes on the listener keep theirs.
+        await _endpoint.ReleaseHubRegistrationAsync().ConfigureAwait(false);
 
         // The listener stops only when the last route AND the last hub on it are gone: HTTP or
         // another hub may still be serving this port.

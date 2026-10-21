@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Transactions;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Abstractions;
 using redb.Route.Core;
 using redb.Route.Processors;

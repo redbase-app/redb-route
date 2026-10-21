@@ -17,7 +17,8 @@ public sealed class ProtobufDataFormat : IMessageSerializer
     /// <summary>Content type the format is registered under.</summary>
     public const string DefaultContentType = "application/x-protobuf";
 
-    private static readonly ConcurrentDictionary<Type, MessageParser> Parsers = new();
+    // Weak per type: a message type of an unloadable module (collectible load context) does not stay alive in this cache.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, MessageParser> Parsers = new();
     private readonly ProtobufDataFormatOptions _options;
 
     /// <summary>Creates the format with the given options (defaults when <c>null</c>).</summary>
@@ -73,7 +74,7 @@ public sealed class ProtobufDataFormat : IMessageSerializer
         }
     }
 
-    private static MessageParser ParserFor(Type type) => Parsers.GetOrAdd(type, static t =>
+    private static MessageParser ParserFor(Type type) => Parsers.GetValue(type, static t =>
         t.GetProperty("Parser", BindingFlags.Public | BindingFlags.Static)?.GetValue(null) as MessageParser
         ?? throw new InvalidOperationException($"Protobuf data format: {t.Name} has no static Parser property; is it a protoc-generated message?"));
 

@@ -217,6 +217,25 @@ All IBM MQ metadata headers are prefixed with `redbIbmMq.`:
 - `redbIbmMq.BackoutCount` — backout count
 - ... and more (see `IbmMqHeaders` class)
 
+### Header filter strategy
+
+The other exchange headers travel in one JSON-encoded message property (MQ property names forbid hyphens), as text;
+the consumer unpacks them on the poll and the XMS path alike, and a request-reply carries them both ways.
+`headerFilterStrategy=#name` names an `IHeaderFilterStrategy` in the registry that decides which headers cross, as
+in Apache Camel: outgoing for a request and a consumer's reply, incoming for a delivery and the reply a
+request-reply producer receives. It replaces the default, `IbmMqHeaderFilterStrategy` (keeps `redbIbmMq.*` back),
+entirely; derive from that class to add to it. MQMD fields, `targetClient=Mq` (no properties at all) and the trace
+context are not the strategy's.
+
+```csharp
+ctx.AddToRegistry("correlationOnly", new DefaultHeaderFilterStrategy
+{
+    OutFilter = ["Correlation-ID"],
+    FilterOnMatch = false,   // a whitelist: only the listed headers go out
+});
+// wmq:ORDERS.Q?queueManager=QM1&headerFilterStrategy=#correlationOnly
+```
+
 ## Telemetry
 
 On the `redb.Route` activity source (`AddSource("redb.Route")`). The W3C context travels in the MQRFH2 user properties

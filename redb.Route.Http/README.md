@@ -86,7 +86,7 @@ From("direct://proxy")
 | **Consumer** | `Http.Listen()`, `.Host()`, `.Port()`, `.Methods()`, `.Cors()`, `.CorsCredentials()`, `.MaxRequestBodySize()`, `.Protocol()`, `.ResponseCode()`, `.InOut()`, `.StreamRequest()` |
 | **Auth** | `.BasicAuth(user, pass)`, `.BearerAuth()`, `.AuthToken()` |
 | **SSL** | `.SslCert(path, pass?)` |
-| **Producer** | `.Timeout()`, `.ContentType()`, `.NoThrowOnError()`, `.NoBridgeHeaders()`, `.NoFollowRedirects()`, `.MaxRedirects()`, `.NoCopyResponseHeaders()`, `.PreserveHostHeader()` |
+| **Producer** | `.Timeout()`, `.ContentType()`, `.NoThrowOnError()`, `.SkipRequestHeaders()`, `.SkipControlHeaders()`, `.HeaderFilterStrategy(name)`, `.NoFollowRedirects()`, `.MaxRedirects()`, `.SkipResponseHeaders()`, `.PreserveHostHeader()` |
 | **Parameters** | `.Param(name, value)`, `.Param(name, IExpression)` — bind `{name}` URL placeholders |
 
 > Most builder methods (Timeout, BasicAuth, AuthToken, MaxRedirects, Host, Port, MaxRequestBodySize, SslCert, ResponseCode) accept both constant values and `IExpression` for runtime resolution.

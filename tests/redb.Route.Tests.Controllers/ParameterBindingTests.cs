@@ -146,7 +146,7 @@ public class ParameterBindingTests
             var json = await Http(exchange, "GET", "/binding/types");
             var bound = JsonSerializer.Deserialize<BoundTypes>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
 
-            using var scope = new FluentAssertions.Execution.AssertionScope();
+            using var scope = new AwesomeAssertions.Execution.AssertionScope();
             bound.At.Should().Be(new DateTime(2026, 9, 30, 10, 15, 0));
             bound.Offset.Should().Be(new DateTimeOffset(2026, 9, 30, 10, 15, 0, TimeSpan.FromHours(3)));
             bound.Amount.Should().Be(12.5m);

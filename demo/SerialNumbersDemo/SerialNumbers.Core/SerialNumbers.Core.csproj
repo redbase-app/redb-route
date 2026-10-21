@@ -23,7 +23,7 @@
     <PackageReference Include="redb.Route.Http" Version="$(RedbVersion)" />
     <PackageReference Include="redb.Route.Quartz" Version="$(RedbVersion)" />
     <!-- The ADO.NET provider behind the sql: component; the same version redb.MSSql uses. -->
-    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.3" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
     <!-- The product status journal is an EF Core model on the redb connection (Catalog/). -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="$(EfCoreVersion)" />
   </ItemGroup>

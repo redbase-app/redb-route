@@ -1,6 +1,6 @@
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.As2;
 using redb.Route.As2.Crypto;
 using redb.Route.As2.Mdn;

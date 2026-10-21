@@ -11,6 +11,7 @@ fully usable without any editor — this extension only makes the text pleasant:
 - **Route tree** in the Explorer sidebar: every routes document of the workspace, its routes
   with ids and `from` endpoints; a click opens the exact line.
 - **Skeletons**: composite inserts the schema cannot offer - `<routes` (document with xmlns), `<route` (with its consumer), `<choice` (both branches), `<tryCatch` (catch+finally) - served by the extension itself, ONLY in redb documents and only at a new-element position; single elements come from the XSD completion.
+- **Bean references**: typing `#` where a value names a registry object (`?headerFilterStrategy=#`, `dataSource="#"`, `bean:#`) lists the `<bean name>` declarations of the current document. No type filter: a missing or wrong bean is reported by `redb-route-xml pack` / `check`.
 - **Route graph** (`Open With` → `redb Route Graph`): every step is a tile of one size, a
   colored glyph and a short caption (`from`, `bean`, `sql`, `set`, `choice`, `when`, `loop`,
   `log`…); what exactly a step does (the property name, the condition, the SQL) is in the

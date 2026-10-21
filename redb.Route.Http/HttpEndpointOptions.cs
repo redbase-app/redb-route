@@ -25,8 +25,30 @@ public class HttpEndpointOptions : EndpointOptions
     /// <summary>Throw an exception on HTTP 4xx/5xx responses. Default: true.</summary>
     public bool ThrowOnError { get; set; } = true;
 
-    /// <summary>Bridge exchange headers to HTTP request headers. Default: true.</summary>
-    public bool BridgeHeaders { get; set; } = true;
+    /// <summary>
+    /// Do not map the exchange headers to request headers at all; only the fields the producer sets itself go out.
+    /// Default: false. Apache Camel's <c>skipRequestHeaders</c>.
+    /// </summary>
+    [EndpointRole(EndpointRole.Producer)]
+    public bool SkipRequestHeaders { get; set; }
+
+    /// <summary>
+    /// Do not let the control headers on the exchange — <c>redbHttp.Method</c>, <c>redbHttp.Query</c> — steer the
+    /// request; the endpoint's own options decide. Default: false. Set it on a producer whose exchange may carry
+    /// headers of other hops (a message received from a broker keeps every header it came with). Apache Camel's
+    /// <c>skipControlHeaders</c>.
+    /// </summary>
+    [EndpointRole(EndpointRole.Producer)]
+    public bool SkipControlHeaders { get; set; }
+
+    /// <summary>
+    /// A registry reference (<c>#name</c>) to an <see cref="redb.Route.Abstractions.IHeaderFilterStrategy"/> that decides
+    /// which headers this endpoint carries, in place of <see cref="HttpHeaderFilterStrategy"/>: the request and
+    /// response headers of a producer, the request and response headers of a consumer. The protocol fields
+    /// (<see cref="HttpHeaders.ProtocolHeaders"/>) and, on a consumer, received <c>redbHttp.*</c> and response-only
+    /// fields are never carried, whatever the strategy says.
+    /// </summary>
+    public string? HeaderFilterStrategy { get; set; }
 
     /// <summary>Authentication scheme. Default: None.</summary>
     [EndpointRole(EndpointRole.Producer)]
@@ -87,8 +109,12 @@ public class HttpEndpointOptions : EndpointOptions
     /// <summary>Maximum number of automatic redirects. Default: 50.</summary>
     public int MaxRedirects { get; set; } = 50;
 
-    /// <summary>Copy HTTP response headers back to exchange headers. Default: true.</summary>
-    public bool CopyResponseHeaders { get; set; } = true;
+    /// <summary>
+    /// Do not map the response headers to exchange headers; the status, URL and content type are still set.
+    /// Default: false. Apache Camel's <c>skipResponseHeaders</c>.
+    /// </summary>
+    [EndpointRole(EndpointRole.Producer)]
+    public bool SkipResponseHeaders { get; set; }
 
     /// <summary>Preserve the Host header from the original request. Default: false.</summary>
     public bool PreserveHostHeader { get; set; }
@@ -261,9 +287,29 @@ public class HttpEndpointOptions : EndpointOptions
             throw new ArgumentException("inboundRealm must be non-empty, without quotes, backslashes or control characters.");
     }
 
+    /// <summary>
+    /// Options renamed to Apache Camel's names, with the meaning reversed. The HTTP options take parameters they have
+    /// no property for (<see cref="LenientPropertiesAttribute"/>), so an old name would be dropped without a word and
+    /// its endpoint would quietly do the opposite of what it says: it is refused instead.
+    /// </summary>
+    private static readonly Dictionary<string, string> RenamedOptions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["bridgeHeaders"] = "'bridgeHeaders' is replaced by Apache Camel's 'skipRequestHeaders', with the meaning reversed: " +
+                            "bridgeHeaders=false is skipRequestHeaders=true; bridgeHeaders=true is the default and needs no option.",
+        ["copyResponseHeaders"] = "'copyResponseHeaders' is replaced by Apache Camel's 'skipResponseHeaders', with the meaning " +
+                                  "reversed: copyResponseHeaders=false is skipResponseHeaders=true; copyResponseHeaders=true " +
+                                  "is the default and needs no option.",
+    };
+
     /// <inheritdoc />
     public override void Validate()
     {
+        foreach (var key in UnmappedParameters.Keys)
+        {
+            if (RenamedOptions.TryGetValue(key, out var replacement))
+                throw new ArgumentException(replacement, key);
+        }
+
         if (Timeout < 0)
             throw new ArgumentException("Timeout must be >= 0.");
 

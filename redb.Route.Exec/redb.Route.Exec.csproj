@@ -13,7 +13,7 @@
   </ItemGroup>
   <ItemGroup>
     <!-- Needed for OEM codepages (cp866, cp1251, …) when decoding cmd.exe stdout on Windows. -->
-    <PackageReference Include="System.Text.Encoding.CodePages" Version="9.0.0" />
+    <PackageReference Include="System.Text.Encoding.CodePages" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

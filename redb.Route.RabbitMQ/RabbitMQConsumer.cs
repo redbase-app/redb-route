@@ -65,11 +65,19 @@ public sealed class RabbitMQConsumer : IConsumer
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = endpoint.Logger;
         _semaphore = new SemaphoreSlim(options.ResolvedConcurrentConsumers);
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
+
+    private readonly IHeaderFilterStrategy _headerFilter;
 
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
+        if (!_options.Declare && string.IsNullOrEmpty(_endpoint.QueueName))
+            throw new InvalidOperationException(
+                $"RabbitMQ consumer '{_endpoint.Uri}': an empty queue name asks for a temporary queue, which only "
+                + "declare=true creates and binds; with declare=false name the queue to read.");
+
         _stopping = false;
         _drain.Start(ct);
         // Consumer channel: no publisher confirms.
@@ -94,14 +102,10 @@ public sealed class RabbitMQConsumer : IConsumer
 
         try
         {
-            // Topology declaration (exchange, queue, bindings)
-            await _endpoint.DeclareTopologyAsync(_channel, ct).ConfigureAwait(false);
-
-            // Resolve actual queue name (important for auto-generated queues)
-            _actualQueueName = string.IsNullOrEmpty(_endpoint.QueueName)
-                ? (await _channel.QueueDeclareAsync("", durable: false, exclusive: true, autoDelete: true,
-                    cancellationToken: ct).ConfigureAwait(false)).QueueName
-                : _endpoint.QueueName;
+            // Topology declaration (exchange, queue, bindings). A temporary queue is read by the name the broker gave
+            // it on that declaration, the one bound to the exchange.
+            _actualQueueName = await _endpoint.DeclareTopologyAsync(_channel, RabbitMQConnectionUse.Consume, ct)
+                .ConfigureAwait(false) ?? _endpoint.QueueName;
 
             // QoS
             await _channel.BasicQosAsync(
@@ -426,7 +430,7 @@ public sealed class RabbitMQConsumer : IConsumer
 
     private Exchange CreateExchange(BasicDeliverEventArgs ea, byte[] body)
     {
-        var message = MessageFrom(ea, body);
+        var message = new Message(body);
 
         var pattern = string.IsNullOrEmpty(ea.BasicProperties.ReplyTo)
             ? ExchangePattern.InOnly
@@ -434,17 +438,19 @@ public sealed class RabbitMQConsumer : IConsumer
 
         var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
         exchange.Pattern = pattern;
+        Fill(message, ea, _headerFilter, exchange);
         return exchange;
     }
 
     /// <summary>
-    /// A delivery as a message: the body as bytes, the AMQP headers, the <c>redbRmq.*</c> delivery metadata and the
-    /// basic properties by name. One mapping for every inbound path — a consumed message and an RPC reply alike.
+    /// A delivery into <paramref name="message"/> (whose body is the delivery's bytes): the AMQP headers as
+    /// <paramref name="headerFilter"/> lets them in, the <c>redbRmq.*</c> delivery metadata and the basic properties by
+    /// name. One mapping for every inbound path, a consumed message and an RPC reply alike; <paramref name="exchange"/>
+    /// is the one the headers come into (for an RPC reply, the request's).
     /// </summary>
-    internal static Message MessageFrom(BasicDeliverEventArgs ea, byte[] body)
+    internal static void Fill(Message message, BasicDeliverEventArgs ea,
+        IHeaderFilterStrategy headerFilter, IExchange exchange)
     {
-        var message = new Message(body);
-
         // Transfer AMQP headers
         if (ea.BasicProperties.Headers is not null)
         {
@@ -457,8 +463,9 @@ public sealed class RabbitMQConsumer : IConsumer
                     _ => header.Value
                 };
 
-                if (value is not null)
-                    message.Headers[header.Key] = value;
+                if (value is null) continue;
+                if (headerFilter.FilterIncoming(header.Key, value, exchange)) continue;
+                message.Headers[header.Key] = value;
             }
         }
 
@@ -495,7 +502,6 @@ public sealed class RabbitMQConsumer : IConsumer
         if (ea.BasicProperties.Timestamp.UnixTime != 0)
             message.Headers[RmqHeaders.Timestamp] = ea.BasicProperties.Timestamp.UnixTime;
         message.Headers["Persistent"] = ea.BasicProperties.Persistent;
-        return message;
     }
 
     /// <summary>
@@ -565,14 +571,14 @@ public sealed class RabbitMQConsumer : IConsumer
             if (!string.IsNullOrEmpty(correlationId))
                 properties.CorrelationId = correlationId;
 
-            // Copy response headers (skip rabbitmq.* internal and AMQP basic property names)
+            // Basic property names never become AMQP headers; the endpoint's strategy decides the rest.
             var headers = new Dictionary<string, object?>();
 
             foreach (var (key, value) in response.Headers)
             {
-                if (RmqHeaders.IsRedbHeader(key)) continue;
                 if (BasicPropertyNames.Contains(key)) continue;
                 if (value is null) continue;
+                if (_headerFilter.FilterOutgoing(key, value, exchange)) continue;
 
                 headers[key] = value switch
                 {

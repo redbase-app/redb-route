@@ -8,7 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
-    <PackageReference Include="FluentValidation" Version="11.9.0" />
+    <PackageReference Include="FluentValidation" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-using FluentAssertions;
+using AwesomeAssertions;
 
 using redb.Route.Llm.Abstractions.Tools;
 using redb.Route.Llm.Engine.Storage;

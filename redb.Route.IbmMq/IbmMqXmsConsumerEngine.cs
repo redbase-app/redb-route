@@ -89,7 +89,10 @@ internal sealed class IbmMqXmsConsumerEngine
         _logger = logger;
         _onProcessed = onProcessed;
         _transacted = options.Transacted == true;
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
+
+    private readonly IHeaderFilterStrategy _headerFilter;
 
     public async Task StartAsync(CancellationToken ct)
     {
@@ -286,9 +289,9 @@ internal sealed class IbmMqXmsConsumerEngine
         var routeMsg = new RouteMessage(body) { ContentType = contentType };
 
         // Carry the same redbIbmMq.* metadata and user headers as the poll path.
-        IbmMqXmsHeaderMapper.CopyToHeaders(message, routeMsg, _endpoint.Destination, _options);
-
         var exchange = Exchange.Create(routeMsg, _endpoint.ScopeFactory);
+        IbmMqXmsHeaderMapper.CopyToHeaders(message, routeMsg, _endpoint.Destination, _options, _headerFilter, exchange);
+
         // A request carrying a reply destination is request-reply (InOut); otherwise one-way (InOnly).
         exchange.Pattern = HasReplyTo(message) ? ExchangePattern.InOut : ExchangePattern.InOnly;
         return exchange;

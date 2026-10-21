@@ -87,10 +87,12 @@ public static class IbmMqMessageHelper
     }
 
     /// <summary>
-    /// Copies RFH2 user properties (if present) into exchange headers.
+    /// Copies RFH2 user properties (if present) that <paramref name="headerFilter"/> lets in into exchange headers;
+    /// <paramref name="exchange"/> is the one they come into (for a request-reply's reply, the request's).
     /// IBM MQ JMS messages carry user-defined properties in the MQRFH2 usr folder.
     /// </summary>
-    public static void CopyRfh2UserProperties(MQMessage mqMsg, RouteMessage routeMsg)
+    public static void CopyRfh2UserProperties(MQMessage mqMsg, RouteMessage routeMsg,
+        IHeaderFilterStrategy headerFilter, IExchange exchange)
     {
         string? json = null;
         try { json = mqMsg.GetStringProperty(IbmMqHeaders.HeaderCatalogue); }
@@ -104,23 +106,26 @@ public static class IbmMqMessageHelper
             if (dict is null) return;
 
             foreach (var (key, value) in dict)
+            {
+                if (headerFilter.FilterIncoming(key, value, exchange)) continue;
                 routeMsg.Headers[key] = value;
+            }
         }
         catch { /* malformed JSON — skip */ }
     }
 
     /// <summary>
-    /// Copies user-defined headers from a route message into the MQ message's RFH2
-    /// user property folder (using the same JSON-encoded property as
-    /// <see cref="BuildOutgoingMessage"/>). Skips internal redb headers.
+    /// Copies the headers of a route message that <paramref name="headerFilter"/> lets out into the MQ message's RFH2
+    /// user property folder (using the same JSON-encoded property as <see cref="BuildOutgoingMessage"/>).
     /// </summary>
-    public static void CopyHeadersToRfh2(MQMessage mqMsg, IMessage routeMsg)
+    public static void CopyHeadersToRfh2(MQMessage mqMsg, IMessage routeMsg,
+        IHeaderFilterStrategy headerFilter, IExchange exchange)
     {
         var customHeaders = new Dictionary<string, string>();
         foreach (var (key, value) in routeMsg.Headers)
         {
-            if (IbmMqHeaders.IsRedbHeader(key)) continue;
             if (value is null) continue;
+            if (headerFilter.FilterOutgoing(key, value, exchange)) continue;
             customHeaders[key] = value.ToString()!;
         }
 
@@ -131,11 +136,13 @@ public static class IbmMqMessageHelper
     }
 
     /// <summary>
-    /// Builds an <see cref="MQMessage"/> from an exchange for sending.
+    /// Builds an <see cref="MQMessage"/> from an exchange for sending; <paramref name="headerFilter"/> decides which
+    /// exchange headers go into the header catalogue.
     /// </summary>
     public static MQMessage BuildOutgoingMessage(
         IExchange exchange,
-        IbmMqEndpointOptions options)
+        IbmMqEndpointOptions options,
+        IHeaderFilterStrategy headerFilter)
     {
         var msg = new MQMessage
         {
@@ -220,8 +227,8 @@ public static class IbmMqMessageHelper
         var customHeaders = new Dictionary<string, string>();
         foreach (var (key, value) in exchange.In.Headers)
         {
-            if (IbmMqHeaders.IsRedbHeader(key)) continue;
             if (value is null) continue;
+            if (headerFilter.FilterOutgoing(key, value, exchange)) continue;
             customHeaders[key] = value.ToString()!;
         }
 

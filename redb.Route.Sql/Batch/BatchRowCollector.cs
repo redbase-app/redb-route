@@ -26,16 +26,17 @@ internal sealed class BatchRowCollector
 
     /// <summary>
     /// A collector when <paramref name="options"/> ask for rows — an <c>outputType</c> other than <c>None</c>, with
-    /// <c>Auto</c> decided by <paramref name="sql"/> — or null, when the batch reads no rows.
+    /// <c>Auto</c> decided by <paramref name="sql"/> — or null, when the batch reads no rows. Rows map to
+    /// <paramref name="poco"/>, the endpoint's <c>outputClass</c> mapping, or to dictionaries without one.
     /// </summary>
-    internal static BatchRowCollector? Create(SqlEndpointOptions options, string sql)
+    internal static BatchRowCollector? Create(SqlEndpointOptions options, SqlRowMapperFactory.PocoMapping? poco, string sql)
     {
         // Under Auto a batch reads no rows, as Apache Camel's executeBatch collects no result sets: the keys of a batch are
         // asked for with an explicit outputType. The text is never parsed for it.
         if (options.OutputType is SqlOutputType.None or SqlOutputType.Auto)
             return null;
 
-        if (SqlRowMapperFactory.Resolve(options.OutputClass) is { } poco)
+        if (poco is not null)
             return new BatchRowCollector(poco.CreateList(), poco.Map);
 
         var mapper = new DictionaryRowMapper();

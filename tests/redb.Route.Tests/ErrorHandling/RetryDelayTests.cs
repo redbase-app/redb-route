@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Microsoft.Extensions.Logging;
 using redb.Route.Core;
 using redb.Route.ErrorHandling;

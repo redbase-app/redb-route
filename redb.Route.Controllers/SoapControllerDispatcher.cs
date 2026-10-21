@@ -31,7 +31,8 @@ public sealed class SoapControllerDispatcher : IProcessor
     /// <summary>Header the SOAP consumer sets to the request operation (Body root element local name).</summary>
     public const string OperationHeader = "redbSoap.operation";
 
-    private static readonly ConcurrentDictionary<Type, XmlSerializer> Serializers = new();
+    // Weak per type: a type of an unloadable module (collectible load context) does not stay alive in this cache.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Type, XmlSerializer> Serializers = new();
     private readonly FrozenDictionary<string, MethodEntry> _operations;
     private readonly IRouteContext _context;
 
@@ -180,7 +181,7 @@ public sealed class SoapControllerDispatcher : IProcessor
         return sw.ToString();
     }
 
-    private static XmlSerializer Serializer(Type t) => Serializers.GetOrAdd(t, static x => new XmlSerializer(x));
+    private static XmlSerializer Serializer(Type t) => Serializers.GetValue(t, static x => new XmlSerializer(x));
 
     private static FrozenDictionary<string, MethodEntry> BuildOperationMap(Type[] controllerTypes)
     {

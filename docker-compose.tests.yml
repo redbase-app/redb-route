@@ -536,7 +536,8 @@ services:
   # Google ships no FCM emulator; this echo records messages:send calls.
   # Used by: redb.Route.Tests.Firebase FCM e2e (AppOptions.HttpClientFactory redirect).
   # Source of the server script: C:\Work\yaml\firebase\fcm-echo\server.js (host infra dir).
-  #   POST /v1/projects/*/messages:send | GET/DELETE /messages | GET /healthz
+  #   POST /v1/projects/*/messages:send | POST/DELETE /v1/projects/*/registrations/*/topicSubscriptions[/*]
+  #   GET/DELETE /messages | GET /healthz
   fcm-echo:
     image: node:22-slim
     container_name: fcm-echo

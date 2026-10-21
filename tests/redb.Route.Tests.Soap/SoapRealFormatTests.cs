@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Soap;
 
 namespace redb.Route.Tests.Soap;

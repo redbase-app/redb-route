@@ -33,7 +33,7 @@ const TRANSFORM = [
     "removeHeaders", "removeProperty", "removeProperties", "transform", "convertBody",
     "marshal", "unmarshal", "normalize", "xslt", "sort", "claimCheck",
     // neutral observability and infrastructure — the lightest weight on purpose
-    "log", "metered", "traced", "streamCaching", "messageHistory", "controlBus", "routePolicy",
+    "log", "metered", "traced", "spanTag", "streamCaching", "messageHistory", "controlBus", "routePolicy",
     "intercept", "interceptFrom", "interceptSendToEndpoint",
     // package elements (present when the palette was refreshed with --bin)
     "cache", "transformJson", "payload", "redbGet", "redbSave", "redbDelete", "redbQuery",

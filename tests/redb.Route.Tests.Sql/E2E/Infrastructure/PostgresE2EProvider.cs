@@ -14,8 +14,13 @@ public sealed class PostgresE2EProvider : SqlE2EProvider
 
     public override DbProviderFactory Factory => NpgsqlFactory.Instance;
 
-    public override string ConnectionString =>
-        Environment.GetEnvironmentVariable(EnvironmentVariable)?.Trim() is { Length: > 0 } cs ? cs : DefaultConnectionString;
+    // Npgsql 10 leaves PostgresException.BatchCommand null unless the connection opts in, and the suite
+    // checks the exact failed item of a batch: the option is set here, also on an overriding string.
+    public override string ConnectionString => new NpgsqlConnectionStringBuilder(
+        Environment.GetEnvironmentVariable(EnvironmentVariable)?.Trim() is { Length: > 0 } cs ? cs : DefaultConnectionString)
+    {
+        IncludeFailedBatchedCommand = true,
+    }.ConnectionString;
 
     public override string StartHint =>
         $"Start it with 'docker start pgdb' (or 'docker compose -f redb.Route/docker-compose.tests.yml up -d pgdb'); override the connection with {EnvironmentVariable}.";

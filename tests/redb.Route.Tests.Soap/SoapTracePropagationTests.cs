@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Text;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Configuration;
 using redb.Route.Core;
 using redb.Route.Soap;

@@ -12,7 +12,7 @@ services:
   tsak:
     image: ${TSAK_IMAGE:-redb-tsak-stack:4.3.0-net10}
     container_name: as4ct-tsak
-    restart: "no"
+    restart: ${AS4CT_RESTART:-no}                   # a stand is started by hand; the public access point: unless-stopped
     ports:
       - "${TSAK_WEB_BIND:-127.0.0.1}:${TSAK_WEB_PORT:-18085}:8085"     # dashboard; TSAK_WEB_BIND opens it to one interface
       - "127.0.0.1:${TSAK_API_PORT:-19090}:9090"     # management API
@@ -31,6 +31,9 @@ services:
       - Tsak__Web__AdminPasswordHash=${TSAK_WEB_ADMIN_PASSWORD_HASH:?TSAK_WEB_ADMIN_PASSWORD_HASH required}
       # In-memory storage has no shared store to discover workers from: the dashboard is told its one worker, with
       # the key it calls the management API with (Tsak:Web:ServiceApiKey is read in cluster mode only).
+      # Behind a reverse proxy that publishes the dashboard: the client address and scheme from X-Forwarded-*, so the
+      # login throttle sees real clients and the auth cookie is Secure. Off when nothing proxies the dashboard.
+      - Tsak__Web__TrustProxyHeaders=${TSAK_WEB_TRUST_PROXY_HEADERS:-false}
       - Tsak__Web__Mode=standalone
       - Tsak__Web__Nodes__0__Id=default
       - Tsak__Web__Nodes__0__Url=http://localhost:9090

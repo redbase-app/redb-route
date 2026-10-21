@@ -1,6 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
-using FluentAssertions;
+using AwesomeAssertions;
 using redb.Route.Core;
 using redb.Route.Soap;
 using SoapDsl = redb.Route.Soap.Fluent.Soap;

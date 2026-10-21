@@ -1,6 +1,7 @@
 using System.Text;
 using Amqp;
 using Amqp.Framing;
+using redb.Route.Abstractions;
 using AmqpMessage = global::Amqp.Message;
 
 namespace redb.Route.Amqp;
@@ -28,9 +29,11 @@ internal static class AmqpMessageHelper
     }
 
     /// <summary>
-    /// Copies AMQP application-properties into a redb.Route message headers dictionary.
+    /// Copies the AMQP application-properties that <paramref name="headerFilter"/> lets in into a redb.Route message's
+    /// headers; <paramref name="exchange"/> is the one they come into (for a request-reply's reply, the request's).
     /// </summary>
-    public static void CopyApplicationProperties(AmqpMessage amqpMessage, redb.Route.Core.Message routeMessage)
+    public static void CopyApplicationProperties(AmqpMessage amqpMessage, redb.Route.Core.Message routeMessage,
+        IHeaderFilterStrategy headerFilter, IExchange exchange)
     {
         if (amqpMessage.ApplicationProperties?.Map == null) return;
 
@@ -46,8 +49,9 @@ internal static class AmqpMessageHelper
                 _ => kvp.Value
             };
 
-            if (value is not null)
-                routeMessage.Headers[key] = value;
+            if (value is null) continue;
+            if (headerFilter.FilterIncoming(key, value, exchange)) continue;
+            routeMessage.Headers[key] = value;
         }
     }
 }

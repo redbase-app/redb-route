@@ -23,6 +23,33 @@ public class RabbitBuilderTests
         act.Should().Throw<ArgumentException>();
     }
 
+    [Fact]
+    public void An_empty_queue_name_points_to_the_exchange_entry()
+    {
+        var act = () => Rabbit.Queue("");
+        act.Should().Throw<ArgumentException>().WithMessage("*Rabbit.Exchange(name, type)*");
+    }
+
+    [Fact]
+    public void Exchange_builds_the_uri_of_an_endpoint_without_a_queue_name()
+    {
+        string uri = Rabbit.Exchange("honest.ui", "fanout").ConnectionFactory("f").Declare();
+
+        uri.Should().StartWith("rabbitmq:?");
+        var endpoint = (RabbitMQEndpoint)new RabbitMQComponent().CreateEndpoint(EndpointUriParser.Parse(uri));
+        endpoint.QueueName.Should().BeEmpty();
+        endpoint.EndpointOptions.Exchange.Should().Be("honest.ui");
+        endpoint.EndpointOptions.ExchangeType.Should().Be("fanout");
+        endpoint.EndpointOptions.Declare.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Exchange_requires_a_name()
+    {
+        var act = () => Rabbit.Exchange(" ");
+        act.Should().Throw<ArgumentException>();
+    }
+
     // ── Connection ──────────────────────────────────────────────────
 
     [Fact]

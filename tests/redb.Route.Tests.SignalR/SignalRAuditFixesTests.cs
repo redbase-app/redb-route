@@ -178,9 +178,17 @@ public sealed class SignalRAuditFixesTests : IAsyncLifetime
         var producer = pushEndpoint.CreateProducer();
         _producers.Add(producer);
         await producer.Start();
-        await producer.Process(new Exchange(new Message("members only")));
 
-        (await received.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("members only",
+        // SignalR answers the handshake before OnConnectedAsync runs, so StartAsync can return before the Connected
+        // exchange put the connection into the group: push until the membership is there.
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!received.Task.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            await producer.Process(new Exchange(new Message("members only")));
+            await Task.WhenAny(received.Task, Task.Delay(200));
+        }
+
+        (await received.Task.WaitAsync(TimeSpan.FromSeconds(1))).Should().Be("members only",
             "членство в группе принадлежит соединению и после reconnect теряется — README обещает, " +
             "что событие Connected с заголовком AddToGroup его возвращает");
     }

@@ -19,6 +19,7 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
 {
     private readonly AzureServiceBusEndpoint _endpoint;
     private readonly AzureServiceBusEndpointOptions _options;
+    private readonly IHeaderFilterStrategy _headerFilter;
     private readonly string _batchKey = $"asb-batch-{Guid.NewGuid():N}";
     private ServiceBusSender? _sender;
 
@@ -30,6 +31,7 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
     {
         _endpoint = endpoint;
         _options = options;
+        _headerFilter = endpoint.HeaderFilterStrategy;
     }
 
     protected override async Task ConnectAsync(CancellationToken ct)
@@ -240,11 +242,11 @@ internal sealed class AzureServiceBusProducer : ConnectableProducer
             is { } scheduled)
             msg.ScheduledEnqueueTime = scheduled;
 
-        // Application properties — copy non-ASB headers
+        // Application properties, as the endpoint's strategy lets the exchange headers out
         foreach (var (key, value) in exchange.In.Headers)
         {
-            if (AzureServiceBusHeaders.IsAsbHeader(key)) continue;
             if (value is null) continue;
+            if (_headerFilter.FilterOutgoing(key, value, exchange)) continue;
             msg.ApplicationProperties[key] = value;
         }
 

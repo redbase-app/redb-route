@@ -104,6 +104,13 @@ public sealed class IbmMqEndpointOptions : EndpointOptions
     /// <summary>Named connection factory from registry. Takes priority over inline params.</summary>
     public string? ConnectionFactory { get; set; }
 
+    /// <summary>
+    /// A registry reference (<c>#name</c>) to an <see cref="redb.Route.Abstractions.IHeaderFilterStrategy"/> that
+    /// decides which headers this endpoint carries between the exchange and the message's header catalogue (a
+    /// request, a consumed message, a reply both ways), in place of <see cref="IbmMqHeaderFilterStrategy"/>.
+    /// </summary>
+    public string? HeaderFilterStrategy { get; set; }
+
     /// <summary>Queue manager hostname. (default: localhost)</summary>
     public string Host { get; set; } = "localhost";
 
