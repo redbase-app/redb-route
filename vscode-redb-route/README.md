@@ -1,73 +1,153 @@
-# redb Route XML — VSCode extension
+# redb Route XML
 
-Text mode for [redb.Route](https://github.com/redbase-app/redb-route) XML routes. The format stays
-fully usable without any editor — this extension only makes the text pleasant:
+Editor support for [redb.Route](https://github.com/redbase-app/redb-route) XML routes in VS Code: completion and
+validation from the format's schema, a route tree, composite skeletons, bean reference hints and a graph editor
+over the XML text.
 
-- **Completion, validation and enum hints** for every element of the format, powered by
-  [Red Hat XML](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-xml) reading
-  the shipped XSD. The binding is **namespace-driven**: a document gets the schema because its
-  root says `urn:redb:route:1.0` — never because of its file name. Someone else's `route.xml`
-  is left alone.
-- **Route tree** in the Explorer sidebar: every routes document of the workspace, its routes
-  with ids and `from` endpoints; a click opens the exact line.
-- **Skeletons**: composite inserts the schema cannot offer - `<routes` (document with xmlns), `<route` (with its consumer), `<choice` (both branches), `<tryCatch` (catch+finally) - served by the extension itself, ONLY in redb documents and only at a new-element position; single elements come from the XSD completion.
-- **Bean references**: typing `#` where a value names a registry object (`?headerFilterStrategy=#`, `dataSource="#"`, `bean:#`) lists the `<bean name>` declarations of the current document. No type filter: a missing or wrong bean is reported by `redb-route-xml pack` / `check`.
-- **Route graph** (`Open With` → `redb Route Graph`): every step is a tile of one size, a
-  colored glyph and a short caption (`from`, `bean`, `sql`, `set`, `choice`, `when`, `loop`,
-  `log`…); what exactly a step does (the property name, the condition, the SQL) is in the
-  tooltip and in the properties panel on click. The toolbar switches the layout (left to
-  right or top down), folds or unfolds every container at once (⊟ / ⊞; a route folds to its
-  title with the ▾ before its name), and switches the
-  tile look (glyph over the caption or beside it); the tile look
-  is remembered for all documents. No container draws a box: a wrapper (`metered`, `loop`,
-  `split`, a transaction) puts its steps into the route's line between its tile and an
-  `end …` tile, and a loop adds a `repeat` arrow back to its start; `choice`, `try-catch` and
-  `filter` fan out into branches (a filter with a bypass for what it did not let in). Edges
-  run in straight segments only and branches merge on a shared bus, so no line crosses the
-  drawing. A run of `setProperty` / `setHeader` steps is one tile `set ×N` whose panel edits the
-  rows in order. Conditional paths are dashed: orange where a message goes past (filter not
-  passed, no match, other type, duplicate), grey with a cross where it is dropped (`sample`,
-  `debounce`), red where a step raises (`→ catch`, `→ onException`, `→ error`).
-  The glyph colors are groups: green where the message comes in, blue where it goes out,
-  purple your code (`bean`), orange data changes, cyan routing, grey observation, red errors.
-- **Mermaid diagram** command (`redb Route: Show Mermaid Diagram`) via the `redb-route-xml`
-  dotnet tool, when installed (`dotnet tool install -g redb.Route.Xml.CodeGen`). Everything else works without .NET on the machine.
+The format does not need an editor. A route file is plain XML that the runtime loads as it is; this extension only
+makes writing and reading it easier.
 
-## Install
+## Features
 
-The extension is not on the Marketplace; every redb.Route release carries it as a file.
+### Schema: completion and validation
 
-1. Open the [releases of redb-route](https://github.com/redbase-app/redb-route/releases), pick the
-   version you use and download `redb-route-xml-<version>.vsix` from its **Assets**.
-2. In VS Code: **Extensions** view → `…` → **Install from VSIX…** → the downloaded file. Or from a
-   terminal: `code --install-extension redb-route-xml-<version>.vsix`.
-3. **Developer: Reload Window**. A graph tab opened before the update keeps the old script: close
-   and reopen it.
+Completion of elements, attributes and enum values, and validation as you type, for every element of the format and
+for the typed options of every connector (`<kafka topic>`, `<sql dataSource>`, `<as4 path>` and so on). The schema
+also knows which side an option belongs to: an option that only a consumer takes is accepted inside `<from>` and
+refused inside `<to>`.
 
-It depends on [Red Hat XML](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-xml)
-(`redhat.vscode-xml`), which VS Code installs on its own when it has network access. On an offline
-machine, download that extension's `.vsix` from the Marketplace page first and install it the same
-way before this one.
+The work is done by [Red Hat XML](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-xml) reading
+the schema this extension ships. The binding goes by namespace, not by file name: a document gets the schema
+because its root element declares `urn:redb:route:1.0`. Any other XML file, including someone else's
+`route.xml`, is left alone.
 
-Open a route file with **Open With…** → **redb Route Graph**, the graph button in the editor title,
-or **redb Route: Open Route Graph** from the command palette.
+### Skeletons
+
+Composite inserts the schema cannot offer, served only in redb route documents and only where a new element may
+start:
+
+| Skeleton | Inserts |
+|---|---|
+| `<route` | a route with its consumer |
+| `<choice` | a choice with a `when` branch and `otherwise` |
+| `<tryCatch` | a try block with `catch` and `finally` |
+
+Single elements come from the schema completion.
+
+### Bean references
+
+Typing `#` where a value names a registry object lists the `<bean name>` declarations of the current document.
+This works in three places: the whole attribute value (`dataSource="#"`), the path right after the scheme
+(`bean:#`) and a URI option value (`?headerFilterStrategy=#`). A `#` inside other text, such as the SQL parameter
+`:#name`, is not a reference and gets no hint.
+
+The list is not filtered by type. A reference to a bean that is not declared, or of the wrong type, is reported by
+`redb-route-xml check` and `redb-route-xml pack`.
+
+### Route tree
+
+The **redb Routes** view in the Explorer lists every routes document of the workspace, with the id and the `from`
+endpoint of each route. A click opens the route at its line. The view appears when the workspace has at least one
+`*.route.xml` or `*.redb-route.xml` file.
+
+### Route graph
+
+**Open With...** > **redb Route Graph**, the graph button in the editor title, or **redb Route: Open Route Graph**
+from the Command Palette opens the route file as a graph. The graph is a second view of the same text: every edit in
+it is an edit of the XML, and undo works as in the text editor.
+
+- **Reading.** Every step is a tile of one size with a glyph and a short caption (`from`, `bean`, `sql`, `set`,
+  `choice`, `loop`, `log`...). The tooltip and the properties panel show what the step does: the property name,
+  the condition, the SQL. Wrappers (`metered`, `loop`, `split`, a transaction) put their steps on the route's line
+  between their own tile and an `end` tile; `choice`, `tryCatch` and `filter` fan out into branches. A run of
+  `setHeader` or `setProperty` steps is one tile `set ×N`.
+- **Paths.** Conditional paths are dashed: orange where a message goes past a step (filter not passed, no match,
+  duplicate), grey with a cross where it is dropped (`sample`, `debounce`), red where a step raises (`catch`,
+  `onException`, error).
+- **Colors.** Green where a message comes in, blue where it goes out, purple your code (`bean`), orange data
+  changes, cyan routing, grey observation, red errors.
+- **Editing.** Insert a step from the palette at any `+` between steps, delete with `Delete`, drag a step to
+  reorder it or to move it into or out of a container, rename an element, edit attributes and child texts in the
+  properties panel.
+- **Endpoints.** For a step with a URI the panel splits it into the scheme, the path and the options of that
+  connector, with enum values offered as a list. A sensitive option (a password, a key) is masked and
+  cannot be edited from the panel.
+- **Placeholders.** A `{{key}}` or `{{key:default}}` value is shown together with what it resolves to, read from
+  `context.sample.json` and `config/*.json` found next to the route file or in up to three folders above it. The
+  edit always keeps the placeholder.
+- **Layout.** The toolbar switches left to right or top down, folds or unfolds every container at once, zooms and
+  switches the tile look (glyph over the caption or beside it). A route folds to its title with the arrow before
+  its name.
+
+### Mermaid diagram
+
+**redb Route: Show Mermaid Diagram** renders the current route file as a Mermaid diagram with the `redb-route-xml`
+.NET tool:
+
+```bash
+dotnet tool install -g redb.Route.Xml.CodeGen
+```
+
+This is the only feature that needs .NET on the machine.
+
+## Requirements
+
+- [Red Hat XML](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-xml) (`redhat.vscode-xml`).
+  VS Code installs it together with this extension when it has network access.
+- The `redb-route-xml` .NET tool, only for the Mermaid diagram.
+
+## Installation
+
+From the Visual Studio Marketplace: in the **Extensions** view search for `redb Route XML` and click **Install**,
+or open the [extension page](https://marketplace.visualstudio.com/items?itemName=redb.redb-route-xml). From a
+terminal: `code --install-extension redb.redb-route-xml`. VS Code then keeps the extension up to date.
+
+Every redb.Route release also carries the extension as a file, for a machine without access to the Marketplace or
+to pin a version:
+
+1. Open the [releases of redb-route](https://github.com/redbase-app/redb-route/releases), pick the version you use
+   and download `redb-route-xml-<version>.vsix` from its assets.
+2. In VS Code: **Extensions** view > `...` > **Install from VSIX...** > the downloaded file. From a terminal:
+   `code --install-extension redb-route-xml-<version>.vsix`.
+3. Run **Developer: Reload Window**. A graph tab opened before an update keeps the old view until it is closed and
+   opened again.
+
+On a machine without network access, download the Red Hat XML `.vsix` from its Marketplace page and install it
+first, the same way.
+
+## Settings
+
+The extension has no settings of its own. It registers its XML catalog with Red Hat XML through that extension's
+API. With an older Red Hat XML that has no such API, it adds the catalog to the user setting `xml.catalogs` once.
+
+## Documentation
+
+- [redb.Route.Xml](https://github.com/redbase-app/redb-route/blob/main/redb.Route.Xml/README.md): the XML format,
+  elements, endpoints, beans, the context document.
+- [Schema and editor support](https://github.com/redbase-app/redb-route/blob/main/redb.Route.Xml/README.md#schema-and-editor-support)
+  and [tooling](https://github.com/redbase-app/redb-route/blob/main/redb.Route.Xml/README.md#tooling-scaffold-pack-generate):
+  the schemas, `check`, `pack` and the code generator.
 
 ## Development
 
 ```bash
 npm install
 npm run compile
-npm test              # unit tests of the sniff and the route scan (node:test, no deps)
+npm test
 ```
 
-Press `F5` in VSCode to launch an Extension Development Host with the extension loaded.
+`npm test` runs the unit tests with `node:test`, without VS Code. Press `F5` to start an Extension Development Host
+with the extension loaded.
 
-`npm run refresh-schema` regenerates `media/redb-route-1.0.xsd` from the format's single
-source of truth (the element registry) via the `redb.Route.Xml.CodeGen` tool.
+The files in `media/` other than the graph's script and styles are generated by the `redb-route-xml` tool from the
+built connector assemblies (`catalog`, `elements` and `xsd` commands). They are not edited by hand.
+
+## License
+
+[Apache License 2.0](https://github.com/redbase-app/redb-route/blob/main/vscode-redb-route/LICENSE).
 
 ## Credits
 
-The graph glyphs follow the notation of *Enterprise Integration Patterns* by Gregor Hohpe and
-Bobby Woolf ([enterpriseintegrationpatterns.com](https://www.enterpriseintegrationpatterns.com/),
-pattern icons under CC BY 4.0), redrawn as 24×24 line icons; the steps the notation has no
-symbol for are drawn in the same style.
+The graph glyphs follow the notation of *Enterprise Integration Patterns* by Gregor Hohpe and Bobby Woolf
+([enterpriseintegrationpatterns.com](https://www.enterpriseintegrationpatterns.com/), pattern icons under
+CC BY 4.0), redrawn as 24×24 line icons. Steps the notation has no symbol for are drawn in the same style.

@@ -43,8 +43,8 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 - [How It Compares](#how-it-compares) — vs Apache Camel, MassTransit, NServiceBus, Wolverine; [Migrating from Camel](#migrating-from-apache-camel)
 - [Routing Patterns](#routing-patterns) — From, To, Filter, Choice, Split, Recipient List, Dynamic Router
 - [Error Handling](#error-handling) — [Retry](#retry-per-step) · [Dead Letter Channel](#dead-letter-channel) · [TryCatch](#trycatch-scoped) · [OnException scope](#onexception--scope-form-chain) · [Route configuration](#route-configuration--handlers-apart-from-the-routes) · [OnException configure](#onexception--configure-form-action) · [Redelivery options](#redelivery-configuration) · [Combined example](#combined-example)
-- [Message Transformation](#message-transformation) — SetBody, SetHeader, Marshal, Unmarshal
-- [Expression Language](#expression-language) — helpers, predicates, string templates
+- [Message Transformation](#message-transformation) — SetBody, SetHeader, Marshal, Unmarshal, header filter strategy
+- [Expression Language](#expression-language) — helpers, predicates, string templates, prefix resolvers
 - [Other EIP Patterns](#other-eip-patterns) — WireTap, Multicast, Throttle, Circuit Breaker, Saga, Idempotent Consumer, Loop, Delay, Resequencer, Enrich
 - [Request-Response (InOut)](#request-response-inout)
 - [Concurrency & Parallelism](#concurrency--parallelism) — `.Threads(N)` EIP, consumer-level knobs, [full guide](CONCURRENCY.md)
@@ -63,6 +63,7 @@ From("kafka://orders?groupId=svc&brokers=localhost:9092")
 - [Transport Capability Matrix](#transport-capability-matrix)
 - [Packages](#packages)
 - [Running Routes in Production — redb.Tsak](#running-routes-in-production--redbtsak)
+- [Upgrading](#upgrading) — [UPGRADING.md](UPGRADING.md), [CHANGELOG.md](CHANGELOG.md)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -82,6 +83,14 @@ flowchart LR
     Choice -- else --> ToC([To\ndirect://standard])
 ```
 
+Install the engine and the transports a route uses (one package per transport, listed in [Packages](#packages)):
+
+```bash
+dotnet add package redb.Route
+dotnet add package redb.Route.Kafka
+dotnet add package redb.Route.RabbitMQ
+```
+
 ```csharp
 // Program.cs — minimal integration pipeline
 var builder = Host.CreateApplicationBuilder(args);
@@ -92,7 +101,7 @@ builder.Services.AddRedbRoute(route =>
     {
         // Kafka → filter → RabbitMQ in 3 lines
         r.From("kafka://orders?groupId=svc&brokers=localhost:9092")
-            .Filter(e => e.Message.GetHeader<string>("type") == "new")
+            .Filter(e => e.In.GetHeader<string>("type") == "new")
             .To("rabbitmq://events?host=localhost");
     });
 });
@@ -126,8 +135,8 @@ public class OrderRoutes : RouteBuilder
             .SetHeader("processed-at", e => DateTimeOffset.UtcNow)
             .Process(async (exchange, ct) =>
             {
-                var body = exchange.Message.GetBody<string>();
-                exchange.Message.SetBody($"PROCESSED: {body}");
+                var body = (string)exchange.In.Body!;
+                exchange.In.Body = $"PROCESSED: {body}";
             })
             .To("rabbitmq://processed?host=localhost");
     }
@@ -545,7 +554,7 @@ Wolverine is excellent at handler-style messaging with Marten-backed sagas. redb
 `When(...)` accepts three forms — lambda, `IPredicate`, or string expression:
 
 ```csharp
-.When(e => e.Message.GetHeader<string>("type") == "order")    // lambda
+.When(e => e.In.GetHeader<string>("type") == "order")    // lambda
 .When(Header("type").isEqualTo("order"))                      // IPredicate
 .When("header.type == 'order'")                               // string expression
 ```
@@ -817,7 +826,7 @@ public class PaymentRoutes : RouteBuilder
                 .To("seda://payment-timeouts")
             .EndOnException()
 
-            .Validate(e => e.Message.GetBody<Payment>().Amount > 0)
+            .Validate(e => ((Payment)e.In.Body!).Amount > 0)
             .Process(async (e, ct) => await EnrichWithCustomer(e, ct))
 
             // 4. Per-step retry: wrap the charge in a transaction that retries
@@ -842,17 +851,17 @@ Resolution when several handlers match: the nearest exception type wins among th
 ```csharp
 // Set body — static, lambda, or expression
 .SetBody("static value")
-.SetBody(e => TransformPayload(e.Message.GetBody<Order>()))
+.SetBody(e => TransformPayload((Order)e.In.Body!))
 .SetBody(JPath("$.order.items"))
 .SetBody(Expr("${header.orderId}-${body}"))
 
 // Transform body
-.Transform(e => JsonSerializer.Serialize(e.Message.GetBody<object>()))
+.Transform(e => JsonSerializer.Serialize(e.In.Body))
 .Transform(JPath<string>("$.order.summary"))
 
 // Headers
 .SetHeader("source", "order-service")
-.SetHeader("source", e => e.Message.GetHeader<string>("origin") ?? "unknown")
+.SetHeader("source", e => e.In.GetHeader<string>("origin") ?? "unknown")
 .SetHeader("total", JPath<decimal>("$.order.total"))
 .RemoveHeader("internal-trace-id")
 
@@ -865,6 +874,12 @@ Resolution when several handlers match: the nearest exception type wins among th
 .Marshal(typeof(JsonMessageSerializer))
 .Unmarshal(typeof(XmlMessageSerializer), typeof(Order))
 ```
+
+Which headers a transport carries each way between the exchange and the wire is decided by a header filter strategy,
+as Apache Camel's `HeaderFilterStrategy`: each transport has a default, and `headerFilterStrategy=#name` on an endpoint
+names one of yours from the registry (HTTP, Kafka, RabbitMQ, AMQP, Azure Service Bus, IBM MQ, gRPC, SQS/SNS, AS2,
+`vm:` sends). See [Header filter strategy](redb.Route/README.md#header-filter-strategy) and the README of each
+transport.
 
 ---
 
@@ -950,6 +965,14 @@ Header("required").isNotNull()
 .When("header.amount > 1000")
 ```
 
+A root of your own (`${order.total}`) is a prefix resolver. Registered on a route context, it serves the expressions of
+that context only and goes with it, so an unloaded module leaves nothing behind; the process-wide
+`ExpressionResolver.RegisterPrefixResolver` is consulted after the context's own:
+
+```csharp
+context.RegisterPrefixResolver("order.", (exchange, path) => orders.Read(exchange, path));
+```
+
 ---
 
 ## Other EIP Patterns
@@ -971,7 +994,7 @@ Header("required").isNotNull()
     .ResetTimeout(TimeSpan.FromSeconds(30)))
 
 // Idempotent Consumer — deduplicate (works as outbox-style dedup with persistent backend)
-.IdempotentConsumer(e => e.Message.GetHeader<string>("messageId"), repository)
+.IdempotentConsumer(e => e.In.GetHeader<string>("messageId"), repository)
 //   InMemoryIdempotentRepository       — process-local, default
 //   SqlIdempotentRepository            — ADO.NET, two-phase commit, survives restarts
 //   RedbIdempotentRepository           — redb.Core RTTI storage, two-phase commit, cluster-wide
@@ -989,16 +1012,16 @@ Header("required").isNotNull()
 //   FileClaimCheckRepository     — one file per claim with TTL, for very large bodies or a shared FS
 //   context.AddClaimCheckRepository("big-payloads", repo) then .ClaimCheck(op, key, repositoryName: "big-payloads")
 
-// Loop — fixed count or conditional
-.Loop(3, sub => sub.Process(e => Retry(e)))
-.Loop(e => !e.Message.GetHeader<bool>("done"), sub => sub.Process(e => DoWork(e)))
+// Loop — fixed count or conditional; the body runs until End()
+.Loop(3).Process(e => Retry(e)).End()
+.Loop(e => !e.In.GetHeader<bool>("done")).Process(e => DoWork(e)).End()
 
 // Delay
 .Delay(TimeSpan.FromSeconds(5))
-.Delay(e => TimeSpan.FromSeconds(e.Message.GetHeader<int>("backoff")))
+.Delay(e => TimeSpan.FromSeconds(e.In.GetHeader<int>("backoff")))
 
 // Resequencer — reorder messages
-.Resequence(e => e.Message.GetHeader<long>("sequenceNumber"))
+.Resequence(e => e.In.GetHeader<long>("sequenceNumber"))
 
 // Enrich — content enricher
 .Enrich("http://api/details", (original, enrichment) => Merge(original, enrichment))
@@ -1024,9 +1047,9 @@ Header("required").isNotNull()
 // Process — inline async with CancellationToken
 .Process(async (exchange, ct) =>
 {
-    var order = exchange.Message.GetBody<Order>();
+    var order = (Order)exchange.In.Body!;
     var result = await ProcessOrder(order, ct);
-    exchange.Message.SetBody(result);
+    exchange.In.Body = result;
 })
 ```
 
@@ -1045,9 +1068,9 @@ public class OrderApi : RouteBuilder
             .Unmarshal(typeof(JsonMessageSerializer), typeof(CreateOrderRequest))
             .Process(async (e, ct) =>
             {
-                var req  = e.Message.GetBody<CreateOrderRequest>();
+                var req  = (CreateOrderRequest)e.In.Body!;
                 var resp = await orderService.CreateAsync(req, ct);
-                e.Message.SetBody(resp);
+                e.In.Body = resp;
             })
             .Marshal(typeof(JsonMessageSerializer))
             .Respond();   // returns the body to the HTTP client
@@ -1199,8 +1222,8 @@ Three backends ship today:
 | Backend | Storage | Across nodes |
 |---------|---------|:--:|
 | `InMemoryIdempotentRepository` | Process memory | — |
-| `SqlIdempotentRepository` | ADO.NET table (any provider), DDL ships with the package | ✅ |
-| `RedbIdempotentRepository` | redb object guarded by a unique key | ✅ |
+| `SqlIdempotentRepository` | ADO.NET table (any provider), DDL ships with the package | Yes |
+| `RedbIdempotentRepository` | redb object guarded by a unique key | Yes |
 
 The key is settled when the exchange's unit of work ends, before the consumer acknowledges the message or hands it back (Apache Camel's defaults): confirmed on success, removed on failure anywhere in the route, so the redelivery is processed again. Inside `.Transacted()` the key follows the transaction instead: it commits with the work and goes with a rollback. Details in [TRANSACTIONS.md](TRANSACTIONS.md#idempotent-consumer).
 
@@ -1258,7 +1281,7 @@ twice, so the receiving side deduplicates. The full recipe, both routes, is in
 .ValidateXsd(xsdContent)
 
 // Custom predicate
-.Validate(e => e.Message.GetBody<Order>().Amount > 0, "Amount must be positive")
+.Validate(e => ((Order)e.In.Body!).Amount > 0, "Amount must be positive")
 
 // FluentValidation and DataAnnotations (redb.Route.Validation.Adapters)
 .ValidateFluent(new OrderValidator())
@@ -1272,32 +1295,25 @@ twice, so the receiving side deduplicates. The full recipe, both routes, is in
 The built-in `mock:` endpoint records received messages and lets you assert on them — no external broker needed in unit tests.
 
 ```csharp
+// redb.Route.TestKit: SendBodyAndHeader, Mock
 public class OrderRouteTests
 {
     [Fact]
     public async Task Route_filters_and_forwards_new_orders()
     {
-        var host = Host.CreateDefaultBuilder()
-            .ConfigureServices(services => services.AddRedbRoute(route =>
-            {
-                route.AddRoutes(r =>
-                {
-                    r.From("direct://input")
-                        .Filter(Header("type").isEqualTo("new"))
-                        .To("mock://received");
-                });
-            }))
-            .Build();
+        await using var context = new RouteContext();
+        context.AddRoutes(r => r
+            .From("direct://input")
+            .Filter("header.type == 'new'")
+            .To("mock://received"));
+        await context.Start();
 
-        await host.StartAsync();
-        var producer = host.Services.GetRequiredService<IRouteProducer>();
-        var mock     = host.Services.GetRequiredService<IMockEndpointRegistry>().Get("received");
+        await context.SendBodyAndHeader("direct://input", "payload-1", "type", "new");
+        await context.SendBodyAndHeader("direct://input", "payload-2", "type", "old");
 
-        await producer.SendAsync("direct://input", "payload-1", new Dictionary<string, object> { ["type"] = "new" });
-        await producer.SendAsync("direct://input", "payload-2", new Dictionary<string, object> { ["type"] = "old" });
-
+        var mock = context.Mock("mock://received");
         Assert.Equal(1, mock.ReceivedCount);
-        Assert.Equal("payload-1", mock.Received[0].Message.GetBody<string>());
+        Assert.Equal("payload-1", mock.ReceivedExchanges[0].In.Body);
     }
 }
 ```
@@ -1324,7 +1340,7 @@ From("kafka://orders")
 // Per-step — inline style
 From("kafka://orders")
     .Traced("validate", async (e, ct) => await ValidateOrder(e, ct))
-    .Metered("transform", e => { e.Message.SetBody(Transform(e)); })
+    .Metered("transform", e => { e.In.Body = Transform(e); })
     .To("rabbitmq://processed");
 
 // Configure via options
@@ -1381,7 +1397,7 @@ a secret's name (`*token*`, `*password*`...). The length of a value is the SDK's
 .Log("Processing order: ${header.orderId}")
 
 // Log with factory
-.Log(e => $"Order {e.Message.GetHeader<string>("orderId")} body size: {e.Message.Body?.ToString()?.Length}")
+.Log(e => $"Order {e.In.GetHeader<string>("orderId")} body size: {e.In.Body?.ToString()?.Length}")
 
 // Structured log scope
 .Log(LogLevel.Information)
@@ -1434,6 +1450,7 @@ Rabbit.Queue("orders")
     .Durable().PrefetchCount(10)
     .DeadLetterExchange("dlx")
     .QueueType("quorum")
+Rabbit.Exchange("ui-notify", "fanout").Declare()    // no queue name: each consumer instance gets its own copy
 
 // Redis
 Redis.Subscribe("events")
@@ -1585,7 +1602,7 @@ flowchart TB
 | `Grpc` | `Grpc.Net` | Client + Kestrel server, binary messages |
 | `Soap` | `System.Xml` + Kestrel | SOAP 1.1/1.2, WS-Security, MTOM, `?wsdl` |
 | `WebSocket` | `ClientWebSocket` + Kestrel | Text/binary, reconnect |
-| `SignalR` | `Microsoft.AspNetCore.SignalR` | Hub consumer + producer/broadcast |
+| `SignalR` | `Microsoft.AspNetCore.SignalR` | Hub consumer + producer/broadcast, each hub path isolated on a shared listener |
 | `SignalR.StackExchangeRedis` | `Microsoft.AspNetCore.SignalR.StackExchangeRedis` | Redis backplane for the hubs, channels keyed on the hub path |
 | `Tcp` | `System.Net.Sockets` | Text-line, length-prefixed, TLS |
 | `File` | File system | Polling, atomic writes, glob, locking |
@@ -1743,42 +1760,42 @@ What each transport can do as a source (`From`) and as a sink (`To`), and which 
 
 | Transport | Consumer (`From`) | Producer (`To`) | Request-Response (InOut) | Transactions | Streaming | Notes |
 |-----------|:--:|:--:|:--:|:--:|:--:|-------|
-| Direct | ✅ | ✅ | ✅ | — | — | In-process synchronous |
-| SEDA | ✅ | ✅ | — | — | ✅ | In-memory bounded queue, multi-consumer |
-| Timer | ✅ | — | — | — | — | Periodic / once-off trigger |
-| Mock | ✅ | ✅ | — | — | — | Test-only, records messages |
-| Log | — | ✅ | — | — | — | Sink for logging |
-| Kafka | ✅ | ✅ | — | ✅ | ✅ | EOS: transactional producer, `Acks=All`, `IsolationLevel=ReadCommitted`, manual commits |
-| RabbitMQ | ✅ | ✅ | ✅ | ✅ | — | Publisher confirms (`MaxOutstandingConfirms`), `Mandatory` flag, transacted channels, automatic recovery, RPC |
-| Redis | ✅ | ✅ | — | — | ✅ | Pub/Sub + Streams + KV ops |
-| AzureServiceBus | ✅ | ✅ | ✅ | ✅ | — | Sessions, scheduled, RPC |
-| IbmMq | ✅ | ✅ | ✅ | ✅ | — | Queues + topics + RPC |
-| Amqp | ✅ | ✅ | ✅ | — | — | AMQP 1.0; RPC via `ReplyTo`/`CorrelationId`, `ExchangePattern.InOut` auto-detected. Connects to Amazon MQ (ActiveMQ/RabbitMQ flavour), Azure Service Bus, Apache Artemis |
-| Sql | ✅ (poll) | ✅ | — | ✅ | — | Polling source, batch sink, stored procs |
-| Elasticsearch | — | ✅ | — | — | — | Index, search, CRUD |
-| Firebase | ✅ (Firestore) | ✅ | — | — | ✅ | Firestore, Cloud Storage, FCM |
-| S3 | ✅ (poll) | ✅ | — | — | ✅ | Multipart upload/download |
-| SQS | ✅ (poll) | ✅ | — | ✅ | — | Amazon SQS — long-poll, `ConcurrentConsumers(N)`, FIFO, visibility timeout + heartbeat, transacted ack |
-| SNS | — | ✅ | — | — | — | Amazon SNS — topic publish, FIFO, SNS→SQS fan-out |
-| Telegram | ✅ (long-poll) | ✅ | — | — | — | Bot API — send/document/photo/edit/delete/answer, 429 `retry_after`, inline/reply keyboards, webhook unpack; at-most-once |
-| Ldap | — | ✅ | — | — | — | Search and CRUD |
-| Http | ✅ (Listen) | ✅ | ✅ | — | ✅ | Kestrel server + HttpClient |
-| Grpc | ✅ (Listen) | ✅ | ✅ | — | ✅ | Unary + streaming |
-| Soap | ✅ (Listen) | ✅ | ✅ | — | — | SOAP 1.1/1.2, WS-Security (UsernameToken, XML-Signature, XML-Encryption), MTOM, `?wsdl`; shares the Kestrel host with `Http` |
-| WebSocket | ✅ | ✅ | — | — | ✅ | Text/binary frames |
-| SignalR | ✅ (Hub) | ✅ | — | — | ✅ | Hub server + client broadcast |
-| Tcp | ✅ | ✅ | — | — | ✅ | Text-line and length-prefixed |
-| File | ✅ (poll) | ✅ | — | — | — | Atomic writes, file locking |
-| Ftp | ✅ (poll) | ✅ | — | — | — | FTP/FTPS |
-| Sftp | ✅ (poll) | ✅ | — | — | — | SSH key auth, proxy |
-| Mail | ✅ (IMAP/POP3) | ✅ (SMTP) | — | — | — | IDLE push for IMAP |
-| MqttNet | ✅ | ✅ | — | — | ✅ | MQTT 5.0, shared subscriptions |
-| Quartz | ✅ | — | — | — | — | Cron / interval triggers |
-| Exec | ✅ (scheduled) | ✅ | ✅ | — | — | Local processes; `AllowedCommands` allowlist, `WorkingDirectory` pin, `TimeoutMs`, byte caps; primary use as `.AsLlmTool("shell")` |
-| Llm | — | ✅ | ✅ | — | ✅ | LLM connector — universal OpenAI-compat (14 vendors) + native Anthropic Messages API; tool-loop agent engine; persistent conversation/approval/budget/idempotency stores via `AddRedbLlmStorage()` |
-| Mcp | — | ✅ | — | — | — | MCP-client connector — spawns external MCP servers (stdio + HTTP/SSE), auto-discovers tools via `tools/list` and registers them as `ILlmToolDescriptor`. Cancellation forwarded as `notifications/cancelled`; auto-restart on transport failure |
+| Direct | Yes | Yes | Yes | — | — | In-process synchronous |
+| SEDA | Yes | Yes | — | — | Yes | In-memory bounded queue, multi-consumer |
+| Timer | Yes | — | — | — | — | Periodic / once-off trigger |
+| Mock | Yes | Yes | — | — | — | Test-only, records messages |
+| Log | — | Yes | — | — | — | Sink for logging |
+| Kafka | Yes | Yes | — | Yes | Yes | EOS: transactional producer, `Acks=All`, `IsolationLevel=ReadCommitted`, manual commits |
+| RabbitMQ | Yes | Yes | Yes | Yes | — | Publisher confirms (`MaxOutstandingConfirms`), `Mandatory` flag, transacted channels, automatic recovery, RPC |
+| Redis | Yes | Yes | — | — | Yes | Pub/Sub + Streams + KV ops |
+| AzureServiceBus | Yes | Yes | Yes | Yes | — | Sessions, scheduled, RPC |
+| IbmMq | Yes | Yes | Yes | Yes | — | Queues + topics + RPC |
+| Amqp | Yes | Yes | Yes | — | — | AMQP 1.0; RPC via `ReplyTo`/`CorrelationId`, `ExchangePattern.InOut` auto-detected. Connects to Amazon MQ (ActiveMQ/RabbitMQ flavour), Azure Service Bus, Apache Artemis |
+| Sql | Yes (poll) | Yes | — | Yes | — | Polling source, batch sink, stored procs |
+| Elasticsearch | — | Yes | — | — | — | Index, search, CRUD |
+| Firebase | Yes (Firestore) | Yes | — | — | Yes | Firestore, Cloud Storage, FCM |
+| S3 | Yes (poll) | Yes | — | — | Yes | Multipart upload/download |
+| SQS | Yes (poll) | Yes | — | Yes | — | Amazon SQS — long-poll, `ConcurrentConsumers(N)`, FIFO, visibility timeout + heartbeat, transacted ack |
+| SNS | — | Yes | — | — | — | Amazon SNS — topic publish, FIFO, SNS→SQS fan-out |
+| Telegram | Yes (long-poll) | Yes | — | — | — | Bot API — send/document/photo/edit/delete/answer, 429 `retry_after`, inline/reply keyboards, webhook unpack; at-most-once |
+| Ldap | — | Yes | — | — | — | Search and CRUD |
+| Http | Yes (Listen) | Yes | Yes | — | Yes | Kestrel server + HttpClient |
+| Grpc | Yes (Listen) | Yes | Yes | — | Yes | Unary + streaming |
+| Soap | Yes (Listen) | Yes | Yes | — | — | SOAP 1.1/1.2, WS-Security (UsernameToken, XML-Signature, XML-Encryption), MTOM, `?wsdl`; shares the Kestrel host with `Http` |
+| WebSocket | Yes | Yes | — | — | Yes | Text/binary frames |
+| SignalR | Yes (Hub) | Yes | — | — | Yes | Hub server + client broadcast |
+| Tcp | Yes | Yes | — | — | Yes | Text-line and length-prefixed |
+| File | Yes (poll) | Yes | — | — | — | Atomic writes, file locking |
+| Ftp | Yes (poll) | Yes | — | — | — | FTP/FTPS |
+| Sftp | Yes (poll) | Yes | — | — | — | SSH key auth, proxy |
+| Mail | Yes (IMAP/POP3) | Yes (SMTP) | — | — | — | IDLE push for IMAP |
+| MqttNet | Yes | Yes | — | — | Yes | MQTT 5.0, shared subscriptions |
+| Quartz | Yes | — | — | — | — | Cron / interval triggers |
+| Exec | Yes (scheduled) | Yes | Yes | — | — | Local processes; `AllowedCommands` allowlist, `WorkingDirectory` pin, `TimeoutMs`, byte caps; primary use as `.AsLlmTool("shell")` |
+| Llm | — | Yes | Yes | — | Yes | LLM connector — universal OpenAI-compat (14 vendors) + native Anthropic Messages API; tool-loop agent engine; persistent conversation/approval/budget/idempotency stores via `AddRedbLlmStorage()` |
+| Mcp | — | Yes | — | — | — | MCP-client connector — spawns external MCP servers (stdio + HTTP/SSE), auto-discovers tools via `tools/list` and registers them as `ILlmToolDescriptor`. Cancellation forwarded as `notifications/cancelled`; auto-restart on transport failure |
 
-Legend: ✅ supported · — not applicable.
+Legend: Yes supported · — not applicable.
 
 For transports that support transactions, combine with `.Transacted()` to wrap pipeline steps in a `TransactionScope`. For InOut transports, use `From(...InOut()).Process(...).Respond()` to return a response to the caller.
 
@@ -1843,7 +1860,7 @@ For transports that support transactions, combine with `.Transacted()` to wrap p
 
 ## Running Routes in Production — redb.Tsak
 
-Writing routes is one thing; running them in production is another. **redb.Tsak** is the runtime container for redb.Route — a .NET equivalent of [Apache Karaf](https://karaf.apache.org/) / [Camel K](https://camel.apache.org/camel-k/). It hosts route contexts, manages their lifecycle, distributes them across a cluster, schedules jobs, captures metrics and logs, and exposes the lot through a REST API, a CLI and a Blazor dashboard.
+Writing routes is one thing; running them in production is another. **[redb.Tsak](https://github.com/redbase-app/redb-tsak)** is the runtime container for redb.Route — a .NET equivalent of [Apache Karaf](https://karaf.apache.org/) / [Camel K](https://camel.apache.org/camel-k/). It hosts route contexts, manages their lifecycle, distributes them across a cluster, schedules jobs, captures metrics and logs, and exposes the lot through a REST API, a CLI and a Blazor dashboard.
 
 ```mermaid
 flowchart TB
@@ -2227,6 +2244,13 @@ All cluster coordination is behind **abstract interfaces** (`ILeaderElection`, `
 For a deeper feature reference and deployment recipes, see the
 [redb.Tsak repository](https://github.com/redbase-app/redb-tsak) — its `README.md`, `API_GUIDE.md`
 and `DEPLOYMENT.md` cover the runtime container end to end.
+
+---
+
+## Upgrading
+
+What changes from one version to the next, and what to do about it: [UPGRADING.md](UPGRADING.md) for the steps a
+breaking change needs, [CHANGELOG.md](CHANGELOG.md) for every release.
 
 ---
 

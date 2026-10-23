@@ -23,7 +23,10 @@ services:
       - Tsak__Web__Mode=cluster
       - Tsak__Web__ServiceApiKey=${TSAK_WEB_API_KEY:?TSAK_WEB_API_KEY required}
       - Tsak__Cluster__NodeId=${TSAK_NODE_ID:-as4ct-1}
-      - Tsak__Cluster__ApiEndpoint=http://localhost:9090
+      # The address the worker registers for its management API: the container name on the compose networks, which
+      # the dashboard in the same container and any other node or dashboard on those networks can reach. A loopback
+      # address would reach only the container itself, and the worker warns about it at every start.
+      - Tsak__Cluster__ApiEndpoint=http://as4ct-tsak:9090
       # A resend after a restart is still a duplicate: the ids of received messages go to the same database.
       - Tsak__Contexts__as4-conformance__Override__Receive__DuplicateStore=redb
     networks: [stand, db]

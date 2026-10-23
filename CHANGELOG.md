@@ -65,6 +65,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Pending changes live in `changelog/unreleased/` until the release; `pwsh scripts/changelog.ps1 -Preview` shows them.
 
+## [4.4.2] — 2026-10-23
+
+### Changed
+
+- **VS Code extension 0.2.23: an icon and a fuller extension page.** The extension has its own icon, a description that
+  names the route graph, and links to the repository and its issues. The README describes every feature, including
+  editing in the graph and placeholder values. Nothing changes in how the extension works.
+
+### Fixed
+
+- **AS4 conformance demo: the worker registers its management API under the container name.** The PostgreSQL and SQL
+  Server overlays of `demo/As4ConformanceDemo/deploy` set `Tsak:Cluster:ApiEndpoint` to `http://as4ct-tsak:9090`
+  instead of `http://localhost:9090`, so the worker no longer warns about a loopback address at every start. Copies of
+  the overlays change the same line.
+
 ## [4.4.1] — 2026-10-21
 
 ### Fixed
