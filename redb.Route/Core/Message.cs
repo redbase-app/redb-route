@@ -10,9 +10,16 @@ namespace redb.Route.Core;
 public class Message : IMessage
 {
     private readonly Dictionary<string, object?> _headers = new(StringComparer.OrdinalIgnoreCase);
+    private MessageAttachments? _attachments;
 
     /// <inheritdoc />
     public object? Body { get; set; }
+
+    /// <inheritdoc />
+    public IMessageAttachments Attachments => _attachments ??= new MessageAttachments();
+
+    /// <summary>The attachment list when one was created and holds something; <c>null</c> otherwise (no allocation).</summary>
+    internal MessageAttachments? AttachmentsOrNull => _attachments is { Count: > 0 } a ? a : null;
 
     /// <inheritdoc />
     public string? ContentType { get; set; }
@@ -37,6 +44,8 @@ public class Message : IMessage
         var clone = new Message(Body) { ContentType = ContentType };
         foreach (var kvp in _headers)
             clone._headers[kvp.Key] = kvp.Value;
+        // A new list over the same content sources, as the body reference is shared.
+        clone._attachments = AttachmentsOrNull?.Copy();
         return clone;
     }
 
@@ -47,6 +56,8 @@ public class Message : IMessage
         // Header values are shared like Clone — they carry immutable metadata, not payload.
         foreach (var kvp in _headers)
             snapshot._headers[kvp.Key] = kvp.Value;
+        // Attachments are payload: their content is copied, like the body.
+        snapshot._attachments = AttachmentsOrNull?.DeepCopy();
         return snapshot;
     }
 

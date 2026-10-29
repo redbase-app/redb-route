@@ -16,6 +16,18 @@ public class HttpComponentTests
     }
 
     [Fact]
+    public async Task AssemblyScan_RegistersHttp_AndHttps()
+    {
+        // The Tsak worker builds a module's components by this scan, through parameterless constructors.
+        await using var context = new RouteContext();
+
+        redb.Route.Extensions.RouteContextExtensions.AddComponents(context, typeof(HttpComponent).Assembly);
+
+        context.GetComponent<HttpComponent>("http").Should().NotBeNull().And.NotBeOfType<HttpsComponent>();
+        context.GetComponent<HttpsComponent>("https").Should().NotBeNull();
+    }
+
+    [Fact]
     public void HttpsComponent_Scheme_ReturnsHttps()
     {
         var component = new HttpsComponent();

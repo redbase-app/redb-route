@@ -27,7 +27,7 @@ public class DelayProcessor : IProcessor
     {
         if (_delay > TimeSpan.Zero)
         {
-            await Task.Delay(_delay, ct).ConfigureAwait(false);
+            await InflightWaits.DelayAsync(exchange, _delay, ct).ConfigureAwait(false);
         }
     }
 }

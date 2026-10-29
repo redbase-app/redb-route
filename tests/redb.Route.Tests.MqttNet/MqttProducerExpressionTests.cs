@@ -87,7 +87,7 @@ public class MqttProducerExpressionTests
         var (endpoint, client) = CreateMocked(new(), topic: "prefix/${header.device}");
         var msg = new Message("payload");
         msg.Headers["device"] = "sensor42";
-        msg.Headers[MqttHeaders.Topic] = "override/topic";
+        msg.Headers[MqttHeaders.OverrideTopic] = "override/topic";
         var exchange = new Exchange(msg);
 
         var published = await SendAndCapture(endpoint, client, exchange);
@@ -120,7 +120,7 @@ public class MqttProducerExpressionTests
         });
         var msg = new Message("payload");
         msg.Headers["qosLevel"] = "2";
-        msg.Headers[MqttHeaders.Qos] = 1; // int header
+        msg.Headers[MqttHeaders.OverrideQos] = 1; // int header
         var exchange = new Exchange(msg);
 
         var published = await SendAndCapture(endpoint, client, exchange);

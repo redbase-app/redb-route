@@ -9,11 +9,13 @@ namespace redb.Route.Tests.Xml;
 /// A header filter strategy declared in markup: <see cref="DefaultHeaderFilterStrategy"/> is a plain bean whose name
 /// lists are filled from <c>&lt;list&gt;</c>, and an endpoint's <c>headerFilterStrategy=#name</c> finds it.
 /// </summary>
-public class XmlHeaderFilterStrategyBeanTests : IAsyncDisposable
+public class XmlHeaderFilterStrategyBeanTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

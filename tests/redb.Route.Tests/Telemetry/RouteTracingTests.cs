@@ -9,11 +9,13 @@ namespace redb.Route.Tests.Telemetry;
 /// on a timer) opens no span of its own and its single-span traces stop crowding the collector.
 /// </summary>
 [Collection("Telemetry")]
-public class RouteTracingTests : IAsyncDisposable
+public class RouteTracingTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.Stop();
         GC.SuppressFinalize(this);

@@ -10,19 +10,27 @@ using SoapDsl = redb.Route.Soap.Fluent.Soap;
 namespace redb.Route.Tests.Soap;
 
 /// <summary>
-/// Ф6 MTOM/XOP (camel-cxf <c>mtom-enabled</c> parity): binary attachments as multipart/related, exposed on
-/// the <see cref="SoapHeaders.Attachments"/> plane. Unit round-trip of the packer plus a full producer→consumer
-/// loopback carrying attachments in both directions.
+/// Ф6 MTOM/XOP (camel-cxf <c>mtom-enabled</c> parity): binary attachments as multipart/related, exposed as
+/// the message attachments. Unit round-trip of the packer plus a full producer→consumer loopback carrying
+/// attachments in both directions.
 /// </summary>
 public class SoapMtomTests
 {
     private static int FreePort() => global::redb.Route.Tests.Shared.TestPorts.Next();
 
+    private static Attachment Part(string contentId, string contentType, byte[] content) => new()
+    {
+        Name = contentId,
+        ContentId = contentId,
+        ContentType = contentType,
+        Content = AttachmentContent.FromBytes(content),
+    };
+
     [Fact]
     public void Multipart_Write_Then_Parse_RoundTrips()
     {
         var payload = new byte[] { 1, 2, 3, 4, 5, 250, 251, 252 };
-        var atts = new List<SoapAttachment> { new("blob-1", "application/octet-stream", payload) };
+        var atts = new List<Attachment> { Part("blob-1", "application/octet-stream", payload) };
         var root = Encoding.UTF8.GetBytes("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"/>");
 
         var (body, contentType) = SoapMultipart.Write(root, "text/xml; charset=utf-8", atts);
@@ -32,7 +40,24 @@ public class SoapMtomTests
         Encoding.UTF8.GetString(parsedRoot).Should().Contain("Envelope");
         parsedAtts.Should().ContainSingle();
         parsedAtts[0].ContentId.Should().Be("blob-1");
-        parsedAtts[0].Content.Should().Equal(payload);
+        parsedAtts[0].Name.Should().Be("blob-1");
+        parsedAtts[0].ContentType.Should().Be("application/octet-stream");
+        parsedAtts[0].Content.ReadAllBytes().Should().Equal(payload);
+    }
+
+    [Fact]
+    public void Multipart_Write_AddressesAnAttachmentWithoutContentId_ByItsName()
+    {
+        var atts = new List<Attachment>
+        {
+            new() { Name = "report.pdf", ContentType = "application/pdf", Content = AttachmentContent.FromBytes([7, 8]) },
+        };
+        var root = Encoding.UTF8.GetBytes("<Envelope/>");
+
+        var (body, contentType) = SoapMultipart.Write(root, "text/xml", atts);
+
+        var (_, parsedAtts) = SoapMultipart.Parse(body, contentType);
+        parsedAtts.Should().ContainSingle().Which.ContentId.Should().Be("report.pdf");
     }
 
     // Builds a raw multipart/related body with a chosen (short) boundary, so we can exercise the parser's
@@ -60,7 +85,7 @@ public class SoapMtomTests
         var (root, atts) = SoapMultipart.Parse(body, ct);
         Encoding.ASCII.GetString(root).Should().Contain("Envelope");
         atts.Should().ContainSingle();
-        Encoding.ASCII.GetString(atts[0].Content).Should().Be("XX--BNDYY");
+        Encoding.ASCII.GetString(atts[0].Content.ReadAllBytes()).Should().Be("XX--BNDYY");
     }
 
     [Fact]
@@ -89,7 +114,7 @@ public class SoapMtomTests
         var (root, atts) = SoapMultipart.Parse(body, ct);
         Encoding.ASCII.GetString(root).Should().Contain("Envelope");
         atts.Select(a => a.ContentId).Should().BeEquivalentTo(new[] { "a1", "b1" });
-        atts.Select(a => Encoding.ASCII.GetString(a.Content)).Should().BeEquivalentTo(new[] { "AAA", "BBB" });
+        atts.Select(a => Encoding.ASCII.GetString(a.Content.ReadAllBytes())).Should().BeEquivalentTo(new[] { "AAA", "BBB" });
     }
 
     [Fact]
@@ -123,10 +148,10 @@ public class SoapMtomTests
             r.From(SoapDsl.Listen("/svc").Host("127.0.0.1").Port(port).ConnectionFactory("mtom"))
                 .Process(e =>
                 {
-                    consumerGot = e.In.GetHeader<IReadOnlyList<SoapAttachment>>(SoapHeaders.Attachments)?[0].Content;
+                    consumerGot = e.In.Attachments.Find("up-1")?.Content.ReadAllBytes();
                     e.In.Body = $"<Ack xmlns=\"urn:test\"><data><xop:Include xmlns:xop=\"{xop}\" href=\"cid:resp-1\"/></data></Ack>";
-                    e.In.Headers[SoapHeaders.Attachments] =
-                        new List<SoapAttachment> { new("resp-1", "text/plain", replied) };
+                    e.In.Attachments.Clear();
+                    e.In.Attachments.Add(Part("resp-1", "text/plain", replied));
                 });
             r.From("direct://call").To(SoapDsl.Call($"http://127.0.0.1:{port}/svc").ConnectionFactory("mtom"));
         });
@@ -136,15 +161,16 @@ public class SoapMtomTests
         await producer.Start();
 
         var msg = new Message($"<Upload xmlns=\"urn:test\"><file><xop:Include xmlns:xop=\"{xop}\" href=\"cid:up-1\"/></file></Upload>");
-        msg.Headers[SoapHeaders.Attachments] = new List<SoapAttachment> { new("up-1", "application/octet-stream", uploaded) };
+        msg.Attachments.Add(Part("up-1", "application/octet-stream", uploaded));
         var exchange = new Exchange(msg);
         await producer.Process(exchange);
 
         // The consumer received our uploaded attachment, and its reply attachment came back to the producer.
         consumerGot.Should().Equal(uploaded);
-        var back = exchange.Out!.GetHeader<IReadOnlyList<SoapAttachment>>(SoapHeaders.Attachments);
+        var back = exchange.Out!.Attachments;
         back.Should().ContainSingle();
-        back![0].Content.Should().Equal(replied);
+        back[0].ContentId.Should().Be("resp-1");
+        back[0].Content.ReadAllBytes().Should().Equal(replied);
     }
 
     [Fact]
@@ -164,8 +190,8 @@ public class SoapMtomTests
             r.From(SoapDsl.Listen("/svc").Host("127.0.0.1").Port(port).ConnectionFactory("mtom"))
                 .Process(e =>
                 {
-                    // Read the inbound attachment but do NOT put a distinct list on the reply.
-                    _ = e.In.GetHeader<IReadOnlyList<SoapAttachment>>(SoapHeaders.Attachments);
+                    // Read the inbound attachment but do NOT change the attachments of the reply.
+                    _ = e.In.Attachments.Find("up-1")?.Content.ReadAllBytes();
                     e.In.Body = "<Ack xmlns=\"urn:test\">ok</Ack>";
                 });
             r.From("direct://call").To(SoapDsl.Call($"http://127.0.0.1:{port}/svc").ConnectionFactory("mtom"));
@@ -176,13 +202,11 @@ public class SoapMtomTests
         await producer.Start();
 
         var msg = new Message("<Upload xmlns=\"urn:test\"/>");
-        msg.Headers[SoapHeaders.Attachments] =
-            new List<SoapAttachment> { new("up-1", "application/octet-stream", Encoding.UTF8.GetBytes("caller-secret")) };
+        msg.Attachments.Add(Part("up-1", "application/octet-stream", Encoding.UTF8.GetBytes("caller-secret")));
         var exchange = new Exchange(msg);
         await producer.Process(exchange);
 
         // The caller's own inbound attachment must NOT come back on the response.
-        var back = exchange.Out!.GetHeader<IReadOnlyList<SoapAttachment>>(SoapHeaders.Attachments);
-        (back?.Count ?? 0).Should().Be(0);
+        exchange.Out!.Attachments.Should().BeEmpty();
     }
 }

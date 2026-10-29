@@ -10,7 +10,7 @@ namespace redb.Route.Tests.Core;
 /// <summary>
 /// Tests for expanded RouteStatus transitions (Phase 4).
 /// </summary>
-public class RouteStatusTests : IAsyncDisposable
+public class RouteStatusTests : IAsyncLifetime
 {
     private readonly RouteContext _context;
 
@@ -22,7 +22,9 @@ public class RouteStatusTests : IAsyncDisposable
         });
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

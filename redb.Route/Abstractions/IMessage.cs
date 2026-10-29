@@ -36,6 +36,15 @@ public interface IMessage
     T? GetHeader<T>(string key);
 
     /// <summary>
+    /// Attachments of this message (Apache Camel's <c>AttachmentMessage</c>): named content beside the body, such as the
+    /// files of a form upload or of an e-mail. They belong to the message, not to the exchange, so <c>In</c> and
+    /// <c>Out</c> carry their own; a broker producer does not send them unless its protocol has a place for them.
+    /// <see cref="Core.Message"/> implements them; a message type that does not answers with an empty list that
+    /// refuses additions.
+    /// </summary>
+    IMessageAttachments Attachments => Core.MessageAttachments.Unsupported;
+
+    /// <summary>
     /// Structural copy of the message. Headers get a new dictionary, but the <see cref="Body"/>
     /// reference and header values are <b>shared</b> (shallow) — this is intentional and relied upon
     /// (e.g. a Splitter branch cloning into a shared aggregation list). For an isolated deep copy of

@@ -23,6 +23,12 @@ public class ProbeCredential
     public static ProbeCredential From(int slot) => new($"slot-{slot}", "via-int");
 }
 
+/// <summary>One constructor taking a decimal: text without type= is a string and fits no parameter.</summary>
+public class ProbePrice(decimal vatRate)
+{
+    public decimal VatRate { get; } = vatRate;
+}
+
 /// <summary>
 /// <c>&lt;constructorArg type="…"&gt;</c> — Spring's <c>constructor-arg type</c>: when several
 /// constructors (or factory-method overloads) accept the same values, the argument types name the
@@ -31,14 +37,16 @@ public class ProbeCredential
 /// error — never a guess. X509Certificate2 from a PFX on net8 is the case that asked for it: its
 /// (string, string) constructor is one of several two-argument ones.
 /// </summary>
-public sealed class XmlBeanTypedArgumentsTests : IAsyncDisposable
+public sealed class XmlBeanTypedArgumentsTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "redb-xml-typed-" + Guid.NewGuid().ToString("N"));
 
     public XmlBeanTypedArgumentsTests() => Directory.CreateDirectory(_dir);
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         Directory.Delete(_dir, recursive: true);
@@ -216,5 +224,41 @@ public sealed class XmlBeanTypedArgumentsTests : IAsyncDisposable
         errors.Should().Contain(m => m.Contains("bean 'none'") && m.Contains("has no public constructor (System.Int32, System.Int32)"));
         errors.Should().Contain(m => m.Contains("bean 'from'") && m.Contains("has 2 public static methods 'From'"));
         errors.Should().NotContain(m => m.Contains("bean 'ok'"));
+    }
+
+    [Fact]
+    public void Untyped_text_argument_for_a_decimal_constructor_fails_the_load()
+    {
+        var act = () => Load($"""<bean name="price" type="{T<ProbePrice>()}"><constructorArg value="0.20"/></bean>""");
+
+        act.Should().Throw<Exception>("ActivatorUtilities passes the text as a string, which no parameter takes");
+    }
+
+    [Fact]
+    public void Gate_WithTheBuiltAssemblies_HoldsUntypedArgumentsAgainstTheConstructors()
+    {
+        var project = RouteProjectScaffold.Create(_dir, "Untyped");
+        File.WriteAllText(Path.Combine(project, "routes", "main.route.xml"), $"""
+            <routes xmlns="urn:redb:route:1.0">
+              <bean name="untyped" type="{T<ProbePrice>()}">
+                <constructorArg value="{"{{"}pricing.vat:0.20{"}}"}"/>
+              </bean>
+              <bean name="typed" type="{T<ProbePrice>()}">
+                <constructorArg type="System.Decimal" value="0.20"/>
+              </bean>
+              <bean name="strings" type="{T<ProbeCredential>()}">
+                <constructorArg value="a"/>
+                <constructorArg value="b"/>
+              </bean>
+              <route id="r"><from uri="direct://in"/><removeBody/></route>
+            </routes>
+            """);
+
+        var errors = RoutePackage.Check(project, "p", "1.0.0", Type.GetType).Errors.Select(e => e.Message).ToList();
+
+        errors.Should().ContainSingle(m => m.Contains("bean 'untyped'"))
+            .Which.Should().Contain("no public constructor").And.Contain("(System.String)")
+            .And.Contain("<constructorArg type=\"System.Decimal\"");
+        errors.Should().NotContain(m => m.Contains("bean 'typed'") || m.Contains("bean 'strings'"));
     }
 }

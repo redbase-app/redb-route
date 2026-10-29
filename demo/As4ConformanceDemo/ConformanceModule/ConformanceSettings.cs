@@ -51,6 +51,13 @@ public sealed class ConformanceSettings
     /// <summary>The test driver's certificate: verifies its signatures, and payloads are encrypted for it.</summary>
     public required X509Certificate2 TestDriverCertificate { get; init; }
 
+    /// <summary>
+    /// Certificate of the test driver on the command channel. The conformance testing service signs Submit, Deliver and
+    /// Notify with a certificate of its own (<c>test_driver_sut_controller</c>); null: <see cref="TestDriverCertificate"/>,
+    /// as a driver with one key has it.
+    /// </summary>
+    public X509Certificate2? TestDriverControllerCertificate { get; init; }
+
     /// <summary>Redeliveries of the ONEWAY_RETRY profile; the user guide asks for 5.</summary>
     public int RetryCount { get; init; } = 5;
 
@@ -125,6 +132,9 @@ public sealed class ConformanceSettings
             TestDriverPartyId = Need(driver, "TestDriver", "PartyId"),
             TestDriverControllerPartyId = Need(driver, "TestDriver", "ControllerPartyId"),
             TestDriverCertificate = X509CertificateLoader.LoadCertificateFromFile(Need(driver, "TestDriver", "Certificate")),
+            TestDriverControllerCertificate = Value(driver, "ControllerCertificate") is { } controllerCertificate
+                ? X509CertificateLoader.LoadCertificateFromFile(controllerCertificate)
+                : null,
             TestDriverTrustAnchors = Certificates(Value(driver, "TrustAnchors")),
             SutPartyId = Need(sut, "Sut", "PartyId"),
             ControllerPartyId = Need(sut, "Sut", "ControllerPartyId"),
@@ -145,8 +155,11 @@ public sealed class ConformanceSettings
     }
 }
 
-/// <summary>One service and action pair of the conformance tests, with how our signature references our certificate.</summary>
-public sealed record ConformanceLeg(string Service, string Action, As4KeyReference KeyReference = As4KeyReference.BinarySecurityToken,
+/// <summary>
+/// One service and action pair of the conformance tests, with how our signature references our certificate:
+/// <c>X509IssuerSerial</c> unless the test asks for another form, as the test suite does.
+/// </summary>
+public sealed record ConformanceLeg(string Service, string Action, As4KeyReference KeyReference = As4KeyReference.IssuerSerial,
     bool PkiPath = false, bool WithPolicy = false)
 {
     /// <summary>Whether a missing receipt is redelivered: the ONEWAY_RETRY profile of the user guide.</summary>
@@ -177,7 +190,7 @@ public static class ConformanceLegs
         new(OneWay, "fourCorner"),
         new(OneWay, "duplicateDetection"),
         new(OneWay, "emptyBodyNotReferencedInSignature"),
-        new(OneWay, "bstDefault"),
+        new(OneWay, "bstDefault", As4KeyReference.BinarySecurityToken),
         new(OneWay, "ski", As4KeyReference.KeyIdentifier),
         new(OneWay, "issuerSerial", As4KeyReference.IssuerSerial),
         // PKI path: we sign with our certification path, and the test driver's signer must present one that leads to

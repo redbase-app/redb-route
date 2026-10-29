@@ -12,11 +12,13 @@ namespace redb.Route.Tests.Xml;
 /// round-trip and Mermaid. The key promise: a route loaded from XML and the same route written
 /// in post-V4 C# describe IDENTICALLY.
 /// </summary>
-public class RouteDescriberTests : IAsyncDisposable
+public class RouteDescriberTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

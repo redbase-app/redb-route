@@ -46,7 +46,7 @@ AS4 route in one worker never fight over a port.
 |---|---|---|
 | Our access point (identity + keys) | **node** — `As4ConnectionFactory` | route context registry, by name |
 | P-Mode / agreement with one partner | **partner** — `As4Partner` | the node's `Partners` list, by `Name` |
-| Partner's access point URL | the **send URI** | `As4.Send("https://...")` |
+| Partner's access point URL (P-Mode `Protocol.Address`) | the partner's **`Address`**, or the **send URI** | `As4Partner.Address` with `As4.Send()`, or `As4.Send("https://...")` |
 | Our receive URL | the **receive URI** | `As4.Receive("/as4/in")` — one URL for all partners |
 | Business document | exchange **body** | `byte[]` + `Message.ContentType` |
 | `eb:Messaging` header values | exchange **headers** `redbAs4.*` | see [Headers](#headers) |
@@ -131,6 +131,7 @@ HTTP response are **not options**: the profile mandates them.
 |---|---|---|
 | `Name` | — (required) | Name within the node: what `partner=` refers to and the `redbAs4.partner` header on receipt. |
 | `PartyId` / `PartyIdType` | — / null | The partner's `eb:PartyId` and its type. |
+| `Address` | null | The partner's MSH address, `http://` or `https://`, with a query where it has one (a Domibus domain, `/domibus?domain=name`). A send endpoint without an address of its own (`As4.Send()`, `as4:?partner=...`) posts here. Null: the send URI gives the address; both is refused. |
 | `OurRole` / `PartnerRole` | ebMS `initiator` / `responder` URIs | `eb:Role` of each side. |
 | `AgreementRef` / `AgreementRefType` / `PModeId` | null | `eb:AgreementRef`, its `@type` and `@pmode`. When set, a received message must carry the same reference. |
 | `Service` / `ServiceType` / `Action` | — (Service, Action required) | `eb:Service` and `eb:Action` of the request leg. |
@@ -218,6 +219,20 @@ From("direct://outbound")
     .To(As4.Send("https://ap.acme.example/as4").ConnectionFactory("node").Partner("acme"));
 ```
 
+**Where it goes.** The address is the send URI's, or the partner's `Address` when the URI has none. With the address
+in the agreement, one endpoint sends to whichever partner a message names, each at its own access point:
+
+```csharp
+var acme = new As4Partner { Name = "acme", Address = "https://ap.acme.example/as4", /* ... */ };
+var globex = new As4Partner { Name = "globex", Address = "https://msh.globex.example/domibus?domain=edelivery", /* ... */ };
+
+From("direct://outbound")
+    .To(As4.Send().ConnectionFactory("node").Partner("${header.partner}"));   // as4:?connectionFactory=node&partner=...
+```
+
+An address in both places is refused, at start for a fixed partner and per message for one chosen by an expression;
+so is a send with no address at all.
+
 A body that is not a list of `As4Payload` (see below) is sent as one payload: `byte[]` as is, `string` as UTF-8, `Stream` copied (not buffered, and not
 closed: the exchange owns it), anything else as its UTF-8 `ToString()`. The payload is compressed, encrypted and
 written to the wire through the core stream cache, so a large one goes through a temporary file, not memory. Its media type is `Message.ContentType` (default `application/octet-stream`).
@@ -260,6 +275,7 @@ certificates, naming exactly the digests we signed. The outcome is on `exchange.
 | `action` | `.Action(value)` | agreement | Overrides `eb:Action`; the agreement must allow it. |
 | `conversationId` | `.ConversationId(value)` | new id, or `redbAs4.conversationId` | `eb:ConversationId`. |
 | `refToMessageId` | `.RefToMessageId(value)` | `redbAs4.refToMessageId`, else none | Set on the reply of a Two-Way exchange; the message then uses the partner's `ReplyLeg`. |
+| `addressQuery` | in the URL of `As4.Send(...)` | none | Query of the partner's address, without `?`, as one encoded value: the query of an `as4` URI holds the options. Domibus serves its domains so: `As4.Send("https://ap/domibus?domain=x")` gives `as4s://ap/domibus?addressQuery=domain%3Dx`. |
 | `timeout` | `.Timeout(ms)` | 60000 | Milliseconds to wait for the response with the receipt; 0 = no limit. |
 | `transacted` | — | — | `true` is refused when the URI is bound: eDelivery requires a synchronous receipt, so a send is never deferred to a transaction. |
 
@@ -306,8 +322,9 @@ From(As4.Receive("/as4/in").Port(4090).ConnectionFactory("node").IdempotentRepos
 
 One URL serves every partner of the node. For each request the receiver, in order:
 
-1. parses the envelope with the core `SafeXml` (no DTD, size-limited) — a malformed envelope or a DOCTYPE is a
-   SOAP Fault `Sender` (400), an unknown header with `mustUnderstand` a `MustUnderstand` fault (500);
+1. parses the envelope with the core `SafeXml`: no DTD, at most `maxEnvelopeCharacters`, the structure of an
+   eDelivery envelope (see [Security notes](#security-notes)). A malformed envelope, a DOCTYPE or an envelope over a
+   limit is a SOAP Fault `Sender` (400), an unknown header with `mustUnderstand` a `MustUnderstand` fault (500);
 2. reads `eb:Messaging` strictly — a signal (receipt / error) without a waiting sender is answered 202 and
    logged, since the profile forbids asynchronous signals;
 3. matches the message to one partner (`EBMS:0001` / `EBMS:0010` when none or more than one);
@@ -404,7 +421,17 @@ All connector headers start with `redbAs4.` (`As4Headers`).
 - **Own XML Signature processing.** .NET `SignedXml` cannot resolve `cid:` references to attachments, so the
   connector processes `ds:Reference` and `SignedInfo` itself (Attachment-Content-Signature-Transform,
   exclusive C14N through the public `XmlDsigExcC14NTransform`, RSA PKCS#1 v1.5).
-- **Untrusted XML** goes through the core `SafeXml` only: DTDs are refused, the envelope is size-limited.
+- **Untrusted XML** goes through the core `SafeXml` only: DTDs are refused, and the reader checks the structure while
+  it reads, before anything is built. A received envelope, and the partner's answer to a send, may be at most 32 levels
+  deep, with 32 attributes and 16 namespace declarations on an element, 4096 namespace declarations in all and
+  `maxEnvelopeCharacters` characters: two to four times what Domibus, Holodeck B2B and this connector send. These are
+  the profile's shape and not options. An uncompressed XML payload is canonicalized for its digest with the core's
+  default limits (depth 256, 1024 attributes, 256 namespace declarations on an element); over them its signature
+  fails, `EBMS:0101`.
+- **Decryption work is bounded**: a message carries exactly one `xenc:EncryptedKey` (each costs an RSA private-key
+  operation, and anyone can encrypt for our certificate), and each payload is decrypted once; anything else is
+  `EBMS:0102`. The signature over `SignedInfo` is checked before any reference is digested, so references a forger
+  adds cost nothing but one canonicalization of a bounded `SignedInfo`.
 - **Signature wrapping**: duplicate `wsu:Id` values are refused, and every reference must cover what the profile
   requires (the `eb:Messaging` header, the body, every attachment).
 - **Replay**: a received `wsu:Timestamp` is checked as WSS4J checks it (Domibus and Holodeck verify with it): `Created`
@@ -445,6 +472,8 @@ outside the profile hits; the answer is the one it gets.
 | Canonicalization | Exclusive C14N | `EBMS:0101` |
 | Reference transforms | exactly one `ds:Transform` per reference | `EBMS:0101` |
 | Signature coverage | `eb:Messaging`, `soap:Body`, every attachment | `EBMS:0103`, as Domibus answers from its policy (`sp:SignedParts`); a `wsu:Timestamp` that is present and not covered: `EBMS:0101` |
+| Envelope structure | depth 32, 32 attributes and 16 namespace declarations on an element, 4096 namespace declarations, `maxEnvelopeCharacters` | SOAP Fault `Sender` |
+| Session keys | exactly one `xenc:EncryptedKey`, each payload decrypted once | `EBMS:0102` |
 | Unsigned or unencrypted message | never | `EBMS:0103` |
 | Payload in the SOAP body | never (payloads are attachments) | `EBMS:0002` |
 | Compression | gzip, with `MimeType` | `EBMS:0303` / `EBMS:0003` |
@@ -466,7 +495,7 @@ net9.0 and net10.0**; the live tests below skip when their stand is down unless 
 | Messaging | Strict `eb:Messaging` reader and writer, SwA MIME, payload consistency, gzip with a size limit. |
 | Producer | Against a loopback partner that decrypts, verifies and answers: verified receipt, ebMS error, no receipt, no response within the timeout, receipt with other digests, receipt signed by a stranger, missing four-corner properties, reply leg; route-level redelivery with the same message id and dead letter after the last attempt; a forward-only `Stream` body sent and left open, a seekable one resent from its start. |
 | Consumer | Loopback (our sender → our receiver) and raw requests: every refusal answered with its ebMS code or SOAP fault, exception text never sent, rollback-only never acknowledged, duplicates acknowledged without a second delivery, a resend after a route failure or an aborted request delivered, repository failure, a claim taken uncancelled; `streamBody`, a large payload spooled to disk, several payloads as released streams; an envelope without `Body` or `Header`, two `wsse:Security` headers, an unexpected failure answered `EBMS:0004`, `mustUnderstand` only for the roles we play. |
-| Hardening | `wsu:Timestamp` by the WSS4J rules (no `Created`, too old, from the future, expired), a partner response over `maxResponseBodySize`, options of the other side refused (`[EndpointRole]`), a partner address with a query refused. |
+| Hardening | `wsu:Timestamp` by the WSS4J rules (no `Created`, too old, from the future, expired), a partner response over `maxResponseBodySize`, options of the other side refused (`[EndpointRole]`), a partner address with a query posted to that query and one with a fragment refused. |
 | Engine | Admission limits (503, counted once as rejected), the shared host of a module host (container, context service, an HTTP and an AS4 route on one port), the drain on stop, statistics once per event (in, error, refusal, out), one trace across sender and receiver, `.Transacted()` commit and rollback, principal from the signer and the TLS client, a node and route from Route-XML. |
 | Transport security | Real loopback TLS handshakes: a TLS receiver without a certificate refuses to start, one with a certificate leaves no plaintext port, the certificate from the node, mutual TLS accepting an allow-listed client certificate (and reporting it on the exchange), refusing a missing or foreign one in the handshake. |
 | Profile | MIME canonical form of uncompressed attachments (XML, text, binary, a CRLF split across reads, a DTD refused), four-corner properties required on receipt, signer outside its validity period, a stranger with the partner's subject, expired own or partner certificates refused before sending. |
@@ -519,7 +548,10 @@ Asynchronous receipts (phase 6) and Pull (phase 10) are optional in the profile 
 ## Cross-cutting
 
 Like every redb.Route connector, AS4 endpoints get statistics and health (`IEndpointStatistics`, visible in
-the Tsak dashboard) and distributed tracing on the core's transport contract: the receiver opens a `"{path} receive"`
+the Tsak dashboard). A message the receiver refuses as the partner's fault (malformed or oversized envelope, failed
+signature or decryption, not what the agreement allows) is counted in `Refused`, with the reason of the last one in
+`LastRefusalMessage`, and not in `Errors` or health: a partner with a broken configuration does not turn the route
+red. `EBMS:0004`, a failure on our side, and a failed route stay errors. AS4 endpoints also get distributed tracing on the core's transport contract: the receiver opens a `"{path} receive"`
 Consumer span (parent: the host's request span when the application traces ASP.NET Core, else the sender's
 `traceparent`, else a root; the sender's baggage is put back), the sender a `"{partner} send"` Client span whose
 context it writes to the request. A refused message, a failed route, an unreachable partner or a missing or invalid

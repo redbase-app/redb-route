@@ -433,6 +433,12 @@
         "role": "producer"
       },
       {
+        "name": "AddressQuery",
+        "type": "string",
+        "sensitive": false,
+        "role": "producer"
+      },
+      {
         "name": "AllowedClientThumbprints",
         "type": "string",
         "sensitive": false,
@@ -6878,6 +6884,12 @@
         "sensitive": false
       },
       {
+        "name": "MaxRequestBodySize",
+        "type": "long",
+        "default": "104857600",
+        "sensitive": false
+      },
+      {
         "name": "Operation",
         "type": "string",
         "sensitive": false
@@ -7047,6 +7059,12 @@
       {
         "name": "OnFailure",
         "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "OnFailureAfterRollback",
+        "type": "bool",
+        "default": "false",
         "sensitive": false
       },
       {
@@ -7491,7 +7509,7 @@
       {
         "name": "ReceiveBufferSize",
         "type": "int",
-        "default": "8192",
+        "default": "0",
         "sensitive": false
       },
       {
@@ -7509,7 +7527,7 @@
       {
         "name": "SendBufferSize",
         "type": "int",
-        "default": "8192",
+        "default": "0",
         "sensitive": false
       },
       {

@@ -8,7 +8,7 @@ namespace redb.Route.Tests.Sql.Batch;
 /// A failed batch inside a route: the route's <c>OnException&lt;DbException&gt;</c> must match it. Handlers are found by the
 /// thrown exception's type and its base types, so this holds only if the provider's exception reaches the route unwrapped.
 /// </summary>
-public sealed class BatchRouteErrorHandlingTests : IAsyncDisposable
+public sealed class BatchRouteErrorHandlingTests : IAsyncLifetime
 {
     private readonly SqliteTestHelper _db = new();
     private readonly RouteContext _context = new();
@@ -16,7 +16,9 @@ public sealed class BatchRouteErrorHandlingTests : IAsyncDisposable
     public BatchRouteErrorHandlingTests() =>
         _db.Execute("CREATE TABLE route_items (id INTEGER PRIMARY KEY, val TEXT NOT NULL)");
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         _db.Dispose();

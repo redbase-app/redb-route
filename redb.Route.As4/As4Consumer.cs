@@ -61,9 +61,9 @@ internal sealed class As4Consumer : IConsumer
     /// <inheritdoc />
     public async Task Start(CancellationToken ct = default)
     {
-        if (_endpoint.PartnerUrl is not null)
+        if (_endpoint.PartnerUrl is not null || Path.Length == 0)
             throw new InvalidOperationException(
-                $"AS4 receive endpoint {_endpoint.Uri} uses the host-style send form; a receive endpoint is as4:/path?host=...&port=....");
+                $"AS4 receive endpoint {_endpoint.Uri} has no receive path; a receive endpoint is as4:/path?host=...&port=....");
 
         _logger ??= _endpoint.Logger;
         _node = As4Node.Resolve(_endpoint.Context, _options.ConnectionFactory!);
@@ -179,8 +179,9 @@ internal sealed class As4Consumer : IConsumer
         catch (XmlException e)
         {
             await body.DisposeAsync().ConfigureAwait(false);
-            // A DTD (forbidden in SOAP, SOAP 1.2 Part 1 §5) or broken XML: the text describes the caller's own bytes.
-            _endpoint.RecordError(e);
+            // A DTD (forbidden in SOAP, SOAP 1.2 Part 1 §5), broken XML or an envelope over its limits: the text describes
+            // the caller's own bytes. A refusal, not an error of this endpoint.
+            _endpoint.RecordRefused($"Malformed SOAP envelope: {e.Message}");
             activity.RecordFailure(e);
             await Write(http, Responses.SoapFault(mustUnderstand: false, $"Malformed SOAP envelope: {e.Message}")).ConfigureAwait(false);
             return;
@@ -188,7 +189,7 @@ internal sealed class As4Consumer : IConsumer
         catch (Exception e) when (e is FormatException or MimeKit.ParseException or ArgumentException)
         {
             await body.DisposeAsync().ConfigureAwait(false);
-            _endpoint.RecordError(e);
+            _endpoint.RecordRefused($"{As4ErrorCode.MimeInconsistency.Code}: {e.Message}");
             activity.RecordFailure(e);
             await WriteSignal(http, Responses.Error(As4ErrorCode.MimeInconsistency, null, host, reference)).ConfigureAwait(false);
             return;
@@ -202,7 +203,7 @@ internal sealed class As4Consumer : IConsumer
 
         if (EnvelopeProblem(message.Envelope) is { } notSoap)
         {
-            _endpoint.RecordError();
+            _endpoint.RecordRefused(notSoap);
             activity?.SetStatus(ActivityStatusCode.Error);
             await Write(http, Responses.SoapFault(mustUnderstand: false, notSoap)).ConfigureAwait(false);
             return;
@@ -210,7 +211,7 @@ internal sealed class As4Consumer : IConsumer
 
         if (UnderstoodHeaders(message.Envelope) is { } unknownBlock)
         {
-            _endpoint.RecordError();
+            _endpoint.RecordRefused($"Header block {unknownBlock} is not understood.");
             activity?.SetStatus(ActivityStatusCode.Error);
             await Write(http, Responses.SoapFault(mustUnderstand: true, $"Header block {unknownBlock} is not understood.")).ConfigureAwait(false);
             return;
@@ -252,7 +253,12 @@ internal sealed class As4Consumer : IConsumer
         {
             _logger?.LogWarning("AS4 receiver {Path}: message {MessageId} refused with {Code} (ref {Reference}): {Detail}",
                 Path, messageId, e.Code.Code, reference, e.Detail);
-            _endpoint.RecordError(e);
+            // The partner's message does not hold (security, agreement, profile): a refusal answered by protocol. EBMS:0004
+            // stays an error: it names a failure on this side.
+            if (e.Code == As4ErrorCode.Other)
+                _endpoint.RecordError(e);
+            else
+                _endpoint.RecordRefused($"{e.Code.Code} for {messageId}: {e.Detail}");
             activity.RecordFailure(e);
             await WriteSignal(http, Responses.Error(e.Code, messageId, host, reference,
                 signer: partner is null ? null : node.Factory.SigningCertificate,

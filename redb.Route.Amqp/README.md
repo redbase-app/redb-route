@@ -148,6 +148,13 @@ name once the consumer has started, for senders to reach it. A producer with `dy
 a node the broker creates for it and logs its name. An endpoint with both an address and
 `dynamic=true` is refused.
 
+## Start
+
+`Start()` returns once the broker has accepted every receiver link of the consumer, so a MULTICAST subscription is in
+place and a message sent right after the start is received. A link the broker refuses (an address it does not serve,
+a routing type the address lacks, no permission) fails the start with `AMQP consumer amqp:<address> cannot start:
+the broker refused the receiver link (<condition>: <description>)`; no answer within `timeout` seconds fails it too.
+
 ## Tracing
 
 On the `redb.Route` activity source (`AddSource("redb.Route")`). The W3C context travels in the application

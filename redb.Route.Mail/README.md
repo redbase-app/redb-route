@@ -71,6 +71,49 @@ From(Pop3.Read("pop3.example.com")
 | `imap` | Consumer | Receive via IMAP (IDLE push or polling) |
 | `pop3` | Consumer | Receive via POP3 (polling) |
 
+The `smtp` producer keeps its connection between sends. When the server has closed it while it was idle (a socket
+timeout answered with `421`, a reset), the message is sent once more on a new connection; a refusal on a fresh connection
+is the server's answer and fails the exchange. `disconnect=true` opens a connection per message instead.
+
+## Attachments
+
+Mail works with the [message attachments](../README.md#attachments) (`exchange.In.Attachments`), the same list an
+upload, a SOAP MTOM call or a route step fills, so the connector before `smtp:` does not matter.
+
+```csharp
+// From code
+exchange.In.Attachments.Add(new Attachment
+{
+    Name = "invoice", FileName = "invoice-42.pdf", ContentType = "application/pdf",
+    Content = AttachmentContent.FromBytes(pdf),
+});
+
+// From a route step: a file read by file:, sent as an attachment
+From("file:///data/out?include=*.pdf")
+    .AddAttachmentFromBody("report", fileName: Header("redbFile.Name"), contentType: "application/pdf")
+    .SetBody("The report is attached.")
+    .To("smtp://mail.example.com?to=team@example.com&subject=Report");
+
+// Forwarding: the received attachments go out as they came
+From("imap://imap.example.com?username=in&password=...")
+    .To("smtp://mail.example.com?to=archive@example.com");
+```
+
+**`smtp:` sends** every message attachment as a part of the mail: the file name (the attachment name when there is
+none), the content type, the `Content-ID`, an `inline` disposition when the part it came from was inline, and the other
+part headers except `Content-*`. The `attachments=` option still adds files by path, before the message attachments.
+
+**`imap:` and `pop3:` receive** every attachment of the mail onto the message attachments: named by its file name
+without a directory, with its content type, `Content-ID` and part headers; an attached mail (`message/rfc822`) is one
+attachment with its bytes. The body stays as before: `MailMessageBody` with the text and the decoded files, and the
+`redbMail.HasAttachments`, `redbMail.AttachmentCount`, `redbMail.AttachmentNames` headers. `fetchAttachments=false`
+puts none on the message; `maxAttachmentSize` leaves out the ones above it. `MailMessageBody` converts to its text, so
+`smtp:` sends a received mail on with its text.
+
+The exchange property `Attachments` is not read: it is an ordinary property now. A route that put a
+`List<MailAttachment>` or file paths there sends the mail without those files until it puts them on the message
+attachments (see `UPGRADING.md`, "Mail and SOAP attachments are message attachments").
+
 ## Part of
 
 [redb.Route](../README.md) — ESB & EIP Framework for .NET

@@ -41,11 +41,16 @@ public class SoapMtomInteropTests
         ctx.AddRoutes(r => r.From(SoapDsl.Listen("/svc").Host("0.0.0.0").Port(ConsumerPort).ConnectionFactory("mtom"))
             .Process(e =>
             {
-                consumerGot = e.In.GetHeader<IReadOnlyList<SoapAttachment>>(SoapHeaders.Attachments)?[0].Content;
+                consumerGot = e.In.Attachments.FirstOrDefault()?.Content.ReadAllBytes();
                 var msg = XElement.Parse(e.In.Body!.ToString()!).Descendants().First(x => x.Name.LocalName == "msg").Value;
                 e.In.Body = $"<tns:EchoResponse xmlns:tns=\"urn:soaptest\"><result>mtom:{msg}</result></tns:EchoResponse>";
-                e.In.Headers[SoapHeaders.Attachments] =
-                    new List<SoapAttachment> { new("resp-1", "application/octet-stream", Encoding.UTF8.GetBytes("redb-mtom-reply")) };
+                e.In.Attachments.Clear();
+                e.In.Attachments.Add(new Attachment
+                {
+                    Name = "resp-1",
+                    ContentId = "resp-1",
+                    Content = AttachmentContent.FromBytes(Encoding.UTF8.GetBytes("redb-mtom-reply")),
+                });
             }));
         await ctx.Start();
 

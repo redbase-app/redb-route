@@ -43,17 +43,19 @@ internal static class AttachmentCanonicalizer
 
     private static Stream ExclusiveC14N(SwaPart part)
     {
-        // Foreign XML: the core SafeXml reader settings (no DTD), whitespace kept, as the transform reads the content.
+        // Foreign XML: the core SafeXml reader (no DTD, the default structure limits), whitespace kept, as the transform
+        // reads the content. The payload is the partner's document, not an envelope, so it gets the generous default
+        // limits; its size is bounded by the request.
         var document = new XmlDocument { PreserveWhitespace = true, XmlResolver = null };
         try
         {
-            using var reader = XmlReader.Create(part.OpenRead(), SafeXml.Settings());
+            using var reader = SafeXml.CreateReader(part.OpenRead(), XmlLimits.Default);
             document.Load(reader);
         }
         catch (XmlException e)
         {
             // Its digest cannot be computed, so the signature over it cannot hold.
-            throw new CryptographicException($"Attachment '{part.ContentId}' is declared {part.ContentType} but is not well-formed XML.", e);
+            throw new CryptographicException($"Attachment '{part.ContentId}' is declared {part.ContentType} but cannot be read as XML: {e.Message}", e);
         }
 
         var transform = new XmlDsigExcC14NTransform(includeComments: false);

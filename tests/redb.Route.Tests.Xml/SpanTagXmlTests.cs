@@ -15,11 +15,13 @@ namespace redb.Route.Tests.Xml;
 /// definition it builds and the C# it prints are checked here; what lands on which span is covered by the engine's
 /// own <c>SpanTagTests</c>.
 /// </summary>
-public class SpanTagXmlTests : IAsyncDisposable
+public class SpanTagXmlTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

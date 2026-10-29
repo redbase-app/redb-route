@@ -15,11 +15,13 @@ namespace redb.Route.Tests.Expressions;
 /// OldRouteCompiler, and RouteContext end-to-end.
 /// </summary>
 [Collection("ExpressionResolver")]
-public class ExpressionDslIntegrationTests : IAsyncDisposable
+public class ExpressionDslIntegrationTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

@@ -339,6 +339,22 @@ public class FunctionCallNode : AstNode
                 }
                 return false;
 
+            // The attachment functions of Camel Simple, one evaluator each shared with the compiled branch.
+            case "attachmentcontent":
+                return ExpressionResolver.Ast_AttachmentContent(evaluatedArgs.Length >= 1 ? evaluatedArgs[0] : null, exchange);
+
+            case "attachmentcontentastext":
+                return ExpressionResolver.Ast_AttachmentContentAsText(evaluatedArgs.Length >= 1 ? evaluatedArgs[0] : null, exchange);
+
+            case "attachmentcontenttype":
+                return ExpressionResolver.Ast_AttachmentContentType(evaluatedArgs.Length >= 1 ? evaluatedArgs[0] : null, exchange);
+
+            case "attachmentheader":
+                return ExpressionResolver.Ast_AttachmentHeader(
+                    evaluatedArgs.Length >= 1 ? evaluatedArgs[0] : null,
+                    evaluatedArgs.Length >= 2 ? evaluatedArgs[1] : null,
+                    exchange);
+
             case "messagehistory":
                 // Same evaluator as the compiled branch — a function that lives in one branch is a lie.
                 return ExpressionResolver.Ast_MessageHistory(

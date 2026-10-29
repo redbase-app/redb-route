@@ -1,4 +1,5 @@
 using System.Text;
+using redb.Route.Abstractions;
 
 namespace redb.Route.Soap;
 
@@ -23,7 +24,7 @@ internal static class SoapMultipart
     /// Content-Type — the SOAP 1.2 way to carry the action once the envelope's own media type is hidden.
     /// </summary>
     public static (byte[] body, string contentType) Write(
-        byte[] rootXml, string rootMediaType, IReadOnlyList<SoapAttachment> attachments, string? action = null)
+        byte[] rootXml, string rootMediaType, IReadOnlyList<Attachment> attachments, string? action = null)
     {
         var boundary = "----=_redb_mtom_" + Guid.NewGuid().ToString("N");
         var startInfo = MediaTypeBase(rootMediaType); // text/xml (1.1) or application/soap+xml (1.2)
@@ -40,15 +41,17 @@ internal static class SoapMultipart
         ms.Write(rootXml, 0, rootXml.Length);
         ms.Write(Crlf, 0, 2);
 
-        // Attachment parts. Content-ID is bracketed exactly once (a caller-supplied id may already carry them).
+        // Attachment parts, addressed by the attachment Content-ID, else its name. The id is bracketed exactly
+        // once (a caller-supplied id may already carry them).
         foreach (var att in attachments)
         {
             Line("--" + boundary);
             Line($"Content-Type: {att.ContentType}");
             Line("Content-Transfer-Encoding: binary");
-            Line($"Content-ID: <{StripBrackets(att.ContentId)}>");
+            Line($"Content-ID: <{StripBrackets(att.ContentId ?? att.Name)}>");
             Line(string.Empty);
-            ms.Write(att.Content, 0, att.Content.Length);
+            using (var content = att.Content.OpenRead())
+                content.CopyTo(ms);
             ms.Write(Crlf, 0, 2);
         }
 
@@ -71,11 +74,11 @@ internal static class SoapMultipart
 
     /// <summary>
     /// Parses a multipart/related body: returns the root part bytes (the SOAP envelope, per the <c>start</c>
-    /// parameter, an <c>application/xop+xml</c> Content-Type, or the first part) and the attachments keyed by
-    /// Content-ID. Throws <see cref="FormatException"/> when the boundary is missing or matches no part, rather
-    /// than silently yielding an empty envelope.
+    /// parameter, an <c>application/xop+xml</c> Content-Type, or the first part) and the other parts as message
+    /// attachments, each named by its Content-ID. Throws <see cref="FormatException"/> when the boundary is missing
+    /// or matches no part, rather than silently yielding an empty envelope.
     /// </summary>
-    public static (byte[] root, IReadOnlyList<SoapAttachment> attachments) Parse(byte[] body, string contentType)
+    public static (byte[] root, IReadOnlyList<Attachment> attachments) Parse(byte[] body, string contentType)
     {
         var boundary = Param(contentType, "boundary")
             ?? throw new FormatException("multipart/related Content-Type has no boundary.");
@@ -102,13 +105,19 @@ internal static class SoapMultipart
         }
         if (rootIndex < 0) rootIndex = 0; // no explicit root marker: the first part is the SOAP envelope
 
-        var attachments = new List<SoapAttachment>();
+        var attachments = new List<Attachment>();
         for (var i = 0; i < parsed.Length; i++)
         {
             if (i == rootIndex) continue;
             var (cid, type, content) = parsed[i];
             if (!string.IsNullOrEmpty(cid))
-                attachments.Add(new SoapAttachment(cid, type, content)); // keep the full Content-Type (params included)
+                attachments.Add(new Attachment
+                {
+                    Name = cid,
+                    ContentId = cid,
+                    ContentType = type, // the full Content-Type, parameters included
+                    Content = AttachmentContent.FromBytes(content),
+                });
         }
 
         return (parsed[rootIndex].content, attachments);

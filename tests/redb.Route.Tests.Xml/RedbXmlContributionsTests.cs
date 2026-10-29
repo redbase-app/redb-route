@@ -6,6 +6,7 @@ using redb.Core;
 using redb.Core.Models.Entities;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.RedbCore.Extensions;
 using redb.Route.RedbCore.Xml;
 using redb.Route.Xml;
 
@@ -27,7 +28,7 @@ public sealed class RedbXmlOrderProps
 /// <c>&lt;beginRedbTransaction&gt;</c> against a substituted <see cref="IRedbService"/>, the
 /// <c>&lt;redb&gt;</c> context block, the schema pass and the generator face.
 /// </summary>
-public class RedbXmlContributionsTests : IAsyncDisposable
+public class RedbXmlContributionsTests : IAsyncLifetime
 {
     private static readonly XmlRouteLoaderOptions Options = new()
     {
@@ -44,7 +45,9 @@ public class RedbXmlContributionsTests : IAsyncDisposable
 
     public RedbXmlContributionsTests() => _context.AddService(typeof(IRedbService), _redb);
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);
@@ -311,6 +314,28 @@ public class RedbXmlContributionsTests : IAsyncDisposable
         await _redb.Received(1).SyncSchemeAsync<RedbXmlOrderProps>();
         _context.GetFromRegistry<IIdempotentRepository>("orders-idem")
             .Should().NotBeNull("the repository must be reachable by <idempotentConsumer repository=…>");
+    }
+
+    [Fact]
+    public async Task ContextRedbBlock_Storage_OpensTheRepositoryOnTheNamedInstance()
+    {
+        var instance = Substitute.For<IRedbService>();
+        instance.CanCreateScope.Returns(true);
+        instance.CreateScope().Returns(_ => new RedbScope(Substitute.For<IRedbService>(), null));
+        _context.RegisterRedbService("local", instance);
+        var document = XDocument.Parse("""
+            <context xmlns="urn:redb:route:1.0">
+              <redb storage="local">
+                <idempotentRepository name="local-idem"/>
+              </redb>
+            </context>
+            """, System.Xml.Linq.LoadOptions.SetLineInfo);
+
+        new XmlContextLoader(_context, Options).Load(document, "context.xml");
+        await _context.Start();
+
+        instance.Received().CreateScope();
+        _context.GetFromRegistry<IIdempotentRepository>("local-idem").Should().NotBeNull();
     }
 
     [Fact]

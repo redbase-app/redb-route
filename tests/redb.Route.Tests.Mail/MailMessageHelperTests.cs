@@ -100,6 +100,85 @@ public sealed class MailMessageHelperTests
         mailBody.Attachments[0].FileName.Should().Be("report.pdf");
         mailBody.Attachments[0].Content.Should().BeEquivalentTo(new byte[] { 1, 2, 3 });
         mailBody.Attachments[0].ContentType.Should().Be("application/pdf");
+
+        // The same file is on the message attachments, which smtp: sends.
+        var onMessage = exchange.In.Attachments.Should().ContainSingle().Subject;
+        onMessage.Name.Should().Be("report.pdf");
+        onMessage.FileName.Should().Be("report.pdf");
+        onMessage.ContentType.Should().Be("application/pdf");
+        onMessage.Content.ReadAllBytes().Should().Equal(1, 2, 3);
+        onMessage.Headers.Should().ContainKey("Content-Disposition");
+    }
+
+    [Fact]
+    public void CreateExchange_AttachedMessage_IsOneMessageAttachment_WithItsBytes()
+    {
+        var inner = new MimeMessage();
+        inner.From.Add(new MailboxAddress("Carol", "carol@example.com"));
+        inner.Subject = "Forwarded";
+        inner.Body = new TextPart("plain") { Text = "inner text" };
+
+        var mime = new MimeMessage();
+        mime.Subject = "Fwd";
+        mime.Body = new Multipart("mixed")
+        {
+            new TextPart("plain") { Text = "see the forwarded mail" },
+            new MessagePart { Message = inner, ContentDisposition = new ContentDisposition(ContentDisposition.Attachment) { FileName = "fwd.eml" } },
+        };
+
+        var exchange = MailMessageHelper.CreateExchange(mime, "imap", "INBOX");
+
+        var attachment = exchange.In.Attachments.Should().ContainSingle().Subject;
+        attachment.FileName.Should().Be("fwd.eml");
+        attachment.ContentType.Should().Be("message/rfc822");
+        System.Text.Encoding.UTF8.GetString(attachment.Content.ReadAllBytes()).Should().Contain("Subject: Forwarded");
+        // MailMessageBody keeps decoded files only, as before.
+        ((MailMessageBody)exchange.In.Body!).Attachments.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void CreateExchange_FileNameWithDirectory_ReachesTheMessageAttachment_WithoutIt()
+    {
+        var mime = new MimeMessage();
+        mime.Body = new Multipart("mixed")
+        {
+            new TextPart("plain") { Text = "x" },
+            new MimePart("application", "octet-stream")
+            {
+                Content = new MimeContent(new MemoryStream(new byte[] { 0x00, 0xFF })),
+                ContentDisposition = new ContentDisposition(ContentDisposition.Attachment),
+                FileName = @"C:\Users\me\отчёт.bin",
+            },
+        };
+
+        var exchange = MailMessageHelper.CreateExchange(mime, "imap", "INBOX");
+
+        var attachment = exchange.In.Attachments.Should().ContainSingle().Subject;
+        attachment.Name.Should().Be("отчёт.bin");
+        attachment.FileName.Should().Be("отчёт.bin");
+        attachment.Content.ReadAllBytes().Should().Equal(0x00, 0xFF);
+    }
+
+    [Fact]
+    public void CreateExchange_FetchAttachmentsOff_LeavesTheMessageAttachmentsEmpty()
+    {
+        var mime = new MimeMessage();
+        mime.Body = new Multipart("mixed")
+        {
+            new TextPart("plain") { Text = "x" },
+            new MimePart("application", "pdf")
+            {
+                Content = new MimeContent(new MemoryStream(new byte[] { 1 })),
+                ContentDisposition = new ContentDisposition(ContentDisposition.Attachment),
+                FileName = "a.pdf",
+            },
+        };
+
+        var exchange = MailMessageHelper.CreateExchange(mime, "imap", "INBOX",
+            options: new MailEndpointOptions { FetchAttachments = false });
+
+        exchange.In.Attachments.Should().BeEmpty();
+        exchange.In.Headers[MailHeaders.AttachmentNames].Should().Be("a.pdf");
     }
 
     [Fact]

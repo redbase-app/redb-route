@@ -156,11 +156,22 @@ public sealed class SoapEndpointOptions : EndpointOptions
     /// <summary>Value of the <c>Retry-After</c> header on a shed request; 0 = do not send it. Default 1.</summary>
     public int RetryAfterSeconds { get; set; } = 1;
 
+    /// <summary>Default <see cref="MaxRequestBodySize"/>: 100 MB, room for MTOM attachments.</summary>
+    public const long DefaultMaxRequestBodySize = 100L * 1024 * 1024;
+
+    /// <summary>
+    /// Upper bound on a request body in bytes, MTOM attachments included; a larger request is refused by the HTTP
+    /// server before the consumer reads it. 0 = no bound. Default <see cref="DefaultMaxRequestBodySize"/>.
+    /// </summary>
+    public long MaxRequestBodySize { get; set; } = DefaultMaxRequestBodySize;
+
     /// <inheritdoc />
     public override void Validate()
     {
         // Ф0: minimal. Full fail-fast (version/operation/cert checks) lands with the producer/consumer.
         ConcurrencyLimitOptions.ValidateShape(MaxConcurrentRequests, RequestQueueLimit, RejectStatusCode, RetryAfterSeconds);
+        if (MaxRequestBodySize < 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxRequestBodySize), MaxRequestBodySize, "SOAP maxRequestBodySize must not be negative.");
     }
 }
 

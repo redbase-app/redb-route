@@ -8,11 +8,13 @@ namespace redb.Route.Tests.Components;
 /// <summary>
 /// Tests for the Mock component.
 /// </summary>
-public class MockComponentTests : IAsyncDisposable
+public class MockComponentTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

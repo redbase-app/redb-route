@@ -12,7 +12,7 @@ namespace redb.Route.Tests.Components;
 /// a compiled schema or stylesheet, a timer, a reference to a route) must not be closed for good by the stop (redb-route
 /// issue #12 was <c>seda:</c>).
 /// </summary>
-public sealed class BuiltInComponentRestartTests : IAsyncDisposable
+public sealed class BuiltInComponentRestartTests : IAsyncLifetime
 {
     private readonly RouteContext _context;
     private readonly string _dir = Directory.CreateTempSubdirectory("redb-restart-").FullName;
@@ -24,7 +24,11 @@ public sealed class BuiltInComponentRestartTests : IAsyncDisposable
         _context = new RouteContext(services.BuildServiceProvider(), "restart");
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    // IAsyncLifetime, not IAsyncDisposable: xUnit 2 never calls DisposeAsync of IAsyncDisposable on a test class, so the
+    // context (timers, Quartz, listeners) and the temporary directory outlived every test.
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         Directory.Delete(_dir, recursive: true);

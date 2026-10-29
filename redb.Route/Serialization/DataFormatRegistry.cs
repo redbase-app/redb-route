@@ -26,6 +26,9 @@ public sealed class DataFormatRegistry : IDataFormatRegistry
         Register(Base64MessageSerializer.DefaultContentType, new Base64MessageSerializer());
         Register(GZipMessageSerializer.DefaultContentType, new GZipMessageSerializer());
         Register(ZipMessageSerializer.DefaultContentType, new ZipMessageSerializer());
+
+        // HTML form data, also without dependencies: ConvertBody<FormBody>() right after an HTTP consumer.
+        Register(FormUrlEncodedMessageSerializer.DefaultContentType, new FormUrlEncodedMessageSerializer());
     }
 
     /// <inheritdoc />

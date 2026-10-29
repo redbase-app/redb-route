@@ -8,11 +8,13 @@ namespace redb.Route.Tests.Definitions;
 /// <summary>
 /// Tests for W5 F10 — RouteBuilder (class-based and inline) factory.
 /// </summary>
-public class RouteBuilderTests : IAsyncDisposable
+public class RouteBuilderTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

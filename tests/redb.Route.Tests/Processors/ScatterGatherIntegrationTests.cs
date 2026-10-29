@@ -18,7 +18,7 @@ namespace redb.Route.Tests.Processors;
 /// Tests the full pipeline: scatter (clone + send to each recipient) → gather (aggregate responses).
 /// </summary>
 [Trait("Category", "Integration")]
-public class ScatterGatherIntegrationTests : IAsyncDisposable
+public class ScatterGatherIntegrationTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
     private readonly List<IConsumer> _consumers = [];
@@ -486,7 +486,9 @@ public class ScatterGatherIntegrationTests : IAsyncDisposable
     // Dispose
     // ══════════════════════════════════════════════════════════════
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         foreach (var consumer in _consumers)
             if (consumer is IAsyncDisposable d)

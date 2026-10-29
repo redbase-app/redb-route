@@ -54,7 +54,9 @@ public class DebounceIntegrationTests
         var forwarded = new ConcurrentBag<object?>();
         var def = new RouteDefinition();
         def.From("direct://debounce");
-        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(150))
+        // The window is wide against the 30 ms gaps: with 150 ms a slow machine stretched a gap past the window and
+        // forwarded v1 as well.
+        def.Debounce(KeyFromHeader, TimeSpan.FromSeconds(1))
             .Process(e => forwarded.Add(e.In.Body))
             .End();
 
@@ -66,7 +68,7 @@ public class DebounceIntegrationTests
         await Task.Delay(30);
         await pipeline.Process(CreateExchange("v3", "A"));
 
-        await Task.Delay(400);
+        await Task.Delay(2_000);
 
         forwarded.Should().ContainSingle().Which.Should().Be("v3");
     }
@@ -124,7 +126,8 @@ public class DebounceIntegrationTests
         var def = new RouteDefinition();
         def.From("direct://debounce");
         def.Process(e => preProcessed.Add(e.In.Body));
-        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(100))
+        // Wide against the 30 ms gap, as in RapidFire: a slow machine stretched the gap past 100 ms.
+        def.Debounce(KeyFromHeader, TimeSpan.FromSeconds(1))
             .Process(e => forwarded.Add(e.In.Body))
             .End();
 
@@ -137,7 +140,7 @@ public class DebounceIntegrationTests
         // Pre-debounce processor runs for every message
         preProcessed.Should().HaveCount(2);
 
-        await Task.Delay(350);
+        await Task.Delay(2_000);
 
         // Post-debounce only gets the last
         forwarded.Should().ContainSingle().Which.Should().Be("msg2");
@@ -149,7 +152,8 @@ public class DebounceIntegrationTests
         var forwarded = new ConcurrentBag<string>();
         var def = new RouteDefinition();
         def.From("direct://debounce");
-        def.Debounce(KeyFromHeader, TimeSpan.FromMilliseconds(150))
+        // Wide against the burst: five calls in a row may take longer than 150 ms on a slow machine.
+        def.Debounce(KeyFromHeader, TimeSpan.FromSeconds(1))
             .Process(e =>
             {
                 var k = e.In.Headers["DebounceKey"]?.ToString() ?? "";
@@ -168,7 +172,7 @@ public class DebounceIntegrationTests
         await pipeline.Process(CreateExchange("b1", "B"));
         await pipeline.Process(CreateExchange("b2", "B"));
 
-        await Task.Delay(400);
+        await Task.Delay(2_000);
 
         forwarded.Should().HaveCount(2);
         forwarded.Should().Contain("A:a3");

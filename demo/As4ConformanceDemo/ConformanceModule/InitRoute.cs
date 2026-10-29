@@ -91,8 +91,11 @@ public static class InitRoute
             SigningCertificate = settings.SutKey,
             DecryptionCertificates = { settings.SutKey },
         };
+        var testDriverController = settings.TestDriverControllerCertificate is { } controllerCertificate
+            ? X509CertificateLoader.LoadCertificate(controllerCertificate.Export(X509ContentType.Cert))
+            : testDriver;
         foreach (var command in new[] { "Submit", "Deliver", "Notify" })
-            controller.Partners.Add(Agreement(command, settings.TestDriverControllerPartyId, ConformanceLegs.CommandService, command, testDriver));
+            controller.Partners.Add(Agreement(command, settings.TestDriverControllerPartyId, ConformanceLegs.CommandService, command, testDriverController));
         context.AddToRegistry("controller", controller);
 
         // Reception awareness: a resend gets its receipt again and reaches no route. Receive:DuplicateStore says where
@@ -213,7 +216,7 @@ public static class InitRoute
     /// reply leg has the values of the request leg, since a Two-Way test answers under the same service and action.
     /// </summary>
     private static As4Partner Agreement(string name, string partyId, string service, string action, X509Certificate2 certificate,
-        As4KeyReference keyReference = As4KeyReference.BinarySecurityToken) => new()
+        As4KeyReference keyReference = As4KeyReference.IssuerSerial) => new()
     {
         Name = name,
         PartyId = partyId,

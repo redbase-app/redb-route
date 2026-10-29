@@ -27,7 +27,15 @@ internal static class As4SecurityEngine
         var security = SecurityHeader(message.Envelope);
         var decrypted = new List<string>();
 
-        foreach (var encryptedKey in Children(security, "EncryptedKey", WsSecurityNames.Xenc))
+        // One session key for all payloads, as eDelivery AS4 1.16 encrypts and as Domibus, Holodeck B2B and this
+        // connector send. Every xenc:EncryptedKey costs an RSA private-key operation and anyone can encrypt for our
+        // certificate, so more of them are refused before the first is opened: a large envelope full of keys would
+        // otherwise buy seconds of CPU per request.
+        var encryptedKeys = Children(security, "EncryptedKey", WsSecurityNames.Xenc).ToList();
+        if (encryptedKeys.Count > 1)
+            throw new CryptographicException($"The security header carries {encryptedKeys.Count} xenc:EncryptedKey elements, not one.");
+
+        foreach (var encryptedKey in encryptedKeys)
         {
             var keyInfo = SecurityTokenResolver.FirstChild(encryptedKey, "KeyInfo", WsSecurityNames.Ds)
                 ?? throw new CryptographicException("xenc:EncryptedKey has no ds:KeyInfo.");
@@ -47,7 +55,8 @@ internal static class As4SecurityEngine
                     throw new CryptographicException($"xenc:DataReference '{uri}' does not point into the message.");
                 var encryptedData = SecurityTokenResolver.FindById(message.Envelope, uri[1..], "EncryptedData", WsSecurityNames.Xenc)
                     ?? throw new CryptographicException($"No xenc:EncryptedData carries the id '{uri[1..]}'.");
-                decrypted.Add(DecryptAttachment(encryptedData, sessionKey, message));
+                var id = DecryptAttachment(encryptedData, sessionKey, message, decrypted);
+                decrypted.Add(id);
             }
         }
 
@@ -75,7 +84,7 @@ internal static class As4SecurityEngine
         return rsa.Decrypt(cipher, RSAEncryptionPadding.OaepSHA256);
     }
 
-    private static string DecryptAttachment(XmlElement encryptedData, byte[] sessionKey, SwaMessage message)
+    private static string DecryptAttachment(XmlElement encryptedData, byte[] sessionKey, SwaMessage message, IReadOnlyList<string> done)
     {
         if (encryptedData.GetAttribute("Type") != WsSecurityNames.AttachmentContentOnly)
             throw new CryptographicException($"xenc:EncryptedData of type '{encryptedData.GetAttribute("Type")}' is not supported.");
@@ -95,6 +104,9 @@ internal static class As4SecurityEngine
         var id = WsSecurityNames.ContentId(uri);
         if (!message.Parts.TryGetValue(id, out var part))
             throw new CryptographicException($"The message has no MIME part with Content-ID '{id}'.");
+        // Each part is decrypted once: references that name it again would read the whole part again for each.
+        if (done.Contains(id, StringComparer.Ordinal))
+            throw new CryptographicException($"The MIME part '{id}' is referenced for decryption more than once.");
 
         // GCM authenticates only at the end: the plaintext goes to a spool that is discarded unless the tag verifies.
         part.Replace(message.Spooled(output => AesGcmCipher.Decrypt(sessionKey, part.OpenRead(), output)));

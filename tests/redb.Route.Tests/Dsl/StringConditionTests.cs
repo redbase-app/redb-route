@@ -15,11 +15,13 @@ namespace redb.Route.Tests.Dsl;
 // Shares the process-wide ExpressionResolver caches with the other expression tests, so it runs
 // in the same collection: cache-statistics assertions there are global and must not race.
 [Collection("ExpressionResolver")]
-public class StringConditionTests : IAsyncDisposable
+public class StringConditionTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

@@ -102,7 +102,7 @@ public class TcpProducerTests : IAsyncLifetime
 
         var exchange = new Exchange(new Message("hello"));
         await producer.Process(exchange);
-        await Task.Delay(100);
+        await TestWait.Until(() => _lastReceivedText == "hello");
 
         _lastReceivedText.Should().Be("hello");
         await producer.Stop();
@@ -117,7 +117,7 @@ public class TcpProducerTests : IAsyncLifetime
         var data = Encoding.UTF8.GetBytes("binary hello");
         var exchange = new Exchange(new Message(data));
         await producer.Process(exchange);
-        await Task.Delay(100);
+        await TestWait.Until(() => _lastReceivedText == "binary hello");
 
         _lastReceivedText.Should().Be("binary hello");
         await producer.Stop();
@@ -133,7 +133,7 @@ public class TcpProducerTests : IAsyncLifetime
         var data = new byte[] { 1, 2, 3, 4, 5 };
         var exchange = new Exchange(new Message(data));
         await producer.Process(exchange);
-        await Task.Delay(100);
+        await TestWait.Until(() => { lock (_receivedMessages) return _receivedMessages.Count >= 1; });
 
         lock (_receivedMessages)
             _receivedMessages.Should().ContainSingle().Which.Should().BeEquivalentTo(data);
@@ -149,7 +149,7 @@ public class TcpProducerTests : IAsyncLifetime
 
         var exchange = new Exchange(new Message("raw msg"));
         await producer.Process(exchange);
-        await Task.Delay(100);
+        await TestWait.Until(() => { lock (_receivedMessages) return _receivedMessages.Count > 0; });
 
         lock (_receivedMessages)
             _receivedMessages.Should().HaveCountGreaterThan(0);
@@ -187,7 +187,7 @@ public class TcpProducerTests : IAsyncLifetime
             await producer.Process(exchange);
         }
 
-        await Task.Delay(200);
+        await TestWait.Until(() => { lock (_receivedMessages) return _receivedMessages.Count >= 5; });
         lock (_receivedMessages) _receivedMessages.Should().HaveCount(5);
         await producer.Stop();
     }
@@ -242,7 +242,7 @@ public class TcpProducerTests : IAsyncLifetime
 
         var exchange = new Exchange(new Message(null));
         await producer.Process(exchange);
-        await Task.Delay(100);
+        await TestWait.Until(() => { lock (_receivedMessages) return _receivedMessages.Count >= 1; });
 
         lock (_receivedMessages) _receivedMessages.Should().HaveCount(1);
         await producer.Stop();
@@ -257,7 +257,7 @@ public class TcpProducerTests : IAsyncLifetime
         var stream = new MemoryStream(Encoding.UTF8.GetBytes("from stream"));
         var exchange = new Exchange(new Message(stream));
         await producer.Process(exchange);
-        await Task.Delay(100);
+        await TestWait.Until(() => _lastReceivedText == "from stream");
 
         _lastReceivedText.Should().Be("from stream");
         await producer.Stop();
@@ -272,7 +272,7 @@ public class TcpProducerTests : IAsyncLifetime
 
         var exchange = new Exchange(new Message("pipe delimited"));
         await producer.Process(exchange);
-        await Task.Delay(100);
+        await TestWait.Until(() => _lastReceivedText == "pipe delimited");
 
         _lastReceivedText.Should().Be("pipe delimited");
         await producer.Stop();

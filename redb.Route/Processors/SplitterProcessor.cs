@@ -300,6 +300,8 @@ public class SplitterProcessor : IProcessor
         // Copy headers from original
         foreach (var header in original.In.Headers)
             splitMessage.Headers[header.Key] = header.Value;
+        // and the attachments, as Camel's split copies the exchange: every part carries them, content shared.
+        MessageAttachments.CopyInto(original.In, splitMessage);
 
         // Set split metadata headers
         splitMessage.Headers["CamelSplitIndex"] = index;

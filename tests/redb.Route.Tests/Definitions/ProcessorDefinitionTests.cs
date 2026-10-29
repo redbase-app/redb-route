@@ -8,11 +8,13 @@ namespace redb.Route.Tests.Definitions;
 /// <summary>
 /// Tests for W5 ProcessorDefinition migration: F0-F1 foundations.
 /// </summary>
-public class ProcessorDefinitionTests : IAsyncDisposable
+public class ProcessorDefinitionTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

@@ -9,7 +9,7 @@ namespace redb.Route.Tests.Cluster;
 /// Verifies the startup-check warning emitted when a route declares <c>.Cluster(true)</c>
 /// but no <see cref="redb.Route.Abstractions.IRoutePolicyFactory"/> is registered.
 /// </summary>
-public class StartupWarningTests : IAsyncDisposable
+public class StartupWarningTests : IAsyncLifetime
 {
     private readonly CapturingLoggerProvider _capture = new();
     private readonly RouteContext _context;
@@ -20,7 +20,9 @@ public class StartupWarningTests : IAsyncDisposable
         _context = new RouteContext(loggerFactory: lf, options: new RouteEngineOptions { StartupChecks = true });
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

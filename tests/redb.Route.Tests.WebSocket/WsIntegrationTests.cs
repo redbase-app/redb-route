@@ -79,7 +79,7 @@ public class WsIntegrationTests : IAsyncLifetime
         var (consumer, producer) = await CreatePair(WsMessageType.Text);
 
         await producer.Process(new Exchange(new Message("integration hello")));
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange.Should().NotBeNull();
         _lastExchange!.In.Body.Should().Be("integration hello");
@@ -93,7 +93,7 @@ public class WsIntegrationTests : IAsyncLifetime
         for (var i = 0; i < 10; i++)
             await producer.Process(new Exchange(new Message($"batch-{i}")));
 
-        await Task.Delay(400);
+        await TestWait.Until(() => consumer.ProcessedCount >= 10);
 
         lock (_capturedExchanges) _capturedExchanges.Should().HaveCount(10);
         consumer.ProcessedCount.Should().Be(10);
@@ -108,7 +108,7 @@ public class WsIntegrationTests : IAsyncLifetime
 
         var data = new byte[] { 0xAA, 0xBB, 0xCC };
         await producer.Process(new Exchange(new Message(data)));
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange.Should().NotBeNull();
         ((byte[])_lastExchange!.In.Body!).Should().BeEquivalentTo(data);
@@ -122,7 +122,7 @@ public class WsIntegrationTests : IAsyncLifetime
         for (var i = 0; i < 5; i++)
             await producer.Process(new Exchange(new Message(new byte[] { (byte)i })));
 
-        await Task.Delay(300);
+        await TestWait.Until(() => { lock (_capturedExchanges) return _capturedExchanges.Count >= 5; });
 
         lock (_capturedExchanges) _capturedExchanges.Should().HaveCount(5);
     }
@@ -177,7 +177,7 @@ public class WsIntegrationTests : IAsyncLifetime
         var (consumer, producer) = await CreatePair();
 
         await producer.Process(new Exchange(new Message("hdr test")));
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         var h = _lastExchange!.In.Headers;
         h[WsHeaders.RemoteAddress].Should().NotBeNull();
@@ -199,7 +199,7 @@ public class WsIntegrationTests : IAsyncLifetime
         var largeData = new byte[64 * 1024];
         Random.Shared.NextBytes(largeData);
         await producer.Process(new Exchange(new Message(largeData)));
-        await Task.Delay(500);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange.Should().NotBeNull();
         ((byte[])_lastExchange!.In.Body!).Should().HaveCount(64 * 1024);
@@ -213,7 +213,7 @@ public class WsIntegrationTests : IAsyncLifetime
         var (consumer, producer) = await CreatePair(WsMessageType.Text);
 
         await producer.Process(new Exchange(new Message(null)));
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange.Should().NotBeNull();
         _lastExchange!.In.Body.Should().Be("");
@@ -228,7 +228,7 @@ public class WsIntegrationTests : IAsyncLifetime
 
         var ms = new MemoryStream(Encoding.UTF8.GetBytes("from-stream"));
         await producer.Process(new Exchange(new Message(ms)));
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange!.In.Body.Should().Be("from-stream");
     }

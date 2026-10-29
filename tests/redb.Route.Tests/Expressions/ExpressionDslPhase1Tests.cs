@@ -11,11 +11,13 @@ namespace redb.Route.Tests.Expressions;
 /// Tests for the expression DSL: string forms of Loop / Delay / Throttle and the Expr(...) forms of
 /// SetProperty / SetBody / SetHeader / Transform.
 /// </summary>
-public class ExpressionDslPhase1Tests : IAsyncDisposable
+public class ExpressionDslPhase1Tests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

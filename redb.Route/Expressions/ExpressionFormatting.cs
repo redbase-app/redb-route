@@ -20,7 +20,9 @@ internal static class ExpressionFormatting
 
         try
         {
-            return CultureInfo.GetCultureInfo(name);
+            // predefinedOnly: ICU (Linux, macOS) builds a culture from any well-formed tag, 'kl-INGON' included, with
+            // the formats of its language or of none; only the list of known cultures turns such a name down.
+            return CultureInfo.GetCultureInfo(name, predefinedOnly: true);
         }
         catch (CultureNotFoundException ex)
         {

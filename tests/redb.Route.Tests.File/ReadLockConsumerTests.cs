@@ -152,7 +152,8 @@ public class ReadLockConsumerTests : IDisposable
         bodies.Should().ContainSingle().Which.Should().Be("STREAMED");
     }
 
-    [Fact]
+    [WindowsFact("FileLock excludes other readers on Windows only: Linux and macOS have advisory locks, "
+        + "a reader that does not ask for a lock opens the file anyway (README, Read Lock Strategies).")]
     public async Task FileLock_KeepsOtherReadersOut_WhileHeld()
     {
         var path = CreateFile("order.csv", "PAYLOAD");

@@ -11,11 +11,13 @@ namespace redb.Route.Tests.Xml;
 /// A repository declared as a bean in markup is the one <c>repository="#name"</c> refers to: the name is the registry
 /// key as is, for idempotent repositories as for every other reference.
 /// </summary>
-public class RepositoryBeanReferenceTests : IAsyncDisposable
+public class RepositoryBeanReferenceTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

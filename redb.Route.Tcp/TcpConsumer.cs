@@ -259,7 +259,7 @@ public sealed class TcpConsumer : IConsumer
                 try
                 {
                     data = await TcpCodec.ReadMessageAsync(
-                        stream, _options.Framing, _options.Delimiter, _options.ReceiveBufferSize, ct)
+                        stream, _options.Framing, _options.Delimiter, _options.ReadChunkSize, ct)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { break; }
@@ -363,8 +363,7 @@ public sealed class TcpConsumer : IConsumer
     private void ConfigureClient(TcpClient client)
     {
         client.NoDelay = _options.NoDelay;
-        client.ReceiveBufferSize = _options.ReceiveBufferSize;
-        client.SendBufferSize = _options.SendBufferSize;
+        _options.ApplyBufferSizes(client);
         client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, _options.KeepAlive);
     }
 }

@@ -7,11 +7,13 @@ namespace redb.Route.Tests.Core;
 /// <summary>
 /// Tests that IRouteContext is properly propagated from RouteBuilder → RouteDefinition → scopes → extensions.
 /// </summary>
-public class RouteContextPropagationTests : IAsyncDisposable
+public class RouteContextPropagationTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.Stop();
     }

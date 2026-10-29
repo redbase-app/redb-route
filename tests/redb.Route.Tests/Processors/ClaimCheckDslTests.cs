@@ -9,11 +9,13 @@ namespace redb.Route.Tests.Processors;
 /// Tests for the <c>.ClaimCheck(...)</c> DSL: the Claim Check EIP reached from a route,
 /// including repository resolution (explicit instance, named registry entry, context default).
 /// </summary>
-public class ClaimCheckDslTests : IAsyncDisposable
+public class ClaimCheckDslTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

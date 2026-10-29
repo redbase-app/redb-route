@@ -15,14 +15,16 @@ namespace redb.Route.Tests.Xml;
 /// unknown attribute in the editor, the package gate refuses the unknown name at <c>check --bin</c>
 /// — and a foreign-namespace attribute, which the format tolerates as metadata, is never an option.
 /// </summary>
-public sealed class StrictEndpointParametersTests : IAsyncDisposable
+public sealed class StrictEndpointParametersTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
     private readonly string _root = Path.Combine(Path.GetTempPath(), "redb-xml-strict-" + Guid.NewGuid().ToString("N"));
 
     public StrictEndpointParametersTests() => Directory.CreateDirectory(_root);
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         Directory.Delete(_root, recursive: true);

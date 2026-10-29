@@ -12,11 +12,13 @@ namespace redb.Route.Tests.Xml;
 /// letter channel, a threads scope with a bounded queue, a metered scope split by tags.
 /// Behaviour where the engine can show it, generated C# where the setting only travels.
 /// </summary>
-public class RetryAndScopeKnobsTests : IAsyncDisposable
+public class RetryAndScopeKnobsTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

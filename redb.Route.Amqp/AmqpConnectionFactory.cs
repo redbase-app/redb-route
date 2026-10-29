@@ -14,7 +14,10 @@ public sealed class AmqpConnectionFactory
 {
     // ── Connection coordinates ──
 
-    /// <summary>Broker host (default: localhost). Comma-separated for failover.</summary>
+    /// <summary>
+    /// Broker host (default: localhost). In a comma-separated list the connection opens to the first host; the others
+    /// are not tried.
+    /// </summary>
     public string Host { get; set; } = "localhost";
 
     /// <summary>AMQP port (default: 5672, or 5671 for AMQPS).</summary>
@@ -145,7 +148,8 @@ public sealed class AmqpConnectionFactory
     }
 
     /// <summary>
-    /// Parses comma-separated hosts and returns an array of addresses for failover.
+    /// Parses comma-separated hosts and returns one address per host, in list order. The component connects to the
+    /// first one.
     /// </summary>
     public global::Amqp.Address[] GetAddresses()
     {

@@ -86,6 +86,89 @@ public sealed class As4RouteXmlTests : IDisposable
         (await delivered.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("a");
     }
 
+    [Fact]
+    public async Task APartnerWithAnAddressInXml_IsSentToThere_FromAnEndpointWithoutOne()
+    {
+        // The address belongs to the agreement, as Protocol.Address belongs to a P-Mode: the markup sends to as4:?partner=a.
+        File.WriteAllBytes(Path.Combine(_dir, "b.pfx"), NodeB.Export(X509ContentType.Pfx, Password));
+        File.WriteAllBytes(Path.Combine(_dir, "a.cer"), NodeA.Export(X509ContentType.Cert));
+        var port = global::redb.Route.Tests.Shared.TestPorts.Next();
+        const string certificate = "System.Security.Cryptography.X509Certificates.X509Certificate2, System.Security.Cryptography";
+
+        await using var context = new RouteContext();
+        context.AddComponent(new As4Component());
+        // Node a, in C#: it receives what node b sends.
+        context.AddToRegistry("a", new As4ConnectionFactory
+        {
+            OurPartyId = "urn:redb:a",
+            ExternalHostName = "a.example",
+            SigningCertificate = NodeA,
+            DecryptionCertificates = { NodeA },
+            Partners =
+            {
+                new As4Partner
+                {
+                    Name = "b",
+                    PartyId = "urn:redb:b",
+                    Service = "urn:example",
+                    Action = "Submit",
+                    PartnerSigningCertificates = { As4TestMessages.PublicOnly(NodeB) },
+                    PartnerEncryptionCertificate = As4TestMessages.PublicOnly(NodeB),
+                    RequireFourCornerProperties = false,
+                },
+            },
+        });
+        context.AddIdempotentRepository("dedup", new InMemoryIdempotentRepository());
+        var delivered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        context.AddRoutes(r => r.From($"as4:/as4/in?host=127.0.0.1&port={port}&connectionFactory=a&idempotentRepository=dedup")
+            .Process(e => delivered.TrySetResult(e.In.GetHeader<string>(As4Headers.Partner)!)));
+
+        context.AddXmlContextFromContent($"""
+            <context xmlns="urn:redb:route:1.0">
+              <bean name="partner-a" type="redb.Route.As4.As4Partner, redb.Route.As4">
+                <property key="Name" value="a"/>
+                <property key="PartyId" value="urn:redb:a"/>
+                <property key="Address" value="http://127.0.0.1:{port}/as4/in"/>
+                <property key="RequireFourCornerProperties" value="false"/>
+                <property key="Service" value="urn:example"/>
+                <property key="Action" value="Submit"/>
+                <property key="PartnerSigningCertificates">
+                  <list><bean type="{certificate}"><constructorArg type="System.String" value="{_dir}/a.cer"/></bean></list>
+                </property>
+                <property key="PartnerEncryptionCertificate">
+                  <bean type="{certificate}"><constructorArg type="System.String" value="{_dir}/a.cer"/></bean>
+                </property>
+              </bean>
+              <bean name="b-key" type="{certificate}">
+                <constructorArg type="System.String" value="{_dir}/b.pfx"/>
+                <constructorArg type="System.String" value="{Password}"/>
+              </bean>
+              <bean name="b" type="redb.Route.As4.As4ConnectionFactory, redb.Route.As4">
+                <property key="OurPartyId" value="urn:redb:b"/>
+                <property key="ExternalHostName" value="b.example"/>
+                <property key="SigningCertificate" ref="b-key"/>
+                <property key="DecryptionCertificates"><list><ref bean="b-key"/></list></property>
+                <property key="Partners"><list><ref bean="partner-a"/></list></property>
+              </bean>
+            </context>
+            """);
+        context.AddXmlRoutesFromContent("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="as4-out">
+                <from uri="direct://as4-outbound"/>
+                <to uri="as4:?connectionFactory=b&amp;partner=a"/>
+              </route>
+            </routes>
+            """);
+        await context.Start();
+
+        var template = new ProducerTemplate(context);
+        template.Start();
+        await template.SendAsync("direct://as4-outbound", "<invoice/>");
+
+        (await delivered.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("b");
+    }
+
     private async Task<(string? ErrorCode, bool Receipt)> Post(int port)
     {
         const string contentId = "p1@a.example";

@@ -30,7 +30,7 @@ public sealed class RedisBinaryBodyTests
 
         await producer.Process(new Exchange(new Message(Binary)));
 
-        var db = (await ConnectionMultiplexer.ConnectAsync(ConnectionString)).GetDatabase();
+        var db = await TestRedis.Database();
         ((byte[]?)await db.StringGetAsync(key)).Should().Equal(Binary);
         await db.KeyDeleteAsync(key);
         await producer.Stop();
@@ -45,7 +45,7 @@ public sealed class RedisBinaryBodyTests
 
         await producer.Process(new Exchange(new Message(Binary)));
 
-        var db = (await ConnectionMultiplexer.ConnectAsync(ConnectionString)).GetDatabase();
+        var db = await TestRedis.Database();
         ((byte[]?)await db.StringGetAsync(key)).Should().Equal(Binary);
         await db.KeyDeleteAsync(key);
         await producer.Stop();

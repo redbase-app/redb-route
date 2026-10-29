@@ -362,6 +362,67 @@ public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, 
         return Self;
     }
 
+    // ── Attachments ──────────────────────────────────────────────────────────
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachment(string, IExpression, string?, string?)"/>
+    public TSelf AddAttachment(string name, IExpression content, string? fileName = null, string? contentType = null)
+    {
+        AddOutput(AddAttachmentDefinition.FromExpression(name, content, AddAttachmentDefinition.Literal(fileName), contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachment(string, IExpression, IExpression, string?)"/>
+    public TSelf AddAttachment(string name, IExpression content, IExpression fileName, string? contentType = null)
+    {
+        ArgumentNullException.ThrowIfNull(fileName);
+        AddOutput(AddAttachmentDefinition.FromExpression(name, content, fileName, contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachmentFromBody(string, string?, string?)"/>
+    public TSelf AddAttachmentFromBody(string name, string? fileName = null, string? contentType = null)
+    {
+        AddOutput(AddAttachmentDefinition.FromBody(name, AddAttachmentDefinition.Literal(fileName), contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachmentFromBody(string, IExpression, string?)"/>
+    public TSelf AddAttachmentFromBody(string name, IExpression fileName, string? contentType = null)
+    {
+        ArgumentNullException.ThrowIfNull(fileName);
+        AddOutput(AddAttachmentDefinition.FromBody(name, fileName, contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachmentFromFile(string, string?, string?)"/>
+    public TSelf AddAttachmentFromFile(string path, string? name = null, string? contentType = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        AddOutput(AddAttachmentDefinition.FromFile(AddAttachmentDefinition.Literal(path)!, name, contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachmentFromFile(IExpression, string?, string?)"/>
+    public TSelf AddAttachmentFromFile(IExpression path, string? name = null, string? contentType = null)
+    {
+        AddOutput(AddAttachmentDefinition.FromFile(path, name, contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.RemoveAttachment"/>
+    public TSelf RemoveAttachment(string name)
+    {
+        AddOutput(new RemoveAttachmentDefinition(name));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.RemoveAttachments"/>
+    public TSelf RemoveAttachments()
+    {
+        AddOutput(new RemoveAttachmentsDefinition());
+        return Self;
+    }
+
     // ── Properties ───────────────────────────────────────────────────────────
 
     /// <inheritdoc />

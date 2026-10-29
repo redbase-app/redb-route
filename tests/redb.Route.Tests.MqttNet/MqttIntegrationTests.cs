@@ -517,7 +517,7 @@ public sealed class MqttIntegrationTests
             try
             {
                 var exchange = new Exchange(new Message("overridden"));
-                exchange.In.Headers[MqttHeaders.Topic] = actualTopic;
+                exchange.In.Headers[MqttHeaders.OverrideTopic] = actualTopic;
                 await ((IProducer)producer).Process(exchange);
 
                 await Task.WhenAny(tcs.Task, Task.Delay(15_000));

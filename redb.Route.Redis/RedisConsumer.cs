@@ -42,6 +42,49 @@ public sealed class RedisConsumer : DrainableConsumer
         _options = options ?? throw new ArgumentNullException(nameof(options));
     }
 
+    // Set up by OnStarting, read by the loop RunAsync starts.
+    private ISubscriber? _subscriber;
+    private ChannelMessageQueue? _queue;
+    private RedisChannel _channel;
+    private IDatabase? _db;
+    private RedisValue _streamPosition;
+
+    /// <summary>
+    /// Everything a message depends on is in place before <see cref="DrainableConsumer.Start"/> returns: the pub/sub
+    /// subscription, the consumer group, the XREAD position. Done in the loop, after Start, it lost whatever was
+    /// published or added in between. A Redis that does not answer fails Start, naming this consumer; it used to leave a
+    /// started consumer that never received anything.
+    /// </summary>
+    protected override async Task OnStarting(CancellationToken ct)
+    {
+        try
+        {
+            switch (_endpoint.OperationType)
+            {
+                case RedisOperationType.SUBSCRIBE or RedisOperationType.PSUBSCRIBE:
+                    await SubscribeAsync(ct).ConfigureAwait(false);
+                    break;
+                case RedisOperationType.XREAD or RedisOperationType.XGROUP:
+                    await PrepareStreamAsync(ct).ConfigureAwait(false);
+                    break;
+                case RedisOperationType.BLPOP or RedisOperationType.BRPOP:
+                    // A list keeps its items, nothing to set up; the round trip only proves Redis answers.
+                    _db = await _endpoint.GetDatabaseAsync(ct).ConfigureAwait(false);
+                    await _db.PingAsync().ConfigureAwait(false);
+                    break;
+                default:
+                    throw new NotSupportedException(
+                        $"Consumer not supported for operation {_endpoint.OperationType}. " +
+                        "Only SUBSCRIBE/PSUBSCRIBE, XREAD/XGROUP, BLPOP/BRPOP are supported.");
+            }
+        }
+        catch (Exception ex) when (ex is RedisException or TimeoutException)
+        {
+            throw new InvalidOperationException(
+                $"Redis consumer {ConsumerName} cannot start, Redis did not answer: {ex.Message}", ex);
+        }
+    }
+
     /// <inheritdoc />
     protected override Task RunAsync(CancellationToken pollCt, CancellationToken processingCt)
     {
@@ -63,24 +106,28 @@ public sealed class RedisConsumer : DrainableConsumer
     // Pub/Sub
     // ═══════════════════════════════════════════════════════════
 
-    private async Task RunPubSubConsumerAsync(CancellationToken pollCt, CancellationToken processingCt)
+    private async Task SubscribeAsync(CancellationToken ct)
     {
-        var subscriber = await _endpoint.GetSubscriberAsync(processingCt).ConfigureAwait(false);
+        _subscriber = await _endpoint.GetSubscriberAsync(ct).ConfigureAwait(false);
         var channel = _options.Channel ?? _endpoint.Resource;
 
         // PSUBSCRIBE is a pattern subscription by itself; usePattern makes SUBSCRIBE one too.
         var pattern = _endpoint.OperationType == RedisOperationType.PSUBSCRIBE || _options.UsePattern;
-        var redisChannel = pattern
+        _channel = pattern
             ? new RedisChannel(channel, RedisChannel.PatternMode.Pattern)
             : new RedisChannel(channel, RedisChannel.PatternMode.Literal);
 
-        ChannelMessageQueue? queue = null;
+        _queue = await _subscriber.SubscribeAsync(_channel).ConfigureAwait(false);
+        Logger?.LogInformation("Redis subscribed to channel: {Channel} (pattern={Pattern})", channel, pattern);
+    }
+
+    private async Task RunPubSubConsumerAsync(CancellationToken pollCt, CancellationToken processingCt)
+    {
+        var subscriber = _subscriber!;
+        var queue = _queue!;
+        var redisChannel = _channel;
         try
         {
-            queue = await subscriber.SubscribeAsync(redisChannel).ConfigureAwait(false);
-
-            Logger?.LogInformation("Redis subscribed to channel: {Channel} (pattern={Pattern})", channel, pattern);
-
             while (!pollCt.IsCancellationRequested)
             {
                 var msg = await queue.ReadAsync(pollCt).ConfigureAwait(false);
@@ -90,15 +137,13 @@ public sealed class RedisConsumer : DrainableConsumer
         catch (OperationCanceledException) { /* normal shutdown */ }
         catch (Exception ex)
         {
-            Logger?.LogError(ex, "Error in Redis Pub/Sub consumer for channel {Channel}", channel);
+            Logger?.LogError(ex, "Error in Redis Pub/Sub consumer for channel {Channel}", redisChannel.ToString());
         }
         finally
         {
-            if (queue != null)
-            {
-                try { await subscriber.UnsubscribeAsync(redisChannel).ConfigureAwait(false); }
-                catch (Exception ex) { Logger?.LogWarning(ex, "Error unsubscribing from Redis channel"); }
-            }
+            try { await subscriber.UnsubscribeAsync(redisChannel).ConfigureAwait(false); }
+            catch (Exception ex) { Logger?.LogWarning(ex, "Error unsubscribing from Redis channel"); }
+            _queue = null;
         }
     }
 
@@ -134,12 +179,11 @@ public sealed class RedisConsumer : DrainableConsumer
     // Streams (XREAD / XGROUP)
     // ═══════════════════════════════════════════════════════════
 
-    private async Task RunStreamConsumerAsync(CancellationToken pollCt, CancellationToken processingCt)
+    private async Task PrepareStreamAsync(CancellationToken ct)
     {
-        var db = await _endpoint.GetDatabaseAsync(processingCt).ConfigureAwait(false);
+        var db = _db = await _endpoint.GetDatabaseAsync(ct).ConfigureAwait(false);
         var streamName = _options.StreamName ?? _endpoint.Resource;
         var consumerGroup = _options.ConsumerGroup;
-        var consumerName = _options.ConsumerName ?? Environment.MachineName;
 
         // Create consumer group if needed
         if (!string.IsNullOrEmpty(consumerGroup))
@@ -150,7 +194,9 @@ public sealed class RedisConsumer : DrainableConsumer
                 await db.StreamCreateConsumerGroupAsync(
                     streamName,
                     consumerGroup,
-                    _options.StreamStartPosition is { } start ? start : null,
+                    // RedisValue? explicitly: a null string converts to RedisValue.Null, which XGROUP CREATE refuses
+                    // ("A null value is not valid"), and a group consumer without streamStartPosition never started.
+                    _options.StreamStartPosition is { } start ? (RedisValue?)start : null,
                     createStream: true).ConfigureAwait(false);
 
                 Logger?.LogInformation("Redis stream consumer group created: {Group} for {Stream}",
@@ -163,9 +209,18 @@ public sealed class RedisConsumer : DrainableConsumer
         }
 
         // Without a group the position is this consumer's to keep, and it moves past every entry read.
-        var position = string.IsNullOrEmpty(consumerGroup)
+        _streamPosition = string.IsNullOrEmpty(consumerGroup)
             ? await StartPositionAsync(db, streamName).ConfigureAwait(false)
             : default;
+    }
+
+    private async Task RunStreamConsumerAsync(CancellationToken pollCt, CancellationToken processingCt)
+    {
+        var db = _db!;
+        var streamName = _options.StreamName ?? _endpoint.Resource;
+        var consumerGroup = _options.ConsumerGroup;
+        var consumerName = _options.ConsumerName ?? Environment.MachineName;
+        var position = _streamPosition;
         RedisValue claimCursor = "0-0";
 
         Logger?.LogInformation("Redis stream consumer started: stream={Stream}, group={Group}, consumer={Consumer}",
@@ -315,7 +370,7 @@ public sealed class RedisConsumer : DrainableConsumer
 
     private async Task RunListConsumerAsync(CancellationToken pollCt, CancellationToken processingCt)
     {
-        var db = await _endpoint.GetDatabaseAsync(processingCt).ConfigureAwait(false);
+        var db = _db!;
         var key = _options.Key ?? _endpoint.Resource;
 
         // BLPOP takes from the head, BRPOP from the tail. Both poll: a blocking pop would hold the multiplexed

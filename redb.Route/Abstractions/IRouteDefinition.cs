@@ -159,6 +159,41 @@ public interface IRouteDefinition : IProcessorDefinition
     /// <summary>Removes a header.</summary>
     IRouteDefinition RemoveHeader(string key);
 
+    // ── Attachments ──
+
+    /// <summary>
+    /// Adds an attachment to the message with the value of <paramref name="content"/> (<c>byte[]</c>, <c>string</c> as
+    /// UTF-8, a <c>Stream</c>, an <see cref="AttachmentContent"/>). The text arguments are literal.
+    /// </summary>
+    IRouteDefinition AddAttachment(string name, IExpression content, string? fileName = null, string? contentType = null);
+
+    /// <summary>As <see cref="AddAttachment(string, IExpression, string?, string?)"/> with the file name evaluated per message.</summary>
+    IRouteDefinition AddAttachment(string name, IExpression content, IExpression fileName, string? contentType = null);
+
+    /// <summary>
+    /// Adds the message body as an attachment; the body stays. The content type defaults to the message's. The text
+    /// arguments are literal.
+    /// </summary>
+    IRouteDefinition AddAttachmentFromBody(string name, string? fileName = null, string? contentType = null);
+
+    /// <summary>As <see cref="AddAttachmentFromBody(string, string?, string?)"/> with the file name evaluated per message.</summary>
+    IRouteDefinition AddAttachmentFromBody(string name, IExpression fileName, string? contentType = null);
+
+    /// <summary>
+    /// Adds the file at <paramref name="path"/> as an attachment, read from disk whenever it is sent; the name and file
+    /// name default to the file's name. The text arguments are literal.
+    /// </summary>
+    IRouteDefinition AddAttachmentFromFile(string path, string? name = null, string? contentType = null);
+
+    /// <summary>As <see cref="AddAttachmentFromFile(string, string?, string?)"/> with the path evaluated per message.</summary>
+    IRouteDefinition AddAttachmentFromFile(IExpression path, string? name = null, string? contentType = null);
+
+    /// <summary>Removes the attachments named <paramref name="name"/>.</summary>
+    IRouteDefinition RemoveAttachment(string name);
+
+    /// <summary>Removes every attachment of the message.</summary>
+    IRouteDefinition RemoveAttachments();
+
     // ── Properties ──
 
     /// <summary>Sets a property to a static value.</summary>

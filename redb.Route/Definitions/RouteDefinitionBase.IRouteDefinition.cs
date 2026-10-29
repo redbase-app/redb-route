@@ -60,6 +60,22 @@ public abstract partial class RouteDefinitionBase<TSelf>
     IRouteDefinition IRouteDefinition.SetHeader(string name, IExpression expression) => SetHeader(name, expression);
     IRouteDefinition IRouteDefinition.RemoveHeader(string key) => RemoveHeader(key);
 
+    // ── Attachments ──
+    IRouteDefinition IRouteDefinition.AddAttachment(string name, IExpression content, string? fileName, string? contentType) =>
+        AddAttachment(name, content, fileName, contentType);
+    IRouteDefinition IRouteDefinition.AddAttachment(string name, IExpression content, IExpression fileName, string? contentType) =>
+        AddAttachment(name, content, fileName, contentType);
+    IRouteDefinition IRouteDefinition.AddAttachmentFromBody(string name, string? fileName, string? contentType) =>
+        AddAttachmentFromBody(name, fileName, contentType);
+    IRouteDefinition IRouteDefinition.AddAttachmentFromBody(string name, IExpression fileName, string? contentType) =>
+        AddAttachmentFromBody(name, fileName, contentType);
+    IRouteDefinition IRouteDefinition.AddAttachmentFromFile(string path, string? name, string? contentType) =>
+        AddAttachmentFromFile(path, name, contentType);
+    IRouteDefinition IRouteDefinition.AddAttachmentFromFile(IExpression path, string? name, string? contentType) =>
+        AddAttachmentFromFile(path, name, contentType);
+    IRouteDefinition IRouteDefinition.RemoveAttachment(string name) => RemoveAttachment(name);
+    IRouteDefinition IRouteDefinition.RemoveAttachments() => RemoveAttachments();
+
     // ── Properties ──
     IRouteDefinition IRouteDefinition.SetProperty(string key, object? value) => SetProperty(key, value);
     IRouteDefinition IRouteDefinition.SetProperty(string key, Func<IExchange, object?> factory) => SetProperty(key, factory);

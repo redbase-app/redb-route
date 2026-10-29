@@ -8,6 +8,8 @@ namespace redb.Route.Tests.Exec;
 /// A scheduled exec consumer keeps running the command after <c>Stop()</c> and <c>Start()</c> of the same route context:
 /// the stop ends the schedule of the cached endpoint, the start runs it again.
 /// </summary>
+// Never in parallel with ExecTraceTests, whose span probe would take these ticks for its own.
+[Collection("ExecScheduledTicks")]
 public sealed class ExecRestartTests
 {
     private static bool IsWindows => OperatingSystem.IsWindows();

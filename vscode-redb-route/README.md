@@ -1,13 +1,35 @@
 # redb Route XML
 
-Editor support for [redb.Route](https://github.com/redbase-app/redb-route) XML routes in VS Code: completion and
-validation from the format's schema, a route tree, composite skeletons, bean reference hints and a graph editor
-over the XML text.
+Editor support for [redb.Route](https://github.com/redbase-app/redb-route) XML routes in VS Code: new projects from
+the redb templates, completion and validation from the format's schema, a route tree, composite skeletons,
+bean reference hints and a graph editor over the XML text.
 
 The format does not need an editor. A route file is plain XML that the runtime loads as it is; this extension only
 makes writing and reading it easier.
 
 ## Features
+
+### New project
+
+**redb: New Project** from the Command Palette opens a page that creates a project from the redb templates
+through `dotnet new`:
+
+- **Status.** The top of the page shows the installed .NET SDKs and the two template packages, `redb.Templates`
+  and `redb.Tsak.Templates`, with an **Install** button for a missing package and an **Update** button when
+  nuget.org has a newer version.
+- **Templates.** Every project and solution template of the installed packages is a card, grouped as redb.Route
+  XML modules, redb.Tsak hosts and applications (console, Blazor, Razor Pages, worker, chat). The basic
+  `redb-route` module is selected when the page opens.
+- **Form.** The chosen template's form asks for the project name, the parameters that template declares (for
+  example the target framework or the database) and the location. A target framework with no SDK for it on this
+  machine is marked, and a location where a folder of that name already holds files is refused.
+- **Create.** **Create** runs `dotnet new` and, when the project carries a local tool manifest,
+  `dotnet tool restore`. Their output shows on the page and in the **redb Route** output channel, and a running
+  step can be cancelled. When it is done, the page offers to open the project in this window, in a new window or to
+  add it to the workspace.
+
+The cards and the form come from the templates themselves, so a new template in the redb template packages
+appears without an update of this extension.
 
 ### Schema: completion and validation
 
@@ -46,9 +68,10 @@ The list is not filtered by type. A reference to a bean that is not declared, or
 
 ### Route tree
 
-The **redb Routes** view in the Explorer lists every routes document of the workspace, with the id and the `from`
-endpoint of each route. A click opens the route at its line. The view appears when the workspace has at least one
-`*.route.xml` or `*.redb-route.xml` file.
+The **redb** button in the Activity Bar opens the **Routes** view: every routes document of the workspace
+(`*.route.xml`, `*.redb-route.xml`), with the id and the `from` endpoint of each route. A click opens the route at
+its line. The view's title bar has **New Project** and **Refresh**; in a workspace without route files the view
+offers **New Project** and a link to the format.
 
 ### Route graph
 
@@ -88,13 +111,15 @@ it is an edit of the XML, and undo works as in the text editor.
 dotnet tool install -g redb.Route.Xml.CodeGen
 ```
 
-This is the only feature that needs .NET on the machine.
+This and **New Project** are the only features that need .NET on the machine.
 
 ## Requirements
 
 - [Red Hat XML](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-xml) (`redhat.vscode-xml`).
   VS Code installs it together with this extension when it has network access.
 - The `redb-route-xml` .NET tool, only for the Mermaid diagram.
+- A .NET SDK and the redb template packages (`dotnet new install redb.Templates`, `dotnet new install
+  redb.Tsak.Templates`), only for **New Project**. Its page offers to install the packages itself.
 
 ## Installation
 

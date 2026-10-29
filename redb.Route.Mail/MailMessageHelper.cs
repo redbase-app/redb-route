@@ -1,6 +1,7 @@
 using MailKit;
 using Microsoft.Extensions.DependencyInjection;
 using MimeKit;
+using redb.Route.Abstractions;
 using redb.Route.Core;
 
 namespace redb.Route.Mail;
@@ -102,15 +103,32 @@ internal static class MailMessageHelper
                 if (!fetchAttachments)
                     continue;
 
+                using var ms = new MemoryStream();
                 if (att is MimePart part && part.Content is not null)
-                {
-                    using var ms = new MemoryStream();
                     part.Content.DecodeTo(ms);
-                    if (maxSize > 0 && ms.Length > maxSize)
-                        continue; // oversized: named in AttachmentNames, payload not carried
-                    mailAttachments.Add(new MailAttachment(
-                        fileName, ms.ToArray(), part.ContentType.MimeType));
-                }
+                else if (att is MessagePart { Message: not null } attached)
+                    attached.Message.WriteTo(ms); // message/rfc822: one attachment with its bytes
+                else
+                    continue;
+
+                if (maxSize > 0 && ms.Length > maxSize)
+                    continue; // oversized: named in AttachmentNames, payload not carried
+
+                var bytes = ms.ToArray();
+                if (att is MimePart)
+                    mailAttachments.Add(new MailAttachment(fileName, bytes, att.ContentType.MimeType));
+
+                // The same file on the message attachments: smtp: and the other producers send these, so
+                // imap -> smtp forwards them without a mapping step.
+                message.Attachments.Add(new Attachment
+                {
+                    Name = BareFileName(fileName),
+                    FileName = BareFileName(fileName),
+                    ContentType = att.ContentType.MimeType,
+                    ContentId = string.IsNullOrEmpty(att.ContentId) ? null : att.ContentId,
+                    Headers = PartHeaders(att),
+                    Content = AttachmentContent.FromBytes(bytes),
+                });
             }
 
             headers[MailHeaders.AttachmentNames] = string.Join(", ", names);
@@ -160,6 +178,25 @@ internal static class MailMessageHelper
         return Exchange.Create(message, scopeFactory);
     }
 
+    private static readonly System.Text.RegularExpressions.Regex Folding = new(@"\r?\n[ \t]*");
+
+    /// <summary>The file name without a directory: a sender's path does not reach the route.</summary>
+    private static string BareFileName(string fileName)
+    {
+        var slash = fileName.LastIndexOfAny(['/', '\\']);
+        var bare = (slash < 0 ? fileName : fileName[(slash + 1)..]).Replace("\r", "").Replace("\n", "");
+        return bare.Length == 0 ? "attachment" : bare;
+    }
+
+    /// <summary>The part headers, unfolded (an attachment holds no line breaks).</summary>
+    private static Dictionary<string, string> PartHeaders(MimeEntity part)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var header in part.Headers)
+            headers[header.Field] = Folding.Replace(header.Value ?? string.Empty, " ").Trim();
+        return headers;
+    }
+
     private static string FormatAddresses(InternetAddressList list)
     {
         if (list.Count == 0) return "";
@@ -175,12 +212,16 @@ internal static class MailMessageHelper
 
 /// <summary>
 /// Composite body for emails with attachments.
-/// Text holds the email body, Attachments holds the decoded file data.
+/// Text holds the email body, Attachments holds the decoded file data. The same files are also on the message
+/// attachments (<see cref="redb.Route.Abstractions.IMessage.Attachments"/>), which is what <c>smtp:</c> sends.
 /// </summary>
 public sealed class MailMessageBody(string text, IReadOnlyList<MailAttachment> attachments) : ICloneable
 {
     /// <summary>Decoded text body.</summary>
     public string Text { get; } = text;
+
+    /// <summary>The text body: what <c>smtp:</c> writes when a received mail is sent on.</summary>
+    public override string ToString() => Text;
 
     /// <summary>Decoded attachments that fit the size cap (names always ride the headers).</summary>
     public IReadOnlyList<MailAttachment> Attachments { get; } = attachments;

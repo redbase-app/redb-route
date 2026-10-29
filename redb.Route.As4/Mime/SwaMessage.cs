@@ -41,7 +41,7 @@ internal sealed class SwaMessage : IDisposable
     /// <summary>
     /// Reads a message from an HTTP body and its Content-Type. <paramref name="body"/> must be seekable; the message
     /// takes ownership of it (MimeKit parses it persistently, so parts are read from it without a copy until they are
-    /// decoded). The envelope is parsed with <see cref="SafeXml"/> (no DTD, bounded by <paramref name="maxEnvelopeCharacters"/>).
+    /// decoded). The envelope is parsed with <see cref="SafeXml"/>: no DTD, the structure of <see cref="EnvelopeLimits"/>, at most <paramref name="maxEnvelopeCharacters"/> characters.
     /// </summary>
     public static SwaMessage Read(string contentType, Stream body, long maxEnvelopeCharacters, StreamCacheOptions spool)
     {
@@ -56,7 +56,7 @@ internal sealed class SwaMessage : IDisposable
         {
             var type = ContentType.Parse(contentType);
             if (!type.IsMimeType("multipart", "related"))
-                return new SwaMessage(SafeXml.LoadDocument(ReadAll(body), preserveWhitespace: true, maxEnvelopeCharacters), parts, spool, body);
+                return new SwaMessage(SafeXml.LoadDocument(ReadAll(body), EnvelopeLimits.For(maxEnvelopeCharacters), preserveWhitespace: true), parts, spool, body);
 
             // The HTTP Content-Type stands in for the entity headers; persistent parsing keeps the parts as views of the body.
             body.Position = 0;
@@ -77,7 +77,7 @@ internal sealed class SwaMessage : IDisposable
                 Content(root).DecodeTo(envelopeStream);
                 envelopeBytes = envelopeStream.ToArray();
             }
-            var envelope = SafeXml.LoadDocument(envelopeBytes, preserveWhitespace: true, maxEnvelopeCharacters);
+            var envelope = SafeXml.LoadDocument(envelopeBytes, EnvelopeLimits.For(maxEnvelopeCharacters), preserveWhitespace: true);
 
             foreach (var part in multipart.OfType<MimePart>())
             {

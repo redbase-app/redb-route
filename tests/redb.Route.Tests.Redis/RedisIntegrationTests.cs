@@ -32,11 +32,7 @@ public sealed class RedisIntegrationTests
         return (RedisEndpoint)component.CreateEndpoint(uri);
     }
 
-    private async Task<IDatabase> GetDatabase()
-    {
-        var conn = await ConnectionMultiplexer.ConnectAsync(ConnectionString);
-        return conn.GetDatabase();
-    }
+    private static Task<IDatabase> GetDatabase() => TestRedis.Database();
 
     /// <summary>Runs <paramref name="body"/> inside a transacted block, as <c>.Transacted()</c> on a route does.</summary>
     private static Task InTransaction(IExchange exchange, Func<IExchange, CancellationToken, Task> body) =>

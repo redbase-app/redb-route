@@ -63,8 +63,14 @@ From("direct://logs")
 | `None` | No locking |
 | `MarkerFile` | Creates a `.redbLock` marker file next to the target |
 | `Changed` | Waits until file size stops changing |
-| `FileLock` | OS-level exclusive handle, held for the duration of processing |
+| `FileLock` | OS-level exclusive handle, held for the duration of processing. Windows only, see below |
 | `Rename` | Renames the file while it is being processed |
+
+`FileLock` relies on Windows share modes: while the consumer holds the file, no other process can open it, and a
+file another program still holds open for writing is skipped until the next poll. Linux and macOS have advisory locks
+only, so there the strategy keeps nobody out: another reader or a second consumer opens the file anyway, and a file
+still being written is picked up. On Linux, the system of the Tsak worker images, use `Rename`, `MarkerFile` or
+`Changed`.
 
 ## Expressions in options
 

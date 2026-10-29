@@ -45,7 +45,10 @@ public sealed class RestVerbDefinition
     /// <summary>Human description → OpenAPI <c>summary</c>.</summary>
     public string? Summary { get; private set; }
 
-    /// <summary>Route id; default <c>rest:METHOD /full/path</c>. Also the OpenAPI <c>operationId</c>.</summary>
+    /// <summary>
+    /// Route id; default <c>rest-METHOD-full-path-1a2b3c4d</c> (no '/' and no space, stable across restarts). Also the
+    /// OpenAPI <c>operationId</c>.
+    /// </summary>
     public string? RouteId { get; private set; }
 
     /// <summary>Target endpoint set by <see cref="To"/>; <c>null</c> for inline routes.</summary>

@@ -11,7 +11,7 @@ namespace redb.Route.Tests.Redis;
 /// Expects Redis at localhost:6379 (no password).
 /// </summary>
 [Trait("Category", "Integration")]
-public sealed class RedisClaimCheckIntegrationTests : IAsyncDisposable
+public sealed class RedisClaimCheckIntegrationTests : IAsyncLifetime
 {
     private const string ConnectionString = "localhost:6379";
     private readonly ITestOutputHelper _output;
@@ -28,7 +28,9 @@ public sealed class RedisClaimCheckIntegrationTests : IAsyncDisposable
             defaultTtl: TimeSpan.FromMinutes(5));
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         // Clean up test keys
         try
@@ -171,7 +173,9 @@ public sealed class RedisClaimCheckIntegrationTests : IAsyncDisposable
         var key = await _repo.Store(data);
         var retrieved = await _repo.Retrieve(key);
 
-        retrieved.Should().BeEquivalentTo(data);
+        // Ordered byte compare: BeEquivalentTo on megabytes runs for tens of seconds, for minutes on a slow Linux stand.
+        retrieved.Length.Should().Be(data.Length);
+        retrieved.AsSpan().SequenceEqual(data).Should().BeTrue("the stored payload comes back unchanged");
         _output.WriteLine("1 MB payload stored and retrieved successfully");
     }
 }

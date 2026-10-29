@@ -50,11 +50,31 @@ public class TcpEndpointOptions : EndpointOptions
     /// <summary>Disable Nagle's algorithm for low-latency. Default: true.</summary>
     public bool NoDelay { get; set; } = true;
 
-    /// <summary>Receive buffer size in bytes. Default: 8192.</summary>
-    public int ReceiveBufferSize { get; set; } = 8192;
+    /// <summary>
+    /// Socket receive buffer (SO_RCVBUF) in bytes. Default 0: the system sizes the buffer and grows it with the
+    /// traffic. A fixed size switches that tuning off on Linux; 8192 there, on loopback, let a 64 KiB frame through
+    /// in about three seconds, because the window stayed below one segment. The Raw and TextLine reads use the same
+    /// value as their chunk size, or <see cref="DefaultReadChunkSize"/> when it is 0.
+    /// </summary>
+    public int ReceiveBufferSize { get; set; }
 
-    /// <summary>Send buffer size in bytes. Default: 8192.</summary>
-    public int SendBufferSize { get; set; } = 8192;
+    /// <summary>Socket send buffer (SO_SNDBUF) in bytes. Default 0: the system sizes the buffer.</summary>
+    public int SendBufferSize { get; set; }
+
+    /// <summary>The chunk size of a Raw or TextLine read when <see cref="ReceiveBufferSize"/> is 0.</summary>
+    public const int DefaultReadChunkSize = 8192;
+
+    /// <summary>The chunk size the Raw and TextLine reads use.</summary>
+    internal int ReadChunkSize => ReceiveBufferSize > 0 ? ReceiveBufferSize : DefaultReadChunkSize;
+
+    /// <summary>Applies the buffer sizes that were set; a 0 leaves the system's own size in place.</summary>
+    internal void ApplyBufferSizes(System.Net.Sockets.TcpClient client)
+    {
+        if (ReceiveBufferSize > 0)
+            client.ReceiveBufferSize = ReceiveBufferSize;
+        if (SendBufferSize > 0)
+            client.SendBufferSize = SendBufferSize;
+    }
 
     // ── Producer (client) ───────────────────────────────
 
@@ -133,11 +153,11 @@ public class TcpEndpointOptions : EndpointOptions
         if (Port is < 0 or > 65535)
             throw new ArgumentException("Port must be between 0 and 65535.");
 
-        if (ReceiveBufferSize <= 0)
-            throw new ArgumentException("ReceiveBufferSize must be > 0.");
+        if (ReceiveBufferSize < 0)
+            throw new ArgumentException("ReceiveBufferSize must be >= 0 (0: the system's own size).");
 
-        if (SendBufferSize <= 0)
-            throw new ArgumentException("SendBufferSize must be > 0.");
+        if (SendBufferSize < 0)
+            throw new ArgumentException("SendBufferSize must be >= 0 (0: the system's own size).");
 
         if (ConnectTimeout < 0)
             throw new ArgumentException("ConnectTimeout must be >= 0.");

@@ -20,13 +20,15 @@ public sealed class KafkaStubComponent : ComponentBase
 /// our own (Ф3 §1–2). Includes the two guarantees the phase names explicitly: WeaveById finds
 /// steps by the XML id attribute, and a URI password never surfaces in mock names or reports.
 /// </summary>
-public class TestKitOverXmlTests : IAsyncDisposable
+public class TestKitOverXmlTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
     public TestKitOverXmlTests() => _context.AddComponent(new KafkaStubComponent());
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

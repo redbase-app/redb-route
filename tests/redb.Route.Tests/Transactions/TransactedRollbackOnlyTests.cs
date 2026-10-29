@@ -10,11 +10,13 @@ namespace redb.Route.Tests.Transactions;
 /// exception (the database and the deferred sends), and the consumer does not acknowledge the message, so the broker
 /// delivers it again.
 /// </summary>
-public class TransactedRollbackOnlyTests : IAsyncDisposable
+public class TransactedRollbackOnlyTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

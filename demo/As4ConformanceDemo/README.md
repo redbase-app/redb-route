@@ -47,8 +47,9 @@ command channel. The agreements of `sut` are built from `ConformanceLegs.Default
 tests (user guide, annex A); a received message is matched on sender, service and action. Add a pair with
 the `ExtraLegs` setting when a test suite needs one that is not there.
 
-Three things of the connector carry the controller, all in 4.3.0:
+Four things of the connector carry the controller:
 
+- a partner address with a query: the service takes the commands at a Domibus domain, `/domibus?domain=...`;
 - a list of `As4Payload` as the body: several payloads in the order given, under the Content-IDs the driver chose,
   with their part properties, and an empty list for a Notify, which has no payload;
 - `payloadList` on the receive endpoints: a single payload still arrives with its Content-ID and part properties;
@@ -64,9 +65,12 @@ A second route context plays the test driver on loopback and walks the message f
 ("AS4 Basic Connectivity Two Way SUT C3"), then a ping, an ebMS error and the retry profile: a proxy between the two
 swallows the driver's responses, once (the message is resent byte for byte, delivered once, and the receipt of the
 resend is reported) and for good (`EBMS:0301` is reported after the redeliveries). Every step prints `PASS` or `FAIL`;
-the exit code is 0 when all 47 passed. The last scenario is the PKI path: a signer that presents its certification path
-is acknowledged, one that does not is refused where a path is required, and on a Submit the SUT sends with its own. The driver is the same connector with the parties swapped, so this proves the
-controller logic and nothing about interoperability.
+the exit code is 0 when all 49 passed. Then the PKI path: a signer that presents its certification path is
+acknowledged, one that does not is refused where a path is required, and on a Submit the SUT sends with its own. The
+last scenario is sender authentication (TA78): a message from the test driver's party id signed with another
+certificate is refused with `EBMS:0101`. As the service does, the driver signs its commands with a key of their own
+and takes them at an address with a query. The driver is the same connector with the parties swapped, so this proves
+the controller logic and nothing about interoperability.
 
 ## Check it against Domibus
 
@@ -90,10 +94,11 @@ arrives through the Override layer, environment variables on the worker of the f
 | Section and key | Default | Meaning |
 |---|---|---|
 | `TestDriver:Url` | (required) | MSH address of the test driver for the messages under test. |
-| `TestDriver:ControllerUrl` | `TestDriver:Url` | MSH address of the test driver for Deliver and Notify. |
+| `TestDriver:ControllerUrl` | `TestDriver:Url` | MSH address of the test driver for Deliver and Notify; it may carry a query, such as the Domibus domain of the service (`?domain=sut_controller_domain`). |
 | `TestDriver:PartyId` | `test_driver` | Party id of the test driver. |
 | `TestDriver:ControllerPartyId` | `test_driver_sut_controller_domain` | Its party id on the command channel. |
 | `TestDriver:Certificate` | (required) | File of the test driver's certificate (DER or PEM). |
+| `TestDriver:ControllerCertificate` | `TestDriver:Certificate` | File of the test driver's certificate on the command channel; the service signs Submit, Deliver and Notify with a certificate of its own (`test_driver_sut_controller`). |
 | `TestDriver:TrustAnchors` | the test driver's certificate | Certificate files (`;` between them) of the authorities its signer must chain to on the legs `bstPkiPath*`. |
 | `Sut:PartyId` | `system_under_test` | Party id of the access point under test, as assigned. |
 | `Sut:ControllerPartyId` | `sut_controller_domain` | Our party id on the command channel. |

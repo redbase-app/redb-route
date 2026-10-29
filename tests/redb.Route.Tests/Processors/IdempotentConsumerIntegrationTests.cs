@@ -9,11 +9,13 @@ namespace redb.Route.Tests.Processors;
 /// <summary>
 /// Integration tests for IdempotentConsumer within route definitions.
 /// </summary>
-public class IdempotentConsumerIntegrationTests : IAsyncDisposable
+public class IdempotentConsumerIntegrationTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

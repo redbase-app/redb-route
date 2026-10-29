@@ -139,8 +139,9 @@ internal sealed class As2CryptoEngine : IAs2CryptoEngine
         using (var stream = new CryptoStream(Stream.Null, hasher, CryptoStreamMode.Write, leaveOpen: true))
         {
             // No Prepare: that would re-encode a binary part (as OpenAS2 signs it) to base64 before it is hashed. The
-            // part was parsed from the wire, so its headers and content are written back as they came.
-            part.WriteTo(FormatOptions.Default, stream);
+            // part was parsed from the wire, so its headers and content are written back as they came, with CRLF line
+            // ends as on the wire: FormatOptions.Default takes the platform's, LF on Linux, and the MIC would differ.
+            part.WriteTo(CrlfFormat, stream);
         }
         return new As2Mic(Convert.ToBase64String(hasher.Hash!), NormalizeAlg(micalg));
     }
@@ -157,10 +158,8 @@ internal sealed class As2CryptoEngine : IAs2CryptoEngine
             if (includeHeaders)
             {
                 // Signed / encrypted: hash the MIME headers + content, CRLF-canonicalized (RFC 4130 §7.3.1).
-                var options = FormatOptions.Default.Clone();
-                options.NewLineFormat = NewLineFormat.Dos;
                 part.Prepare(EncodingConstraint.SevenBit);
-                part.WriteTo(options, stream);
+                part.WriteTo(CrlfFormat, stream);
             }
             else if (part is MimePart { Content: not null } mp)
             {
@@ -169,11 +168,21 @@ internal sealed class As2CryptoEngine : IAs2CryptoEngine
             }
             else
             {
-                part.WriteTo(stream);
+                part.WriteTo(CrlfFormat, stream);
             }
         }
 
         return new As2Mic(Convert.ToBase64String(hasher.Hash!), NormalizeAlg(micalg));
+    }
+
+    /// <summary>MIME written with CRLF line ends on every platform, as on the wire (RFC 4130 §7.3.1).</summary>
+    private static readonly FormatOptions CrlfFormat = CreateCrlfFormat();
+
+    private static FormatOptions CreateCrlfFormat()
+    {
+        var options = FormatOptions.Default.Clone();
+        options.NewLineFormat = NewLineFormat.Dos;
+        return options;
     }
 
     /// <summary>

@@ -15,11 +15,13 @@ namespace redb.Route.Tests.Definitions;
 /// 4. RedeliveryPolicy class + DSL
 /// 5. OnException(params Type[])
 /// </summary>
-public class GapFeatureTests : IAsyncDisposable
+public class GapFeatureTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

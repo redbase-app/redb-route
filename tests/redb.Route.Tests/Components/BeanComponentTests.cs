@@ -98,11 +98,13 @@ public class CalcBean
 /// semantics, property binding through the shared converter, [Sensitive] redaction, instance
 /// caching by normalized URI, and the loud errors the plan demands.
 /// </summary>
-public class BeanComponentTests : IAsyncDisposable
+public class BeanComponentTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

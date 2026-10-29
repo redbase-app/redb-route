@@ -61,4 +61,34 @@ public sealed class DefaultInflightRepository : IInflightRepository
     /// <inheritdoc />
     public int CountByRoute(string routeId)
         => _entries.Values.Count(t => t.Entry.RouteId == routeId);
+
+    /// <inheritdoc />
+    public IDisposable BeginWait(string exchangeId, TimeSpan delay)
+    {
+        ArgumentNullException.ThrowIfNull(exchangeId);
+        var until = DateTime.UtcNow + delay;
+        Update(exchangeId, e => e with { WaitingUntil = until });
+        return new Wait(this, exchangeId);
+    }
+
+    private void Update(string exchangeId, Func<InflightExchange, InflightExchange> change)
+    {
+        while (_entries.TryGetValue(exchangeId, out var tracked))
+        {
+            if (_entries.TryUpdate(exchangeId, tracked with { Entry = change(tracked.Entry) }, tracked))
+                return;
+            // Raced with another entry of the same exchange: read it again.
+        }
+    }
+
+    private sealed class Wait(DefaultInflightRepository owner, string exchangeId) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                owner.Update(exchangeId, e => e with { WaitingUntil = null, LastWaitEndedAt = DateTime.UtcNow });
+        }
+    }
 }

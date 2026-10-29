@@ -73,6 +73,9 @@ public class PipelineProcessor : IProcessor
                     exchange.In.ContentType = outMsg.ContentType;
                 foreach (var (key, value) in outMsg.Headers)
                     exchange.In.Headers[key] = value;
+                // Attachments follow the content type rule: an Out that carries some replaces those of In, an Out that
+                // carries none (a producer's reply) leaves the In ones for the next step.
+                Core.MessageAttachments.ReplaceWhenPresent(outMsg, exchange.In);
                 exchange.Out = null; // prevent stale Out from re-merging on next step
             }
         }

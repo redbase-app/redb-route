@@ -7,11 +7,13 @@ namespace redb.Route.Tests;
 /// <summary>
 /// End-to-end tests proving the route engine actually works with DSL + compilation + direct component.
 /// </summary>
-public class RouteContextTests : IAsyncDisposable
+public class RouteContextTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

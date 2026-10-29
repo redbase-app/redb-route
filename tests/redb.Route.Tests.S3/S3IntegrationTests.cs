@@ -10,9 +10,9 @@ using Xunit.Abstractions;
 namespace redb.Route.Tests.S3;
 
 /// <summary>
-/// Integration tests against MinIO docker container.
-/// Expects MinIO at localhost:9000 (minioadmin/minioadmin).
-/// Start with: docker compose -f docker-compose.tests.yml up minio -d
+/// Integration tests against the S3-compatible test store (RustFS, docker-compose.tests.yml service s3).
+/// Expects it at localhost:9000 (minioadmin/minioadmin).
+/// Start with: docker compose -f docker-compose.tests.yml up s3 -d
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class S3IntegrationTests : IAsyncLifetime
@@ -406,6 +406,9 @@ public sealed class S3IntegrationTests : IAsyncLifetime
         var content = await ReadObjectAsString(TestBucket, dstKey);
         content.Should().Be("copy me");
         (await ObjectExists(TestBucket, srcKey)).Should().BeTrue("source should remain");
+        exchange.In.Headers[S3Headers.ProducedBucketName].Should().Be(TestBucket, "the produced object is the copy");
+        exchange.In.Headers[S3Headers.ProducedKey].Should().Be(dstKey);
+        exchange.In.Headers[S3Headers.ETag].Should().NotBeNull();
 
         await CleanupPrefixAsync(TestBucket, prefix);
     }
@@ -628,7 +631,12 @@ public sealed class S3IntegrationTests : IAsyncLifetime
         var response = await _rawClient!.GetObjectAsync(TestBucket, key);
         using var ms = new MemoryStream();
         await response.ResponseStream.CopyToAsync(ms);
-        ms.ToArray().Should().BeEquivalentTo(data);
+        // Ordered byte compare: BeEquivalentTo on megabytes runs for tens of seconds, for minutes on a slow Linux stand.
+        ms.Length.Should().Be(data.Length);
+        ms.ToArray().AsSpan().SequenceEqual(data).Should().BeTrue("the object reads back as the uploaded bytes");
+        exchange.In.Headers[S3Headers.ProducedBucketName].Should().Be(TestBucket, "a multipart upload reports as a single PUT does");
+        exchange.In.Headers[S3Headers.ProducedKey].Should().Be(key);
+        exchange.In.Headers[S3Headers.ETag].Should().NotBeNull();
 
         await CleanupPrefixAsync(TestBucket, prefix);
     }

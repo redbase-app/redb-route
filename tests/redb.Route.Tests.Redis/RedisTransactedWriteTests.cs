@@ -23,7 +23,7 @@ public sealed class RedisTransactedWriteTests
         return (RedisEndpoint)new RedisComponent().CreateEndpoint(EndpointUriParser.Parse($"redis:{path}?{qs}"));
     }
 
-    private static async Task<IDatabase> Db() => (await ConnectionMultiplexer.ConnectAsync(ConnectionString)).GetDatabase();
+    private static Task<IDatabase> Db() => TestRedis.Database();
 
     /// <summary>Runs <paramref name="body"/> inside a transacted block, as <c>.Transacted()</c> on a route does.</summary>
     private static Task InTransaction(IExchange exchange, Func<IExchange, CancellationToken, Task> body) =>

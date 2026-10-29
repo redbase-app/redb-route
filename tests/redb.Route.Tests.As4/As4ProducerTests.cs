@@ -8,6 +8,7 @@ using redb.Route.As4.Security;
 using redb.Route.As4.Signals;
 using redb.Route.Core;
 using redb.Route.Processors;
+using As4Dsl = redb.Route.As4.Fluent.As4;
 
 namespace redb.Route.Tests.As4;
 
@@ -50,6 +51,85 @@ public class As4ProducerTests
         user.CollaborationInfo.Action.Should().Be("Submit");
         user.PropertyValue("originalSender").Should().Be("C1");
         Encoding.UTF8.GetString(fake.Payload!).Should().Be(Payload);
+    }
+
+    [Fact]
+    public async Task Send_ToAnAddressWithAQuery_PostsToThatQuery()
+    {
+        // Domibus serves its domains as /domibus?domain=name; the EC test driver takes controller messages so.
+        await using var fake = new FakePartner(Answer.Receipt);
+        var context = NewContext();
+        await using var _ = context;
+        var uri = (string)As4Dsl.Send($"http://127.0.0.1:{fake.Port}/domibus?domain=sut_controller_domain&x=a%20b")
+            .ConnectionFactory("node").Partner("acme").Timeout(15000);
+        var producer = (As4Producer)context.GetEndpoint(uri).CreateProducer();
+        await producer.Start();
+
+        var exchange = NewExchange();
+        await producer.Process(exchange);
+
+        exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+        fake.RequestPathAndQuery.Should().Be("/domibus?domain=sut_controller_domain&x=a%20b");
+    }
+
+    [Fact]
+    public async Task Send_ToAPartnerChosenPerMessage_PostsToItsOwnAddress()
+    {
+        // The address is part of the agreement (P-Mode Protocol.Address): one endpoint, each partner at its own MSH.
+        await using var acme = new FakePartner(Answer.Receipt);
+        await using var globex = new FakePartner(Answer.Receipt);
+        var context = NewContext(
+            p => p.Address = $"http://127.0.0.1:{acme.Port}/msh",
+            node => node.Partners.Add(new As4Partner
+            {
+                Name = "globex",
+                PartyId = "urn:redb:globex",
+                Service = "urn:example",
+                Action = "Submit",
+                Address = $"http://127.0.0.1:{globex.Port}/domibus?domain=globex",
+                PartnerSigningCertificates = { As4TestMessages.PublicOnly(Partner) },
+                PartnerEncryptionCertificate = As4TestMessages.PublicOnly(Partner),
+            }));
+        await using var _ = context;
+        var producer = (As4Producer)context.GetEndpoint(As4Dsl.Send().ConnectionFactory("node").Partner("${header.to}").Timeout(15000)).CreateProducer();
+        await producer.Start();
+
+        foreach (var to in new[] { "acme", "globex" })
+        {
+            var exchange = NewExchange();
+            exchange.In.Headers["to"] = to;
+            await producer.Process(exchange);
+            exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue(to);
+        }
+
+        acme.RequestPathAndQuery.Should().Be("/msh");
+        acme.Received!.UserMessages.Single().To.PartyIds.Single().Value.Should().Be("urn:redb:acme");
+        globex.RequestPathAndQuery.Should().Be("/domibus?domain=globex");
+        globex.Received!.UserMessages.Single().To.PartyIds.Single().Value.Should().Be("urn:redb:globex");
+    }
+
+    [Fact]
+    public async Task Send_ToAPartnerChosenPerMessage_WithoutAnAddress_FailsThatMessage()
+    {
+        var context = NewContext(node => { }, node => node.Partners.Add(new As4Partner
+        {
+            Name = "globex",
+            PartyId = "urn:redb:globex",
+            Service = "urn:example",
+            Action = "Submit",
+            Address = "http://127.0.0.1:1/msh",
+            PartnerSigningCertificates = { As4TestMessages.PublicOnly(Partner) },
+            PartnerEncryptionCertificate = As4TestMessages.PublicOnly(Partner),
+        }));
+        await using var _ = context;
+        var producer = (As4Producer)context.GetEndpoint(As4Dsl.Send().ConnectionFactory("node").Partner("${header.to}")).CreateProducer();
+        await producer.Start();
+
+        var exchange = NewExchange();
+        exchange.In.Headers["to"] = "acme";
+        var act = () => producer.Process(exchange);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*no address*acme*");
     }
 
     [Fact]
@@ -657,6 +737,9 @@ public class As4ProducerTests
         /// <summary>Content-Type of the last request as it came on the wire.</summary>
         public string? WireContentType { get; private set; }
 
+        /// <summary>Path and query of the last request.</summary>
+        public string? RequestPathAndQuery { get; private set; }
+
         /// <summary>MessageId of every user message received, in order.</summary>
         public List<string> ReceivedIds { get; } = [];
 
@@ -690,6 +773,7 @@ public class As4ProducerTests
                     })
                     .ToList();
                 WireContentType = http.Request.ContentType;
+                RequestPathAndQuery = http.Request.Url!.PathAndQuery;
                 Payload = Parts.Count == 1 ? Parts[0].Content : null;
                 var messageId = Received.UserMessages.Single().MessageInfo.MessageId;
                 var mode = _answers[Math.Min(ReceivedIds.Count, _answers.Length - 1)];

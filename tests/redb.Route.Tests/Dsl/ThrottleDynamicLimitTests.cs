@@ -12,11 +12,13 @@ namespace redb.Route.Tests.Dsl;
 /// to <c>int.MaxValue</c>, so <c>${header.rate}</c> throttled nothing at all.
 /// </summary>
 [Collection("ExpressionResolver")]
-public class ThrottleDynamicLimitTests : IAsyncDisposable
+public class ThrottleDynamicLimitTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

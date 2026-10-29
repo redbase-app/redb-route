@@ -12,7 +12,7 @@ namespace redb.Route.Tests.Components;
 /// the callee sees the headers the strategy lets out, and the caller keeps its own headers and takes the reply's body,
 /// the reply headers the strategy lets in, the properties and the outcome. <c>vm:</c> filters the copy it hands over.
 /// </summary>
-public sealed class InterContextHeaderFilterStrategyTests : IAsyncDisposable
+public sealed class InterContextHeaderFilterStrategyTests : IAsyncLifetime
 {
     private readonly ServiceProvider _sp;
 
@@ -23,7 +23,9 @@ public sealed class InterContextHeaderFilterStrategyTests : IAsyncDisposable
         _sp = services.BuildServiceProvider();
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _sp.DisposeAsync();
         GC.SuppressFinalize(this);

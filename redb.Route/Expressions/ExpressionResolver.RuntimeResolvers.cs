@@ -79,6 +79,13 @@ public static partial class ExpressionResolver
             DebugLog("Getting contentType");
             return exchange.In.ContentType;
         }
+        else if (IsAttachmentsPath(propertyName))
+        {
+            // The attachments of the In message, as Camel Simple's ${attachments}: before the exchange-property
+            // fallback, so a property named "attachments" no longer answers here.
+            DebugLog($"Getting attachments: '{propertyName}'");
+            return ResolveAttachmentsPath(exchange, propertyName);
+        }
         else
         {
             // Pluggable prefix resolvers (e.g. conversation., tool.) take precedence

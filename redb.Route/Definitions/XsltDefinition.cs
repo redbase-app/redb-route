@@ -1,4 +1,5 @@
 using redb.Route.Abstractions;
+using redb.Route.Core;
 using redb.Route.Xslt;
 
 namespace redb.Route.Definitions;
@@ -33,11 +34,14 @@ public sealed class XsltFileDefinition : ProcessorDefinition
     public override IProcessor CreateProcessor(IRouteContext context)
     {
         var engines = context.GetXsltEngineFactory();
+        // Through the context's resource resolver, as the xslt: endpoint and validateXsd do: a stylesheet inside a package
+        // is found where the package keeps its resources, not under the worker's working directory.
+        string Resolve(string path) => ResourceResolution.Resolve(context, path, "XSLT stylesheet");
         return new XsltProcessor(
-            engines.FromFile(_stylesheetPath),
+            engines.FromFile(Resolve(_stylesheetPath)),
             _output, _failOnNullBody,
             allowTemplateFromHeader: _allowTemplateFromHeader,
-            fileEngineFactory: engines.FromFile,
+            fileEngineFactory: path => engines.FromFile(Resolve(path)),
             contentEngineFactory: engines.FromContent);
     }
 }

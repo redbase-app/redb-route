@@ -24,6 +24,8 @@ public sealed class StreamCache : Stream, IAsyncDisposable
     private Stream _inner;
     private bool _completed;
     private bool _disposed;
+    // Serialises the reads of this stream and of its readers (OpenReader): they share one inner stream and its position.
+    private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>Creates a cache with the threshold and temporary directory of <paramref name="options"/> (defaults when <c>null</c>).</summary>
     public StreamCache(StreamCacheOptions? options = null)
@@ -153,43 +155,151 @@ public sealed class StreamCache : Stream, IAsyncDisposable
         set
         {
             EnsureReadable();
-            _inner.Position = value;
+            _gate.Wait();
+            try { _inner.Position = value; }
+            finally { _gate.Release(); }
         }
     }
 
     /// <inheritdoc />
-    public override int Read(byte[] buffer, int offset, int count)
-    {
-        EnsureReadable();
-        return _inner.Read(buffer, offset, count);
-    }
+    public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
 
     /// <inheritdoc />
     public override int Read(Span<byte> buffer)
     {
         EnsureReadable();
-        return _inner.Read(buffer);
+        _gate.Wait();
+        try { return _inner.Read(buffer); }
+        finally { _gate.Release(); }
     }
 
     /// <inheritdoc />
-    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
-    {
-        EnsureReadable();
-        return _inner.ReadAsync(buffer, offset, count, ct);
-    }
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
+        ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
 
     /// <inheritdoc />
-    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+    public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
     {
         EnsureReadable();
-        return _inner.ReadAsync(buffer, ct);
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try { return await _inner.ReadAsync(buffer, ct).ConfigureAwait(false); }
+        finally { _gate.Release(); }
     }
 
     /// <inheritdoc />
     public override long Seek(long offset, SeekOrigin origin)
     {
         EnsureReadable();
-        return _inner.Seek(offset, origin);
+        _gate.Wait();
+        try { return _inner.Seek(offset, origin); }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Opens an independent read-only view of the completed cache, positioned at the start: it has a position of its own,
+    /// so several readers (and this stream) read the same content without moving each other. Disposing a reader leaves
+    /// the cache open; the cache's owner disposes it.
+    /// </summary>
+    public Stream OpenReader()
+    {
+        EnsureReadable();
+        return new Reader(this);
+    }
+
+    private int ReadAt(long position, Span<byte> buffer)
+    {
+        EnsureReadable();
+        _gate.Wait();
+        try
+        {
+            var saved = _inner.Position;
+            _inner.Position = position;
+            try { return _inner.Read(buffer); }
+            finally { _inner.Position = saved; }
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async ValueTask<int> ReadAtAsync(long position, Memory<byte> buffer, CancellationToken ct)
+    {
+        EnsureReadable();
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var saved = _inner.Position;
+            _inner.Position = position;
+            try { return await _inner.ReadAsync(buffer, ct).ConfigureAwait(false); }
+            finally { _inner.Position = saved; }
+        }
+        finally { _gate.Release(); }
+    }
+
+    private sealed class Reader(StreamCache cache) : Stream
+    {
+        private long _position;
+        private bool _closed;
+
+        public override bool CanRead => !_closed && cache.CanRead;
+        public override bool CanSeek => CanRead;
+        public override bool CanWrite => false;
+        public override long Length => cache.Length;
+
+        public override long Position
+        {
+            get => _position;
+            set
+            {
+                ArgumentOutOfRangeException.ThrowIfNegative(value);
+                _position = value;
+            }
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            ObjectDisposedException.ThrowIf(_closed, this);
+            var read = cache.ReadAt(_position, buffer);
+            _position += read;
+            return read;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
+            ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            ObjectDisposedException.ThrowIf(_closed, this);
+            var read = await cache.ReadAtAsync(_position, buffer, ct).ConfigureAwait(false);
+            _position += read;
+            return read;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            ObjectDisposedException.ThrowIf(_closed, this);
+            Position = origin switch
+            {
+                SeekOrigin.Begin => offset,
+                SeekOrigin.Current => _position + offset,
+                SeekOrigin.End => Length + offset,
+                _ => throw new ArgumentOutOfRangeException(nameof(origin))
+            };
+            return _position;
+        }
+
+        public override void Flush() { }
+
+        public override void SetLength(long value) => throw new NotSupportedException("A StreamCache reader is read-only.");
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException("A StreamCache reader is read-only.");
+
+        protected override void Dispose(bool disposing)
+        {
+            _closed = true;
+            base.Dispose(disposing);
+        }
     }
 
     /// <inheritdoc />

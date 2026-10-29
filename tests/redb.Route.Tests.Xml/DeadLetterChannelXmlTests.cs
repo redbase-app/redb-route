@@ -10,11 +10,13 @@ namespace redb.Route.Tests.Xml;
 /// <c>&lt;deadLetterChannel uri="..."/&gt;</c> in <c>context.xml</c> — the context's dead letter channel, Apache Camel's
 /// <c>errorHandlerRef</c> on <c>&lt;camelContext&gt;</c>: a context-level element only, and one error handler per context.
 /// </summary>
-public class DeadLetterChannelXmlTests : IAsyncDisposable
+public class DeadLetterChannelXmlTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

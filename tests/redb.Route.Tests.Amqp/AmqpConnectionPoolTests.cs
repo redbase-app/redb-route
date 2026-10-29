@@ -71,6 +71,60 @@ public sealed class AmqpConnectionPoolTests
         AmqpComponent.ResolveConnectionKey(opts).Should().EndWith("#ssl");
     }
 
+    /// <summary>
+    /// connectionFactory= takes the whole connection from the registry factory: host, port, credentials and TLS. The
+    /// address used to come from the URI options, so a factory's broker other than localhost:5672 was never reached.
+    /// </summary>
+    [Fact]
+    public async Task A_named_factory_gives_the_connection_its_host_port_credentials_and_tls()
+    {
+        var component = new AmqpComponent();
+        await using var context = new RouteContext();
+        context.AddComponent(component);
+        context.AddToRegistry("broker", new AmqpConnectionFactory
+        {
+            Host = "artemis.internal, artemis-2.internal", Port = 5999, User = "svc", Password = "pw", Ssl = true,
+        });
+
+        var settings = component.ResolveConnectionSettings(OptionsFromUri("amqp://orders?connectionFactory=broker"));
+        var address = AmqpComponent.ConnectionAddress(settings);
+
+        address.Host.Should().Be("artemis.internal");
+        address.Port.Should().Be(5999);
+        address.User.Should().Be("svc");
+        address.Password.Should().Be("pw");
+        address.Scheme.Should().Be("amqps");
+    }
+
+    [Fact]
+    public async Task Without_a_factory_the_connection_takes_the_URI_parameters()
+    {
+        var component = new AmqpComponent();
+        await using var context = new RouteContext();
+        context.AddComponent(component);
+
+        var settings = component.ResolveConnectionSettings(
+            OptionsFromUri("amqp://orders?host=broker-a,broker-b&port=5673&user=alice&password=secret"));
+        var address = AmqpComponent.ConnectionAddress(settings);
+
+        address.Host.Should().Be("broker-a");
+        address.Port.Should().Be(5673);
+        address.User.Should().Be("alice");
+        address.Scheme.Should().Be("amqp");
+    }
+
+    [Fact]
+    public async Task An_unknown_factory_name_fails_instead_of_using_the_URI()
+    {
+        var component = new AmqpComponent();
+        await using var context = new RouteContext();
+        context.AddComponent(component);
+
+        var resolve = () => component.ResolveConnectionSettings(OptionsFromUri("amqp://orders?connectionFactory=missing"));
+
+        resolve.Should().Throw<Exception>().WithMessage("*missing*");
+    }
+
     [Fact]
     public void Component_DisposeAsync_OnEmptyPool_DoesNotThrow()
     {

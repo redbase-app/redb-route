@@ -15,7 +15,7 @@ namespace redb.Route.Tests.Processors;
 /// Integration tests for Bean / Service Activator using full route pipeline with DirectComponent.
 /// </summary>
 [Trait("Category", "Integration")]
-public class BeanIntegrationTests : IAsyncDisposable
+public class BeanIntegrationTests : IAsyncLifetime
 {
     private readonly ServiceProvider _serviceProvider;
     private readonly RouteContext _context;
@@ -309,7 +309,9 @@ public class BeanIntegrationTests : IAsyncDisposable
     // Dispose
     // ══════════════════════════════════════════════════════════════
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         await _serviceProvider.DisposeAsync();

@@ -64,12 +64,58 @@ public class JsonArrayTokenizerTests
     }
 
     [Fact]
-    public async Task UnsupportedBody_Throws()
+    public async Task ScalarBody_IsNotAJsonArray()
     {
         var act = async () => await Collect(JsonArrayTokenizer.Tokenize(12345)).ConfigureAwait(false);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*unsupported body type*").ConfigureAwait(false);
+            .WithMessage("*not a JSON array*").ConfigureAwait(false);
+    }
+
+    [Fact]
+    public async Task NullBody_Throws()
+    {
+        var act = async () => await Collect(JsonArrayTokenizer.Tokenize(null)).ConfigureAwait(false);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*body is null*").ConfigureAwait(false);
+    }
+
+    [Fact]
+    public async Task JpathResult_ObjectArray_SplitsIntoElementJson()
+    {
+        // <setBody expr="${jpath('$.lines')}"/> then <split><tokenizeJsonArray/>: the body is the object[] jpath returns.
+        var exchange = new redb.Route.Core.Exchange();
+        exchange.In.Body = """{"id":"o-1","lines":[{"sku":"A-1","qty":1},{"sku":"B-2","qty":2}]}""";
+        var lines = new redb.Route.Expressions.JsonPathExpression("$.lines").Evaluate<object>(exchange);
+
+        var result = await Collect(JsonArrayTokenizer.Tokenize(lines)).ConfigureAwait(false);
+
+        lines.Should().BeOfType<object[]>();
+        result.Should().Equal("""{"sku":"A-1","qty":1}""", """{"sku":"B-2","qty":2}""");
+    }
+
+    [Fact]
+    public async Task TypedScalarArray_SplitsLikeTheText()
+    {
+        var result = await Collect(JsonArrayTokenizer.Tokenize(new[] { 1, 2 })).ConfigureAwait(false);
+        var strings = await Collect(JsonArrayTokenizer.Tokenize(new[] { "x", "y" })).ConfigureAwait(false);
+
+        result.Should().Equal("1", "2");
+        strings.Should().Equal("\"x\"", "\"y\"");
+    }
+
+    [Fact]
+    public async Task JsonTree_SplitsAndKeepsNonAsciiAsWritten()
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse("""[{"name":"Склад"},null]""");
+        using var document = System.Text.Json.JsonDocument.Parse("""[{"name":"Склад"}]""");
+
+        var fromNode = await Collect(JsonArrayTokenizer.Tokenize(node)).ConfigureAwait(false);
+        var fromDocument = await Collect(JsonArrayTokenizer.Tokenize(document)).ConfigureAwait(false);
+
+        fromNode.Should().Equal("""{"name":"Склад"}""", "null");
+        fromDocument.Should().Equal("""{"name":"Склад"}""");
     }
 
     private static async Task<List<object?>> Collect(IAsyncEnumerable<object?> source)

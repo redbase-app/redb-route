@@ -9,11 +9,13 @@ namespace redb.Route.Tests.Definitions;
 /// <summary>
 /// Tests for W5 F8 — AggregateDefinition, ThrottleDefinition, DebounceDefinition, CircuitBreakerDefinition.
 /// </summary>
-public class F8DefinitionTests : IAsyncDisposable
+public class F8DefinitionTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

@@ -170,7 +170,7 @@ public sealed class TcpProducer : ConnectableProducer
         if (_options.InOut)
         {
             var response = await TcpCodec.ReadMessageAsync(
-                _stream!, _options.Framing, _options.Delimiter, _options.ReceiveBufferSize, ct)
+                _stream!, _options.Framing, _options.Delimiter, _options.ReadChunkSize, ct)
                 .ConfigureAwait(false);
 
             if (response is not null)
@@ -239,9 +239,8 @@ public sealed class TcpProducer : ConnectableProducer
         _client = new TcpClient
         {
             NoDelay = _options.NoDelay,
-            ReceiveBufferSize = _options.ReceiveBufferSize,
-            SendBufferSize = _options.SendBufferSize
         };
+        _options.ApplyBufferSizes(_client);
         _client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, _options.KeepAlive);
 
         using var cts = _options.ConnectTimeout > 0

@@ -21,8 +21,8 @@ public sealed class As4Endpoint : EndpointBase<As4EndpointOptions>
 
     /// <summary>
     /// Partner URL a producer posts to, rebuilt from a host-style URI (<c>as4s://ap.partner/as4</c> has the
-    /// path <c>ap.partner/as4</c>). Null for a receive URI (<c>as4:/as4/in</c>). Deliberately not an option:
-    /// the address has one source, the URI.
+    /// path <c>ap.partner/as4</c>), with <see cref="As4EndpointOptions.AddressQuery"/> as its query. Null for a
+    /// receive URI (<c>as4:/as4/in</c>).
     /// </summary>
     internal string? PartnerUrl { get; }
 
@@ -34,13 +34,26 @@ public sealed class As4Endpoint : EndpointBase<As4EndpointOptions>
         Logger = component.Logger;
 
         if (uri.Path.Length > 0 && !uri.Path.StartsWith('/'))
-            PartnerUrl = (options.UseTls ? "https://" : "http://") + uri.Path;
+            PartnerUrl = (options.UseTls ? "https://" : "http://") + uri.Path
+                + (options.AddressQuery is null ? "" : "?" + options.AddressQuery);
     }
 
     /// <inheritdoc />
     public override IProducer CreateProducer()
     {
         RefuseOtherSidesOptions(EndpointRole.Producer);
+        if (PartnerUrl is null)
+        {
+            // as4:?partner=...: the address is the partner's, scheme and query included.
+            if (Uri.Path.Length > 0)
+                throw new InvalidOperationException(
+                    $"AS4 send endpoint '{EndpointUri.Sanitize(Uri.NormalizedKey)}' has a receive path; a send endpoint is " +
+                    "as4s://host[:port]/path, or as4:?partner=... to use the partner's Address.");
+            if (Options.UseTls || Options.AddressQuery is not null)
+                throw new InvalidOperationException(
+                    $"AS4 send endpoint '{EndpointUri.Sanitize(Uri.NormalizedKey)}' has no address, so as4s and addressQuery say nothing: " +
+                    "the partner's Address gives scheme and query. Write as4:?partner=....");
+        }
         return new As4Producer(this, Options);
     }
 

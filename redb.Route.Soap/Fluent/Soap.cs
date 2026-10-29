@@ -84,6 +84,7 @@ public sealed class SoapConsumerBuilder
     private int _requestQueueLimit;
     private int? _rejectStatusCode;
     private int? _retryAfterSeconds;
+    private long? _maxRequestBodySize;
     private string? _connectionFactory;
     private bool _ssl;
     private string? _sslCertPath;
@@ -154,6 +155,9 @@ public sealed class SoapConsumerBuilder
     /// <summary>Retry-After value for a shed request in seconds; 0 = do not send (default 1).</summary>
     public SoapConsumerBuilder RetryAfterSeconds(int seconds) { _retryAfterSeconds = seconds; return this; }
 
+    /// <summary>Upper bound on a request body in bytes, MTOM attachments included; 0 = no bound (default 100 MB).</summary>
+    public SoapConsumerBuilder MaxRequestBodySize(long bytes) { _maxRequestBodySize = bytes; return this; }
+
     /// <summary>Builds the <c>soap:/path?...</c> (or <c>soaps:</c>) URI.</summary>
     public string Build()
     {
@@ -177,6 +181,7 @@ public sealed class SoapConsumerBuilder
         if (_requestQueueLimit > 0) Append("requestQueueLimit", _requestQueueLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (_rejectStatusCode is { } rsc) Append("rejectStatusCode", rsc.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (_retryAfterSeconds is { } ras) Append("retryAfterSeconds", ras.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (_maxRequestBodySize is { } mrb) Append("maxRequestBodySize", mrb.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (!string.IsNullOrEmpty(_allowedClientThumbprints))
             Append("allowedClientThumbprints", _allowedClientThumbprints!);
         return sb.ToString();

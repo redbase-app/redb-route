@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using MQTTnet;
@@ -158,8 +159,8 @@ internal sealed class MqttProducer : ConnectableProducer
 
     private string ResolvePublishTopic(IExchange exchange)
     {
-        // Allow overriding topic via header
-        if (exchange.In.Headers.TryGetValue(MqttHeaders.Topic, out var topicObj)
+        // Only the route's own override: redbMqtt.topic is what the connector last received or sent, never a target.
+        if (exchange.In.Headers.TryGetValue(MqttHeaders.OverrideTopic, out var topicObj)
             && topicObj is string topicStr && !string.IsNullOrEmpty(topicStr))
             return topicStr;
 
@@ -168,16 +169,20 @@ internal sealed class MqttProducer : ConnectableProducer
 
     private MqttQualityOfServiceLevel ResolveQos(IExchange exchange)
     {
-        // 1. Header override
-        if (exchange.In.Headers.TryGetValue(MqttHeaders.Qos, out var qosObj) && qosObj is int qosInt)
+        // 1. The route's own override: redbMqtt.qos is what the connector last received or sent, never a setting.
+        //    An int from C#, or its text from markup (<setHeader value="1"/>); anything else is the route's mistake.
+        if (exchange.In.Headers.TryGetValue(MqttHeaders.OverrideQos, out var qosObj) && qosObj is not null)
         {
-            return qosInt switch
+            var level = qosObj switch
             {
-                0 => MqttQualityOfServiceLevel.AtMostOnce,
-                1 => MqttQualityOfServiceLevel.AtLeastOnce,
-                2 => MqttQualityOfServiceLevel.ExactlyOnce,
-                _ => MqttQualityOfServiceLevel.AtMostOnce
+                int i => i,
+                string s when int.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) => parsed,
+                _ => -1
             };
+            if (level is < 0 or > 2)
+                throw new InvalidOperationException(
+                    $"Header '{MqttHeaders.OverrideQos}' must be 0, 1 or 2 (an int or its text), got '{qosObj}' ({qosObj.GetType().Name}).");
+            return (MqttQualityOfServiceLevel)level;
         }
 
         // 2. Expression (e.g. "${body['qos']}")
@@ -208,8 +213,18 @@ internal sealed class MqttProducer : ConnectableProducer
 
     private bool ResolveRetain(IExchange exchange)
     {
-        if (exchange.In.Headers.TryGetValue(MqttHeaders.Retain, out var retainObj) && retainObj is bool retainBool)
-            return retainBool;
+        // Only the route's own override: redbMqtt.retain is the flag of the last receive or publish.
+        // A bool from C#, or its text from markup (<setHeader value="true"/>).
+        if (exchange.In.Headers.TryGetValue(MqttHeaders.OverrideRetain, out var retainObj) && retainObj is not null)
+        {
+            return retainObj switch
+            {
+                bool b => b,
+                string s when bool.TryParse(s, out var parsed) => parsed,
+                _ => throw new InvalidOperationException(
+                    $"Header '{MqttHeaders.OverrideRetain}' must be true or false (a bool or its text), got '{retainObj}' ({retainObj.GetType().Name}).")
+            };
+        }
 
         return _options.Retain;
     }

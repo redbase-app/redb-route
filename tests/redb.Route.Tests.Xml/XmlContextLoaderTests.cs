@@ -49,11 +49,13 @@ public sealed class ProbeComponent : ComponentBase
 /// nested constructor beans, the onInit pipeline in the fail-fast bootstrap phase, and the
 /// {{...}}-aware <c>enabled=</c> on routes.
 /// </summary>
-public class XmlContextLoaderTests : IAsyncDisposable
+public class XmlContextLoaderTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

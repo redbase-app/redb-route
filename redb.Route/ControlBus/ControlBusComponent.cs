@@ -293,6 +293,7 @@ public sealed class ControlBusProducer : IProducer
                   .Append(" warnings=\"").Append(s.Warnings).Append('"')
                   .Append(" rejected=\"").Append(s.Rejected).Append('"')
                   .Append(" cancelled=\"").Append(s.Cancelled).Append('"')
+                  .Append(" refused=\"").Append(s.Refused).Append('"')
                   .Append(" bytesIn=\"").Append(s.BytesIn).Append('"')
                   .Append(" bytesOut=\"").Append(s.BytesOut).Append('"')
                   .Append(" throughputPerSecond=\"").Append(s.ThroughputPerSecond.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)).Append('"')
@@ -300,6 +301,8 @@ public sealed class ControlBusProducer : IProducer
 
                 if (s.LastErrorMessage is { Length: > 0 } lastError)
                     sb.Append(" lastError=\"").Append(Escape(lastError)).Append('"');
+                if (s.LastRefusalMessage is { Length: > 0 } lastRefusal)
+                    sb.Append(" lastRefusal=\"").Append(Escape(lastRefusal)).Append('"');
             }
             sb.Append("/>");
         }

@@ -17,11 +17,13 @@ public class CatalogOrder
 /// children and the schema errors the format promises. Behavioral spot-checks plus one
 /// anti-drift document that exercises every element at once.
 /// </summary>
-public class CatalogContributionsTests : IAsyncDisposable
+public class CatalogContributionsTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

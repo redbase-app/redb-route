@@ -263,6 +263,13 @@ public abstract class RouteBuilder : IRouteBuilder
     /// </summary>
     public static StringExpression Expr(string template) => new(template);
 
+    /// <summary>
+    /// A value from configuration: <c>{{key}}</c> / <c>{{key:default}}</c> resolved through the route context, as in an
+    /// endpoint URI: <c>SetHeader("redbLdap.AuthDn", Placeholder("{{ldap.user}}"))</c>. Equivalent to
+    /// <c>new PlaceholderExpression(text)</c>; what <c>value="{{key}}"</c> of a markup step becomes.
+    /// </summary>
+    public static PlaceholderExpression Placeholder(string text) => new(text);
+
     // ── Streaming tokenizer helpers ─────────────────────────────────────────
 
     /// <summary>Creates a splitter function that splits the body into lines.</summary>

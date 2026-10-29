@@ -35,11 +35,13 @@ public class ProbeRoster(IReadOnlyList<ProbePartner> partners)
 /// shape: each partner its own bean, rotation a second slot) is built from XML, into the declared
 /// collection type, and a reference may only look back — never forward, never at nothing.
 /// </summary>
-public class XmlBeanListAndRefTests : IAsyncDisposable
+public class XmlBeanListAndRefTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

@@ -14,11 +14,13 @@ namespace redb.Route.Tests.Dsl;
 /// been fixed; this closes the same hole for the expression overload.
 /// </summary>
 [Collection("ExpressionResolver")]
-public class ExpressionConditionEndToEndTests : IAsyncDisposable
+public class ExpressionConditionEndToEndTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

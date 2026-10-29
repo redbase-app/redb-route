@@ -48,7 +48,10 @@ public sealed class SqlE2EDatabase : IAsyncDisposable
             {
                 await connection.OpenAsync(ct);
             }
-            catch (Exception ex) when (ex is DbException or SocketException or TimeoutException or InvalidOperationException)
+            // Inside an ambient transaction the open also enlists, and an enlistment failure (a promotion to a
+            // distributed transaction above all) is the outcome a test looks at, not an unreachable server.
+            catch (Exception ex) when ((ex is DbException or SocketException or TimeoutException or InvalidOperationException)
+                                       && System.Transactions.Transaction.Current is null)
             {
                 throw new InvalidOperationException(
                     $"SQL E2E: provider '{Provider.Name}' is not reachable. {Provider.StartHint}", ex);

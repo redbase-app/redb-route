@@ -35,6 +35,9 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
     private long _bytesOut;
     private long _rejected;
     private long _cancelled;
+    private long _refused;
+    private long _lastRefusalTicks;
+    private volatile string _lastRefusalMessage = "";
     private long _lastActivityTicks;
     private readonly DateTime _startTime = DateTime.UtcNow;
 
@@ -106,6 +109,22 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
 
     /// <inheritdoc />
     public long Cancelled => Interlocked.Read(ref _cancelled);
+
+    /// <inheritdoc />
+    public long Refused => Interlocked.Read(ref _refused);
+
+    /// <inheritdoc />
+    public DateTime? LastRefusalTime
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastRefusalTicks);
+            return ticks == 0 ? null : new DateTime(ticks, DateTimeKind.Utc);
+        }
+    }
+
+    /// <inheritdoc />
+    public string LastRefusalMessage => _lastRefusalMessage;
 
     /// <inheritdoc />
     public DateTime? LastActivity
@@ -229,6 +248,9 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
         Interlocked.Exchange(ref _bytesOut, 0);
         Interlocked.Exchange(ref _rejected, 0);
         Interlocked.Exchange(ref _cancelled, 0);
+        Interlocked.Exchange(ref _refused, 0);
+        Interlocked.Exchange(ref _lastRefusalTicks, 0);
+        _lastRefusalMessage = "";
         Interlocked.Exchange(ref _lastActivityTicks, 0);
         Interlocked.Exchange(ref _lastErrorTicks, 0);
         _lastErrorMessage = "";
@@ -330,6 +352,20 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
     {
         Interlocked.Increment(ref _cancelled);
         Interlocked.Exchange(ref _lastActivityTicks, DateTime.UtcNow.Ticks);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Bumps activity and its own stamp, never the error counter or the last-error stamp: a caller's bad request is not
+    /// a failure of the endpoint, and must not mark it degraded in the health calculation.
+    /// </remarks>
+    public void RecordRefused(string reason)
+    {
+        _lastRefusalMessage = reason ?? "";
+        Interlocked.Increment(ref _refused);
+        var nowTicks = DateTime.UtcNow.Ticks;
+        Interlocked.Exchange(ref _lastActivityTicks, nowTicks);
+        Interlocked.Exchange(ref _lastRefusalTicks, nowTicks);
     }
 
     // ── Utility ──

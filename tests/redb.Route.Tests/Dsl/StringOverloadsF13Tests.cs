@@ -14,11 +14,13 @@ namespace redb.Route.Tests.Dsl;
 /// behaviour of the lambda form through a compiled route; a malformed expression fails at build
 /// (the StringExpression compiles at declaration).
 /// </summary>
-public class StringOverloadsF13Tests : IAsyncDisposable
+public class StringOverloadsF13Tests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

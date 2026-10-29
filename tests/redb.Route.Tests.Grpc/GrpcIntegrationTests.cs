@@ -241,7 +241,10 @@ public class GrpcIntegrationTests : IAsyncLifetime
         var exchange = new Exchange(new Message(largePayload));
         await producer.Process(exchange);
 
-        ((byte[])exchange.Out!.Body!).Should().BeEquivalentTo(largePayload);
+        // Ordered byte compare: BeEquivalentTo on megabytes runs for tens of seconds, for minutes on a slow Linux stand.
+        var echoed = (byte[])exchange.Out!.Body!;
+        echoed.Length.Should().Be(largePayload.Length);
+        echoed.AsSpan().SequenceEqual(largePayload).Should().BeTrue("the payload comes back unchanged");
     }
 
     [Fact]

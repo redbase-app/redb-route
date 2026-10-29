@@ -10,7 +10,7 @@ namespace redb.Route.Tests.S3;
 
 /// <summary>
 /// Smoke test for the P1 transport span opened by <see cref="S3Producer"/>.
-/// Requires MinIO docker container on localhost:9000.
+/// Requires the S3 test store (docker-compose.tests.yml service s3) on localhost:9000.
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class S3TelemetrySmokeTests

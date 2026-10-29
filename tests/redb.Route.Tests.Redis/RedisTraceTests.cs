@@ -25,7 +25,11 @@ public sealed class RedisTraceTests
 
     public static TheoryData<string> Modes => new() { "BLPOP", "XREAD", "SUBSCRIBE" };
 
-    private string Uri(string operation) => $"redis:{operation}:{_key}?connectionString={ConnectionString}";
+    // XREAD from the stream's start: with the default $ the position is taken in the consumer loop after Start returned,
+    // and an entry added before that is behind it. These tests are about spans, not about the start position.
+    private string Uri(string operation) => operation == "XREAD"
+        ? $"redis:{operation}:{_key}?connectionString={ConnectionString}&streamStartPosition=0"
+        : $"redis:{operation}:{_key}?connectionString={ConnectionString}";
 
     private RouteTelemetryProbe Spans(ActivityKind kind)
         => new(a => a.Kind == kind && RouteTelemetryProbe.Tag(a, RouteTelemetryProbe.EndpointTag)?.Contains(_key, StringComparison.Ordinal) == true);
@@ -42,7 +46,11 @@ public sealed class RedisTraceTests
                 await redis.GetDatabase().StreamAddAsync(_key, "v", value);
                 break;
             default:
-                await redis.GetSubscriber().PublishAsync(RedisChannel.Literal(_key), value);
+                // Pub/sub keeps nothing for a subscriber that is not there yet: send until the consumer has one.
+                var deadline = DateTime.UtcNow + Wait;
+                while (await redis.GetSubscriber().PublishAsync(RedisChannel.Literal(_key), value) == 0
+                       && DateTime.UtcNow < deadline)
+                    await Task.Delay(50);
                 break;
         }
     }

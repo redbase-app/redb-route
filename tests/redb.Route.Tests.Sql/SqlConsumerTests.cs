@@ -275,6 +275,131 @@ public class SqlConsumerTests : IDisposable
         errors[0]["err"]!.ToString().Should().Contain("Processing failed!");
     }
 
+    private SqlConsumer TransactedOutbox(bool afterRollback, Func<IExchange, bool> fails, string? outputType = null)
+    {
+        var parameters = new Dictionary<string, string>
+        {
+            ["repeatCount"] = "1",
+            ["transacted"] = "true",
+            ["onSuccess"] = "UPDATE outbox SET processed = 1 WHERE id = :#id",
+            ["onFailure"] = "UPDATE outbox SET processed = 2 WHERE id = :#id",
+        };
+        if (afterRollback) parameters["onFailureAfterRollback"] = "true";
+        if (outputType is not null) parameters["outputType"] = outputType;
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(ci => fails(ci.Arg<IExchange>())
+                ? Task.FromException(new InvalidOperationException("bad row"))
+                : Task.CompletedTask);
+        return (SqlConsumer)CreateEndpoint(parameters).CreateConsumer(processor);
+    }
+
+    private List<long> ProcessedStates()
+        => _db.Query("SELECT processed FROM outbox ORDER BY id").Select(r => Convert.ToInt64(r["processed"])).ToList();
+
+    [Fact]
+    public async Task Transacted_OnFailureAfterRollback_MarksTheFailedRow_AndGoesOnWithTheOthers()
+    {
+        InsertOutboxRow("ok-1");
+        InsertOutboxRow("bad");
+        InsertOutboxRow("ok-2");
+        var consumer = TransactedOutbox(afterRollback: true, e => (string?)e.In.Headers["message"] == "bad");
+
+        await consumer.Poll(CancellationToken.None);
+
+        ProcessedStates().Should().Equal([1L, 2L, 1L],
+            "the failed row is rolled back to its savepoint and marked; the rows around it commit in the same poll");
+    }
+
+    [Fact]
+    public async Task Transacted_ByDefault_RollsTheWholePollBack_AndTheRowIsReadAgain()
+    {
+        InsertOutboxRow("ok-1");
+        InsertOutboxRow("bad");
+        InsertOutboxRow("ok-2");
+        var consumer = TransactedOutbox(afterRollback: false, e => (string?)e.In.Headers["message"] == "bad");
+
+        await consumer.Poll(CancellationToken.None);
+
+        ProcessedStates().Should().Equal([0L, 0L, 0L], "as in Apache Camel: the cycle is one transaction and rolls back whole");
+    }
+
+    [Fact]
+    public async Task Transacted_OnFailureAfterRollback_SelectOne_KeepsTheMarkInATransactionOfItsOwn()
+    {
+        InsertOutboxRow("bad");
+        var consumer = TransactedOutbox(afterRollback: true, _ => true, outputType: "SelectOne");
+
+        await consumer.Poll(CancellationToken.None);
+
+        ProcessedStates().Should().Equal([2L]);
+    }
+
+    [Theory]
+    [InlineData("transacted=false", "needs transacted=true")]
+    [InlineData("outputType=StreamList", "StreamList")]
+    public void OnFailureAfterRollback_IsRefused_WhereItCannotHold(string other, string message)
+    {
+        var parameters = new Dictionary<string, string> { ["onFailureAfterRollback"] = "true", ["transacted"] = "true" };
+        var (key, value) = (other.Split('=')[0], other.Split('=')[1]);
+        parameters[key] = value;
+
+        var act = () => CreateEndpoint(parameters);
+
+        act.Should().Throw<ArgumentException>().WithMessage($"*{message}*");
+    }
+
+    /// <summary>The ways a route returns without throwing: a failure left unhandled, a handled one, a rollback-only exchange.</summary>
+    public static TheoryData<string, bool> RouteOutcomes => new()
+    {
+        { "unhandled", true },   // onException handled="false": the failure stays on the exchange
+        { "handled", false },    // onException handled="true": the row is done
+        { "rollbackOnly", true },
+    };
+
+    [Theory]
+    [MemberData(nameof(RouteOutcomes))]
+    public async Task Consumer_FailureLeftOnTheExchange_RunsOnFailure_NotOnSuccess(string outcome, bool fails)
+    {
+        InsertOutboxRow("msg-1");
+        _db.Execute("CREATE TABLE marks (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, err TEXT)");
+
+        var endpoint = CreateEndpoint(new()
+        {
+            ["repeatCount"] = "1",
+            ["onSuccess"] = "INSERT INTO marks(kind) VALUES('success')",
+            ["onFailure"] = "INSERT INTO marks(kind, err) VALUES('failure', :#redbError)"
+        });
+        var processor = Substitute.For<IProcessor>();
+        processor.Process(Arg.Any<IExchange>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var exchange = ci.Arg<IExchange>();
+                switch (outcome)
+                {
+                    case "unhandled":
+                        exchange.Exception = new InvalidOperationException("left on the exchange");
+                        break;
+                    case "handled":
+                        exchange.Exception = new InvalidOperationException("handled by onException");
+                        exchange.ExceptionHandled = true;
+                        break;
+                    default:
+                        exchange.MarkRollbackOnly();
+                        break;
+                }
+                return Task.CompletedTask;
+            });
+
+        var consumer = (SqlConsumer)endpoint.CreateConsumer(processor);
+        await consumer.Poll(CancellationToken.None);
+
+        var marks = _db.Query("SELECT kind, err FROM marks");
+        marks.Should().ContainSingle().Which["kind"].Should().Be(fails ? "failure" : "success");
+        if (outcome == "unhandled")
+            marks[0]["err"]!.ToString().Should().Contain("left on the exchange");
+    }
+
     [Fact]
     public async Task Consumer_OnSuccess_MissingParameter_IsAnError()
     {

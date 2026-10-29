@@ -89,6 +89,11 @@ a raw Redis command, named with `.CustomCommand("PING")` (or the `redbRedis.Comm
 `streamClaimMinIdleMs` must exceed the longest time a route takes: a slower route would have its entry claimed by another
 consumer while it still works on it.
 
+A consumer is ready when its route has started: the subscription, the consumer group and the XREAD position are set up
+before `Start()` returns, so a message published right after the start is received. A Redis that does not answer at
+start fails the route start with an error naming the consumer (`redis:SUBSCRIBE:orders cannot start ...`); an outage
+after the start is ridden out by the client, which reconnects and subscribes again.
+
 ## Transactions
 
 Redis is a store first, so inside a route's `.Transacted()` block only the operations that announce work wait for the

@@ -68,7 +68,8 @@ public sealed class RestDefinition
         _verbs.Add(verb);
         EnsureOpenApiRoute();
 
-        var routeId = verb.RouteId ?? $"rest:{verb.Method} {verb.FullPath}";
+        var key = verb.RouteId ?? $"{verb.Method} {verb.FullPath}";
+        var routeId = verb.RouteId ?? GeneratedId(key);
         var route = _builder.From(ConsumerUri(verb.FullPath, verb.Method)).RouteId(routeId);
         Append(route, new RestRequestDefinition(verb, Options));
 
@@ -80,12 +81,12 @@ public sealed class RestDefinition
         }
 
         // Inline steps live in their own direct route, so the response step can still run after them.
-        // The name carries a fingerprint of the full route id: sanitizing alone maps "/{id}" and "/id"
-        // to the same text, and a direct endpoint registered twice silently keeps the last handler.
-        var inner = $"direct://rest-{Sanitize(routeId)}-{Fingerprint(routeId)}";
+        // The name carries a fingerprint (GeneratedId): sanitizing alone maps "/{id}" and "/id" to the
+        // same text, and a direct endpoint registered twice silently keeps the last handler.
+        var inner = $"direct://{GeneratedId(key)}";
         route.To(inner);
         Append(route, new RestResponseDefinition(verb, Options));
-        return _builder.From(inner).RouteId(routeId + " (handler)");
+        return _builder.From(inner).RouteId(routeId + "-handler");
     }
 
     /// <summary>Path the OpenAPI document is served at (<see cref="RestOptions.OpenApiPath"/> or <c>{basePath}/openapi.json</c>).</summary>
@@ -96,7 +97,7 @@ public sealed class RestDefinition
         if (_openApiRegistered || !Options.OpenApi) return;
         _openApiRegistered = true;
 
-        var route = _builder.From(ConsumerUri(OpenApiPath, "GET")).RouteId($"rest:openapi {BasePath}");
+        var route = _builder.From(ConsumerUri(OpenApiPath, "GET")).RouteId(GeneratedId($"openapi {BasePath}"));
         Append(route, new OpenApiDocumentDefinition(this));
     }
 
@@ -124,6 +125,14 @@ public sealed class RestDefinition
         step.Parent = route;
         route.Outputs.Add(step);
     }
+
+    /// <summary>
+    /// A generated route id: <c>rest-GET-api-orders-id-1a2b3c4d</c>. It carries no '/' and no space, because the worker
+    /// API and the dashboard address a route by one path segment. The fingerprint keeps <c>/{id}</c> and <c>/id</c>
+    /// apart, which sanitizing alone maps to the same text, and it is the same in every process, so the id survives a
+    /// restart.
+    /// </summary>
+    internal static string GeneratedId(string key) => $"rest-{Sanitize(key)}-{Fingerprint(key)}";
 
     private static string Sanitize(string routeId)
         => Regex.Replace(routeId, @"[^A-Za-z0-9_.-]+", "-").Trim('-');

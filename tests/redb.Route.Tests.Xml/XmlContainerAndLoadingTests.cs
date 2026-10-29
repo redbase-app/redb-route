@@ -11,11 +11,13 @@ namespace redb.Route.Tests.Xml;
 /// Р21 extension channel exercised from outside the core, expression-escaping equivalence and
 /// the glob loading overload.
 /// </summary>
-public class XmlContainerAndLoadingTests : IAsyncDisposable
+public class XmlContainerAndLoadingTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

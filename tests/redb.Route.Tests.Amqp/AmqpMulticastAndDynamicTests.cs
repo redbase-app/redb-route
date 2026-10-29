@@ -92,6 +92,69 @@ public sealed class AmqpMulticastAndDynamicTests
         recorder.Received.Should().Equal("to the dynamic node");
     }
 
+    /// <summary>
+    /// On a MULTICAST address the subscription is the receiver link: it exists once the broker answered the attach.
+    /// Start used to return before that answer, so a message sent right after it could go to nobody.
+    /// </summary>
+    [Fact]
+    public async Task A_message_sent_right_after_Start_on_a_multicast_address_is_received()
+    {
+        var address = $"multicast.{Guid.NewGuid():N}";
+        var producerEndpoint = Endpoint(address, "&routingType=MULTICAST");
+        var producer = (AmqpProducer)producerEndpoint.CreateProducer();
+        await producer.Start();
+        var recorder = Recorder();
+        var endpoint = Endpoint(address, "&routingType=MULTICAST");
+        var consumer = (AmqpConsumer)endpoint.CreateConsumer(recorder.Processor);
+        try
+        {
+            await consumer.Start();
+            await producer.Process(new Exchange(new Message("right after start")));
+
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (recorder.Received.IsEmpty && DateTime.UtcNow < deadline)
+                await Task.Delay(20);
+            recorder.Received.Should().Equal("right after start");
+        }
+        finally
+        {
+            await consumer.Stop();
+            await endpoint.Stop();
+            await producer.Stop();
+            await producerEndpoint.Stop();
+        }
+    }
+
+    /// <summary>
+    /// A link the broker refuses fails Start, naming the consumer and the broker's reason. It used to be logged by the
+    /// receive loop while the consumer counted as started and never received. Here: an ANYCAST receiver on an address
+    /// that exists for MULTICAST only.
+    /// </summary>
+    [Fact]
+    public async Task A_receiver_link_the_broker_refuses_fails_Start_and_names_the_consumer()
+    {
+        var address = $"multicast-only.{Guid.NewGuid():N}";
+        var multicastEndpoint = Endpoint(address, "&routingType=MULTICAST");
+        var multicast = (AmqpConsumer)multicastEndpoint.CreateConsumer(Recorder().Processor);
+        await multicast.Start();
+        var endpoint = Endpoint(address, "&routingType=ANYCAST&timeout=10");
+        var consumer = (AmqpConsumer)endpoint.CreateConsumer(Recorder().Processor);
+        try
+        {
+            var start = () => consumer.Start();
+
+            var refused = await start.Should().ThrowAsync<InvalidOperationException>();
+            _output.WriteLine(refused.Which.Message);
+            refused.WithMessage($"AMQP consumer amqp:{address} cannot start: the broker refused the receiver link*");
+        }
+        finally
+        {
+            await endpoint.Stop();
+            await multicast.Stop();
+            await multicastEndpoint.Stop();
+        }
+    }
+
     [Fact]
     public void A_dynamic_endpoint_with_an_address_is_refused()
     {

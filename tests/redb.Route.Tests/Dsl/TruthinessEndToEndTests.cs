@@ -11,11 +11,13 @@ namespace redb.Route.Tests.Dsl;
 /// header actually routes a branch.
 /// </summary>
 [Collection("ExpressionResolver")]
-public class TruthinessEndToEndTests : IAsyncDisposable
+public class TruthinessEndToEndTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

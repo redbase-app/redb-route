@@ -3,6 +3,188 @@
 What to check and change when moving to a new version. Each section lists the changes that need action;
 [CHANGELOG.md](CHANGELOG.md) has the full list of what changed.
 
+## 4.5.0
+
+### A Redis consumer starts only when it receives
+
+A `redis:` consumer (SUBSCRIBE, PSUBSCRIBE, XREAD, XGROUP, BLPOP, BRPOP) now subscribes, creates its consumer group
+and pins its XREAD position before `Start()` returns. Before, it did that in the background after the route had
+started: a message published or an entry added in between was lost, and a Redis that was down at start left a
+consumer that looked started and never received anything, with an error in the log only.
+
+What the operator sees now: when Redis does not answer at start, the route, and with it the context, fails to start
+with `InvalidOperationException: Redis consumer redis:<OPERATION>:<resource> cannot start, Redis did not answer: ...`.
+In a Tsak worker the context shows as failed instead of running. Check that Redis is reachable from the worker before
+the context starts. Once a consumer has started, a later outage is handled as before: StackExchange.Redis reconnects
+and subscribes again. Start waits up to the connect and command timeouts of the connection (5 s each by default)
+before it gives up.
+
+### An AMQP consumer starts only when the broker accepted its link
+
+An `amqp:` consumer now waits in `Start()` until the broker has answered every receiver link it attaches, as it did
+for `dynamic=true` only. Before, a link the broker refused (an address it does not serve, a routing type the address
+does not have, no permission to read it) was logged by the receive loop, and the consumer looked started and never
+received anything. On a MULTICAST address the subscription is the link itself, so it is now in place when `Start()`
+returns.
+
+What the operator sees now: the route, and with it the context, fails to start with
+`InvalidOperationException: AMQP consumer amqp:<address> cannot start: the broker refused the receiver link
+(<condition>: <description>).`, or `... the broker did not answer the receiver link within <timeout> s.` after the
+endpoint's `timeout` (30 s by default). In a Tsak worker the context shows as failed instead of running. Fix the
+address, the routing type or the permissions the message names.
+
+### An MQTT publish goes to its endpoint topic
+
+An `mqtt:` publish no longer reads `redbMqtt.topic` as its target. The connector writes that header itself, with the
+topic a message was received on and the topic of every publish, so a second publish in a route went to the first
+topic, and a received message republished to `mqtt://alerts/...` went back to the topic it came from. A route that set
+`redbMqtt.topic` to choose where a publish goes sets `redbMqtt.overrideTopic` (`MqttHeaders.OverrideTopic`) instead;
+`redbMqtt.topic` stays readable as the topic of the last receive or publish.
+
+### An MQTT publish takes its endpoint QoS and retain flag
+
+An `mqtt:` publish no longer reads `redbMqtt.qos` and `redbMqtt.retain`. The consumer writes them with the QoS and
+retain flag of the received message, so a republished message kept the QoS it arrived with, and a retained message was
+retained again on the new topic. A publish now uses the endpoint's `qos`, `qosExpression` and `retain`. A route that
+set `redbMqtt.qos` or `redbMqtt.retain` to choose them sets `redbMqtt.overrideQos` (`MqttHeaders.OverrideQos`: 0, 1 or
+2) or `redbMqtt.overrideRetain` (`MqttHeaders.OverrideRetain`: true or false) instead, as a number or bool from C# or
+as text from markup (`<setHeader name="redbMqtt.overrideQos" value="1"/>`). Another value fails the publish. A route
+that wants a republish to keep the incoming flags copies them over:
+`exchange.In.Headers[MqttHeaders.OverrideRetain] = exchange.In.Headers[MqttHeaders.Retain];`. The MQTT 5 properties
+(`redbMqtt.contentType`, `redbMqtt.responseTopic`, `redbMqtt.correlationData`, `redbMqtt.messageExpiryInterval`,
+`redbMqtt.userProperties`) still pass through to a publish.
+
+### XML structure limits
+
+XML that redb.Route reads from outside goes through `SafeXml`, and `SafeXml` now checks the structure of a document
+while it reads it. A document over a limit is refused with `XmlLimitException`, an `XmlException`, before it is built.
+The limits every caller gets:
+
+| Limit | Default |
+|---|---|
+| Nesting depth, the root counting as 1 | 256 |
+| Attributes on one element, namespace declarations included | 1024 |
+| Namespace declarations on one element | 256 |
+
+Size, element count and namespace declarations in the whole document are not bounded by default. These limits apply
+to XPath over a message body, the SOAP receiver and sender, Route-XML markup and templates. A document deeper than
+256 levels used to be read and is refused now; search for such documents (generated XML, recursive structures)
+before upgrading. Code that reads XML through `SafeXml` itself can pass its own `XmlLimits`:
+`SafeXml.Parse(xml, XmlLimits.Default with { MaxDepth = 1024 })`.
+
+**SOAP receiver.** A request is checked once against these limits before anything parses it, and again after the
+body is decrypted; a request over a limit is a `Client` / `Sender` fault naming the limit. The request body is now
+bounded by `maxRequestBodySize`, 100 MB by default; it was not bounded before. `maxRequestBodySize=0` restores no
+bound.
+
+**AS4 receiver and sender.** The envelope has tighter limits, the shape of an eDelivery envelope: depth 32,
+32 attributes and 16 namespace declarations on an element, 4096 namespace declarations in the envelope, and
+`maxEnvelopeCharacters` as before. A received envelope over them is a SOAP `Sender` fault; a partner's answer over
+them is an invalid receipt. A message must carry exactly one `xenc:EncryptedKey`, and each payload is decrypted once;
+anything else is `EBMS:0102`. Domibus, Holodeck B2B and this connector send messages well within all of this.
+
+### AS4 refusals in their own counter
+
+An AS4 receiver used to count every message it refused (a malformed envelope, a failed signature or decryption, a
+message the agreement does not allow) in `Errors`, so a partner with a broken configuration turned the route red. These
+are now counted in `IEndpointStatistics.Refused`, with the reason of the last one in `LastRefusalMessage`, and no longer
+in `Errors`, the last error or health. `EBMS:0004` (a failure on our side) and route failures stay errors. An alert
+that watches `Errors` of an AS4 receive endpoint for refused messages should watch `Refused` instead; in a route,
+`stats('current', 'refused')`.
+
+### `attachments` in an expression
+
+A bare `attachments` in an expression (`${attachments}`, `attachments.size`) now reads the attachments of the In
+message, as `${attachments}` does in Camel Simple. It used to fall back to an exchange property of that name, for
+example the list an `smtp:` route put in `exchange.Properties["Attachments"]`. An expression that meant the property
+writes `property.attachments`.
+
+### Mail and SOAP attachments are message attachments
+
+`smtp:`, `imap:`, `pop3:` and `soap:` now work with the message attachments, `exchange.In.Attachments` (see the
+README, "Attachments"). The old conventions are removed with no transition period.
+
+**Nothing warns you.** `smtp:` no longer reads the exchange property `Attachments`. That property is an ordinary
+property now, so a route still setting it gets no error, and its mail goes out **without the files**. Search the code
+for `Properties["Attachments"]`, `MailAttachment` set on an exchange property, `SoapHeaders.Attachments`,
+`redbSoap.attachments`, `SoapHeaders.HasAttachments`, `redbSoap.hasAttachments` and `SoapAttachment`, and migrate
+each one as shown below.
+
+**Mail: files from code, before `smtp:`.**
+
+```csharp
+// before
+exchange.Properties["Attachments"] = new List<MailAttachment>
+{
+    new("orders.zip", zip, "application/zip")
+};
+
+// after
+exchange.In.Attachments.Add(new Attachment
+{
+    Name = "orders.zip", FileName = "orders.zip", ContentType = "application/zip",
+    Content = AttachmentContent.FromBytes(zip)
+});
+```
+
+**Mail: file paths, before `smtp:`.**
+
+```csharp
+// before
+exchange.Properties["Attachments"] = new List<string> { @"C:\out\report.pdf" };
+
+// after: the file is read when the mail is sent
+exchange.In.Attachments.Add(new Attachment
+{
+    Name = "report.pdf", FileName = "report.pdf", ContentType = "application/pdf",
+    Content = AttachmentContent.FromFile(@"C:\out\report.pdf")
+});
+// or a route step: .AddAttachmentFromFile(@"C:\out\report.pdf", contentType: "application/pdf")
+```
+
+The `attachments=` endpoint option (comma separated paths) stays as it was.
+
+**Mail: received mail.** `imap:` and `pop3:` also put the attachments of a mail on the message attachments.
+`MailMessageBody`, its `Attachments` and the `redbMail.*` attachment headers stay as they were, so routes reading
+them need no change. Two behaviors are new: a received mail sent on to `smtp:` carries its attachments (before, they
+were dropped), and its text (`MailMessageBody` converts to its text; before, the type name was sent as the text).
+
+**SOAP: sending attachments (producer, or a consumer reply).**
+
+```csharp
+// before
+msg.Headers[SoapHeaders.Attachments] =
+    new List<SoapAttachment> { new("doc-1", "application/pdf", pdfBytes) };
+
+// after
+msg.Attachments.Add(new Attachment
+{
+    Name = "doc-1", ContentId = "doc-1", ContentType = "application/pdf",
+    Content = AttachmentContent.FromBytes(pdfBytes)
+});
+```
+
+A consumer route that replies with attachments replaces the request ones: `e.In.Attachments.Clear()`, then `Add`. As
+before, a reply that still holds exactly the request attachments is sent without them.
+
+**SOAP: reading attachments.**
+
+```csharp
+// before
+var parts = e.In.GetHeader<IReadOnlyList<SoapAttachment>>(SoapHeaders.Attachments);
+byte[] bytes = parts![0].Content;
+bool any = e.In.GetHeader<bool>(SoapHeaders.HasAttachments);
+
+// after
+var part = e.In.Attachments.Find("doc-1");          // named by the Content-ID
+byte[] bytes = part!.Content.ReadAllBytes();
+bool any = e.In.Attachments.Count > 0;              // in an expression: attachments.size > 0
+```
+
+`SoapAttachment.ContentId`, `ContentType` and `Content` map to `Attachment.ContentId` (also its `Name`),
+`ContentType` and `Content.ReadAllBytes()`. A producer reply's attachments are on `exchange.Out.Attachments`, and on
+`In` after the pipeline moves on.
+
 ## 4.4
 
 ### HTTP header options

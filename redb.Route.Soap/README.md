@@ -189,7 +189,6 @@ Connector metadata carries the `redbSoap.` prefix and is **stripped before the e
 | `redbSoap.username` / `redbSoap.password` | in | WS-Security UsernameToken, surfaced on the consumer. |
 | `redbSoap.signatureValid` | in | Whether an inbound Body signature verified (see WS-Security). |
 | `redbSoap.responseType` | out | Pojo mode: per-message response CLR `Type`. |
-| `redbSoap.attachments` | in/out | MTOM attachments — an `IReadOnlyList<SoapAttachment>`. |
 | `redbSoap.header.*` | in/out | Envelope `<soap:Header>` block elements (the second plane). |
 
 ---
@@ -281,22 +280,33 @@ context.AddToRegistry("secured", new SoapConnectionFactory {
 
 ## MTOM / attachments
 
-Set `Mtom = true`. Binary attachments travel as `multipart/related` + `xop:Include` and live on the
-`redbSoap.attachments` header plane as `SoapAttachment` records — a side plane, like Camel's
-`AttachmentMessage`, so the Body contract is untouched.
+Set `Mtom = true`. Binary attachments travel as `multipart/related` + `xop:Include` and are the
+[message attachments](../README.md#attachments) (`exchange.In.Attachments`), as Camel's `AttachmentMessage`, so the
+Body contract is untouched and the same attachments can go on to `smtp:` or come from an upload.
 
 ```csharp
 var msg = new Message("<Upload xmlns=\"urn:svc\"><file>" +
     "<xop:Include xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" href=\"cid:doc-1\"/></file></Upload>");
-msg.Headers[SoapHeaders.Attachments] =
-    new List<SoapAttachment> { new("doc-1", "application/pdf", pdfBytes) };
+msg.Attachments.Add(new Attachment
+{
+    Name = "doc-1", ContentId = "doc-1", ContentType = "application/pdf",
+    Content = AttachmentContent.FromBytes(pdfBytes),
+});
 await producer.Process(new Exchange(msg));
 ```
 
-The consumer exposes inbound attachments on `redbSoap.attachments`; the route reads them and, to reply with
-attachments, sets a **new** list on its response (the connector will not echo the caller's own inbound
-attachments). The MIME parser is line-anchored, so boundary-looking bytes inside a binary part never cause a
-mis-split.
+- **Producer.** Sends every message attachment as a part addressed by its `Content-ID`, else by its name; the reply's
+  MTOM parts become the attachments of the reply, which replace the request ones when the pipeline moves on (a reply
+  without parts leaves the request attachments).
+- **Consumer.** Every non-root part of an inbound `multipart/related` becomes a message attachment named by its
+  `Content-ID`, with its full `Content-Type`. To reply with attachments, the route changes them (for example
+  `Attachments.Clear()` and `Add`); a reply that holds exactly the request attachments is sent without them, so the
+  connector does not echo the caller's own files.
+- In an expression: `attachments.size`, `attachmentContent('doc-1')`, `attachments[0].contentId`.
+
+The MIME parser is line-anchored, so boundary-looking bytes inside a binary part never cause a mis-split.
+The `redbSoap.attachments` and `redbSoap.hasAttachments` headers and the `SoapAttachment` type are gone (see
+`UPGRADING.md`, "Mail and SOAP attachments are message attachments").
 
 ---
 
@@ -372,6 +382,20 @@ Honest boundaries (documented in `../../docs/SOAP_CONNECTOR_PLAN.md`):
   `PasswordDigest` is treated as plaintext. Rare WS-* variants.
 
 Part of the redb.Route connector family.
+
+## Request limits
+
+A request is bounded before the route sees it:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `maxRequestBodySize` | 100 MB | Upper bound on the request body in bytes, MTOM attachments included; the HTTP server refuses a larger one. `0` = no bound. DSL: `.MaxRequestBodySize(bytes)` |
+
+The envelope is read through the core `SafeXml`: a DTD is refused, and the structure is checked while it is read,
+with the core's default limits (depth 256, 1024 attributes and 256 namespace declarations on an element). The check
+runs once before anything parses the request, and again after the body is decrypted, since anyone can encrypt for
+our certificate. A request over a limit is a `Client` (SOAP 1.1) or `Sender` (SOAP 1.2) fault that names the limit,
+and never reaches the route. The sender reads the service's answers with the same limits.
 
 ## Concurrency limits
 

@@ -11,11 +11,13 @@ namespace redb.Route.Tests.Core;
 /// driven with a real message, asserting the message actually reaches the resolved destination.
 /// Values are drawn from IConfiguration, context properties and inline defaults.
 /// </summary>
-public class PropertyPlaceholderIntegrationTests : IAsyncDisposable
+public class PropertyPlaceholderIntegrationTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

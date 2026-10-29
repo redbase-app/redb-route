@@ -134,6 +134,14 @@ public sealed record ElementSpec(
     /// </summary>
     public bool Terminal { get; init; }
 
+    /// <summary>
+    /// The element takes attributes beyond <see cref="Attributes"/>: the options of the type it names (a serializer's
+    /// <c>delimiter=";"</c> on <c>&lt;marshal type="…"&gt;</c> or <c>&lt;dataFormat&gt;</c>), which only that type knows. The
+    /// schema lets them through and the loader holds each against the type's writable properties. Init-only, as
+    /// <see cref="Terminal"/>.
+    /// </summary>
+    public bool OpenAttributes { get; init; }
+
     /// <summary>A leaf with attributes only.</summary>
     public static ElementSpec Leaf(string name, params AttributeSpec[] attributes)
         => new(name, XmlElementKind.Step, attributes, []);

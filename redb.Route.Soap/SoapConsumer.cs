@@ -81,7 +81,7 @@ public sealed class SoapConsumer : IConsumer
             o.Host, o.Port, o.Path, methods, HandleRequest,
             ssl, certPath, certPassword,
             corsOptions: null,                 // SOAP is not a browser transport
-            maxRequestBodySize: 0,             // unchanged: the connector caps nothing itself
+            maxRequestBodySize: o.MaxRequestBodySize,
             clientCertificateMode: MapClientCertificateMode(certMode),
             clientCertificateValidation: BuildThumbprintValidator(thumbprints),
             concurrencyLimit: ConcurrencyLimitOptions.FromEndpoint(
@@ -187,7 +187,7 @@ public sealed class SoapConsumer : IConsumer
 
         // Inbound MTOM/XOP (camel-cxf mtom-enabled parity): unwrap multipart/related into the root envelope
         // plus attachments, then continue as if a plain envelope had arrived.
-        IReadOnlyList<SoapAttachment>? inAttachments = null;
+        IReadOnlyList<Attachment>? inAttachments = null;
         if (SoapMultipart.IsMultipartRelated(contentType))
         {
             try
@@ -211,9 +211,15 @@ public sealed class SoapConsumer : IConsumer
         // Pipeline statistics (MessagesIn/BytesIn) are the core StatisticsProcessor's - the
         // ownership audit removed the double. Transport-level failures above stay recorded here.
 
+        // The envelope is parsed several times below (decryption, the body, the signature, the headers): one
+        // streaming pass over the structure first, so every later parse reads a bounded document.
+        if (await RefusedOverLimits(http, version, reqBytes).ConfigureAwait(false))
+            return;
+
         // WS-Security decrypt (Ф4b): if the Body is encrypted and we hold the private key, decrypt first,
         // so signature verification and parsing below see the plaintext. Skipped in Message (transparent
         // proxy) mode — there the route receives the wire bytes verbatim.
+        var decrypted = false;
         if (dataFormat != SoapDataFormat.Message && factory?.SigningCert is { HasPrivateKey: true } decKey)
         {
             try
@@ -225,6 +231,7 @@ public sealed class SoapConsumer : IConsumer
                     using var dms = new MemoryStream();
                     doc.Save(dms);
                     reqBytes = dms.ToArray();
+                    decrypted = true;
                 }
             }
             catch (Exception ex)
@@ -246,6 +253,11 @@ public sealed class SoapConsumer : IConsumer
                 return;
             }
         }
+
+        // The plaintext came from the caller too: anyone can encrypt for our certificate. Its structure is checked
+        // again before anything reads it.
+        if (decrypted && await RefusedOverLimits(http, version, reqBytes).ConfigureAwait(false))
+            return;
 
         SoapParseResult parsed;
         try { parsed = SoapEnvelope.Parse(reqBytes, version); }
@@ -277,10 +289,10 @@ public sealed class SoapConsumer : IConsumer
             _ => parsed.BodyXml,
         };
         var message = new Message(bodyForRoute) { ContentType = "text/xml" };
-        if (inAttachments is { Count: > 0 })
+        if (inAttachments is not null)
         {
-            message.Headers[SoapHeaders.Attachments] = inAttachments;
-            message.Headers[SoapHeaders.HasAttachments] = true;
+            foreach (var attachment in inAttachments)
+                message.Attachments.Add(attachment);
         }
         var action = ExtractAction(http.Request, version);
         if (!string.IsNullOrEmpty(action)) message.Headers[SoapHeaders.Action] = action;
@@ -435,11 +447,11 @@ public sealed class SoapConsumer : IConsumer
                 }
             }
 
-            // Outbound MTOM: package the reply with attachments the route explicitly set. The guard against
-            // the inbound list prevents silently echoing the caller's own attachments back when a route
-            // mutates In in place and never sets a distinct reply list.
-            var outAttachments = outMsg.GetHeader<IReadOnlyList<SoapAttachment>>(SoapHeaders.Attachments);
-            if (factory?.Mtom == true && outAttachments is { Count: > 0 } && !ReferenceEquals(outAttachments, inAttachments))
+            // Outbound MTOM: package the reply with the message attachments the route set. A reply that still
+            // holds exactly the request attachments is not packaged, so a route that never touches them does not
+            // echo the caller's own files back.
+            var outAttachments = outMsg.Attachments;
+            if (factory?.Mtom == true && outAttachments.Count > 0 && !SameAttachments(outAttachments, inAttachments))
                 (respEnvelope, respContentType) = SoapMultipart.Write(respEnvelope, SoapEnvelope.ContentType(version, null), outAttachments);
 
             http.Response.ContentType = respContentType;
@@ -520,6 +532,19 @@ public sealed class SoapConsumer : IConsumer
             ? SoapVersion.Soap12
             : SoapVersion.Soap11;
 
+    /// <summary>True when the reply holds the very attachments the request brought, in the same order.</summary>
+    private static bool SameAttachments(IReadOnlyList<Attachment> reply, IReadOnlyList<Attachment>? request)
+    {
+        if (request is null || reply.Count != request.Count)
+            return false;
+        for (var i = 0; i < reply.Count; i++)
+        {
+            if (!ReferenceEquals(reply[i], request[i]))
+                return false;
+        }
+        return true;
+    }
+
     private static string? ExtractAction(HttpRequest request, SoapVersion version)
     {
         if (version == SoapVersion.Soap11)
@@ -533,6 +558,31 @@ public sealed class SoapConsumer : IConsumer
         var rest = ct[(idx + "action=".Length)..];
         var end = rest.IndexOf(';');
         return (end < 0 ? rest : rest[..end]).Trim().Trim('"');
+    }
+
+    /// <summary>
+    /// Checks the structure of <paramref name="envelope"/> against <see cref="XmlLimits.Default"/> and answers a
+    /// request over a limit with a Sender fault that names the limit. Malformed XML is not answered here: the parse
+    /// below answers it, or passes it on in Message mode.
+    /// </summary>
+    private async Task<bool> RefusedOverLimits(HttpContext http, SoapVersion version, byte[] envelope)
+    {
+        try
+        {
+            SafeXml.Check(envelope, XmlLimits.Default);
+            return false;
+        }
+        catch (XmlLimitException ex)
+        {
+            _endpoint.RecordError(ex);
+            await WriteFault(http, version, $"SOAP request refused: {ex.Message}",
+                SoapEnvelope.SenderCode(version)).ConfigureAwait(false);
+            return true;
+        }
+        catch (System.Xml.XmlException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

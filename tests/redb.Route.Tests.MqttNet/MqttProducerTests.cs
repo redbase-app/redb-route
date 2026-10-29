@@ -170,11 +170,140 @@ public class MqttProducerTests
         await producer.Start();
 
         var exchange = new Exchange(new Message("data"));
-        exchange.In.Headers[MqttHeaders.Topic] = "override/topic";
+        exchange.In.Headers[MqttHeaders.OverrideTopic] = "override/topic";
         await ((IProducer)producer).Process(exchange);
 
         capturedMessage.Should().NotBeNull();
         capturedMessage!.Topic.Should().Be("override/topic");
+    }
+
+    private static async Task<string> PublishedTopic(string endpointTopic, IExchange exchange)
+    {
+        MqttApplicationMessage? captured = null;
+        var endpoint = CreateEndpointWithMocks(out var client, out _, out _, topic: endpointTopic);
+        client.PublishAsync(Arg.Any<MqttApplicationMessage>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new MqttClientPublishResult(0, MqttClientPublishReasonCode.Success, "", null)))
+            .AndDoes(x => captured = x.Arg<MqttApplicationMessage>());
+        var producer = endpoint.CreateProducer();
+        await producer.Start();
+        await ((IProducer)producer).Process(exchange);
+        return captured!.Topic;
+    }
+
+    /// <summary>
+    /// Two publishes of one exchange to different endpoints: each goes to its own topic. The first publish writes
+    /// redbMqtt.topic, which the second used to read as its target.
+    /// </summary>
+    [Fact]
+    public async Task Two_publishes_in_one_route_each_go_to_their_endpoint_topic()
+    {
+        var exchange = new Exchange(new Message("21.5"));
+
+        var first = await PublishedTopic("sensors/room-1/temperature", exchange);
+        var second = await PublishedTopic("sensors/room-2/temperature", exchange);
+
+        first.Should().Be("sensors/room-1/temperature");
+        second.Should().Be("sensors/room-2/temperature");
+        exchange.In.Headers[MqttHeaders.Topic].Should().Be("sensors/room-2/temperature", "the header tells where it went");
+    }
+
+    /// <summary>A received message republished to a fixed topic goes there, not back to the topic it came from.</summary>
+    [Fact]
+    public async Task A_received_message_republished_goes_to_the_endpoint_topic()
+    {
+        var exchange = new Exchange(new Message("42"));
+        exchange.In.Headers[MqttHeaders.Topic] = "sensors/room-1/temperature"; // as the consumer writes it
+
+        var topic = await PublishedTopic("alerts/temperature", exchange);
+
+        topic.Should().Be("alerts/temperature");
+    }
+
+    private static async Task<MqttApplicationMessage> Published(IExchange exchange, int qos, bool retain)
+    {
+        MqttApplicationMessage? captured = null;
+        var endpoint = CreateEndpointWithMocks(out var client, out _, out _, qos: qos, retain: retain);
+        client.PublishAsync(Arg.Any<MqttApplicationMessage>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new MqttClientPublishResult(0, MqttClientPublishReasonCode.Success, "", null)))
+            .AndDoes(x => captured = x.Arg<MqttApplicationMessage>());
+        var producer = endpoint.CreateProducer();
+        await producer.Start();
+        await ((IProducer)producer).Process(exchange);
+        return captured!;
+    }
+
+    /// <summary>
+    /// A retained QoS 2 message received and republished goes out with the endpoint's QoS and retain flag. The
+    /// consumer's redbMqtt.qos and redbMqtt.retain used to carry over, so the republish was retained again.
+    /// </summary>
+    [Fact]
+    public async Task A_received_retained_message_republished_takes_the_endpoint_qos_and_retain()
+    {
+        var exchange = new Exchange(new Message("42"));
+        exchange.In.Headers[MqttHeaders.Qos] = 2;        // as the consumer writes them
+        exchange.In.Headers[MqttHeaders.Retain] = true;
+
+        var published = await Published(exchange, qos: 1, retain: false);
+
+        published.QualityOfServiceLevel.Should().Be(MqttQualityOfServiceLevel.AtLeastOnce);
+        published.Retain.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task The_override_headers_win_over_the_endpoint_and_the_incoming_flags()
+    {
+        var exchange = new Exchange(new Message("42"));
+        exchange.In.Headers[MqttHeaders.Qos] = 2;
+        exchange.In.Headers[MqttHeaders.Retain] = true;
+        exchange.In.Headers[MqttHeaders.OverrideQos] = 0;
+        exchange.In.Headers[MqttHeaders.OverrideRetain] = false;
+
+        var published = await Published(exchange, qos: 1, retain: true);
+
+        published.QualityOfServiceLevel.Should().Be(MqttQualityOfServiceLevel.AtMostOnce);
+        published.Retain.Should().BeFalse();
+    }
+
+    /// <summary>Markup sets a header as text (&lt;setHeader value="2"/&gt;); the override takes it.</summary>
+    [Fact]
+    public async Task The_override_headers_given_as_text_apply()
+    {
+        var exchange = new Exchange(new Message("42"));
+        exchange.In.Headers[MqttHeaders.OverrideQos] = "2";
+        exchange.In.Headers[MqttHeaders.OverrideRetain] = "true";
+
+        var published = await Published(exchange, qos: 0, retain: false);
+
+        published.QualityOfServiceLevel.Should().Be(MqttQualityOfServiceLevel.ExactlyOnce);
+        published.Retain.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(-1)]
+    [InlineData("high")]
+    [InlineData(1L)]
+    public async Task A_qos_override_out_of_range_fails_the_publish(object value)
+    {
+        var exchange = new Exchange(new Message("42"));
+        exchange.In.Headers[MqttHeaders.OverrideQos] = value;
+
+        var publish = () => Published(exchange, qos: 0, retain: false);
+
+        await publish.Should().ThrowAsync<InvalidOperationException>().WithMessage("*redbMqtt.overrideQos*");
+    }
+
+    [Theory]
+    [InlineData("yes")]
+    [InlineData(1)]
+    public async Task A_retain_override_that_is_not_a_bool_fails_the_publish(object value)
+    {
+        var exchange = new Exchange(new Message("42"));
+        exchange.In.Headers[MqttHeaders.OverrideRetain] = value;
+
+        var publish = () => Published(exchange, qos: 0, retain: false);
+
+        await publish.Should().ThrowAsync<InvalidOperationException>().WithMessage("*redbMqtt.overrideRetain*");
     }
 
     [Fact]
@@ -215,7 +344,7 @@ public class MqttProducerTests
         await producer.Start();
 
         var exchange = new Exchange(new Message("data"));
-        exchange.In.Headers[MqttHeaders.Qos] = 2;
+        exchange.In.Headers[MqttHeaders.OverrideQos] = 2;
         await ((IProducer)producer).Process(exchange);
 
         capturedMessage.Should().NotBeNull();
@@ -260,7 +389,7 @@ public class MqttProducerTests
         await producer.Start();
 
         var exchange = new Exchange(new Message("data"));
-        exchange.In.Headers[MqttHeaders.Retain] = true;
+        exchange.In.Headers[MqttHeaders.OverrideRetain] = true;
         await ((IProducer)producer).Process(exchange);
 
         capturedMessage.Should().NotBeNull();

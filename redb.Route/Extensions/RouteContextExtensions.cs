@@ -40,6 +40,16 @@ public static class RouteContextExtensions
            ?? new Configuration.StreamCacheOptions();
 
     /// <summary>
+    /// The attachment options in force for <paramref name="context"/>: the engine's
+    /// <see cref="Configuration.RouteEngineOptions.Attachments"/>, the defaults without a context. There is no second
+    /// source (no separately registered service), so <c>RedbRoute:Attachments:MaxReplayableBytes</c> means the same for
+    /// the checkpoint and for the Tsak DLQ.
+    /// </summary>
+    /// <param name="context">Route context; <c>null</c> gives the defaults.</param>
+    public static Configuration.AttachmentOptions GetAttachmentOptions(this IRouteContext? context)
+        => (context as Core.RouteContext)?.AttachmentOptions ?? new Configuration.AttachmentOptions();
+
+    /// <summary>
     /// Resolves a named object from the context registry and FAILS LOUD when nothing is
     /// registered under the name. A typo in <c>connectionFactory=…</c> must never silently
     /// fall back to URI parameters or defaults — a working configuration and a

@@ -21,7 +21,7 @@ services:
   # ── RabbitMQ (AMQP 0-9-1) ──────────────────────────────────────────────────
   # Used by: redb.Route.Tests.RabbitMQ → localhost:5672, admin/admin
   rabbitmq:
-    image: rabbitmq:4-management-alpine
+    image: rabbitmq:4.3-management-alpine
     container_name: route-rabbitmq
     hostname: rabbitmq
     ports:
@@ -177,7 +177,7 @@ services:
 
   # ── GreenMail (SMTP + IMAP + POP3) ─────────────────────────────────────────
   # Used by: redb.Route.Tests.Mail — user admin/admin pre-provisioned.
-  #   SMTP → 3025, POP3 → 3110, IMAP → 3143, SMTPS → 3465, IMAPS → 3993, POP3S → 3995
+  #   SMTP → 3025, POP3 → 3110, IMAP → 3143, SMTPS → 3465, IMAPS → 3993, POP3S → 3995, HTTP API → 8080
   greenmail:
     image: greenmail/standalone:2.1.2
     container_name: route-greenmail
@@ -189,13 +189,20 @@ services:
       - "3465:3465"     # SMTPS
       - "3993:3993"     # IMAPS
       - "3995:3995"     # POP3S
+      - "8080:8080"     # HTTP API: the tests purge the mailboxes through it
     environment:
-      GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.users=admin:admin@localhost"
+      # setup.test.all binds to 127.0.0.1 inside the container: reachable through Docker Desktop, not from another
+      # container or a Linux host's port mapping. hostname=0.0.0.0 binds every server to all interfaces.
+      # Each server has 2 s to start by default; on a loaded 2-CPU host SMTPS missed it, the main thread died and the
+      # HTTP API, started last, never came up.
+      GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.startup.timeout=30000 -Dgreenmail.users=admin:admin@localhost"
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 3025 && nc -z localhost 3143"]
+      # The image has no nc, curl or wget; bash opens the ports itself. The HTTP API starts after every mail server.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3025 && exec 4<>/dev/tcp/127.0.0.1/3143 && exec 5<>/dev/tcp/127.0.0.1/8080"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
 
   # ── SFTP (OpenSSH) ─────────────────────────────────────────────────────────
   # Used by: redb.Route.Tests.Sftp → localhost:2222, testuser/secret, dir upload/
@@ -276,41 +283,29 @@ services:
       retries: 6
       start_period: 15s
 
-  # ── MinIO (S3-compatible) ────────────────────────────────────────────────────
+  # ── S3-compatible store: RustFS ─────────────────────────────────────────────
   # Used by: redb.Route.Tests.S3 → localhost:9000 (minioadmin/minioadmin)
   # No C:\Work\yaml canonical — S3 test infra lives only here.
-  minio:
-    image: minio/minio:latest
-    container_name: route-minio
-    hostname: minio
+  # RustFS, the image the redb-route-s3 template uses: Docker Hub no longer serves MinIO community images
+  # (minio/mc is refused), so a fresh host could not start the old stand. The suites create their own buckets.
+  s3:
+    image: rustfs/rustfs:1.0.3
+    container_name: route-s3
+    hostname: s3
     ports:
       - "9000:9000"     # S3 API
       - "9001:9001"     # Web console
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    command: server /data --console-address ":9001"
+      RUSTFS_ACCESS_KEY: minioadmin
+      RUSTFS_SECRET_KEY: minioadmin
+      RUSTFS_CONSOLE_ENABLE: "true"
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/health"]
       interval: 10s
       timeout: 5s
       retries: 5
     volumes:
-      - minio-data:/data
-
-  # Creates the default test bucket after MinIO is healthy.
-  minio-init:
-    image: minio/mc:latest
-    container_name: route-minio-init
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 minioadmin minioadmin;
-      mc mb --ignore-existing local/test-bucket;
-      exit 0;
-      "
+      - s3-data:/data
 
   # ── FTP/FTPS ────────────────────────────────────────────────────────────────
   # Used by: redb.Route.Tests.Ftp → localhost:21, testuser/secret
@@ -326,10 +321,20 @@ services:
       ADDRESS: localhost
       MIN_PORT: 21000
       MAX_PORT: 21010
+    # vsftpd refuses a config file root does not own, and one with CRLF lines, and with background=YES says nothing.
+    # A bind mount keeps the owner of the checkout (uid 1000 on a Linux host) and a Windows checkout has CRLF, so the
+    # file is mounted aside and written by root without the CRs.
     volumes:
-      - ./tests/docker/ftp/vsftpd.conf:/etc/vsftpd/vsftpd.conf:ro
+      - ./tests/docker/ftp/vsftpd.conf:/config/vsftpd.conf:ro
+    entrypoint:
+      - /sbin/tini
+      - --
+      - sh
+      - -c
+      - tr -d '\r' < /config/vsftpd.conf > /etc/vsftpd/vsftpd.conf && chmod 0644 /etc/vsftpd/vsftpd.conf && exec /bin/start_vsftpd.sh
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 21"]
+      # 127.0.0.1: vsftpd listens on IPv4 only, and localhost resolves to ::1 in this image.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 21"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -354,7 +359,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 30s
+      # Elasticsearch needs more than two minutes to start on a 2-CPU host; checks failing within start_period do not
+      # count, a passing one ends it at once.
+      start_period: 180s
 
   # ── Azure Service Bus Emulator (+ Azurite + SQL Edge) ───────────────────────
   # Used by: redb.Route.Tests.AzureServiceBus → localhost:5300 (AMQP)
@@ -623,7 +630,7 @@ volumes:
   mosquitto-data:
   mosquitto-log:
   ibmmq-data:
-  minio-data:
+  s3-data:
   elastic-data:
   openldap-data:
   openldap-config:

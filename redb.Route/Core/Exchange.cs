@@ -448,12 +448,32 @@ public class Exchange : IExchange
 
     private static bool IsDisposable(object? body) => body is IAsyncDisposable or IDisposable;
 
+    // The disposable payload the exchange carries right now: the In and Out bodies and the content sources of their
+    // attachments (a StreamCache, a file to delete). Attachments are payload like the body, so they follow its ownership.
+    private IEnumerable<object> CarriedDisposables()
+    {
+        if (IsDisposable(In.Body)) yield return In.Body!;
+        if (IsDisposable(Out?.Body)) yield return Out!.Body!;
+        foreach (var content in DisposableAttachmentContents(In))
+            yield return content;
+        if (Out is not null)
+            foreach (var content in DisposableAttachmentContents(Out))
+                yield return content;
+    }
+
+    private static IEnumerable<object> DisposableAttachmentContents(IMessage message)
+    {
+        if (message is not Message { AttachmentsOrNull: { } attachments })
+            yield break;
+        foreach (var attachment in attachments)
+            if (IsDisposable(attachment.Content))
+                yield return attachment.Content;
+    }
+
     // Called under _bodiesLock: the current disposable bodies and the ones on this exchange's account.
     private HashSet<object> OwnedBodies()
     {
-        var bodies = new HashSet<object>(ReferenceEqualityComparer.Instance);
-        if (IsDisposable(In.Body)) bodies.Add(In.Body!);
-        if (IsDisposable(Out?.Body)) bodies.Add(Out!.Body!);
+        var bodies = new HashSet<object>(CarriedDisposables(), ReferenceEqualityComparer.Instance);
         if (_lent is not null) bodies.UnionWith(_lent);
         return bodies;
     }
@@ -465,8 +485,8 @@ public class Exchange : IExchange
         lock (_bodiesLock)
         {
             if (_bodiesReleased) return;
-            if (IsDisposable(In.Body)) (_lent ??= new HashSet<object>(ReferenceEqualityComparer.Instance)).Add(In.Body!);
-            if (IsDisposable(Out?.Body)) (_lent ??= new HashSet<object>(ReferenceEqualityComparer.Instance)).Add(Out!.Body!);
+            foreach (var body in CarriedDisposables())
+                (_lent ??= new HashSet<object>(ReferenceEqualityComparer.Instance)).Add(body);
         }
     }
 
@@ -476,7 +496,7 @@ public class Exchange : IExchange
         lock (_bodiesLock)
         {
             if (_bodiesReleased) return false;
-            if (!(ReferenceEquals(In.Body, body) || ReferenceEquals(Out?.Body, body) || _lent?.Contains(body) == true))
+            if (!(_lent?.Contains(body) == true || CarriedDisposables().Any(b => ReferenceEquals(b, body))))
                 return false;
             (_lent ??= new HashSet<object>(ReferenceEqualityComparer.Instance)).Add(body);
             return true;

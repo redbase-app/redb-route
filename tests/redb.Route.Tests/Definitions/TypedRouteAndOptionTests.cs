@@ -8,11 +8,13 @@ namespace redb.Route.Tests.Definitions;
 /// <summary>
 /// Tests for typed route definitions (<see cref="redb.Route.Definitions.RouteDefinition{TIn}"/>).
 /// </summary>
-public class TypedRouteDefinitionTests : IAsyncDisposable
+public class TypedRouteDefinitionTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);
@@ -85,11 +87,13 @@ public class TypedRouteDefinitionTests : IAsyncDisposable
 /// <summary>
 /// Tests for <see cref="RouteEngineOptions"/> integration.
 /// </summary>
-public class RouteEngineOptionsTests : IAsyncDisposable
+public class RouteEngineOptionsTests : IAsyncLifetime
 {
     private RouteContext? _context;
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         if (_context != null)
             await _context.DisposeAsync();

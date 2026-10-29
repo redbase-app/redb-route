@@ -12,11 +12,13 @@ namespace redb.Route.Tests.Processors;
 /// async hand-off (a serial source keeps dispatching), error routing to OnException, graceful
 /// drain-on-stop (no in-flight lost), per-exchange clone isolation, and argument validation.
 /// </summary>
-public class ThreadsProcessorTests : IAsyncDisposable
+public class ThreadsProcessorTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

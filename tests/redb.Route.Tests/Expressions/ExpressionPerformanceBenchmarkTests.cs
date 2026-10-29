@@ -9,7 +9,10 @@ namespace redb.Route.Tests.Expressions;
 /// <summary>
 /// Performance benchmarks for the expression compilation and evaluation engine.
 /// Measures cache hit throughput, AST compilation, and template processing performance.
+/// The thresholds are absolute operations per second, so a slow or shared machine fails them without any defect:
+/// Category=Performance lets such a run leave them out.
 /// </summary>
+[Trait("Category", "Performance")]
 [Collection("ExpressionResolver")]
 public class ExpressionPerformanceBenchmarkTests : IDisposable
 {

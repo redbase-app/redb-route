@@ -78,7 +78,7 @@ try
             {
                 var binPath = Path.GetFullPath(diagramBin);
                 context.AddService(typeof(redb.Route.Abstractions.IBeanTypeResolver),
-                    new BinTypeResolver(BuildBinResolver(binPath)));
+                    new BinTypeResolver(redb.Route.Xml.Packaging.PackageTypeResolver.Create(binPath, Console.Error.WriteLine)));
                 diagramOptions = new XmlRouteLoaderOptions { Extensions = LoadContributions(binPath) };
             }
             try
@@ -181,7 +181,7 @@ try
             // method= targets are verified against the real assemblies) and brings the Р21
             // markup contributions those assemblies carry (<cache>, <redbQuery>, …) into the
             // XSD gate, the way the worker's own discovery will see them at load.
-            var resolver = Option("--bin") is { } binDir ? BuildBinResolver(Path.GetFullPath(binDir)) : null;
+            var resolver = Option("--bin") is { } binDir ? redb.Route.Xml.Packaging.PackageTypeResolver.Create(Path.GetFullPath(binDir), Console.Error.WriteLine) : null;
             var extensions = Option("--bin") is { } contribDir
                 ? LoadContributions(Path.GetFullPath(contribDir))
                 : null;
@@ -251,42 +251,6 @@ catch (Exception ex) when (ex is ArgumentException or FileNotFoundException or X
     return 1;
 }
 
-static Func<string, Type?> BuildBinResolver(string binDir)
-{
-    var context = new System.Runtime.Loader.AssemblyLoadContext("route-pack-check", isCollectible: false);
-    context.Resolving += (loadContext, assemblyName) =>
-    {
-        var candidate = Path.Combine(binDir, assemblyName.Name + ".dll");
-        return File.Exists(candidate) ? loadContext.LoadFromAssemblyPath(candidate) : null;
-    };
-    foreach (var dll in Directory.GetFiles(binDir, "*.dll"))
-    {
-        try
-        {
-            context.LoadFromAssemblyPath(dll);
-        }
-        catch (BadImageFormatException)
-        {
-            Console.Error.WriteLine($"warning: {Path.GetFileName(dll)} is not a loadable assembly — skipped by the deep bean checks.");
-        }
-    }
-    return typeName =>
-    {
-        var comma = typeName.IndexOf(',');
-        var full = (comma >= 0 ? typeName[..comma] : typeName).Trim();
-        var assemblyName = comma >= 0 ? typeName[(comma + 1)..].Trim() : null;
-        var assemblies = assemblyName is null
-            ? context.Assemblies
-            : context.Assemblies.Where(a => a.GetName().Name == assemblyName);
-        foreach (var assembly in assemblies)
-        {
-            if (assembly.GetType(full) is { } type)
-                return type;
-        }
-        return Type.GetType(typeName); // core/BCL types (System.String in <convertBody> etc.)
-    };
-}
-
 /// <summary>
 /// The tool casts what a bin carries to ITS OWN redb.Route.Xml / redb.Route types. A bin built
 /// against another version of those assemblies yields types the cast silently rejects: zero
@@ -312,53 +276,7 @@ static void RequireSameRuntime(string binDir, System.Reflection.Assembly own)
 static List<redb.Route.Xml.IXmlElementContribution> LoadContributions(string binDir)
 {
     RequireSameRuntime(binDir, typeof(redb.Route.Xml.IXmlElementContribution).Assembly);
-    // Same ALC pattern as LoadComponents: the tool's own assemblies (redb.Route.Xml above all)
-    // win through the Default-context fallback, so a contribution loaded from --bin implements
-    // THE tool's IXmlElementContribution and the cast holds.
-    var contributions = new List<redb.Route.Xml.IXmlElementContribution>();
-    var seen = new HashSet<string>(StringComparer.Ordinal);
-    var context = new System.Runtime.Loader.AssemblyLoadContext($"contrib:{binDir}", isCollectible: false);
-    context.Resolving += (loadContext, assemblyName) =>
-    {
-        var candidate = Path.Combine(binDir, assemblyName.Name + ".dll");
-        return File.Exists(candidate) ? loadContext.LoadFromAssemblyPath(candidate) : null;
-    };
-    foreach (var dll in Directory.GetFiles(binDir, "redb.Route.*.dll"))
-    {
-        System.Reflection.Assembly assembly;
-        try
-        {
-            // The Resolving hook may have already pulled this simple name from another probe
-            // dir while satisfying a dependency; loading the local copy on top would throw
-            // «assembly with same name is already loaded» — first copy wins, like the worker.
-            var simpleName = System.Reflection.AssemblyName.GetAssemblyName(dll).Name;
-            assembly = context.Assemblies.FirstOrDefault(a => a.GetName().Name == simpleName)
-                ?? context.LoadFromAssemblyPath(dll);
-        }
-        catch (BadImageFormatException)
-        {
-            continue;
-        }
-        Type[] types;
-        try
-        {
-            types = assembly.GetTypes();
-        }
-        catch (System.Reflection.ReflectionTypeLoadException ex)
-        {
-            types = [.. ex.Types.Where(t => t is not null)!];
-        }
-        foreach (var type in types)
-        {
-            if (type.IsAbstract || type.IsInterface
-                || !typeof(redb.Route.Xml.IXmlElementContribution).IsAssignableFrom(type)
-                || type.GetConstructor(Type.EmptyTypes) is null
-                || !seen.Add(type.FullName ?? type.Name))
-                continue;
-            contributions.Add((redb.Route.Xml.IXmlElementContribution)Activator.CreateInstance(type)!);
-        }
-    }
-    return contributions;
+    return redb.Route.Xml.CodeGen.ContributionLoader.Load(binDir, CarriedAssembly);
 }
 
 /// <summary>The assembly of this name the tool itself already runs on, if it is one of them.</summary>

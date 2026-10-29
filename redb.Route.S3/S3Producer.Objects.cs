@@ -61,7 +61,9 @@ internal sealed partial class S3Producer
 
         if (_options.MultiPartUpload && request.InputStream is { Length: > 0 } s && s.Length > _options.PartSize)
         {
-            await MultiPartUploadAsync(bucket, key, request, ct).ConfigureAwait(false);
+            var completed = await MultiPartUploadAsync(bucket, key, request, ct).ConfigureAwait(false);
+            // The same result headers as a single PUT: which object was written, its ETag and version.
+            SetProducedHeaders(exchange, bucket, key, completed.ETag, completed.VersionId);
         }
         else
         {
@@ -75,7 +77,7 @@ internal sealed partial class S3Producer
         Logger?.LogDebug("S3 PutObject: {Bucket}/{Key}", bucket, key);
     }
 
-    private async Task MultiPartUploadAsync(string bucket, string key, PutObjectRequest request, CancellationToken ct)
+    private async Task<CompleteMultipartUploadResponse> MultiPartUploadAsync(string bucket, string key, PutObjectRequest request, CancellationToken ct)
     {
         var initRequest = new InitiateMultipartUploadRequest
         {
@@ -130,8 +132,9 @@ internal sealed partial class S3Producer
                 PartETags = partETags,
             };
 
-            await _client.CompleteMultipartUploadAsync(completeRequest, ct).ConfigureAwait(false);
+            var completed = await _client.CompleteMultipartUploadAsync(completeRequest, ct).ConfigureAwait(false);
             Logger?.LogDebug("S3 MultiPartUpload completed: {Bucket}/{Key}, {Parts} parts", bucket, key, partETags.Count);
+            return completed;
         }
         catch
         {
@@ -263,8 +266,8 @@ internal sealed partial class S3Producer
 
         var response = await _client!.CopyObjectAsync(request, ct).ConfigureAwait(false);
 
-        exchange.In.Headers[S3Headers.ETag] = response.ETag;
-        exchange.In.Headers[S3Headers.VersionId] = response.VersionId;
+        // The object written is the copy: its bucket and key are the produced ones.
+        SetProducedHeaders(exchange, destBucket, destKey, response.ETag, response.VersionId);
         Logger?.LogDebug("S3 CopyObject: {SrcBucket}/{SrcKey} → {DstBucket}/{DstKey}", sourceBucket, sourceKey, destBucket, destKey);
     }
 

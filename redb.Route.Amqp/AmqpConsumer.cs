@@ -93,25 +93,36 @@ public sealed class AmqpConsumer : IConsumer
         {
             for (var i = 0; i < workerCount; i++)
             {
-                var assigned = _options.Dynamic
-                    ? new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously)
-                    : null;
+                // Every link waits for the broker's attach answer before Start returns. Without the wait a refused
+                // link (an unknown address, no permission) was only logged by the receive loop and the consumer stayed
+                // "started" without receiving, and on a topic the subscription did not exist yet when Start returned.
+                var attached = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
                 var (session, receiver) = await _endpoint
                     .CreateDedicatedReceiverAsync($"receiver-{_endpoint.Address}-{i}-{Guid.NewGuid():N}",
-                        assigned is null ? null : (_, remote) => assigned.TrySetResult((remote.Source as Source)?.Address),
-                        ct)
+                        (link, remote) => OnLinkAttached(link, remote, attached), ct)
                     .ConfigureAwait(false);
                 var worker = new Worker(session, receiver);
                 _workers.Add(worker);
 
-                if (assigned is not null)
+                string? address;
+                try
+                {
+                    address = await attached.Task
+                        .WaitAsync(TimeSpan.FromSeconds(_options.Timeout), ct).ConfigureAwait(false);
+                }
+                catch (TimeoutException ex)
+                {
+                    throw new InvalidOperationException(
+                        $"{ConsumerName} cannot start: the broker did not answer the receiver link within "
+                        + $"{_options.Timeout} s.", ex);
+                }
+
+                if (_options.Dynamic)
                 {
                     // The broker names the dynamic node in its attach answer; the route reads that node.
-                    var address = await assigned.Task
-                        .WaitAsync(TimeSpan.FromSeconds(_options.Timeout), ct).ConfigureAwait(false);
                     if (string.IsNullOrEmpty(address))
                         throw new InvalidOperationException(
-                            $"AMQP consumer '{_endpoint.Uri}': the broker created no dynamic node for the receiver link.");
+                            $"{ConsumerName} cannot start: the broker created no dynamic node for the receiver link.");
                     _address = address;
                 }
 
@@ -132,6 +143,31 @@ public sealed class AmqpConsumer : IConsumer
             "AMQP consumer started: address={Address}, credit={Credit}, concurrent={Concurrent}",
             _address, _options.Credit, workerCount);
     }
+
+    /// <summary>The consumer as errors name it: its scheme and the address of its URI.</summary>
+    private string ConsumerName => $"AMQP consumer amqp:{_endpoint.Address}";
+
+    /// <summary>
+    /// The broker's attach answer. An accepted receiver link comes back with a source (for a dynamic node, the address
+    /// the broker gave it); a refused one comes back without a source and is detached right after with the reason.
+    /// Frames of a connection are handled one after another, so the detach cannot pass the handler subscribed here.
+    /// </summary>
+    private void OnLinkAttached(ILink link, Attach remote, TaskCompletionSource<string?> attached)
+    {
+        if (remote.Source is Source source)
+        {
+            attached.TrySetResult(source.Address);
+            return;
+        }
+
+        link.Closed += (_, error) => attached.TrySetException(Refused(error));
+        if (link.IsClosed)
+            attached.TrySetException(Refused(link.Error));
+    }
+
+    private InvalidOperationException Refused(Error? error) => new(
+        $"{ConsumerName} cannot start: the broker refused the receiver link"
+        + (error is null ? "." : $" ({error.Condition}: {error.Description})."));
 
     /// <inheritdoc />
     public async Task Stop(CancellationToken ct = default)

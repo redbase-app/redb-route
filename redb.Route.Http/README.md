@@ -129,6 +129,13 @@ parameters arrive as `header.id`, query as `header.query.*`; the status code is 
 `{basePath}/openapi.json` (`RestOptions.OpenApi` / `OpenApiPath`). Several `Rest(...)` declarations
 share a port.
 
+Route ids: a verb's route takes the id given with `.Id(...)` (`id=` in XML). Without one it gets
+`rest-GET-api-orders-id-1a2b3c4d`: method and path with every other character turned into `-`, then a
+fingerprint of the method and path, so `/{id}` and `/id` stay apart and the id is the same on every start.
+The OpenAPI route is `rest-openapi-api-orders-…`, and the route of a verb's inline steps is the verb's id
+plus `-handler`. The ids carry no `/` and no space, so the Tsak worker API and the dashboard can address
+them.
+
 ### Request validation
 
 Parameters are declared on the verb with `Param(...)` and always go to the OpenAPI document. They are

@@ -54,25 +54,43 @@ public static class RedbContextDslExtensions
     /// <param name="name">Registry name of the repository.</param>
     /// <param name="ttl">Idempotency-entry lifetime; null — keep forever.</param>
     /// <param name="processorName">Logical processor name partitioning the entries; default — the registry name.</param>
+    /// <param name="storage">
+    /// The named redb instance the entries are kept in (<c>context.RegisterRedbService</c>, or a Tsak <c>Redb</c>
+    /// section); null for the context's default redb, as <see cref="SyncRedbScheme"/> resolves it.
+    /// </param>
     public static IRouteContext AddRedbIdempotentRepository(
-        this IRouteContext context, string name, TimeSpan? ttl = null, string? processorName = null)
+        this IRouteContext context, string name, TimeSpan? ttl = null, string? processorName = null,
+        string? storage = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrEmpty(name);
 
-        context.AddLifecycleListener(new StartupAction(ctx =>
+        context.AddLifecycleListener(new StartupAction(async ctx =>
         {
-            var scopeFactory = ctx.GetServiceProvider()?.GetService<IServiceScopeFactory>()
-                ?? throw new InvalidOperationException(
-                    $"AddRedbIdempotentRepository('{name}'): the context has no service provider — "
-                    + "the repository resolves a scoped IRedbService per exchange and needs DI.");
             var options = new RedbIdempotentOptions
             {
                 ProcessorName = processorName ?? name,
                 Ttl = ttl,
             };
-            ctx.AddIdempotentRepository(name, new RedbIdempotentRepository(scopeFactory, options));
-            return Task.CompletedTask;
+
+            if (string.IsNullOrEmpty(storage))
+            {
+                // The context's default redb: a scope of the context's service provider per operation.
+                var scopeFactory = ctx.GetServiceProvider()?.GetService<IServiceScopeFactory>()
+                    ?? throw new InvalidOperationException(
+                        $"AddRedbIdempotentRepository('{name}'): the context has no service provider — "
+                        + "the repository resolves a scoped IRedbService per exchange and needs DI.");
+                ctx.AddIdempotentRepository(name, new RedbIdempotentRepository(scopeFactory, options));
+                return;
+            }
+
+            // A named instance: a scope of it per operation, from the same source the redb steps of that storage use.
+            Func<RedbScope> openScope = () => ctx.CreateRedbScope(storage);
+
+            // Opened once at start, so a storage name that resolves to nothing fails the start, not the first message.
+            await using (openScope().ConfigureAwait(false)) { }
+
+            ctx.AddIdempotentRepository(name, new RedbIdempotentRepository(openScope, options));
         }));
         return context;
     }

@@ -1,5 +1,55 @@
 [
   {
+    "name": "addAttachment",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "name",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "expr",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "fromBody",
+        "type": "Bool",
+        "required": false
+      },
+      {
+        "name": "file",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "fileExpr",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "fileName",
+        "type": "String",
+        "required": false
+      },
+      {
+        "name": "fileNameExpr",
+        "type": "Expression",
+        "required": false
+      },
+      {
+        "name": "contentType",
+        "type": "String",
+        "required": false
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
     "name": "aggregate",
     "kind": "Scope",
     "attributes": [
@@ -272,6 +322,26 @@
         "name": "type",
         "type": "TypeName",
         "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "dataFormat",
+    "kind": "ContextLevel",
+    "attributes": [
+      {
+        "name": "type",
+        "type": "TypeName",
+        "required": true
+      },
+      {
+        "name": "name",
+        "type": "String",
+        "required": false
       }
     ],
     "children": [],
@@ -1359,6 +1429,30 @@
     "takesEndpoint": false
   },
   {
+    "name": "removeAttachment",
+    "kind": "Step",
+    "attributes": [
+      {
+        "name": "name",
+        "type": "String",
+        "required": true
+      }
+    ],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "removeAttachments",
+    "kind": "Step",
+    "attributes": [],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
     "name": "removeBody",
     "kind": "Step",
     "attributes": [],
@@ -2206,6 +2300,21 @@
     "name": "rollbackTransaction",
     "kind": "Step",
     "attributes": [],
+    "children": [],
+    "allowsSteps": false,
+    "allowsText": false,
+    "takesEndpoint": false
+  },
+  {
+    "name": "routeBuilder",
+    "kind": "ContextLevel",
+    "attributes": [
+      {
+        "name": "type",
+        "type": "TypeName",
+        "required": true
+      }
+    ],
     "children": [],
     "allowsSteps": false,
     "allowsText": false,

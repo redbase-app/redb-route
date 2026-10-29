@@ -15,8 +15,9 @@ namespace redb.Route.RedbCore.Repositories;
 /// <see cref="IRedbService"/> without raw DDL — the scheme is managed automatically
 /// through <see cref="IdempotentEntryProps"/>.
 /// <para>
-/// Uses <see cref="IServiceScopeFactory"/> to create a fresh <see cref="IRedbService"/> scope
-/// per operation — safe for concurrent use from multiple route threads.
+/// Opens a fresh <see cref="IRedbService"/> scope per operation, so it is safe for concurrent use from multiple route
+/// threads: from an <see cref="IServiceScopeFactory"/>, or from any source of <see cref="RedbScope"/>, such as a named
+/// redb instance of the route context (<c>context.CreateRedbScope(name)</c>).
 /// </para>
 /// <para>
 /// <b>Identity strategy:</b> each entry stores its composite identity
@@ -38,7 +39,7 @@ namespace redb.Route.RedbCore.Repositories;
 /// </summary>
 public sealed class RedbIdempotentRepository : IIdempotentRepository
 {
-    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly Func<RedbScope> _openScope;
     private readonly RedbIdempotentOptions _options;
     private bool _schemeEnsured;
 
@@ -46,17 +47,37 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
     private const int MaxRetries = 5;
     private const int BaseDelayMs = 200;
 
-    /// <summary>Creates a new repository.</summary>
+    /// <summary>Creates a repository over the <see cref="IRedbService"/> of the scopes <paramref name="scopeFactory"/> opens.</summary>
     public RedbIdempotentRepository(IServiceScopeFactory scopeFactory, RedbIdempotentOptions options)
+        : this(OpenFrom(scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory))), options)
     {
-        ArgumentNullException.ThrowIfNull(scopeFactory);
+    }
+
+    /// <summary>
+    /// Creates a repository over the redb scopes <paramref name="openScope"/> opens, one per operation; the repository
+    /// disposes each. A named instance of a route context: <c>() =&gt; context.CreateRedbScope("orders")</c>.
+    /// </summary>
+    public RedbIdempotentRepository(Func<RedbScope> openScope, RedbIdempotentOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(openScope);
         ArgumentNullException.ThrowIfNull(options);
-        _scopeFactory = scopeFactory;
+        _openScope = openScope;
         _options = options;
     }
 
-    private IRedbService CreateRedb(IServiceScope scope)
-        => scope.ServiceProvider.GetRequiredService<IRedbService>();
+    private static Func<RedbScope> OpenFrom(IServiceScopeFactory scopeFactory) => () =>
+    {
+        var scope = scopeFactory.CreateScope();
+        try
+        {
+            return new RedbScope(scope.ServiceProvider.GetRequiredService<IRedbService>(), scope);
+        }
+        catch
+        {
+            scope.Dispose();
+            throw;
+        }
+    };
 
     /// <summary>
     /// True: inside an ambient transaction redb writes on the transaction's connection (core <c>AmbientConnectionRegistry</c>,
@@ -93,8 +114,8 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
         return await DeadlockRetryHelper.ExecuteWithRetryAsync(async () =>
         {
-            using var scope = _scopeFactory.CreateScope();
-            var redb = CreateRedb(scope);
+            using var scope = _openScope();
+            var redb = scope.Service;
 
             // Indexed lookup by composite name (IX__objects__name).
             // Defensive Props filter guards against any name collision from foreign schemes
@@ -145,8 +166,8 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
         await DeadlockRetryHelper.ExecuteWithRetryAsync(async () =>
         {
-            using var scope = _scopeFactory.CreateScope();
-            var redb = CreateRedb(scope);
+            using var scope = _openScope();
+            var redb = scope.Service;
 
             var items = await redb.Query<IdempotentEntryProps>()
                 .WhereRedb(x => x.Name == entryName)
@@ -173,8 +194,8 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
         await DeadlockRetryHelper.ExecuteWithRetryAsync(async () =>
         {
-            using var scope = _scopeFactory.CreateScope();
-            var redb = CreateRedb(scope);
+            using var scope = _openScope();
+            var redb = scope.Service;
 
             var items = await redb.Query<IdempotentEntryProps>()
                 .WhereRedb(x => x.Name == entryName)
@@ -200,8 +221,8 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
         return await DeadlockRetryHelper.ExecuteWithRetryAsync(async () =>
         {
-            using var scope = _scopeFactory.CreateScope();
-            var redb = CreateRedb(scope);
+            using var scope = _openScope();
+            var redb = scope.Service;
 
             var items = await redb.Query<IdempotentEntryProps>()
                 .WhereRedb(x => x.Name == entryName)
@@ -220,8 +241,8 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
         await DeadlockRetryHelper.ExecuteWithRetryAsync(async () =>
         {
-            using var scope = _scopeFactory.CreateScope();
-            var redb = CreateRedb(scope);
+            using var scope = _openScope();
+            var redb = scope.Service;
 
             // Bulk clear is scope-wide; name-prefix filter not used (would require LIKE),
             // so we fall back to the Props-level scan here.
@@ -239,8 +260,8 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
     {
         if (_schemeEnsured) return;
 
-        using var scope = _scopeFactory.CreateScope();
-        var redb = CreateRedb(scope);
+        using var scope = _openScope();
+        var redb = scope.Service;
         await redb.SyncSchemeAsync<IdempotentEntryProps>().ConfigureAwait(false);
         _schemeEnsured = true;
     }
@@ -253,8 +274,8 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
         await DeadlockRetryHelper.ExecuteWithRetryAsync(async () =>
         {
-            using var scope = _scopeFactory.CreateScope();
-            var redb = CreateRedb(scope);
+            using var scope = _openScope();
+            var redb = scope.Service;
 
             var expired = await redb.Query<IdempotentEntryProps>()
                 .Where(e => e.ProcessorName == _options.ProcessorName && e.CreatedAt < cutoff)

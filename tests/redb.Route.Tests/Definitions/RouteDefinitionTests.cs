@@ -11,11 +11,13 @@ namespace redb.Route.Tests.Definitions;
 /// <summary>
 /// Tests for W5 F3 — RouteDefinition skeleton (pipeline compilation).
 /// </summary>
-public class RouteDefinitionTests : IAsyncDisposable
+public class RouteDefinitionTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

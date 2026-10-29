@@ -197,6 +197,9 @@ internal sealed class SqlConsumer : DrainableConsumer
 
         var executionMs = stopwatch.ElapsedMilliseconds;
 
+        // onFailureAfterRollback: every row under a savepoint, so a failed row is undone alone and the cycle goes on.
+        var perRowSavepoint = tx != null && _options.OnFailureAfterRollback;
+
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
@@ -205,13 +208,29 @@ internal sealed class SqlConsumer : DrainableConsumer
             IncrementInflight();
             try
             {
+                if (perRowSavepoint)
+                    await SaveRowAsync(tx!, ct).ConfigureAwait(false);
                 await Processor.Process(exchange, ct).ConfigureAwait(false);
+                // A failure the route left on the exchange (onException handled="false", rollback-only) fails the row too.
+                exchange.ThrowIfUnhandledFailure();
                 await ExecuteOnSuccessAsync(connection, tx, row, exchange, ct).ConfigureAwait(false);
             }
             // A stop is not a failure of the row: a cancellation of this poll's token goes up, onFailure does not run.
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 exchange.Exception = ex;
+                if (perRowSavepoint)
+                {
+                    if (await TryRollbackRowAsync(tx!, i).ConfigureAwait(false))
+                    {
+                        // The row's own work is undone; its mark stays in the poll's transaction, and the next row goes on.
+                        await ExecuteLifecycleSql(connection, tx, _options.OnFailure, row, exchange, ct).ConfigureAwait(false);
+                        continue;
+                    }
+                    // The server has ended the transaction: nothing more can be written in it.
+                    await RollbackQuietlyAsync(tx!).ConfigureAwait(false);
+                    return;
+                }
                 await ExecuteLifecycleSql(connection, tx, _options.OnFailure, row, exchange, ct).ConfigureAwait(false);
                 if (tx != null) { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); return; }
             }
@@ -286,6 +305,7 @@ internal sealed class SqlConsumer : DrainableConsumer
                     try
                     {
                         await Processor.Process(exchange, ct).ConfigureAwait(false);
+                        exchange.ThrowIfUnhandledFailure();
                         if (!string.IsNullOrEmpty(_options.OnSuccess))
                         {
                             var statementConnection = await RowStatementConnectionAsync().ConfigureAwait(false);
@@ -458,18 +478,19 @@ internal sealed class SqlConsumer : DrainableConsumer
                     await afterRoute().ConfigureAwait(false);
                 }
 
+                exchange.ThrowIfUnhandledFailure();
                 await ExecuteOnSuccessAsync(connection, tx, null, exchange, ct).ConfigureAwait(false);
             }
             // A stop is not a failure of the row: a cancellation of this poll's token goes up, onFailure does not run.
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 exchange.Exception = ex;
-                await ExecuteLifecycleSql(connection, tx, _options.OnFailure, null, exchange, ct).ConfigureAwait(false);
                 if (tx != null)
                 {
-                    await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                    await FailInTransactionAsync(connection, tx, null, exchange, ct).ConfigureAwait(false);
                     return true;
                 }
+                await ExecuteLifecycleSql(connection, tx, _options.OnFailure, null, exchange, ct).ConfigureAwait(false);
             }
         }
         finally
@@ -480,6 +501,68 @@ internal sealed class SqlConsumer : DrainableConsumer
         }
 
         return false;
+    }
+
+    /// <summary>Name of the savepoint each row of an <c>onFailureAfterRollback</c> poll runs under.</summary>
+    internal const string RowSavepointName = "redb_poll_row";
+
+    private static async Task SaveRowAsync(DbTransaction tx, CancellationToken ct)
+    {
+        try
+        {
+            await tx.SaveAsync(RowSavepointName, ct).ConfigureAwait(false);
+        }
+        catch (NotSupportedException ex)
+        {
+            throw new InvalidOperationException(
+                $"onFailureAfterRollback=true undoes a failed row to a savepoint, and {tx.Connection?.GetType().Name} does not support " +
+                "savepoints. Remove the option: a failure then rolls back the whole poll and the row is read again.", ex);
+        }
+    }
+
+    private async Task<bool> TryRollbackRowAsync(DbTransaction tx, int index)
+    {
+        try
+        {
+            await tx.RollbackAsync(RowSavepointName, CancellationToken.None).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger?.LogWarning(ex,
+                "SQL poll row {Index} failed and its savepoint can no longer be rolled back to; the transaction has ended, the cycle stops",
+                index);
+            return false;
+        }
+    }
+
+    private async Task RollbackQuietlyAsync(DbTransaction tx)
+    {
+        try { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception ex) { Logger?.LogDebug(ex, "SQL poll transaction was already ended by the server"); }
+    }
+
+    /// <summary>
+    /// The failure of the one exchange of a poll (a list, a scalar, a single row) inside the poll's transaction. By default
+    /// <c>onFailure</c> runs in it and the transaction rolls back with it. With <c>onFailureAfterRollback</c> the transaction
+    /// rolls back first, then <c>onFailure</c> runs in a short transaction of its own on the same connection, so the mark stays.
+    /// </summary>
+    private async Task FailInTransactionAsync(
+        DbConnection connection, DbTransaction tx, Dictionary<string, object?>? row, IExchange exchange, CancellationToken ct)
+    {
+        if (!_options.OnFailureAfterRollback)
+        {
+            await ExecuteLifecycleSql(connection, tx, _options.OnFailure, row, exchange, ct).ConfigureAwait(false);
+            await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            return;
+        }
+
+        await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(_options.OnFailure))
+            return;
+        await using var own = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await ExecuteLifecycleSql(connection, own, _options.OnFailure, row, exchange, ct).ConfigureAwait(false);
+        await own.CommitAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>A connection to the primary database for the row statements of a streaming poll.</summary>
@@ -507,14 +590,15 @@ internal sealed class SqlConsumer : DrainableConsumer
             try
             {
                 await Processor.Process(exchange, ct).ConfigureAwait(false);
+                exchange.ThrowIfUnhandledFailure();
                 await ExecuteOnSuccessAsync(connection, tx, null, exchange, ct).ConfigureAwait(false);
             }
             // A stop is not a failure of the row: a cancellation of this poll's token goes up, onFailure does not run.
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 exchange.Exception = ex;
+                if (tx != null) { await FailInTransactionAsync(connection, tx, null, exchange, ct).ConfigureAwait(false); return; }
                 await ExecuteLifecycleSql(connection, tx, _options.OnFailure, null, exchange, ct).ConfigureAwait(false);
-                if (tx != null) { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); return; }
             }
             finally
             {
@@ -561,14 +645,15 @@ internal sealed class SqlConsumer : DrainableConsumer
             try
             {
                 await Processor.Process(exchange, ct).ConfigureAwait(false);
+                exchange.ThrowIfUnhandledFailure();
                 await ExecuteOnSuccessAsync(connection, tx, row, exchange, ct).ConfigureAwait(false);
             }
             // A stop is not a failure of the row: a cancellation of this poll's token goes up, onFailure does not run.
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 exchange.Exception = ex;
+                if (tx != null) { await FailInTransactionAsync(connection, tx, row, exchange, ct).ConfigureAwait(false); return; }
                 await ExecuteLifecycleSql(connection, tx, _options.OnFailure, row, exchange, ct).ConfigureAwait(false);
-                if (tx != null) { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); return; }
             }
             finally
             {

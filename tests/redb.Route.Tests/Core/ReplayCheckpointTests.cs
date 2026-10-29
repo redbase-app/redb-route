@@ -11,11 +11,13 @@ namespace redb.Route.Tests.Core;
 /// pass, tail replay from a snapshot via <see cref="IRouteContext.ReplayAsync"/>, prefix is NOT
 /// re-run, marker registry, duplicate detection, graceful degrade for a non-snapshot-able body.
 /// </summary>
-public class ReplayCheckpointTests : IAsyncDisposable
+public class ReplayCheckpointTests : IAsyncLifetime
 {
     private readonly RouteContext _ctx = new("replay-test");
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _ctx.DisposeAsync();
         GC.SuppressFinalize(this);

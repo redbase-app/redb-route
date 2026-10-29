@@ -7,6 +7,7 @@
     <ProjectReference Include="..\..\redb.Route.DataFormats.Protobuf\redb.Route.DataFormats.Protobuf.csproj" />
     <ProjectReference Include="..\..\redb.Route.DataFormats.Avro\redb.Route.DataFormats.Avro.csproj" />
     <ProjectReference Include="..\..\redb.Route.DataFormats.Yaml\redb.Route.DataFormats.Yaml.csproj" />
+    <ProjectReference Include="..\..\redb.Route.DataFormats.Mime\redb.Route.DataFormats.Mime.csproj" />
   </ItemGroup>
 
   <ItemGroup>

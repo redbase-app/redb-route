@@ -13,11 +13,13 @@ namespace redb.Route.Tests.Dsl;
 /// refuses the synchronous one, which is exactly what a real awaiting predicate would do.
 /// </summary>
 [Collection("ExpressionResolver")]
-public class AsyncPredicateEndToEndTests : IAsyncDisposable
+public class AsyncPredicateEndToEndTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

@@ -276,7 +276,7 @@ public class OnExceptionProcessor : IProcessor
                     {
                         var delay = handler.RetryPolicy.GetDelay(attempt - 1);
                         if (delay > TimeSpan.Zero)
-                            await Task.Delay(delay, ct).ConfigureAwait(false);
+                            await InflightWaits.DelayAsync(exchange, delay, ct).ConfigureAwait(false);
                     }
 
                     // B6: Restore original message/body before retry

@@ -49,6 +49,16 @@ public sealed class XmlParseContext
     /// <summary>Appends an already-positioned message (the schema validation path).</summary>
     internal void AddRawError(string positionedMessage) => _errors.Add(positionedMessage);
 
+    /// <summary>
+    /// Work that changes the context only once the whole document is valid (adding routes): the loader runs it after the
+    /// last check, and a document with errors runs none of it.
+    /// </summary>
+    internal void WhenValid(Action action) => _whenValid.Add(action);
+
+    /// <summary>The work <see cref="WhenValid"/> collected, in document order.</summary>
+    internal IReadOnlyList<Action> ValidOnlyWork => _whenValid;
+    private readonly List<Action> _whenValid = [];
+
     /// <summary>The <c>file(line,column)</c> prefix of an element.</summary>
     public string Position(XElement element)
         => element is IXmlLineInfo info && info.HasLineInfo()

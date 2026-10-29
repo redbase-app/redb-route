@@ -155,8 +155,13 @@ public abstract class StreamListLifetimeTestsBase : IAsyncLifetime
                 scope.Complete();
         });
 
-        (writeError ?? scopeError).Should().BeAssignableTo<TransactionException>(
-            $"two connections at once in one scope need a distributed transaction (write: {Outcome.Describe(writeError)}, scope: {Outcome.Describe(scopeError)})");
+        // Either outcome means the scope cannot commit: the promotion is refused, or the driver waits for it until the
+        // write times out. Which one comes depends on the machine, not on the connector.
+        var failure = writeError ?? scopeError;
+        var outcome = $"write: {Outcome.Describe(writeError)}, scope: {Outcome.Describe(scopeError)}";
+        failure.Should().NotBeNull($"two connections at once in one scope need a distributed transaction ({outcome})");
+        (failure is TransactionException || Provider.IsSecondConnectionTimeout(failure!)).Should().BeTrue(
+            $"the scope fails with a transaction error or a timeout of the waiting write ({outcome})");
         (await Target.ReadIdsAsync()).Should().BeEmpty();
     }
 

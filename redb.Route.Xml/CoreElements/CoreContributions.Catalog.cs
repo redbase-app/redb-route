@@ -1047,6 +1047,19 @@ internal static partial class CoreContributions
             return ContentTypeDispatch.Instance; // unmarshal dispatches by the message ContentType
         }
 
+        return CreateSerializer(e, ctx, typeName, extras);
+    }
+
+    /// <summary>
+    /// A serializer of the named type with its options set from the element's other attributes (<c>delimiter=";"</c> →
+    /// <c>Delimiter</c>): the per-step form of <c>&lt;marshal&gt;</c> / <c>&lt;unmarshal&gt;</c> and the context-level
+    /// <c>&lt;dataFormat&gt;</c>. A serializer built from an options object (<c>new CsvDataFormat(CsvDataFormatOptions)</c>,
+    /// the shape of the redb.Route.DataFormats.* packages) gets one with the attributes set on it; otherwise the serializer
+    /// is created with its parameterless constructor and the attributes set its own properties. Null after an error.
+    /// </summary>
+    internal static IMessageSerializer? CreateSerializer(XElement e, XmlParseContext ctx, string typeName,
+        IReadOnlyList<XAttribute> extras)
+    {
         var type = ResolveType(typeName, e, ctx);
         if (type is null) return null;
         if (!typeof(IMessageSerializer).IsAssignableFrom(type))
@@ -1054,24 +1067,44 @@ internal static partial class CoreContributions
             ctx.AddError(e, $"'{typeName}' does not implement IMessageSerializer.");
             return null;
         }
-        object instance;
+
+        // A parameterless constructor keeps the serializer's own properties as the options, as before; only a serializer
+        // without one is built from an options object.
+        var optionsConstructor = type.GetConstructor(Type.EmptyTypes) is not null ? null : type.GetConstructors()
+            .FirstOrDefault(c => c.GetParameters() is [{ ParameterType: { IsClass: true } p }]
+                                 && p != typeof(string) && p.GetConstructor(Type.EmptyTypes) is not null);
         try
         {
-            instance = Activator.CreateInstance(type)
+            if (optionsConstructor is not null)
+            {
+                var optionsType = optionsConstructor.GetParameters()[0].ParameterType;
+                var options = Activator.CreateInstance(optionsType)!;
+                SetOptions(e, ctx, options, extras, $"serializer '{type.Name}' options ({optionsType.Name})");
+                return (IMessageSerializer)optionsConstructor.Invoke([options]);
+            }
+
+            var instance = Activator.CreateInstance(type)
                 ?? throw new InvalidOperationException($"Activator returned null for {type}.");
+            SetOptions(e, ctx, instance, extras, $"serializer '{type.Name}'");
+            return (IMessageSerializer)instance;
         }
         catch (Exception ex) when (ex is MissingMethodException or MemberAccessException or InvalidOperationException)
         {
-            ctx.AddError(e, $"serializer '{typeName}' has no usable parameterless constructor: {ex.Message}");
+            ctx.AddError(e, $"serializer '{typeName}' has no parameterless constructor and none taking an options object: {ex.Message}");
             return null;
         }
+    }
+
+    private static void SetOptions(XElement e, XmlParseContext ctx, object target, IReadOnlyList<XAttribute> extras, string what)
+    {
+        var type = target.GetType();
         foreach (var extra in extras)
         {
             var property = type.GetProperty(char.ToUpperInvariant(extra.Name.LocalName[0]) + extra.Name.LocalName[1..])
                 ?? type.GetProperty(extra.Name.LocalName);
             if (property is null || !property.CanWrite)
             {
-                ctx.AddError(e, $"serializer '{type.Name}' has no writable property for option '{extra.Name.LocalName}'.");
+                ctx.AddError(e, $"{what} has no writable property for option '{extra.Name.LocalName}'.");
                 continue;
             }
             var converted = OptionValueConverter.Convert(extra.Value, property.PropertyType);
@@ -1080,9 +1113,8 @@ internal static partial class CoreContributions
                 ctx.AddError(e, $"'{extra.Value}' is not convertible to {property.PropertyType.Name} for option '{extra.Name.LocalName}'.");
                 continue;
             }
-            property.SetValue(instance, converted);
+            property.SetValue(target, converted);
         }
-        return (IMessageSerializer)instance;
     }
 
     private static TimeSpan? Duration(string value)

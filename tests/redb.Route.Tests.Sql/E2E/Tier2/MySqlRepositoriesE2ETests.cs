@@ -11,7 +11,7 @@ namespace redb.Route.Tests.Sql.E2E.Tier2;
 /// </summary>
 [Trait("Category", "SqlE2ETier2")]
 [Trait("SqlProvider", "mysql")]
-public sealed class MySqlRepositoriesE2ETests : IAsyncDisposable
+public sealed class MySqlRepositoriesE2ETests : IAsyncLifetime
 {
     private readonly MySqlE2EProvider _provider = new();
     private readonly string _suffix = Guid.NewGuid().ToString("N")[..12];
@@ -60,7 +60,9 @@ public sealed class MySqlRepositoriesE2ETests : IAsyncDisposable
         return table;
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await using var connection = await Factory.CreateConnectionAsync();
         foreach (var table in _tables)

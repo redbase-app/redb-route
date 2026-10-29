@@ -95,15 +95,34 @@ internal static partial class CoreContributions
                 }
             },
             ["setHeader"] = (e, w) => w.Verb(e, "SetHeader", S6(e, "name"),
-                A(e, "expr") is { } x ? XmlCodeWriter.Expr(x) : S6(e, "value")),
+                A(e, "expr") is { } x ? XmlCodeWriter.Expr(x) : XmlCodeWriter.Value(A(e, "value") ?? "")),
             ["setProperty"] = (e, w) => w.Verb(e, "SetProperty", S6(e, "name"),
-                A(e, "expr") is { } x ? XmlCodeWriter.Expr(x) : S6(e, "value")),
+                A(e, "expr") is { } x ? XmlCodeWriter.Expr(x) : XmlCodeWriter.Value(A(e, "value") ?? "")),
             ["setBody"] = (e, w) => w.Verb(e, "SetBody",
-                A(e, "expr") is { } x ? XmlCodeWriter.Expr(x) : S6(e, "value")),
+                A(e, "expr") is { } x ? XmlCodeWriter.Expr(x) : XmlCodeWriter.Value(A(e, "value") ?? "")),
             ["transform"] = (e, w) => w.Verb(e, "Transform", XmlCodeWriter.Expr(A(e, "expr") ?? "")),
             ["removeHeader"] = (e, w) => w.Verb(e, "RemoveHeader", S6(e, "name")),
             ["removeProperty"] = (e, w) => w.Verb(e, "RemoveProperty", S6(e, "name")),
             ["removeBody"] = (e, w) => w.Verb(e, "RemoveBody"),
+            ["addAttachment"] = (e, w) =>
+            {
+                // Optional arguments by name: a positional null would not pick between the literal and expression overloads.
+                string? Opt(string name) => A(e, name) is { } v ? XmlCodeWriter.Str(v) : null;
+                string[] Named(params (string Name, string? Value)[] args) =>
+                    [.. args.Where(a => a.Value is not null).Select(a => $"{a.Name}: {a.Value}")];
+                string? FileName() => A(e, "fileNameExpr") is { } x ? XmlCodeWriter.Expr(x) : Opt("fileName");
+                if (A(e, "file") is { } file)
+                    w.Verb(e, "AddAttachmentFromFile", [XmlCodeWriter.Str(file), .. Named(("name", Opt("name")), ("contentType", Opt("contentType")))]);
+                else if (A(e, "fileExpr") is { } fileExpr)
+                    w.Verb(e, "AddAttachmentFromFile", [XmlCodeWriter.Expr(fileExpr), .. Named(("name", Opt("name")), ("contentType", Opt("contentType")))]);
+                else if (A(e, "fromBody") is not null)
+                    w.Verb(e, "AddAttachmentFromBody", [S6(e, "name"), .. Named(("fileName", FileName()), ("contentType", Opt("contentType")))]);
+                else
+                    w.Verb(e, "AddAttachment", [S6(e, "name"), XmlCodeWriter.Expr(A(e, "expr") ?? ""),
+                        .. Named(("fileName", FileName()), ("contentType", Opt("contentType")))]);
+            },
+            ["removeAttachment"] = (e, w) => w.Verb(e, "RemoveAttachment", S6(e, "name")),
+            ["removeAttachments"] = (e, w) => w.Verb(e, "RemoveAttachments"),
             ["removeHeaders"] = (e, w) => w.Verb(e, "RemoveHeaders",
                 [S6(e, "pattern"), .. (A(e, "except") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(XmlCodeWriter.Str)]),
             ["removeProperties"] = (e, w) => w.Verb(e, "RemoveProperties",

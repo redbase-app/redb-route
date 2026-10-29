@@ -102,6 +102,7 @@ public static class RoutePackage
         ArgumentException.ThrowIfNullOrWhiteSpace(projectDir);
         var findings = new List<PackageFinding>();
         var artifacts = CollectArtifacts(projectDir, findings);
+        CheckPackageConfigName(projectDir, name, findings);
         var requiredKeys = RunChecks(projectDir, artifacts, findings, typeResolver, extensions, catalog);
         var manifest = BuildManifest(projectDir, name, version, artifacts, requiredKeys);
         return new PackageResult(manifest, findings);
@@ -121,7 +122,12 @@ public static class RoutePackage
         if (result.Errors.Any())
             return result;
 
-        var manifest = result.Manifest with { EntryPoints = entryPoints ?? [] };
+        // An entry DLL is packed at the package root, so the manifest names it by its file name: the loader looks it up
+        // in the zip by exactly this name, and a build path ("bin/Release/net10.0/X.dll") would not be found there.
+        var manifest = result.Manifest with
+        {
+            EntryPoints = (entryPoints ?? []).Select(e => Path.GetFileName(Path.GetFullPath(e, projectDir))).ToList(),
+        };
         var stage = Path.Combine(outDir, $"{name}-{version}");
         if (Directory.Exists(stage))
             Directory.Delete(stage, recursive: true);
@@ -131,9 +137,9 @@ public static class RoutePackage
             JsonSerializer.Serialize(manifest, ManifestJson));
 
         // L4 — the identity stub only (эскиз 11 §1.4: secrets never ride inside the package).
-        var l4Source = Path.Combine(projectDir, ConfigDir, $"{name}.config.json");
+        var l4Source = FindPackageConfig(projectDir, name);
         File.WriteAllText(Path.Combine(stage, $"{name}.config.json"),
-            File.Exists(l4Source)
+            l4Source is not null
                 ? File.ReadAllText(l4Source)
                 : JsonSerializer.Serialize(new { ContextName = manifest.Context ?? name, AutoStart = true }, ManifestJson));
 
@@ -150,7 +156,7 @@ public static class RoutePackage
         if (Directory.Exists(resources))
             CopyTree(resources, Path.Combine(stage, ResourcesDir));
 
-        foreach (var entryPoint in manifest.EntryPoints)
+        foreach (var entryPoint in entryPoints ?? [])
         {
             var source = Path.GetFullPath(entryPoint, projectDir);
             File.Copy(source, Path.Combine(stage, Path.GetFileName(source)), overwrite: true);
@@ -164,6 +170,47 @@ public static class RoutePackage
     }
 
     private static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true };
+
+    /// <summary>
+    /// The package reads its L4 config from <c>config/&lt;name&gt;.config.json</c> only. When that file is absent but
+    /// another <c>*.config.json</c> is there, the package name and the file disagree (a rename, a <c>--name</c>), and the
+    /// build would write the default config instead: a warning naming both files.
+    /// </summary>
+    private static void CheckPackageConfigName(string projectDir, string name, List<PackageFinding> findings)
+    {
+        var configDir = Path.Combine(projectDir, ConfigDir);
+        var expected = $"{name}.config.json";
+        if (!Directory.Exists(configDir) || FindPackageConfig(projectDir, name) is not null)
+            return;
+
+        var found = Directory.GetFiles(configDir, "*.config.json")
+            .Select(f => $"{ConfigDir}/{Path.GetFileName(f)}")
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .ToList();
+        if (found.Count == 0)
+            return;
+
+        findings.Add(new PackageFinding(false, $"{ConfigDir}/{expected}",
+            $"the package '{name}' reads its config from {ConfigDir}/{expected}, which is missing, but {string.Join(", ", found)} "
+            + $"is there; the package gets the default config (ContextName, AutoStart) instead. "
+            + $"Rename the file to {expected}, or pack with the name it was made for (--name)."));
+    }
+
+    /// <summary>
+    /// <c>config/&lt;name&gt;.config.json</c> with exactly this file name, letter case included, on every system. A plain
+    /// <see cref="File.Exists(string)"/> ignored the case on Windows and macOS and kept it on Linux, so
+    /// <c>--name orders</c> next to <c>Orders.config.json</c> packed that file on a Windows machine and the default
+    /// config on a Linux build agent.
+    /// </summary>
+    private static string? FindPackageConfig(string projectDir, string name)
+    {
+        var configDir = Path.Combine(projectDir, ConfigDir);
+        if (!Directory.Exists(configDir))
+            return null;
+        var expected = $"{name}.config.json";
+        return Directory.EnumerateFiles(configDir, "*.config.json")
+            .FirstOrDefault(f => string.Equals(Path.GetFileName(f), expected, StringComparison.Ordinal));
+    }
 
     private static List<string> CollectArtifacts(string projectDir, List<PackageFinding> findings)
     {
@@ -183,8 +230,7 @@ public static class RoutePackage
         List<string> artifacts, IReadOnlyList<string> requiredKeys)
     {
         string? contextName = null;
-        var l4 = Path.Combine(projectDir, ConfigDir, $"{name}.config.json");
-        if (File.Exists(l4))
+        if (FindPackageConfig(projectDir, name) is { } l4)
         {
             try
             {
@@ -365,6 +411,8 @@ public static class RoutePackage
             CheckConditionTemplates(file, root, registry.Find(root.Name.LocalName)?.Spec, registry, findings);
         }
 
+        CheckRouteBuilders(documents, typeResolver, findings);
+
         if (typeResolver is not null)
         {
             var instanceTypes = RunDeepBeanChecks(beanDeclarations, beanMethodCalls, typeResolver, findings);
@@ -382,6 +430,37 @@ public static class RoutePackage
         }
 
         return [.. requiredKeys];
+    }
+
+    /// <summary>
+    /// Every <c>&lt;routeBuilder&gt;</c> of <c>context.xml</c> names its type; with the built assemblies at hand the type
+    /// exists and is one the loader accepts (a public, non-abstract <c>RouteBuilder</c> with a public parameterless
+    /// constructor). The worker would refuse the package on any of these, so the build does.
+    /// </summary>
+    private static void CheckRouteBuilders(List<(string File, XDocument Document)> documents,
+        Func<string, Type?>? typeResolver, List<PackageFinding> findings)
+    {
+        foreach (var (file, document) in documents)
+        {
+            if (document.Root?.Name.LocalName != "context")
+                continue;
+            foreach (var element in document.Root.Elements().Where(e => e.Name.LocalName == "routeBuilder"))
+            {
+                var line = (IXmlLineInfo)element;
+                var at = $"{file}({line.LineNumber},{line.LinePosition})";
+                var typeName = element.Attribute("type")?.Value.Trim();
+                if (string.IsNullOrEmpty(typeName))
+                {
+                    findings.Add(new PackageFinding(true, at, "<routeBuilder> needs type=\"Namespace.Type, Assembly\"."));
+                    continue;
+                }
+                // A type that does not resolve is reported by the generic type-attribute check.
+                if (typeResolver?.Invoke(typeName) is not { } type)
+                    continue;
+                if (CoreElements.RouteBuilderContextContribution.Refusal(type) is { } reason)
+                    findings.Add(new PackageFinding(true, at, $"<routeBuilder>: '{typeName}' {reason}"));
+            }
+        }
     }
 
     /// <summary>
@@ -728,11 +807,29 @@ public static class RoutePackage
                 for (var i = 0; i < bean.ConstructorArgs.Count; i++)
                     CheckValue(bean.ConstructorArgs[i].Value, parameters[i].ParameterType, $"constructorArg {i + 1}");
             }
-            else
+            else if (bean.ConstructorArgs.Count > 0)
             {
-                // The constructor is chosen at load from the built arguments, so no parameter types them.
+                // The constructor is chosen at load from the built arguments (ActivatorUtilities): each argument goes to a
+                // parameter its value is assignable to, text as System.String. So the arguments are checked as built.
+                var built = new List<Type?>();
                 for (var i = 0; i < bean.ConstructorArgs.Count; i++)
-                    CheckValue(bean.ConstructorArgs[i].Value, null, $"constructorArg {i + 1}");
+                {
+                    var value = bean.ConstructorArgs[i].Value;
+                    built.Add(value switch
+                    {
+                        ScalarBeanValue => typeof(string),
+                        RefBeanValue reference => instanceTypes.TryGetValue(reference.Bean, out var referenced) ? referenced : null,
+                        NestedBeanValue nested => Check(nested.Bean),
+                        ListBeanValue { ElementTypeName: { } element } => typeResolver(element)?.MakeArrayType(),
+                        _ => null,
+                    });
+                    if (value is not NestedBeanValue)
+                        CheckValue(value, null, $"constructorArg {i + 1}");
+                }
+                if (built.All(t => t is not null) && !type.GetConstructors().Any(c => TakesBuilt(c.GetParameters(), built!)))
+                    return Error(bean.At, $"{label}: no public constructor of '{type.FullName}' takes ({BeanFactory.Signature(built!)}): "
+                        + "without type= a constructorArg is passed as it is built, text as System.String."
+                        + TypedHint(type, bean.ConstructorArgs.Count));
             }
 
             foreach (var property in bean.Properties)
@@ -745,6 +842,39 @@ public static class RoutePackage
                 CheckValue(property.Value, info.PropertyType, property.Key);
             }
             return instanceType;
+        }
+
+        /// <summary>
+        /// Whether ActivatorUtilities could pass the built arguments to these parameters: every argument to its own
+        /// parameter of a type it is assignable to (the parameters left over come from DI or their defaults).
+        /// </summary>
+        private static bool TakesBuilt(ParameterInfo[] parameters, IReadOnlyList<Type> built)
+        {
+            var taken = new bool[parameters.Length];
+            foreach (var argument in built)
+            {
+                var index = -1;
+                for (var i = 0; i < parameters.Length && index < 0; i++)
+                {
+                    if (!taken[i] && parameters[i].ParameterType.IsAssignableFrom(argument))
+                        index = i;
+                }
+                if (index < 0)
+                    return false;
+                taken[index] = true;
+            }
+            return true;
+        }
+
+        /// <summary>The type= to write when exactly one public constructor takes that many arguments.</summary>
+        private static string TypedHint(Type type, int count)
+        {
+            var candidates = type.GetConstructors().Where(c => c.GetParameters().Length == count).ToList();
+            if (candidates.Count != 1)
+                return " Name the parameter types with <constructorArg type=\"…\">.";
+            var parameters = candidates[0].GetParameters();
+            return " Name the parameter types: "
+                   + string.Join(" ", parameters.Select(p => $"<constructorArg type=\"{p.ParameterType.FullName}\" …/>")) + ".";
         }
 
         private void CheckValue(BeanValue value, Type? target, string slot)

@@ -12,7 +12,7 @@ namespace redb.Route.Tests.As4;
 /// hard-fail when the status cannot be determined unless soft-fail is chosen; a certificate that names no CRL
 /// distribution point and no AIA passes, as in Domibus. Off by default, as in Camel/CXF, Holodeck and phase4.
 /// </summary>
-public sealed class As4RevocationTests : IAsyncDisposable
+public sealed class As4RevocationTests : IAsyncLifetime
 {
     private readonly HttpListener _listener = new();
     private readonly int _port = global::redb.Route.Tests.Shared.TestPorts.Next();
@@ -309,7 +309,9 @@ public sealed class As4RevocationTests : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         _listener.Stop();
         _listener.Close();

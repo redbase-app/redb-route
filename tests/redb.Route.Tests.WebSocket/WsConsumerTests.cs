@@ -122,7 +122,7 @@ public class WsConsumerTests : IAsyncLifetime
 
         using var ws = await ConnectClient();
         await SendText(ws, "hello ws");
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange.Should().NotBeNull();
         _lastExchange!.In.Body.Should().Be("hello ws");
@@ -136,7 +136,7 @@ public class WsConsumerTests : IAsyncLifetime
 
         using var ws = await ConnectClient();
         await SendText(ws, "typed");
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange!.In.Body.Should().BeOfType<string>();
     }
@@ -150,7 +150,7 @@ public class WsConsumerTests : IAsyncLifetime
         using var ws = await ConnectClient();
         var payload = new byte[] { 10, 20, 30 };
         await SendBinary(ws, payload);
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange.Should().NotBeNull();
         _lastExchange!.In.Body.Should().BeOfType<byte[]>();
@@ -167,7 +167,7 @@ public class WsConsumerTests : IAsyncLifetime
         for (var i = 0; i < 5; i++)
             await SendText(ws, $"msg-{i}");
 
-        await Task.Delay(300);
+        await TestWait.Until(() => consumer.ProcessedCount >= 5);
 
         lock (_capturedExchanges) _capturedExchanges.Should().HaveCount(5);
         consumer.ProcessedCount.Should().Be(5);
@@ -183,7 +183,7 @@ public class WsConsumerTests : IAsyncLifetime
 
         using var ws = await ConnectClient();
         await SendText(ws, "header test");
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         var h = _lastExchange!.In.Headers;
         h[WsHeaders.RemoteAddress].Should().NotBeNull();
@@ -205,7 +205,7 @@ public class WsConsumerTests : IAsyncLifetime
 
         using var ws = await ConnectClient();
         await SendText(ws, "fire-and-forget");
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange!.Pattern.Should().Be(ExchangePattern.InOnly);
     }
@@ -260,11 +260,11 @@ public class WsConsumerTests : IAsyncLifetime
         await consumer.Start();
 
         using var ws1 = await ConnectClient();
-        await Task.Delay(100);
+        await TestWait.Until(() => consumer.ActiveConnections >= 1);
         consumer.ActiveConnections.Should().BeGreaterThanOrEqualTo(1);
 
         using var ws2 = await ConnectClient();
-        await Task.Delay(100);
+        await TestWait.Until(() => consumer.ActiveConnections >= 2);
         consumer.ActiveConnections.Should().BeGreaterThanOrEqualTo(2);
     }
 
@@ -280,11 +280,11 @@ public class WsConsumerTests : IAsyncLifetime
 
         using var ws = await ConnectClient();
         await SendText(ws, "one");
-        await Task.Delay(200);
+        await TestWait.Until(() => consumer.ProcessedCount >= 1);
         consumer.ProcessedCount.Should().Be(1);
 
         await SendText(ws, "two");
-        await Task.Delay(200);
+        await TestWait.Until(() => consumer.ProcessedCount >= 2);
         consumer.ProcessedCount.Should().Be(2);
     }
 
@@ -334,7 +334,7 @@ public class WsConsumerTests : IAsyncLifetime
             clients.Add(ws);
         }
 
-        await Task.Delay(300);
+        await TestWait.Until(() => { lock (_capturedExchanges) return _capturedExchanges.Count >= 3; });
 
         lock (_capturedExchanges) _capturedExchanges.Should().HaveCount(3);
 
@@ -353,7 +353,7 @@ public class WsConsumerTests : IAsyncLifetime
 
         using var ws = await ConnectClient();
         await SendText(ws, "error test");
-        await Task.Delay(200);
+        await TestWait.Until(() => consumer.ProcessedCount >= 1);
 
         _lastExchange.Should().NotBeNull();
         _lastExchange!.Exception.Should().BeOfType<InvalidOperationException>();
@@ -382,7 +382,7 @@ public class WsConsumerTests : IAsyncLifetime
 
         using var ws = await ConnectClient();
         await SendText(ws, "");
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange.Should().NotBeNull();
         _lastExchange!.In.Body.Should().Be("");

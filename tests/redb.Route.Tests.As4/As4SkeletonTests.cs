@@ -33,13 +33,38 @@ public class As4SkeletonTests
     }
 
     [Fact]
-    public void Send_ToAnAddressWithAQuery_IsRefused_WithTheReason()
+    public void Send_ToAnAddressWithAQuery_CarriesItInAddressQuery()
     {
-        // The query of an as4: URI holds the endpoint's options (as http:'s does); a partner address with its own query
-        // would otherwise fail later as "'tenant' is not an option", which reads as the author's typo.
-        var act = () => As4Dsl.Send("https://ap.partner/as4?tenant=7").Build();
+        // The query of an as4: URI holds the endpoint's options (as http:'s does): the address's own query is one value.
+        var builder = As4Dsl.Send("https://ap.partner/domibus?domain=a&tenant=7").ConnectionFactory("node");
+        string uri = builder;
 
-        act.Should().Throw<ArgumentException>().WithMessage("*query*options*");
+        uri.Should().Be("as4s://ap.partner/domibus?addressQuery=" + Uri.EscapeDataString("domain=a&tenant=7") + "&connectionFactory=node");
+        ((string)builder).Should().Be(uri, "building twice gives the same URI");
+
+        using var ctx = new RouteContext();
+        ctx.AddComponent(new As4Component());
+        ((As4Endpoint)ctx.GetEndpoint(uri)).PartnerUrl.Should().Be("https://ap.partner/domibus?domain=a&tenant=7");
+    }
+
+    [Theory]
+    [InlineData("https://ap.partner/as4#part")]
+    [InlineData("https://ap.partner/as4?a=1#part")]
+    public void Send_ToAnAddressWithAFragment_IsRefused(string address)
+    {
+        var act = () => As4Dsl.Send(address).Build();
+
+        act.Should().Throw<ArgumentException>().WithMessage("*fragment*");
+    }
+
+    [Theory]
+    [InlineData("?domain=a")]
+    [InlineData("domain=a#x")]
+    public void Options_Validate_AMalformedAddressQuery_Throws(string query)
+    {
+        var options = new As4EndpointOptions { ConnectionFactory = "node", AddressQuery = query };
+
+        options.Invoking(o => o.Validate()).Should().Throw<ArgumentException>().WithMessage("*addressQuery*");
     }
 
     [Fact]
@@ -323,6 +348,80 @@ public class As4SkeletonTests
         await producer.Start();
 
         producer.IsStarted.Should().BeTrue();
+    }
+
+    // ── Where a message goes: the endpoint's address or the partner's ───────────
+
+    [Fact]
+    public void Send_WithoutAnAddress_IsTheAs4FormWithoutAPath()
+    {
+        ((string)As4Dsl.Send().ConnectionFactory("node").Partner("acme")).Should().Be("as4:?connectionFactory=node&partner=acme");
+    }
+
+    [Fact]
+    public async Task Producer_Start_WithThePartnersAddress_TakesIt()
+    {
+        using var ctx = NewContext(partner: p => p.Address = "https://ap.acme.example/domibus?domain=x");
+        var producer = (As4Producer)ctx.GetEndpoint(As4Dsl.Send().ConnectionFactory("node").Partner("acme")).CreateProducer();
+
+        await producer.Start();
+
+        producer.IsStarted.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Producer_Start_WithoutAnyAddress_Throws()
+    {
+        using var ctx = NewContext();
+        var producer = (As4Producer)ctx.GetEndpoint(As4Dsl.Send().ConnectionFactory("node").Partner("acme")).CreateProducer();
+
+        var act = () => producer.Start();
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*no address*acme*no Address*");
+    }
+
+    [Fact]
+    public async Task Producer_Start_WithAnAddressInBothPlaces_Throws()
+    {
+        using var ctx = NewContext(partner: p => p.Address = "https://ap.acme.example/as4");
+        var producer = SendProducer(ctx, "partner=acme");
+
+        var act = () => producer.Start();
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*one place*");
+    }
+
+    [Theory]
+    [InlineData("as4s:?connectionFactory=node&partner=acme")]
+    [InlineData("as4:?connectionFactory=node&partner=acme&addressQuery=domain%3Dx")]
+    public void Producer_WithoutAnAddress_RefusesWhatOnlyAnAddressCarries(string uri)
+    {
+        using var ctx = NewContext(partner: p => p.Address = "https://ap.acme.example/as4");
+
+        var act = () => ctx.GetEndpoint(uri).CreateProducer();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*as4s and addressQuery*");
+    }
+
+    [Fact]
+    public void Producer_OnAReceivePath_Throws()
+    {
+        using var ctx = NewContext();
+
+        var act = () => ctx.GetEndpoint("as4:/as4/in?connectionFactory=node&partner=acme").CreateProducer();
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*receive path*");
+    }
+
+    [Theory]
+    [InlineData("ap.acme.example/as4")]
+    [InlineData("ftp://ap.acme.example/as4")]
+    [InlineData("https://ap.acme.example/as4#part")]
+    public void Node_PartnerWithAMalformedAddress_Throws(string address)
+    {
+        using var ctx = NewContext(partner: p => p.Address = address);
+
+        var act = () => As4Node.Resolve(ctx, "node");
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Address*");
     }
 
     [Fact]

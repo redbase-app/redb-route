@@ -363,8 +363,8 @@ Uses `x-amz-if-none-match` — upload fails if the object key already exists.
 | `delay` | int | `60000` | Polling interval (ms) |
 | `initialDelay` | int | `1000` | Delay before first poll (ms) |
 | `maxMessagesPerPoll` | int | `10` | Max objects per poll (0 = unlimited) |
-| `deleteAfterRead` | bool | `true` | Delete after successful processing |
-| `moveAfterRead` | bool | `false` | Move to destination bucket instead of delete |
+| `deleteAfterRead` | bool | `true` | Delete after successful processing; with `moveAfterRead=true` the move takes its place (an explicit `deleteAfterRead=true` beside it is an error) |
+| `moveAfterRead` | bool | `false` | Move to destination bucket instead of delete; needs `destinationBucket` |
 | `destinationBucket` | string | `""` | Target bucket for move |
 | `destinationBucketPrefix` | string | `""` | Prefix for moved key |
 | `destinationBucketSuffix` | string | `""` | Suffix for moved key |

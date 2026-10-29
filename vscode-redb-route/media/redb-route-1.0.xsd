@@ -1,6 +1,7 @@
 <xs:schema targetNamespace="urn:redb:route:1.0" elementFormDefault="qualified" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:r="urn:redb:route:1.0">
   <xs:group name="step">
     <xs:choice>
+      <xs:element ref="r:addAttachment" />
       <xs:element ref="r:aggregate" />
       <xs:element ref="r:beginTransaction" />
       <xs:element ref="r:cache" />
@@ -38,6 +39,8 @@
       <xs:element ref="r:redbGet" />
       <xs:element ref="r:redbQuery" />
       <xs:element ref="r:redbSave" />
+      <xs:element ref="r:removeAttachment" />
+      <xs:element ref="r:removeAttachments" />
       <xs:element ref="r:removeBody" />
       <xs:element ref="r:removeHeader" />
       <xs:element ref="r:removeHeaders" />
@@ -80,6 +83,21 @@
       <xs:element ref="r:xslt" />
     </xs:choice>
   </xs:group>
+  <xs:element name="addAttachment">
+    <xs:complexType>
+      <xs:attribute name="name" type="xs:string" />
+      <xs:attribute name="expr" type="xs:string" />
+      <xs:attribute name="fromBody" type="xs:boolean" />
+      <xs:attribute name="file" type="xs:string" />
+      <xs:attribute name="fileExpr" type="xs:string" />
+      <xs:attribute name="fileName" type="xs:string" />
+      <xs:attribute name="fileNameExpr" type="xs:string" />
+      <xs:attribute name="contentType" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
   <xs:element name="aggregate">
     <xs:complexType>
       <xs:choice minOccurs="0" maxOccurs="unbounded">
@@ -248,6 +266,15 @@
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="dataFormat">
+    <xs:complexType>
+      <xs:attribute name="type" use="required" type="xs:string" />
+      <xs:attribute name="name" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##any" processContents="lax" />
     </xs:complexType>
   </xs:element>
   <xs:element name="deadLetterChannel">
@@ -484,7 +511,7 @@
       <xs:attribute name="type" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
-      <xs:anyAttribute namespace="##other" processContents="lax" />
+      <xs:anyAttribute namespace="##any" processContents="lax" />
     </xs:complexType>
   </xs:element>
   <xs:element name="messageHistory">
@@ -796,6 +823,21 @@
       <xs:attribute name="type" type="xs:string" />
       <xs:attribute name="byUnique" type="xs:boolean" />
       <xs:attribute name="storage" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="removeAttachment">
+    <xs:complexType>
+      <xs:attribute name="name" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
+  <xs:element name="removeAttachments">
+    <xs:complexType>
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
       <xs:anyAttribute namespace="##other" processContents="lax" />
@@ -1240,6 +1282,14 @@
       <xs:anyAttribute namespace="##other" processContents="lax" />
     </xs:complexType>
   </xs:element>
+  <xs:element name="routeBuilder">
+    <xs:complexType>
+      <xs:attribute name="type" use="required" type="xs:string" />
+      <xs:attribute name="id" type="xs:string" />
+      <xs:attribute name="description" type="xs:string" />
+      <xs:anyAttribute namespace="##other" processContents="lax" />
+    </xs:complexType>
+  </xs:element>
   <xs:element name="routePolicy">
     <xs:complexType>
       <xs:attribute name="ref" use="required" type="xs:string" />
@@ -1619,7 +1669,7 @@
       <xs:attribute name="target" use="required" type="xs:string" />
       <xs:attribute name="id" type="xs:string" />
       <xs:attribute name="description" type="xs:string" />
-      <xs:anyAttribute namespace="##other" processContents="lax" />
+      <xs:anyAttribute namespace="##any" processContents="lax" />
     </xs:complexType>
   </xs:element>
   <xs:element name="validate">
@@ -1806,8 +1856,10 @@
           </xs:complexType>
         </xs:element>
         <xs:element ref="r:routeConfiguration" />
+        <xs:element ref="r:dataFormat" />
         <xs:element ref="r:deadLetterChannel" />
         <xs:element ref="r:redb" />
+        <xs:element ref="r:routeBuilder" />
       </xs:choice>
     </xs:complexType>
   </xs:element>

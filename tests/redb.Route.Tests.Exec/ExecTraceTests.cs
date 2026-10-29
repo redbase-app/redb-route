@@ -14,6 +14,9 @@ namespace redb.Route.Tests.Exec;
 /// marks it red. The producer's client span is named after the resolved executable, file name only, and carries it as
 /// <c>process.executable.name</c>; a refused command marks it red. <c>EnableTelemetry=false</c> opens none of these spans.
 /// </summary>
+// One collection with ExecRestartTests: its schedule ticks the same shell, and the probe here counted those green tick
+// spans as this route's.
+[Collection("ExecScheduledTicks")]
 public sealed class ExecTraceTests
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);

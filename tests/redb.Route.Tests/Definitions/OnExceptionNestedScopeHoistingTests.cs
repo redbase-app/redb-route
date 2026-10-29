@@ -13,11 +13,13 @@ namespace redb.Route.Tests.Definitions;
 /// hoisted to wrap the whole route — and must NOT compile into an inline pipeline
 /// step that runs its handler on every healthy exchange.
 /// </summary>
-public class OnExceptionNestedScopeHoistingTests : IAsyncDisposable
+public class OnExceptionNestedScopeHoistingTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

@@ -9,12 +9,14 @@ namespace redb.Route.Tests.Definitions;
 /// Integration tests for ContentType-based deserialization via
 /// <c>Unmarshal&lt;T&gt;()</c> and <c>OfType&lt;T&gt;()</c> auto-conversion.
 /// </summary>
-public class ContentTypeDeserializationTests : IAsyncDisposable
+public class ContentTypeDeserializationTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
     private readonly JsonMessageSerializer _json = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

@@ -94,8 +94,8 @@ public sealed class SoapProducer : ConnectableProducer
 
         // MTOM/XOP (camel-cxf mtom-enabled parity): wrap envelope + attachments as multipart/related. For
         // SOAP 1.2 the action rides on the multipart Content-Type (1.1 keeps its SOAPAction header below).
-        var attachments = exchange.In.GetHeader<IReadOnlyList<SoapAttachment>>(SoapHeaders.Attachments);
-        if (factory?.Mtom == true && attachments is { Count: > 0 })
+        var attachments = exchange.In.Attachments;
+        if (factory?.Mtom == true && attachments.Count > 0)
             (envelope, httpContentType) = SoapMultipart.Write(
                 envelope, SoapEnvelope.ContentType(version, action), attachments,
                 version == SoapVersion.Soap12 ? action : null);
@@ -143,7 +143,7 @@ public sealed class SoapProducer : ConnectableProducer
         var respBytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
 
         // Inbound MTOM: unwrap multipart/related and surface the attachments on the reply.
-        IReadOnlyList<SoapAttachment>? respAttachments = null;
+        IReadOnlyList<Attachment>? respAttachments = null;
         if (SoapMultipart.IsMultipartRelated(response.Content.Headers.ContentType?.ToString()))
         {
             var (rootBytes, atts) = SoapMultipart.Parse(respBytes, response.Content.Headers.ContentType!.ToString());
@@ -212,10 +212,12 @@ public sealed class SoapProducer : ConnectableProducer
             catch { /* malformed signature — leave the flag unset */ }
         }
 
-        if (respAttachments is { Count: > 0 })
+        // The reply attachments replace the request ones when the pipeline moves Out to In; a reply without
+        // attachments leaves the request attachments on the message.
+        if (respAttachments is not null)
         {
-            exchange.Out!.Headers[SoapHeaders.Attachments] = respAttachments;
-            exchange.Out!.Headers[SoapHeaders.HasAttachments] = true;
+            foreach (var attachment in respAttachments)
+                exchange.Out!.Attachments.Add(attachment);
         }
         // No catch/RecordError: exceptions fly into the core (ToProcessor / the template),
         // which records them against this endpoint (ownership audit).

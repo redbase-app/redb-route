@@ -73,4 +73,10 @@ public sealed class MsSqlE2EProvider : SqlE2EProvider
     public override bool CanCreateBatch => true;
     public override bool PrepareRejectsUntypedParameters => true;
     public override bool ReaderClosedOnPrepareLetsScopeCommit => true;
+
+    /// <summary>
+    /// Measured on the Linux gate (SQL Server 2022, 1.5 CPUs): the write on the second connection ran into the command
+    /// timeout (number -2) while the first one still read; on faster machines the promotion is refused at once.
+    /// </summary>
+    public override bool IsSecondConnectionTimeout(Exception error) => error is SqlException { Number: -2 };
 }

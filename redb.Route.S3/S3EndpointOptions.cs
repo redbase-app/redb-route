@@ -162,9 +162,23 @@ public class S3EndpointOptions : EndpointOptions
 
     /// <summary>
     /// Delete objects from S3 after they have been successfully consumed.
-    /// Only performed if the exchange completes without error. (default: true)
+    /// Only performed if the exchange completes without error. (default: true; with <see cref="MoveAfterRead"/> the
+    /// object is moved instead, as Apache Camel's <c>move</c> takes the place of the delete)
     /// </summary>
-    public bool DeleteAfterRead { get; set; } = true;
+    public bool DeleteAfterRead
+    {
+        get => _deleteAfterRead;
+        set
+        {
+            _deleteAfterRead = value;
+            _deleteAfterReadSet = true;
+        }
+    }
+
+    private bool _deleteAfterRead = true;
+
+    // Only a delete asked for explicitly conflicts with a move; the default gives way to it.
+    private bool _deleteAfterReadSet;
 
     /// <summary>
     /// Move objects to <see cref="DestinationBucket"/> after successful consumption
@@ -365,7 +379,7 @@ public class S3EndpointOptions : EndpointOptions
         if (MoveAfterRead && string.IsNullOrEmpty(DestinationBucket))
             throw new InvalidOperationException("DestinationBucket is required when MoveAfterRead=true.");
 
-        if (MoveAfterRead && DeleteAfterRead)
+        if (MoveAfterRead && DeleteAfterRead && _deleteAfterReadSet)
             throw new InvalidOperationException(
                 "Cannot set both MoveAfterRead=true and DeleteAfterRead=true. MoveAfterRead implies the object is moved, not deleted from source after move.");
 

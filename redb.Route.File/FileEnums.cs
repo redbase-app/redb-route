@@ -22,8 +22,11 @@ public enum ReadLockStrategy
     Changed,
 
     /// <summary>
-    /// Uses OS-level exclusive file lock (FileShare.None).
-    /// If the lock fails, the file is skipped until next poll.
+    /// Holds the file open without read or write sharing for the duration of processing.
+    /// If the open fails, the file is skipped until next poll.
+    /// Windows only: Linux and macOS locks are advisory, there another reader opens the file
+    /// anyway and the strategy keeps nobody out. Use <see cref="Rename"/>, <see cref="MarkerFile"/>
+    /// or <see cref="Changed"/> there.
     /// </summary>
     FileLock,
 

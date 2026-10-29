@@ -42,20 +42,36 @@ public sealed class CheckpointProcessor : IProcessor
     {
         try
         {
+            EnsureAttachmentsReplayable(exchange);
             // Freeze the state at this marker — deep, isolated (NOT Clone). Last marker wins.
             exchange.Properties[RouteCheckpoint.PropertyKey] =
                 new RouteCheckpoint(exchange.RouteId ?? string.Empty, _markerName, exchange.Snapshot());
         }
         catch (NotSupportedException ex)
         {
-            // A non-snapshot-able body must NEVER break the happy path: degrade gracefully — this
-            // pass captures no checkpoint (replay simply won't be available for it) and processing
-            // continues. Make the body snapshot-able (immutable / byte[] / ICloneable) to enable it.
+            // A non-snapshot-able body, or attachments above RedbRoute:Attachments:MaxReplayableBytes, must NEVER break
+            // the happy path: degrade gracefully — this pass captures no checkpoint (replay simply won't be available
+            // for it) and processing continues. The exception says which of the two it was.
             _logger?.LogWarning(ex,
-                "Checkpoint '{Marker}' not captured: exchange body is not snapshot-able; replay unavailable for this pass.",
-                _markerName);
+                "Checkpoint '{Marker}' not captured: {Reason} Replay unavailable for this pass.",
+                _markerName, ex.Message);
         }
 
         return _body.Process(exchange, ct);
+    }
+
+    // A replay snapshot copies attachment content into memory, so it keeps at most RedbRoute:Attachments:MaxReplayableBytes
+    // of it (the Tsak DLQ stores this checkpoint, so the same limit holds there). Checked here, not in Snapshot itself:
+    // other snapshot users (a deferred transactional write) are not replays and have no such limit.
+    private static void EnsureAttachmentsReplayable(IExchange exchange)
+    {
+        var total = Core.MessageAttachments.TotalLength(exchange.In)
+                    + (exchange.Out is { } outMessage ? Core.MessageAttachments.TotalLength(outMessage) : 0);
+        if (total == 0)
+            return;
+        var limit = Extensions.RouteContextExtensions.GetAttachmentOptions(exchange.Context).MaxReplayableBytes;
+        if (total > limit)
+            throw new NotSupportedException(
+                $"the attachments of the exchange hold {total} bytes, more than RedbRoute:Attachments:MaxReplayableBytes ({limit}).");
     }
 }

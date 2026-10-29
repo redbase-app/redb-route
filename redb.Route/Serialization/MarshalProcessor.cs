@@ -21,6 +21,10 @@ public sealed class MarshalProcessor : IProcessor
     /// <inheritdoc />
     public Task Process(IExchange exchange, CancellationToken ct = default)
     {
+        // A message format sees the whole message (a body may be empty when the attachments are the payload).
+        if (_serializer is IMessageDataFormat messageFormat)
+            return messageFormat.MarshalAsync(exchange, ct).AsTask();
+
         var body = exchange.In.Body;
         if (body is null)
             return Task.CompletedTask;
@@ -67,6 +71,13 @@ public sealed class UnmarshalProcessor : IProcessor
     /// <inheritdoc />
     public async Task Process(IExchange exchange, CancellationToken ct = default)
     {
+        // A message format reads the body as it came, with the content type parameters.
+        if (_serializer is IMessageDataFormat messageFormat)
+        {
+            await messageFormat.UnmarshalAsync(exchange, _targetType, ct).ConfigureAwait(false);
+            return;
+        }
+
         // Text formats (CSV, YAML, JSON) usually arrive as a string; a Stream is common after an
         // HTTP or file consumer. All three are the same bytes to a serializer.
         var bytes = exchange.In.Body switch

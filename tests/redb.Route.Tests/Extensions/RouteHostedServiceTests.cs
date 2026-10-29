@@ -8,12 +8,14 @@ namespace redb.Route.Tests.Extensions;
 /// <summary>
 /// Tests for <see cref="RouteHostedService"/>.
 /// </summary>
-public class RouteHostedServiceTests : IAsyncDisposable
+public class RouteHostedServiceTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
     private readonly ILogger<RouteHostedService> _logger = NullLogger<RouteHostedService>.Instance;
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

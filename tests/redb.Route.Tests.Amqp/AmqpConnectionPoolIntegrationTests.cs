@@ -97,6 +97,31 @@ public sealed class AmqpConnectionPoolIntegrationTests
         await ctx.DisposeAsync();
     }
 
+    /// <summary>
+    /// The URI names only the factory, and the broker is not where the URI defaults point (localhost:5672): the
+    /// connection goes where the factory says. It used to take host, port and credentials from the URI defaults.
+    /// </summary>
+    [Fact]
+    public async Task A_named_factory_alone_takes_the_connection_to_its_own_broker()
+    {
+        var component = new AmqpComponent();
+        await using var ctx = new RouteContext();
+        ctx.AddComponent(component);
+        ctx.AddToRegistry("broker", new AmqpConnectionFactory { Host = Host, Port = Port, User = User, Password = Password });
+        var address = $"pool.factory-only.{Guid.NewGuid():N}";
+        var endpoint = (AmqpEndpoint)component.CreateEndpoint(
+            EndpointUriParser.Parse($"amqp://{address}?connectionFactory=broker"));
+        var producer = (AmqpProducer)endpoint.CreateProducer();
+
+        await producer.Start();
+        await producer.Process(new Exchange(new Message("through the factory")));
+
+        var conns = await component.GetPooledConnectionsAsync();
+        conns.Should().ContainSingle().Which.IsClosed.Should().BeFalse();
+        await producer.Stop();
+        await endpoint.Stop();
+    }
+
     [Fact]
     public async Task Pool_StopOneEndpoint_PooledConnectionRemains_OtherEndpointStillWorks()
     {

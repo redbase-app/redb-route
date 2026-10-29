@@ -32,6 +32,14 @@ public sealed class As4Partner
     /// <summary>The partner's <c>eb:PartyId</c>. Exactly one per side, as eDelivery requires.</summary>
     public string? PartyId { get; set; }
 
+    /// <summary>
+    /// The partner's MSH address (P-Mode <c>Protocol.Address</c>): <c>http://</c> or <c>https://</c>, with a query where the
+    /// partner has one, such as a Domibus domain (<c>/domibus?domain=name</c>). A send endpoint without an address of its
+    /// own (<c>as4:?partner=...</c>, <c>As4.Send()</c>) posts here, so a partner chosen per message by an expression gets
+    /// its own address. Null: the send endpoint gives the address; giving it in both places is refused.
+    /// </summary>
+    public string? Address { get; set; }
+
     /// <summary>The partner's <c>eb:PartyId/@type</c>; omitted when null.</summary>
     public string? PartyIdType { get; set; }
 
@@ -174,6 +182,11 @@ public sealed class As4Partner
             throw new InvalidOperationException($"{owner}: PartyId is required.");
         if (string.IsNullOrWhiteSpace(OurRole) || string.IsNullOrWhiteSpace(PartnerRole))
             throw new InvalidOperationException($"{owner}: OurRole and PartnerRole are required.");
+        if (Address is not null
+            && (!Uri.TryCreate(Address, UriKind.Absolute, out var address)
+                || (address.Scheme != Uri.UriSchemeHttp && address.Scheme != Uri.UriSchemeHttps)
+                || address.Fragment.Length > 0))
+            throw new InvalidOperationException($"{owner}: Address is an absolute http:// or https:// address without a fragment.");
 
         new As4Leg { Service = Service, ServiceType = ServiceType, Action = Action }.Validate($"{owner} request leg");
         ReplyLeg?.Validate($"{owner} reply leg");

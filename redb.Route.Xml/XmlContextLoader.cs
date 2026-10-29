@@ -121,6 +121,8 @@ public sealed class XmlContextLoader
         if (ctx.Errors.Count > 0)
             throw new XmlRouteException(sourceName, ctx.Errors);
 
+        foreach (var work in ctx.ValidOnlyWork)
+            work();
         if (configurations is not null)
             _context.AddRoutes(configurations);
         if (init is not null && init.Outputs.Count > 0)

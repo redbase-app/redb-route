@@ -46,8 +46,10 @@
     <Project Path="redb.Route.DataFormats.Protobuf/redb.Route.DataFormats.Protobuf.csproj" />
     <Project Path="redb.Route.DataFormats.Avro/redb.Route.DataFormats.Avro.csproj" />
     <Project Path="redb.Route.DataFormats.Yaml/redb.Route.DataFormats.Yaml.csproj" />
+    <Project Path="redb.Route.DataFormats.Mime/redb.Route.DataFormats.Mime.csproj" />
     <Project Path="redb.Route.JsonTransform/redb.Route.JsonTransform.csproj" />
     <Project Path="redb.Route.Cache/redb.Route.Cache.csproj" />
+    <Project Path="redb.Route.Xml/redb.Route.Xml.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/redb.Route.Tests.As2/redb.Route.Tests.As2.csproj" />
@@ -91,6 +93,8 @@
     <Project Path="tests/redb.Route.Tests.DataFormats/redb.Route.Tests.DataFormats.csproj" />
     <Project Path="tests/redb.Route.Tests.JsonTransform/redb.Route.Tests.JsonTransform.csproj" />
     <Project Path="tests/redb.Route.Tests.Cache/redb.Route.Tests.Cache.csproj" />
+    <Project Path="tests/redb.Route.Tests.Xml/redb.Route.Tests.Xml.csproj" />
+    <Project Path="tests/redb.Route.Tests.Hosting/redb.Route.Tests.Hosting.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="redb.Route.Xml.CodeGen/redb.Route.Xml.CodeGen.csproj" />

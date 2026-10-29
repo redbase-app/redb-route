@@ -85,6 +85,33 @@ public class RestDslTests : IAsyncLifetime
         await _serverManager.DisposeAsync();
     }
 
+    /// <summary>
+    /// The worker API and the dashboard address a route by one path segment: a generated id with '/' (it used to be
+    /// "rest:openapi /api/orders", "rest:GET /api/orders/{id}") made the route unmanageable there.
+    /// </summary>
+    [Fact]
+    public async Task GeneratedRouteIds_HaveNoSlashOrSpace_AreDistinct_AndTheSameInTheNextProcess()
+    {
+        var ids = _ctx.Routes.Select(r => r.RouteId).ToList();
+
+        ids.Should().OnlyContain(id => !id.Contains('/') && !id.Contains(' '));
+        ids.Should().OnlyHaveUniqueItems();
+        ids.Should().Contain("createOrder", "an explicit id stays as written");
+        ids.Should().ContainSingle(id => id.StartsWith("rest-openapi-api-orders-"));
+        ids.Should().Contain(id => id.StartsWith("rest-GET-api-orders-id-"));
+        ids.Should().Contain(id => id.StartsWith("rest-DELETE-api-orders-id-") && id.EndsWith("-handler"));
+        // "/api/v/{id}" and "/api/v/id" sanitize alike; the fingerprint keeps their routes apart.
+        ids.Count(id => id.StartsWith("rest-GET-api-v-id-") && !id.EndsWith("-handler")).Should().Be(2);
+
+        // Stable across restarts: the same declaration in a fresh context yields the same ids.
+        await using var again = new RouteContext();
+        await using var manager = new SharedHttpServerManager();
+        again.AddComponent(new HttpComponent { ServerManager = manager });
+        again.AddRoutes(new OrdersApi(GetFreePort()));
+        await again.Start();
+        again.Routes.Select(r => r.RouteId).Should().BeEquivalentTo(ids);
+    }
+
     [Fact]
     public async Task Get_PathParameterAndQuery_BecomeHeaders_ResponseIsJson()
     {

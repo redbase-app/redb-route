@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Processors;
 using redb.Route.Telemetry;
 
 namespace redb.Route.ErrorHandling;
@@ -59,7 +60,7 @@ public sealed class DeadLetterProcessor : IProcessor
 
                     var delay = _retryPolicy.GetDelay(attempt - 1);
                     if (delay > TimeSpan.Zero)
-                        await Task.Delay(delay, ct).ConfigureAwait(false);
+                        await InflightWaits.DelayAsync(exchange, delay, ct).ConfigureAwait(false);
 
                     exchange.Exception = null;
                     exchange.ExceptionHandled = false;

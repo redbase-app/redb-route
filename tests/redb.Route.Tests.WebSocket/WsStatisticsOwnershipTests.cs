@@ -47,9 +47,11 @@ public sealed class WsStatisticsOwnershipTests : IAsyncLifetime
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (Volatile.Read(ref processed) < 1 && DateTime.UtcNow < deadline) await Task.Delay(100);
         processed.Should().Be(1);
-        await Task.Delay(200);
 
         var stats = (IEndpointStatistics)_context.GetEndpoint(uri);
+        await TestWait.Until(() => stats.MessagesIn >= 1 && stats.BytesIn >= 5);
+        // A double count would land a moment later: give it the time before the exact check.
+        await Task.Delay(300);
         stats.MessagesIn.Should().Be(1,
             "кадр один - ядро уже считает MessagesIn, самозапись коннектора задваивала");
         stats.BytesIn.Should().Be(5, "и байты тоже задваивались");
@@ -71,9 +73,11 @@ public sealed class WsStatisticsOwnershipTests : IAsyncLifetime
         using var template = new ProducerTemplate(_context);
         template.Start();
         await template.SendAsync("direct:out", "payload");
-        await Task.Delay(300);
 
         var stats = (IEndpointStatistics)_context.GetEndpoint(producerUri);
+        await TestWait.Until(() => stats.MessagesOut >= 1 && stats.BytesOut >= 7);
+        // A double count would land a moment later: give it the time before the exact check.
+        await Task.Delay(300);
         stats.MessagesOut.Should().Be(1,
             "отправка одна - маршрутный .To() уже считает через ToProcessor, самозапись задваивала");
         stats.BytesOut.Should().Be(7, "wire-байты остаются за коннектором и пишутся один раз");

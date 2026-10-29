@@ -12,12 +12,14 @@ namespace redb.Route.Tests.Xml;
 /// of the other files too, and in <c>context.xml</c>. A route names configurations with <c>routeConfigurationId</c>;
 /// the configuration without an id is the default, for the routes that name none.
 /// </summary>
-public class RouteConfigurationXmlTests : IAsyncDisposable
+public class RouteConfigurationXmlTests : IAsyncLifetime
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(2);
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

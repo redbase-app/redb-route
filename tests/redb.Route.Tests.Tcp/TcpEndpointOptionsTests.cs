@@ -18,8 +18,8 @@ public class TcpEndpointOptionsTests
         options.Encoding.Should().Be("utf-8");
         options.KeepAlive.Should().BeTrue();
         options.NoDelay.Should().BeTrue();
-        options.ReceiveBufferSize.Should().Be(8192);
-        options.SendBufferSize.Should().Be(8192);
+        options.ReceiveBufferSize.Should().Be(0);
+        options.SendBufferSize.Should().Be(0);
         options.ConnectTimeout.Should().Be(10_000);
         options.Reconnect.Should().BeFalse();
         options.ReconnectInterval.Should().Be(5_000);
@@ -57,9 +57,33 @@ public class TcpEndpointOptionsTests
     [Fact]
     public void Validate_InvalidReceiveBufferSize_Throws()
     {
-        var options = new TcpEndpointOptions { ReceiveBufferSize = 0 };
+        var options = new TcpEndpointOptions { ReceiveBufferSize = -1 };
         var act = () => options.Validate();
         act.Should().Throw<ArgumentException>().WithMessage("*ReceiveBufferSize*");
+    }
+
+    /// <summary>
+    /// A buffer size of 0 leaves the socket as the system made it. A fixed 8192 switched the Linux buffer tuning off,
+    /// and on loopback a 64 KiB frame took about three seconds.
+    /// </summary>
+    [Fact]
+    public void ZeroBufferSizes_LeaveTheSystemSizes_AndASetSizeReachesTheSocket()
+    {
+        using var untouched = new System.Net.Sockets.TcpClient();
+        var systemReceive = untouched.ReceiveBufferSize;
+        var systemSend = untouched.SendBufferSize;
+
+        using var byDefault = new System.Net.Sockets.TcpClient();
+        new TcpEndpointOptions().ApplyBufferSizes(byDefault);
+        byDefault.ReceiveBufferSize.Should().Be(systemReceive);
+        byDefault.SendBufferSize.Should().Be(systemSend);
+        new TcpEndpointOptions().ReadChunkSize.Should().Be(TcpEndpointOptions.DefaultReadChunkSize);
+
+        using var configured = new System.Net.Sockets.TcpClient();
+        var options = new TcpEndpointOptions { ReceiveBufferSize = 1 << 20, SendBufferSize = 1 << 20 };
+        options.ApplyBufferSizes(configured);
+        configured.ReceiveBufferSize.Should().NotBe(systemReceive, "a size that was set is applied");
+        options.ReadChunkSize.Should().Be(1 << 20);
     }
 
     [Fact]

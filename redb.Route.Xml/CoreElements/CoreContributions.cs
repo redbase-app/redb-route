@@ -12,7 +12,15 @@ namespace redb.Route.Xml.CoreElements;
 internal static partial class CoreContributions
 {
     internal static IReadOnlyList<IXmlElementContribution> All { get; } =
-        [.. Basic(), .. Catalog(), DeadLetterChannelContextContribution.Instance];
+        [.. Basic(), .. Catalog(), DeadLetterChannelContextContribution.Instance, DataFormatContextContribution.Instance,
+           RouteBuilderContextContribution.Instance];
+
+    /// <summary>
+    /// A <c>value=</c> with <c>{{key}}</c> placeholders as the expression that resolves them through the route context
+    /// (as an endpoint URI is resolved), or null for a plain literal, which stays a constant.
+    /// </summary>
+    private static IExpression? FromConfiguration(string value)
+        => Route.Core.PropertyPlaceholderResolver.HasPlaceholder(value) ? new PlaceholderExpression(value) : null;
 
     private static IXmlElementContribution[] Basic() =>
     [
@@ -35,7 +43,9 @@ internal static partial class CoreContributions
             var pick = ctx.ExactlyOneOf(e, "value", "expr");
             if (name is null || pick is null) return cur;
             return pick.Value.Name == "value"
-                ? cur.SetHeader(name, pick.Value.Value)
+                ? FromConfiguration(pick.Value.Value) is { } configured
+                    ? cur.SetHeader(name, configured)
+                    : cur.SetHeader(name, pick.Value.Value)
                 : cur.SetHeader(name, new StringExpression(pick.Value.Value));
         }),
         Step("setProperty", (e, cur, ctx) =>
@@ -44,7 +54,9 @@ internal static partial class CoreContributions
             var pick = ctx.ExactlyOneOf(e, "value", "expr");
             if (name is null || pick is null) return cur;
             return pick.Value.Name == "value"
-                ? cur.SetProperty(name, pick.Value.Value)
+                ? FromConfiguration(pick.Value.Value) is { } configured
+                    ? cur.SetProperty(name, configured)
+                    : cur.SetProperty(name, pick.Value.Value)
                 : cur.SetProperty(name, new StringExpression(pick.Value.Value));
         }),
         Step("setBody", (e, cur, ctx) =>
@@ -52,7 +64,9 @@ internal static partial class CoreContributions
             var pick = ctx.ExactlyOneOf(e, "value", "expr");
             if (pick is null) return cur;
             return pick.Value.Name == "value"
-                ? cur.SetBody(pick.Value.Value)
+                ? FromConfiguration(pick.Value.Value) is { } configured
+                    ? cur.SetBody(configured)
+                    : cur.SetBody(pick.Value.Value)
                 : cur.SetBody(new StringExpression(pick.Value.Value));
         }),
         Step("transform", (e, cur, ctx) =>
@@ -71,6 +85,66 @@ internal static partial class CoreContributions
             return name is null ? cur : cur.RemoveProperty(name);
         }),
         Step("removeBody", (e, cur, ctx) => cur.RemoveBody()),
+        // One element, four content sources: an expression, the body, a file path literal or a file path expression.
+        // As everywhere in the format, a literal and an expression are separate attributes (fileName / fileNameExpr,
+        // file / fileExpr): the attribute used decides the meaning, never the text.
+        Step("addAttachment", (e, cur, ctx) =>
+        {
+            var sources = new[] { "expr", "fromBody", "file", "fileExpr" }.Where(a => ctx.Attr(e, a) is not null).ToArray();
+            if (sources.Length != 1)
+            {
+                ctx.AddError(e, "<addAttachment> takes exactly one of 'expr', 'fromBody', 'file' or 'fileExpr'.");
+                return cur;
+            }
+            if (ctx.Attr(e, "fileName") is not null && ctx.Attr(e, "fileNameExpr") is not null)
+            {
+                ctx.AddError(e, "<addAttachment> takes 'fileName' or 'fileNameExpr', not both.");
+                return cur;
+            }
+            var fileName = ctx.Attr(e, "fileName");
+            IExpression? fileNameExpr = ctx.Attr(e, "fileNameExpr") is { } fx ? new StringExpression(fx) : null;
+            var contentType = ctx.Attr(e, "contentType");
+            switch (sources[0])
+            {
+                case "file" or "fileExpr":
+                    if (fileName is not null || fileNameExpr is not null)
+                    {
+                        ctx.AddError(e, "<addAttachment> from a file takes its file name from the file; use 'name' to name the attachment.");
+                        return cur;
+                    }
+                    return sources[0] == "file"
+                        ? cur.AddAttachmentFromFile(ctx.Attr(e, "file")!, ctx.Attr(e, "name"), contentType)
+                        : cur.AddAttachmentFromFile(new StringExpression(ctx.Attr(e, "fileExpr")!), ctx.Attr(e, "name"), contentType);
+                case "fromBody":
+                {
+                    if (ctx.Convert<bool>(e, "fromBody") is not true)
+                    {
+                        ctx.AddError(e, "<addAttachment fromBody=...> must be 'true'; leave the attribute out otherwise.");
+                        return cur;
+                    }
+                    var name = ctx.RequiredAttr(e, "name");
+                    if (name is null) return cur;
+                    return fileNameExpr is not null
+                        ? cur.AddAttachmentFromBody(name, fileNameExpr, contentType)
+                        : cur.AddAttachmentFromBody(name, fileName, contentType);
+                }
+                default:
+                {
+                    var name = ctx.RequiredAttr(e, "name");
+                    if (name is null) return cur;
+                    var content = new StringExpression(ctx.Attr(e, "expr")!);
+                    return fileNameExpr is not null
+                        ? cur.AddAttachment(name, content, fileNameExpr, contentType)
+                        : cur.AddAttachment(name, content, fileName, contentType);
+                }
+            }
+        }),
+        Step("removeAttachment", (e, cur, ctx) =>
+        {
+            var name = ctx.RequiredAttr(e, "name");
+            return name is null ? cur : cur.RemoveAttachment(name);
+        }),
+        Step("removeAttachments", (e, cur, ctx) => cur.RemoveAttachments()),
         Step("removeHeaders", (e, cur, ctx) =>
         {
             var pattern = ctx.RequiredAttr(e, "pattern");

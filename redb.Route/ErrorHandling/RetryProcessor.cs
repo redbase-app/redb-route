@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using redb.Route.Abstractions;
 using redb.Route.Core;
+using redb.Route.Processors;
 using redb.Route.Telemetry;
 
 namespace redb.Route.ErrorHandling;
@@ -68,7 +69,7 @@ public sealed class RetryProcessor : IProcessor
                     "Exchange processing failed (attempt {Attempt}/{MaxRetries}): {Error}. Retrying in {Delay:F0}ms.",
                     attempt + 1, _policy.MaxRetries, failure.Message, actualDelay.TotalMilliseconds);
 
-                await Task.Delay(actualDelay, ct).ConfigureAwait(false);
+                await InflightWaits.DelayAsync(exchange, actualDelay, ct).ConfigureAwait(false);
 
                 // Reset exchange error state before retry
                 exchange.Exception = null;

@@ -11,11 +11,13 @@ namespace redb.Route.Tests.Processors;
 /// StreamCaching, StreamingSplitter (async), Tokenizers (Lines/Xml/Json)
 /// through the DSL → Compiler → Engine chain.
 /// </summary>
-public class StreamingIntegrationTests : IAsyncDisposable
+public class StreamingIntegrationTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

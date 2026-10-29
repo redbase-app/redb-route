@@ -67,7 +67,9 @@ Every element accepts `id=` and `description=`: they flow into step identity (me
 node ids and labels, `WeaveById` targets, generated-code comments).
 
 **Leaf steps** — `to`, `toD`, `setHeader`, `setProperty`, `setBody`, `setHeaders`, `setProperties`, `transform`,
-`removeHeader/Property/Body/Headers/Properties`, `log`, `delay`, `stop`, `throwException`,
+`removeHeader/Property/Body/Headers/Properties`, `addAttachment` (exactly one of `expr`, `fromBody="true"`, `file`,
+`fileExpr`; `name`, `fileName` or `fileNameExpr`, `contentType`), `removeAttachment`, `removeAttachments`, `log`,
+`delay`, `stop`, `throwException`,
 `convertBody`, `wireTap`, `validate`, `sort`, `sample`, `streamCaching`, `validateJsonSchema`,
 `validateXsd`, `xslt`, `marshal`, `unmarshal`, `controlBus`, `enrich`, `pollEnrich`,
 `recipientList`, `dynamicRouter`, `routingSlip`, `claimCheck`, `beginTransaction`,
@@ -117,7 +119,8 @@ The expression language is the engine's own — `${header.x}`, `count(property.i
 'many' : 'few'`, `${jpath('$.order.id')}`, `${xpath('/order/@id')}`, arithmetic, `uuid()`,
 `datediff(...)`, `messageHistory(...)` (the exchange's own trail: `'compact'`, `'count'`,
 `'slowestMs'`, ...), `stats(...)` (endpoint statistics, and the OpenTelemetry layer through
-`'otel:<instrument>'`) — and a broken expression fails **when the document loads**, not on the
+`'otel:<instrument>'`), the message attachments (`attachments.size`, `attachmentContentAsText('note')`,
+`attachmentContentType(...)`, `attachmentHeader(...)`) — and a broken expression fails **when the document loads**, not on the
 first message. Whitespace around operators is insignificant, so `expr="header.amount>1000"` avoids
 XML escaping entirely (`>` needs no escape in attribute values; `<` does).
 
@@ -186,6 +189,12 @@ Values resolve `{{key}}` / `{{key:default}}` through the context's configuration
 (`IConfiguration`, then context properties) **before** type conversion — `{{ldap.port:636}}`
 binds to an `int`. Nested anonymous beans build option graphs inline. Objects with real
 dependencies stay in code; XML references them by `#name`.
+
+The same placeholders work in endpoint URIs, in `enabled=` of a route and in `value=` of `<setHeader>`, `<setProperty>`
+and `<setBody>`: `<setHeader name="redbLdap.AuthDn" value="{{ldap.user}}"/>` sets the configured value, resolved through
+the same chain when the route first runs (`Placeholder("{{ldap.user}}")` in C#). A key with no value and no default fails
+the exchange, in the words a URI uses. Inside an `expr=` the expression language reads the message, not the
+configuration: put a configured value into a header first and read `${header.…}`.
 
 A `<property>` or `<constructorArg>` takes exactly one of: `value=`, `ref=`, one nested anonymous
 `<bean>`, one `<list>`. So a factory that holds an OBJECT - a certificate, a credentials object, a
@@ -406,12 +415,31 @@ Besides route files, a package can carry a `context.xml` — the context-level c
   <bean name="main-db" type="…"> … </bean>
   <!-- the context's dead letter channel: a failure of any route no onException took -->
   <deadLetterChannel uri="direct://errors"/>
+  <!-- a data format for <marshal format="csv"/>: the serializer type, extra names, its options -->
+  <dataFormat type="redb.Route.DataFormats.Csv.CsvDataFormat, redb.Route.DataFormats.Csv" name="csv" delimiter=";"/>
+  <!-- C# routes of the same context: a RouteBuilder of the module's own assembly -->
+  <routeBuilder type="Orders.Routes.OrdersRoute, Orders"/>
   <onInit>
     <to uri="sql:CREATE TABLE IF NOT EXISTS demo_log (id BIGINT)?dataSource=#main-db"/>
     <to uri="bean:#seeder?method=EnsureDefaults"/>
   </onInit>
 </context>
 ```
+
+`<dataFormat>` registers a format on the context, as `context.AddDataFormat(...)` does in code: `<marshal format="…"/>`,
+`<unmarshal format="…"/>` and content-type dispatch find it under its own content type and media types and under each
+name in `name` (comma-separated). The other attributes set the serializer's options by property name, as on the per-step
+`<marshal type="…" delimiter=";"/>`, which needs no registration and suits a format used in one place.
+
+`<routeBuilder>` adds a C# route builder to the context, as `context.AddRoutes(new OrdersRoute())` does in code, so one
+package keeps routes in markup and in the DSL side by side, in one context. The type resolves like a `<bean type>`: in a
+Tsak package, from the package's own assemblies first, so a module built with `RoutePackageIncludeAssembly=true` names
+its builders by `Namespace.Type, Assembly`. The type must be a public, non-abstract class deriving from `RouteBuilder`
+with a public parameterless constructor, the rule of `AddRoutes(Assembly[])`. A builder reads its configuration through
+`{{key}}` properties and reaches the beans of `context.xml` by their registry name (`bean:#name`). It is added once
+the whole document is valid, and a builder already in the context, or named twice, is a load error. Route ids share one
+context with the markup routes: a clash fails the start. `redb-route-xml check --bin` and `pack --bin` hold the type
+against the same rule, so a wrong one fails the build.
 
 `<onInit>` is a pipeline of ordinary format steps, run **once** in the engine's fail-fast
 bootstrap phase: a failed step keeps the context from accepting traffic, and the error names
@@ -513,7 +541,7 @@ of the runtime):
 | Command | What it does |
 |---|---|
 | `new Orders --context orders` | scaffolds a route project: an ordinary `.csproj`, `context.xml`, `routes/`, `resources/`, layered `config/`, the generated XSD wired into `.vscode` |
-| `pack . --version 1.0.0 [--bin bin/Debug/net9.0]` | runs the checks, then builds the package layout (`manifest.json`, config, artifacts, resources) and a `.tpkg` zip |
+| `pack . --version 1.0.0 [--bin bin/Debug/net9.0] [--entry bin/Debug/net9.0/Orders.dll]` | runs the checks, then builds the package layout (`manifest.json`, config, artifacts, resources) and a `.tpkg` zip; `--entry` (repeatable) adds a DLL as the package's entry point |
 | `check .` | the same gate for CI — findings only |
 | `catalog <binDir> --out dir` | builds the component catalog + catalog-aware XSD from built connector assemblies |
 | `csharp routes/x.route.xml --namespace My.Routes` | fluent C# (readable, or `--style machine` with `#line` mapping diagnostics back to the XML) |
@@ -536,6 +564,12 @@ connection parameter written beside the option that names a connection factory (
 whole connection, so host cannot be given on the URI as well.`). A literal
 secret in a URI is a warning that names the fix (supply it through configuration). Add
 `-p:PackRouteOnBuild=true` to a scaffolded project to pack on every `dotnet build`.
+
+A package carries only the DLLs passed with `--entry`. A project whose markup uses its own C# types (`<bean type="My.Beans.X,
+MyModule"/>`) passes its build output: `--entry "$(TargetPath)"` in the build target. The DLL is packed at the package
+root and named in `manifest.json` by its file name; Tsak loads it into the package's own load context, where the markup's
+bean types are looked up first. The route-xml templates of `redb.Templates` do this when the project sets
+`<RoutePackageIncludeAssembly>true</RoutePackageIncludeAssembly>`.
 
 What the gate **warns** about, leaving the decision to the author: a step that never runs
 (anything after `<stop/>`, `<rollbackAll/>` or `<throwException/>` in the same list), an

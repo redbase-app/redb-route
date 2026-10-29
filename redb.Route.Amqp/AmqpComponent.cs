@@ -114,29 +114,32 @@ public sealed class AmqpComponent : ComponentBase
 
     private async Task<Connection> CreateConnectionAsync(string key, AmqpEndpoint endpoint, CancellationToken ct)
     {
-        var options = endpoint.EndpointOptions;
-        var factory = BuildConnectionFactory(options);
-        var address = BuildAddress(options);
+        var settings = ResolveConnectionSettings(endpoint.EndpointOptions);
+        var address = ConnectionAddress(settings);
 
-        var connection = await factory.CreateAsync(address).ConfigureAwait(false);
+        var connection = await settings.Build().CreateAsync(address).ConfigureAwait(false);
         endpoint.AttachConnectionEvents(connection);
 
-        Logger?.LogInformation("AMQP connection opened [{Key}]: host={Host}, vHost={VHost}",
-            key, options.Host, options.VirtualHost);
+        Logger?.LogInformation("AMQP connection opened [{Key}]: host={Host}, port={Port}, vHost={VHost}",
+            key, address.Host, address.Port, settings.VirtualHost);
 
         return connection;
     }
 
-    private ConnectionFactory BuildConnectionFactory(AmqpEndpointOptions options)
+    /// <summary>
+    /// The settings a connection is opened with: the registry factory <c>connectionFactory=</c> names, whole (its host,
+    /// port, credentials and TLS, not the URI's), or else the inline URI parameters.
+    /// </summary>
+    internal AmqpConnectionFactory ResolveConnectionSettings(AmqpEndpointOptions options)
     {
         if (!string.IsNullOrEmpty(options.ConnectionFactory))
         {
             // A set-but-unknown name fails loud — never a silent fallback to URI params (Ф11 Ж-1).
             var registryFactory = Context.GetRequiredFromRegistry<AmqpConnectionFactory>(options.ConnectionFactory);
             Logger?.LogDebug("AMQP: using ConnectionFactory '{Name}' from registry", options.ConnectionFactory);
-            return registryFactory.Build();
+            return registryFactory;
         }
-        var cf = new AmqpConnectionFactory
+        return new AmqpConnectionFactory
         {
             Host = options.Host,
             Port = options.Port,
@@ -146,17 +149,10 @@ public sealed class AmqpComponent : ComponentBase
             VirtualHost = options.VirtualHost,
             Ssl = options.Ssl,
         };
-
-        return cf.Build();
     }
 
-    private static Address BuildAddress(AmqpEndpointOptions options)
-    {
-        var scheme = options.Ssl ? "amqps" : "amqp";
-        var hosts = options.Host.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var primaryHost = hosts.Length > 0 ? hosts[0] : "localhost";
-        return new Address(primaryHost, options.Port, options.User, options.Password, "/", scheme);
-    }
+    /// <summary>The address a connection is opened to: the first host of the settings.</summary>
+    internal static Address ConnectionAddress(AmqpConnectionFactory settings) => settings.GetAddresses()[0];
 
     /// <inheritdoc />
     public override async ValueTask DisposeAsync()

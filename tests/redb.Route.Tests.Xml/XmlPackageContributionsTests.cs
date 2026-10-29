@@ -17,7 +17,7 @@ namespace redb.Route.Tests.Xml;
 /// of the Ф0 §4 table reachable before Tsak (`&lt;rest&gt;` waits for the Http package to be
 /// free, `redb.Route.Core` waits for the owner).
 /// </summary>
-public class XmlPackageContributionsTests : IAsyncDisposable
+public class XmlPackageContributionsTests : IAsyncLifetime
 {
     private static readonly XmlRouteLoaderOptions Options = new()
     {
@@ -26,7 +26,9 @@ public class XmlPackageContributionsTests : IAsyncDisposable
 
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);
@@ -185,9 +187,9 @@ public class XmlPackageContributionsTests : IAsyncDisposable
         var ids = Examples.ExampleHarness.Definitions(_context)
             .OfType<IRouteDefinition>().Select(r => r.GetRouteId()).ToList();
         ids.Should().Contain("orders-get", "id= names the verb's route");
-        ids.Should().Contain(id => id != null && id.StartsWith("rest:POST /api/orders"),
+        ids.Should().Contain(id => id != null && id.StartsWith("rest-POST-api-orders-") && !id.EndsWith("-handler"),
             "the inline verb spawns its consumer route");
-        ids.Should().Contain(id => id != null && id.Contains("(handler)"),
+        ids.Should().Contain(id => id != null && id.StartsWith("rest-POST-api-orders-") && id.EndsWith("-handler"),
             "inline steps live in their own handler route");
     }
 

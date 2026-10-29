@@ -114,4 +114,10 @@ public abstract class SqlE2EProvider
     /// ("a command is already in progress", "already an open DataReader").
     /// </summary>
     public virtual bool ReaderConnectionRunsAnotherCommand => false;
+
+    /// <summary>
+    /// The way a second connection in a scope can fail besides a <see cref="System.Transactions.TransactionException"/>:
+    /// a driver that waits for the promotion until the command times out. False where only the transaction error comes.
+    /// </summary>
+    public virtual bool IsSecondConnectionTimeout(Exception error) => false;
 }

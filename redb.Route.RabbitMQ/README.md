@@ -78,6 +78,11 @@ From("direct://notify")
 
 > Most builder methods accept both constant values and `IExpression` for runtime resolution via the expression engine.
 
+Queues are durable by default, and a consumer without a queue name gets an exclusive temporary queue. A named queue
+with `durable=false` must also be `exclusive=true` on RabbitMQ 4.3 and later: the broker refuses transient
+non-exclusive queues there (541 INTERNAL_ERROR, `transient_nonexcl_queues`) unless its configuration permits that
+deprecated feature.
+
 ## Consumer concurrency & acknowledgement
 
 - **`.ConcurrentConsumers(N)`** is the single knob for consumer-side parallelism: it sets both the

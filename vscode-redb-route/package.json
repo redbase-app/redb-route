@@ -2,7 +2,7 @@
   "name": "redb-route-xml",
   "displayName": "redb Route XML",
   "description": "Completion and validation for redb.Route XML routes, a route tree, bean reference hints and a graph editor over the XML text.",
-  "version": "0.2.24",
+  "version": "0.2.25",
   "publisher": "redb",
   "license": "Apache-2.0",
   "icon": "media/icon.png",
@@ -56,17 +56,37 @@
         "priority": "option"
       }
     ],
-    "views": {
-      "explorer": [
+    "viewsContainers": {
+      "activitybar": [
         {
-          "id": "redbRoutes",
-          "name": "redb Routes",
-          "icon": "$(type-hierarchy-sub)",
-          "when": "redbRoute.hasRoutes"
+          "id": "redb",
+          "title": "redb",
+          "icon": "media/activity.svg"
         }
       ]
     },
+    "views": {
+      "redb": [
+        {
+          "id": "redbRoutes",
+          "name": "Routes",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "redbRoutes",
+        "contents": "No redb route files in this workspace.\n[New Project](command:redbRoute.newProject)\nRoute files are *.route.xml documents whose root declares the urn:redb:route:1.0 namespace. [Read about the format](https://github.com/redbase-app/redb-route/blob/main/redb.Route.Xml/README.md).",
+        "when": "!redbRoute.hasRoutes"
+      }
+    ],
     "commands": [
+      {
+        "command": "redbRoute.newProject",
+        "title": "redb: New Project",
+        "icon": "$(add)"
+      },
       {
         "command": "redbRoute.refreshTree",
         "title": "redb Route: Refresh Route Tree",
@@ -84,6 +104,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "redbRoute.newProject",
+          "when": "view == redbRoutes",
+          "group": "navigation@1"
+        },
         {
           "command": "redbRoute.refreshTree",
           "when": "view == redbRoutes",

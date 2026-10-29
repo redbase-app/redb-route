@@ -918,6 +918,153 @@ public class As4ConsumerTests
     }
 
     /// <summary>Node B receiving on a loopback port; nodes A and C (C unknown to B) can send to it.</summary>
+    // ── Hostile XML (11-XML-HARDENING, layer 1) ──────────────────────────────
+    // Each test checks a property of the receiver, not a package version: the refusal comes with the right protocol
+    // answer and in bounded time, and the test turns red when someone removes the limit behind it.
+
+    /// <summary>A SOAP 1.2 envelope whose header carries <paramref name="hostile"/>.</summary>
+    private static byte[] EnvelopeWith(string hostile) => Encoding.UTF8.GetBytes(
+        "<soapenv:Envelope xmlns:soapenv=\"http://www.w3.org/2003/05/soap-envelope\"><soapenv:Header>" + hostile +
+        "</soapenv:Header><soapenv:Body/></soapenv:Envelope>");
+
+    public static TheoryData<string, string> EnvelopesOverTheLimits() => new()
+    {
+        // 100 000 levels: the limit stops the reader at level 33, long before a recursive step would meet them.
+        { "MaxDepth", string.Concat(Enumerable.Repeat("<x>", 100_000)) + string.Concat(Enumerable.Repeat("</x>", 100_000)) },
+        { "MaxAttributesPerElement", "<x " + string.Join(' ', Enumerable.Range(0, 200).Select(i => $"a{i}=\"v\"")) + "/>" },
+        { "MaxNamespaceDeclarationsPerElement", "<x " + string.Join(' ', Enumerable.Range(0, 20).Select(i => $"xmlns:p{i}=\"urn:{i}\"")) + "/>" },
+        { "MaxNamespaceDeclarations", string.Concat(Enumerable.Range(0, 5_000).Select(i => $"<x xmlns:p=\"urn:{i}\"/>")) },
+    };
+
+    [Theory]
+    [MemberData(nameof(EnvelopesOverTheLimits))]
+    public async Task EnvelopeOverAStructureLimit_IsASenderSoapFaultInBoundedTime(string limit, string hostile)
+    {
+        var reached = false;
+        await using var stand = await Stand.StartAsync(_ => { reached = true; return Task.CompletedTask; });
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var response = await stand.PostBytes("application/soap+xml", EnvelopeWith(hostile));
+        watch.Stop();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var text = await response.Content.ReadAsStringAsync();
+        text.Should().Contain("soapenv:Sender").And.Contain(limit);
+        reached.Should().BeFalse();
+        stand.Refused.Should().Be(1, "a hostile envelope is the partner's fault");
+        stand.Errors.Should().Be(0);
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task EnvelopeWithinTheLimits_StillReachesTheRoute()
+    {
+        // The limits are three to four times what real envelopes use: an ordinary message is untouched by them.
+        var reached = false;
+        await using var stand = await Stand.StartAsync(_ => { reached = true; return Task.CompletedTask; });
+        var (message, _) = SecuredMessage(Encoding.UTF8.GetBytes(Payload));
+
+        (await stand.PostRaw(message)).Receipt.Should().BeTrue();
+        reached.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HundredsOfReferences_AreRefusedBeforeAnyIsDigested()
+    {
+        // A 4 MB payload referenced 1000 more times would cost 4 GB of hashing if references were digested before the
+        // signature over them is checked. They are not: the signature fails first. The time is measured against the same
+        // message without the extra references in the same run, so a slow host moves both: digesting them would take
+        // hundreds of times the baseline, refusing takes about as long as it. A refusal over the limit is tried again, up
+        // to three times: a stall of a shared host passes, digesting would make every attempt slow.
+        await using var stand = await Stand.StartAsync(_ => Task.CompletedTask);
+        var payload = System.Security.Cryptography.RandomNumberGenerator.GetBytes(4 * 1024 * 1024);
+
+        var baseline = System.Diagnostics.Stopwatch.StartNew();
+        (await stand.PostRaw(Referencing(payload, extraReferences: 0))).Receipt.Should().BeTrue();
+        baseline.Stop();
+        var limit = TimeSpan.FromTicks(Math.Max(baseline.Elapsed.Ticks * 3, TimeSpan.FromSeconds(1).Ticks));
+
+        var attempts = new List<TimeSpan>();
+        do
+        {
+            var hostileMessage = Referencing(payload, extraReferences: 1000);
+            var hostile = System.Diagnostics.Stopwatch.StartNew();
+            var answer = await stand.PostRaw(hostileMessage);
+            hostile.Stop();
+            answer.ErrorCode.Should().Be("EBMS:0101");
+            attempts.Add(hostile.Elapsed);
+        }
+        while (attempts[^1] >= limit && attempts.Count < 3);
+
+        attempts.Min().Should().BeLessThan(limit,
+            $"the same message without the extra references took {baseline.Elapsed}; the refusals took {string.Join(", ", attempts)}");
+
+        static (string ContentType, byte[] Body) Referencing(byte[] payload, int extraReferences)
+        {
+            var message = RawMessage();
+            message.Parts.Values.Single().Replace(new MemoryStream(As4TestMessages.Gzip(payload)));
+            As4SecurityEngine.Sign(message, NodeA, As4KeyReference.BinarySecurityToken, null, DateTimeOffset.UtcNow);
+            var signedInfo = (XmlElement)message.Envelope.GetElementsByTagName("SignedInfo", WsSecurityNames.Ds)[0]!;
+            var attachmentReference = signedInfo.ChildNodes.OfType<XmlElement>()
+                .Last(e => e.LocalName == "Reference" && e.GetAttribute("URI").StartsWith("cid:", StringComparison.Ordinal));
+            for (var i = 0; i < extraReferences; i++)
+                signedInfo.AppendChild(attachmentReference.CloneNode(deep: true));
+            As4SecurityEngine.Encrypt(message, As4TestMessages.PublicOnly(NodeB), As4KeyReference.BinarySecurityToken);
+            return message.Write();
+        }
+    }
+
+    [Fact]
+    public async Task MoreThanOneEncryptedKey_IsFailedDecryption()
+    {
+        // Each key costs an RSA private-key operation, and anyone can encrypt for our certificate: one key per message.
+        await using var stand = await Stand.StartAsync(_ => Task.CompletedTask);
+        var message = RawMessage();
+        As4SecurityEngine.Sign(message, NodeA, As4KeyReference.BinarySecurityToken, null, DateTimeOffset.UtcNow);
+        As4SecurityEngine.Encrypt(message, As4TestMessages.PublicOnly(NodeB), As4KeyReference.BinarySecurityToken);
+        var encryptedKey = (XmlElement)message.Envelope.GetElementsByTagName("EncryptedKey", WsSecurityNames.Xenc)[0]!;
+        for (var i = 0; i < 50; i++)
+            encryptedKey.ParentNode!.InsertAfter(encryptedKey.CloneNode(deep: true), encryptedKey);
+
+        (await stand.PostRaw(message.Write())).ErrorCode.Should().Be("EBMS:0102");
+    }
+
+    [Fact]
+    public async Task APartReferencedTwiceForDecryption_IsFailedDecryption()
+    {
+        await using var stand = await Stand.StartAsync(_ => Task.CompletedTask);
+        var message = RawMessage();
+        As4SecurityEngine.Sign(message, NodeA, As4KeyReference.BinarySecurityToken, null, DateTimeOffset.UtcNow);
+        As4SecurityEngine.Encrypt(message, As4TestMessages.PublicOnly(NodeB), As4KeyReference.BinarySecurityToken);
+        var dataReference = (XmlElement)message.Envelope.GetElementsByTagName("DataReference", WsSecurityNames.Xenc)[0]!;
+        dataReference.ParentNode!.AppendChild(dataReference.CloneNode(deep: true));
+
+        (await stand.PostRaw(message.Write())).ErrorCode.Should().Be("EBMS:0102");
+    }
+
+    [Fact]
+    public async Task XmlPayloadOverTheDefaultLimits_FailsItsSignatureInBoundedTime()
+    {
+        // An uncompressed XML payload is canonicalized for its digest. Signed as an ordinary document, then swapped
+        // for one 100 000 levels deep: the canonicalizer's reader stops it at the default depth.
+        await using var stand = await Stand.StartAsync(_ => Task.CompletedTask);
+        const string contentId = "p1@a.example";
+        var message = SwaMessage.Create(As4TestMessages.UserMessage(Guid.NewGuid().ToString("N") + "@a.example", contentId,
+            from: "urn:redb:a", to: "urn:redb:b", service: "urn:example", action: "Submit"));
+        var part = message.AddPart(contentId, "application/xml", Encoding.UTF8.GetBytes(Payload));
+        As4SecurityEngine.Sign(message, NodeA, As4KeyReference.BinarySecurityToken, null, DateTimeOffset.UtcNow);
+        part.Replace(new MemoryStream(Encoding.UTF8.GetBytes(
+            string.Concat(Enumerable.Repeat("<x>", 100_000)) + string.Concat(Enumerable.Repeat("</x>", 100_000)))));
+        As4SecurityEngine.Encrypt(message, As4TestMessages.PublicOnly(NodeB), As4KeyReference.BinarySecurityToken);
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var answer = await stand.PostRaw(message.Write());
+        watch.Stop();
+
+        answer.ErrorCode.Should().Be("EBMS:0101");
+        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+    }
+
     private sealed class Stand : IAsyncDisposable
     {
         private readonly RouteContext _context;
@@ -932,6 +1079,9 @@ public class As4ConsumerTests
 
         /// <summary>Errors counted on the receive endpoint.</summary>
         public long Errors => ((IEndpointStatistics)_context.GetEndpoint(_receiveUri)).Errors;
+
+        /// <summary>Requests refused on the receive endpoint as the partner's fault.</summary>
+        public long Refused => ((IEndpointStatistics)_context.GetEndpoint(_receiveUri)).Refused;
 
         public static async Task<Stand> StartAsync(Func<IExchange, Task> route, IIdempotentRepository? duplicates = null,
             bool streamBody = false, redb.Route.Configuration.StreamCacheOptions? spool = null,

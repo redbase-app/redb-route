@@ -61,6 +61,28 @@ public class As4CanonicalizationTests
     {
         var act = () => Digest("text/xml", "<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>");
 
-        act.Should().Throw<CryptographicException>().WithMessage("*not well-formed XML*");
+        act.Should().Throw<CryptographicException>().WithMessage("*cannot be read as XML*");
+    }
+
+    [Fact]
+    public void XmlAttachmentOverTheDefaultLimits_IsRefusedBeforeCanonicalization()
+    {
+        // The payload is the partner's document, read with the generous default limits: 100 000 levels stop at 257.
+        var deep = string.Concat(Enumerable.Repeat("<x>", 100_000)) + string.Concat(Enumerable.Repeat("</x>", 100_000));
+
+        var act = () => Digest("application/xml", deep);
+
+        act.Should().Throw<CryptographicException>().WithMessage("*MaxDepth*")
+            .WithInnerException<redb.Route.Core.XmlLimitException>();
+    }
+
+    [Fact]
+    public void XmlAttachmentWithinTheDefaultLimits_IsCanonicalizedAsBefore()
+    {
+        // A deep but ordinary payload (60 levels, more than any envelope) keeps its digest path. Deeper than about 65
+        // levels the patched System.Security.Cryptography.Xml (10.0.13) refuses to canonicalize on its own.
+        var deep = string.Concat(Enumerable.Repeat("<x>", 60)) + string.Concat(Enumerable.Repeat("</x>", 60));
+
+        Digest("application/xml", deep).Should().HaveCount(32);
     }
 }

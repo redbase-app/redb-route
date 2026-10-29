@@ -12,7 +12,7 @@ namespace redb.Route.Tests.Core;
 /// the caller carried the callee's id, so the caller's route span and its later step metrics were attributed
 /// to the callee. The caller must get its own id back, as it already does for <c>IExchange.Context</c>.
 /// </summary>
-public class InProcessRouteIdTests : IAsyncDisposable
+public class InProcessRouteIdTests : IAsyncLifetime
 {
     private readonly ServiceProvider _sp;
 
@@ -23,11 +23,13 @@ public class InProcessRouteIdTests : IAsyncDisposable
         _sp = services.BuildServiceProvider();
     }
 
-    public ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public Task DisposeAsync()
     {
         _sp.Dispose();
         GC.SuppressFinalize(this);
-        return ValueTask.CompletedTask;
+        return Task.CompletedTask;
     }
 
     private RouteContext New(string name) => new(_sp, $"{name}-{Guid.NewGuid():N}");

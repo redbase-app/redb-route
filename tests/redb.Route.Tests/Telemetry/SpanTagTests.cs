@@ -15,7 +15,7 @@ namespace redb.Route.Tests.Telemetry;
 /// <see cref="InboundParent.HostRequest"/>), since no core component has one.
 /// </summary>
 [Collection("Telemetry")]
-public sealed class SpanTagTests : IAsyncDisposable
+public sealed class SpanTagTests : IAsyncLifetime
 {
     private const string HostSourceName = "redb.Route.Tests.SpanTag.Host";
     private static readonly ActivitySource Host = new(HostSourceName);
@@ -38,7 +38,9 @@ public sealed class SpanTagTests : IAsyncDisposable
         _probe = new RouteTelemetryProbe(activity => activity.TraceId == _traceId);
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         _probe.Dispose();

@@ -43,16 +43,21 @@ internal static class SelfTest
     {
         using var sutKey = SelfSigned("CN=redb AS4 SUT (selftest)");
         using var driverKey = SelfSigned("CN=test driver (selftest)");
+        // The conformance testing service signs the commands with a key of their own, and posts them to a Domibus domain.
+        using var driverControllerKey = SelfSigned("CN=test driver controller (selftest)");
+        // AS4_CP_TA78: another certificate of the same authority, signing as the test driver.
+        using var secondaryKey = SelfSigned("CN=test driver secondary (selftest)");
 
         // ── The module, exactly as the Tsak worker would configure it ──
         var settings = new ConformanceSettings
         {
             // The messages under test go to the driver through a proxy that can swallow its responses (a lost receipt).
             TestDriverUrl = $"http://127.0.0.1:{ProxyPort}/driver/msh",
-            TestDriverControllerUrl = $"http://127.0.0.1:{DriverPort}/driver/controller",
+            TestDriverControllerUrl = $"http://127.0.0.1:{DriverPort}/driver/controller?domain=sut_controller_domain",
             Port = SutPort,
             SutKey = sutKey,
             TestDriverCertificate = PublicOnly(driverKey),
+            TestDriverControllerCertificate = PublicOnly(driverControllerKey),
             RetryCount = 1,
             RetryDelay = TimeSpan.FromSeconds(1),
             SendTimeout = 15000,
@@ -64,7 +69,7 @@ internal static class SelfTest
         var userMessages = Channel.CreateUnbounded<Received>();
         var commands = Channel.CreateUnbounded<Received>();
         var driver = NewContext(sp, "test-driver");
-        ConfigureDriver(driver, settings, driverKey, PublicOnly(sutKey), userMessages, commands);
+        ConfigureDriver(driver, settings, driverKey, driverControllerKey, secondaryKey, PublicOnly(sutKey), userMessages, commands);
 
         await using var proxy = new LossyProxy(ProxyPort, $"http://127.0.0.1:{DriverPort}");
         await sut.Start();
@@ -224,6 +229,21 @@ internal static class SelfTest
             var pathNotify = await Next(commands);
             Check("on a Submit the SUT sends with its own path and the driver receives it", pathMessage?.Header(As4Headers.MessageId) == pathSubmitId, pathMessage?.Header(As4Headers.MessageId));
             Check("the driver's receipt, signed with a path, is verified", pathNotify?.Property("signalType") == "receipt", pathNotify?.Property("signalType"));
+
+            // ── 8. Sender authentication: the test driver's party id, signed with another certificate ──
+            Console.WriteLine("Sender authentication (AS4_CP_TA78):");
+            var impostor = NewMessage(Payloads());
+            string? impostorRefusal = null;
+            try
+            {
+                await Send(driver, As4.Send(sutUrl).ConnectionFactory("driver-secondary").Partner("default"), impostor);
+            }
+            catch (As4ErrorSignalException e)
+            {
+                impostorRefusal = e.ErrorCode;
+            }
+            Check("a message signed by a certificate that is not the sender's is refused", impostorRefusal == "EBMS:0101", impostorRefusal);
+            Check("and no Deliver follows", await Next(commands, TimeSpan.FromSeconds(2)) is null);
         }
         catch (Exception e)
         {
@@ -247,6 +267,7 @@ internal static class SelfTest
         "leg-" + ConformanceLegs.Default.ToList().FindIndex(l => l.Service == service && l.Action == action);
 
     private static void ConfigureDriver(RouteContext context, ConformanceSettings settings, X509Certificate2 driverKey,
+        X509Certificate2 driverControllerKey, X509Certificate2 secondaryKey,
         X509Certificate2 sutCertificate, Channel<Received> userMessages, Channel<Received> commands)
     {
         context.AddComponent(new As4Component());
@@ -284,13 +305,25 @@ internal static class SelfTest
         }
         context.AddToRegistry("driver", node);
 
+        // The same party signing with another key: only the message under test goes out from it.
+        var secondary = new As4ConnectionFactory
+        {
+            OurPartyId = settings.TestDriverPartyId,
+            OurPartyIdType = ConformanceSettings.UnregisteredPartyIdType,
+            ExternalHostName = "gitb.eu",
+            SigningCertificate = secondaryKey,
+            DecryptionCertificates = { secondaryKey },
+        };
+        secondary.Partners.Add(Agreement("default", settings.SutPartyId, ConformanceLegs.OneWay, "default"));
+        context.AddToRegistry("driver-secondary", secondary);
+
         var controller = new As4ConnectionFactory
         {
             OurPartyId = settings.TestDriverControllerPartyId,
             OurPartyIdType = ConformanceSettings.UnregisteredPartyIdType,
             ExternalHostName = "gitb.eu",
-            SigningCertificate = driverKey,
-            DecryptionCertificates = { driverKey },
+            SigningCertificate = driverControllerKey,
+            DecryptionCertificates = { driverControllerKey },
         };
         foreach (var command in new[] { "Submit", "Deliver", "Notify" })
             controller.Partners.Add(Agreement(command, settings.ControllerPartyId, ConformanceLegs.CommandService, command));

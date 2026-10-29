@@ -37,7 +37,9 @@ services.AddOpenTelemetry()
 **Layer 2 — endpoint statistics.** Every endpoint tracks its own counters, readable in-process
 through `IEndpointStatistics`: `MessagesIn`, `MessagesOut`, `Errors`, `Warnings`, `Rejected`
 (shed by an admission limit before the pipeline ran), `Cancelled` (abandoned by a cooperative
-cancellation — not the route's fault, and not an error), `BytesIn`/`BytesOut`,
+cancellation — not the route's fault, and not an error), `Refused` (requests the transport refused as the
+caller's fault with the protocol's own error, before any exchange; `LastRefusalMessage`/`Time` say why; not an
+error, and not in health), `BytesIn`/`BytesOut`,
 `ThroughputPerSecond`, `AverageProcessingTime` (last 100 messages), `LastErrorMessage`/`Time`,
 `HealthStatus`/`HealthReason`. A consumer endpoint's completed count is
 `MessagesIn − Errors − Cancelled`.
@@ -76,8 +78,8 @@ measurements:
 
 `stats(target, metric)`: the target is an endpoint URI or `'current'` (the route processing the
 exchange). Metric names, case-insensitive: `messagesIn`, `messagesOut`, `errors`, `warnings`,
-`rejected`, `cancelled`, `bytesIn`, `bytesOut`, `throughputPerSecond`, `averageProcessingTimeMs`,
-`health`, `healthReason`, `lastError`. A typo in a literal metric name fails the route **build**
+`rejected`, `cancelled`, `refused`, `bytesIn`, `bytesOut`, `throughputPerSecond`, `averageProcessingTimeMs`,
+`health`, `healthReason`, `lastError`, `lastRefusal`. A typo in a literal metric name fails the route **build**
 with the list of known names, not the first message.
 
 The same function reads the **OpenTelemetry layer** when the target starts with `otel:` — the EIP counters and

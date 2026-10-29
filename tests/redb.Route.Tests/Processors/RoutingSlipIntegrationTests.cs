@@ -9,11 +9,13 @@ namespace redb.Route.Tests.Processors;
 /// Integration tests for the Routing Slip EIP through the DSL → Compiler → Engine pipeline,
 /// using real in-process <c>direct://</c> endpoints.
 /// </summary>
-public class RoutingSlipIntegrationTests : IAsyncDisposable
+public class RoutingSlipIntegrationTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

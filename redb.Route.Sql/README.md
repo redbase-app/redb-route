@@ -227,6 +227,7 @@ constants or `{{property}}` placeholders; a `${...}` expression there fails endp
 | `connectionString` / `provider` | inline connection instead of `dataSource` | — |
 | `commandTimeout` | seconds | `30` |
 | `transacted` | **consumer only** — SELECT + `onSuccess`/`onFailure` in one transaction | `false` |
+| `onFailureAfterRollback` | **consumer only**, with `transacted=true` — a failed row keeps its `onFailure` mark and the poll goes on (see below) | `false` |
 | `isolationLevel` | `System.Data.IsolationLevel` | provider default |
 | `readOnly` | `true`: run on the data source's read replica (`ReadConnectionString`) — declared by the endpoint's author, never guessed from the SQL; refused with `batchSize` and for a poll with `onSuccess`/`onFailure`/`onBatchComplete` or `transacted` | `false` |
 | `placeholderStyle` | how `:#name` reaches the provider: `At` (`@name`) \| `Colon` (`:name`, Oracle) \| `Question` (`?`, ODBC) — see [Parameters and binding](#parameters-and-binding) | `At` |
@@ -277,6 +278,19 @@ A poll consumer with `outputType=StreamList` keeps its reader open while the rou
 
 The default mode reads the rows first and closes the reader before processing, so SELECT and `onSuccess` share one
 connection and transaction on every provider. A failing `onSuccess` is logged in every mode.
+
+A row fails, and gets `onFailure` instead of `onSuccess`, when a failure escapes the route, when the route leaves one on
+the exchange (an `onException` with `handled="false"`), or when the route marks the exchange rollback-only. A failure an
+`onException` handles (`handled="true"`) completes the row.
+
+With `transacted=true` the poll cycle is one transaction. The first failed row runs `onFailure` inside it, then the
+transaction rolls back, `onFailure` included, and the cycle ends: that row keeps the state it had and is read again on the
+next poll, and the rows after it wait. A row that fails every time therefore holds up the rows behind it, as in Apache
+Camel. `onFailureAfterRollback=true` keeps the mark: with one exchange per row each row runs under a savepoint, a failed row
+is rolled back to it, gets `onFailure` in the poll's transaction and the cycle goes on with the next row; with one exchange
+per poll (`pollDelivery=List`, `Scalar`, `SelectOne`) the transaction rolls back and `onFailure` runs in a short transaction
+of its own. It needs `transacted=true` and a provider with savepoints, and is refused with `outputType=StreamList`. Without
+`transacted` each row's `onSuccess` or `onFailure` commits on its own anyway.
 
 With `pollDelivery=List` the poll is one exchange, as Apache Camel's `useIterator=false`: the body is the list of rows
 (`List<Dictionary<string, object?>>`, or `List<T>` with `outputClass`), limited by `maxMessagesPerPoll`; with

@@ -32,6 +32,16 @@ public sealed class ConvertBodyProcessor : IProcessor
         if (_targetType.IsInstanceOfType(body))
             return;
 
+        // A model type through a message format registered for the content type: the format reads the body as it came
+        // (a Stream included) with the content type parameters. Plain text and byte conversions stay below.
+        if (_targetType != typeof(string) && _targetType != typeof(byte[]) && _targetType != typeof(Stream)
+            && exchange.In.ContentType is { } contentType
+            && _registry?.GetSerializer(contentType) is IMessageDataFormat messageFormat)
+        {
+            await messageFormat.UnmarshalAsync(exchange, _targetType, ct).ConfigureAwait(false);
+            return;
+        }
+
         exchange.In.Body = body is Stream
             ? await ConvertStreamAsync(body, exchange.In.ContentType, ct).ConfigureAwait(false)
             : Convert(body, exchange.In.ContentType);

@@ -14,6 +14,18 @@ public class WsComponentTests
     }
 
     [Fact]
+    public async Task AssemblyScan_RegistersWs_AndWss()
+    {
+        // The Tsak worker builds a module's components by this scan, through parameterless constructors.
+        await using var context = new RouteContext();
+
+        redb.Route.Extensions.RouteContextExtensions.AddComponents(context, typeof(WsComponent).Assembly);
+
+        context.GetComponent<WsComponent>("ws").Should().NotBeNull().And.NotBeOfType<WssComponent>();
+        context.GetComponent<WssComponent>("wss").Should().NotBeNull();
+    }
+
+    [Fact]
     public void WssComponent_Scheme_IsWss()
     {
         var component = new WssComponent();

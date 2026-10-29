@@ -19,6 +19,13 @@ public sealed class ExecProducerTests
     private static string[] EchoArgs(string text) =>
         IsWindows ? new[] { "/c", "echo", text } : new[] { "-c", $"echo {text}" };
 
+    /// <summary>
+    /// The same arguments as one Args string. The producer splits it on spaces outside double quotes, so the script of
+    /// <c>sh -c</c> is quoted: unquoted, <c>-c echo hello</c> ran a bare echo with <c>hello</c> as <c>$0</c>.
+    /// </summary>
+    private static string EchoArgsLine(string text) =>
+        IsWindows ? $"/c echo {text}" : $"-c \"echo {text}\"";
+
     private static (ExecProducer producer, ExecEndpoint endpoint) NewProducer(ExecEndpointOptions options)
     {
         var component = new ExecComponent();
@@ -36,7 +43,7 @@ public sealed class ExecProducerTests
         var options = new ExecEndpointOptions
         {
             Command = EchoCmd,
-            Args = string.Join(' ', EchoArgs("hello")),
+            Args = EchoArgsLine("hello"),
             TimeoutMs = 5000
         };
         var (producer, _) = NewProducer(options);
@@ -63,7 +70,7 @@ public sealed class ExecProducerTests
         var options = new ExecEndpointOptions
         {
             Command = EchoCmd,
-            Args = string.Join(' ', EchoArgs("nope")),
+            Args = EchoArgsLine("nope"),
             AllowedCommands = "git,ls",
             TimeoutMs = 5000
         };
@@ -81,7 +88,7 @@ public sealed class ExecProducerTests
         var options = new ExecEndpointOptions
         {
             Command = EchoCmd,
-            Args = string.Join(' ', EchoArgs("ok")),
+            Args = EchoArgsLine("ok"),
             AllowedCommands = IsWindows ? "CMD" : "SH",
             TimeoutMs = 5000
         };
@@ -154,7 +161,7 @@ public sealed class ExecProducerTests
 
         var exchange = NewExchange();
         exchange.In.Headers[ExecHeaders.Command] = EchoCmd;
-        exchange.In.Headers[ExecHeaders.Args] = string.Join(' ', EchoArgs("hi-from-header"));
+        exchange.In.Headers[ExecHeaders.Args] = EchoArgsLine("hi-from-header");
 
         await producer.Process(exchange);
 
@@ -168,7 +175,7 @@ public sealed class ExecProducerTests
         var options = new ExecEndpointOptions
         {
             Command = EchoCmd,
-            Args = string.Join(' ', EchoArgs("plain-out")),
+            Args = EchoArgsLine("plain-out"),
             JsonResponse = false,
             CaptureStderrInBody = false,
             TimeoutMs = 5000

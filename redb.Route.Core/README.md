@@ -128,6 +128,24 @@ context.AddRoutes(r =>
 The repository opens a scope of its own for every check, so it is safe under parallel consumers; inside
 `.Transacted()` the key commits with the work.
 
+To keep the keys in a named redb instance instead of the context's default one, name it with `storage`:
+
+```csharp
+context.RegisterRedbService("local", localRedb);
+context.AddRedbIdempotentRepository("orders-inbound", ttl: TimeSpan.FromDays(7), storage: "local");
+```
+
+In `context.xml` the `storage` of the `<redb>` block applies to both `<syncScheme>` and `<idempotentRepository>`:
+
+```xml
+<redb storage="local">
+  <syncScheme type="Hub.Incident, Hub"/>
+  <idempotentRepository name="orders-inbound" ttl="7.00:00:00"/>
+</redb>
+```
+
+A storage name that resolves to no instance fails the context start.
+
 ## Key Classes
 
 | Class | Description |

@@ -18,7 +18,7 @@ namespace redb.Route.Tests.Processors;
 /// Tests the full pipeline: strategy selection → ToProcessor → DirectEndpoint → DirectProducer → consumer.
 /// </summary>
 [Trait("Category", "Integration")]
-public class LoadBalancerIntegrationTests : IAsyncDisposable
+public class LoadBalancerIntegrationTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
     private readonly ConcurrentBag<(string Endpoint, object? Body)> _received = [];
@@ -214,7 +214,9 @@ public class LoadBalancerIntegrationTests : IAsyncDisposable
     // Cleanup
     // ══════════════════════════════════════════════════════════════
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         foreach (var consumer in _consumers)
             await consumer.Stop();

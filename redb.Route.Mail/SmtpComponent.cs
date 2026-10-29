@@ -130,8 +130,20 @@ public class SmtpProducer : IProducer
                 activity.SetTag("messaging.smtp.subject", message.Subject);
         }
 
-        var client = await EnsureConnectedAsync(ct).ConfigureAwait(false);
-        var response = await client.SendAsync(message, ct).ConfigureAwait(false);
+        var (client, reused) = await EnsureConnectedAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await client.SendAsync(message, ct).ConfigureAwait(false);
+        }
+        // A kept connection the server has closed while it was idle (a socket timeout: "421 Service shutting down", a
+        // reset) is not seen by IsConnected; the server refused before taking the message, so it is sent once more on a
+        // new connection. A failure on a fresh connection is the server's answer and goes up.
+        catch (Exception ex) when (reused && IsDeadConnection(ex) && !ct.IsCancellationRequested)
+        {
+            Drop(client);
+            (client, _) = await EnsureConnectedAsync(ct).ConfigureAwait(false);
+            await client.SendAsync(message, ct).ConfigureAwait(false);
+        }
 
         exchange.In.Headers[MailHeaders.MessageId] = message.MessageId;
 
@@ -249,33 +261,64 @@ public class SmtpProducer : IProducer
             }
         }
 
-        // From exchange properties: List<MailAttachment> or byte[][]
-        if (exchange.Properties.TryGetValue("Attachments", out var attachObj))
-        {
-            switch (attachObj)
-            {
-                case IEnumerable<MailAttachment> attachments:
-                    foreach (var att in attachments)
-                        bodyBuilder.Attachments.Add(att.FileName, att.Content, ContentType.Parse(att.ContentType ?? "application/octet-stream"));
-                    break;
+        // The message attachments, whichever step or consumer put them there.
+        foreach (var attachment in exchange.In.Attachments)
+            AddAttachment(bodyBuilder, attachment);
+    }
 
-                case IEnumerable<string> filePaths:
-                    foreach (var path in filePaths)
-                    {
-                        if (System.IO.File.Exists(path))
-                            bodyBuilder.Attachments.Add(path);
-                    }
-                    break;
+    /// <summary>
+    /// Writes one message attachment as a MIME part: file name (else the attachment name), content type,
+    /// <c>Content-ID</c>, an <c>inline</c> disposition when the source part declared one, and the other part
+    /// headers that are not <c>Content-*</c> (those come from the attachment fields).
+    /// </summary>
+    private static void AddAttachment(BodyBuilder bodyBuilder, Attachment attachment)
+    {
+        MimeEntity entity;
+        using (var content = attachment.Content.OpenRead())
+            entity = bodyBuilder.Attachments.Add(attachment.FileName ?? attachment.Name, content,
+                ContentType.Parse(attachment.ContentType));
+
+        if (attachment.ContentId is { Length: > 0 } contentId)
+            entity.ContentId = contentId;
+
+        foreach (var (name, value) in attachment.Headers)
+        {
+            if (name.Equals("Content-Disposition", StringComparison.OrdinalIgnoreCase))
+            {
+                if (ContentDisposition.TryParse(value, out var disposition)
+                    && disposition.Disposition.Equals(ContentDisposition.Inline, StringComparison.OrdinalIgnoreCase)
+                    && entity.ContentDisposition is { } written)
+                    written.Disposition = ContentDisposition.Inline;
+                continue;
             }
+
+            if (!name.StartsWith("Content-", StringComparison.OrdinalIgnoreCase))
+                entity.Headers.Add(name, value);
         }
     }
 
-    private async Task<SmtpClient> EnsureConnectedAsync(CancellationToken ct)
+    /// <summary>The failures of a connection the server closed while it was kept open between sends.</summary>
+    private static bool IsDeadConnection(Exception ex) => ex is ServiceNotConnectedException or SmtpProtocolException
+        or System.IO.IOException
+        || ex is SmtpCommandException { StatusCode: SmtpStatusCode.ServiceNotAvailable };
+
+    private void Drop(SmtpClient client)
+    {
+        lock (_lock)
+        {
+            if (ReferenceEquals(_client, client))
+                _client = null;
+        }
+        client.Dispose();
+    }
+
+    /// <summary>The kept connection when there is one (reused), else a new one, connected and authenticated.</summary>
+    private async Task<(SmtpClient Client, bool Reused)> EnsureConnectedAsync(CancellationToken ct)
     {
         lock (_lock)
         {
             if (_client is { IsConnected: true })
-                return _client;
+                return (_client, true);
         }
 
         var client = new SmtpClient();
@@ -293,7 +336,7 @@ public class SmtpProducer : IProducer
         await AuthenticateAsync(client, ct).ConfigureAwait(false);
 
         lock (_lock) _client = client;
-        return client;
+        return (client, false);
     }
 
     private async Task AuthenticateAsync(SmtpClient client, CancellationToken ct)
@@ -330,7 +373,8 @@ public class SmtpProducer : IProducer
 }
 
 /// <summary>
-/// Attachment data for programmatic attachment via exchange properties.
+/// A decoded attachment of a received mail inside <see cref="MailMessageBody"/>. The same attachment is also on the
+/// message attachments (<see cref="IMessage.Attachments"/>), which is what <c>smtp:</c> sends.
 /// </summary>
 /// <param name="FileName">Attachment file name.</param>
 /// <param name="Content">Attachment content bytes.</param>

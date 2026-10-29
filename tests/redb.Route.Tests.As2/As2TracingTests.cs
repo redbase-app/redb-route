@@ -136,7 +136,10 @@ public class As2TracingTests
 
         await act.Should().ThrowAsync<TaskCanceledException>();
         probe.Activities.Single(a => a.Kind == ActivityKind.Client).Status.Should().Be(ActivityStatusCode.Error);
-        (await accepted).Response.Abort();
+        // On a slow host the 300 ms run out before the request reaches the listener: awaiting it would hang the test.
+        // Disposing the listener ends a pending GetContextAsync.
+        if (accepted.IsCompletedSuccessfully)
+            accepted.Result.Response.Abort();
     }
 
     [Fact]

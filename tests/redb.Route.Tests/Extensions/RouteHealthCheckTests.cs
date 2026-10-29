@@ -9,11 +9,13 @@ namespace redb.Route.Tests.Extensions;
 /// <summary>
 /// Tests for <see cref="RouteHealthCheck"/> per-route status and endpoint statistics.
 /// </summary>
-public class RouteHealthCheckTests : IAsyncDisposable
+public class RouteHealthCheckTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

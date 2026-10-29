@@ -11,11 +11,13 @@ namespace redb.Route.Tests.Idempotent;
 /// for type (Camel's lookupByNameAndType). A bean declared in markup under <c>dedup</c> is the repository
 /// <c>repository="#dedup"</c> names; no <c>idempotent:</c> or <c>claimcheck:</c> key prefix exists.
 /// </summary>
-public class RepositoryRegistryNameTests : IAsyncDisposable
+public class RepositoryRegistryNameTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

@@ -60,6 +60,14 @@ public sealed class As4EndpointOptions : EndpointOptions
     [EndpointRole(EndpointRole.Producer)]
     public DynamicValue<string>? RefToMessageId { get; set; }
 
+    /// <summary>
+    /// Query of the partner's address, without the <c>?</c>: Domibus serves its domains as
+    /// <c>/domibus?domain=name</c>. The query of an <c>as4</c> URI holds the endpoint's options, so the address
+    /// query travels in this option, encoded as one value; <c>As4.Send(url)</c> moves it here from the URL.
+    /// </summary>
+    [EndpointRole(EndpointRole.Producer)]
+    public string? AddressQuery { get; set; }
+
     /// <summary>Milliseconds to wait for the partner's HTTP response carrying the receipt. Default 60000.</summary>
     [EndpointRole(EndpointRole.Producer)]
     public int Timeout { get; set; } = 60000;
@@ -182,6 +190,9 @@ public sealed class As4EndpointOptions : EndpointOptions
             throw new ArgumentOutOfRangeException(nameof(Port), Port, "AS4 port must be between 1 and 65535.");
         if (Timeout < 0)
             throw new ArgumentOutOfRangeException(nameof(Timeout), Timeout, "AS4 timeout must not be negative.");
+        if (AddressQuery is not null && (AddressQuery.Length == 0 || AddressQuery.StartsWith('?') || AddressQuery.Contains('#')))
+            throw new ArgumentException("AS4 addressQuery is the query of the partner's address without '?' and without a fragment, " +
+                "such as 'domain=name'.");
         if (MaxRequestBodySize <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxRequestBodySize), MaxRequestBodySize, "AS4 maxRequestBodySize must be positive.");
         if (MaxResponseBodySize <= 0)

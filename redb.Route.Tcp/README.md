@@ -138,8 +138,8 @@ From("tcp://0.0.0.0:9443?textLine=true&ssl=true&sslCertPath=/certs/server.pfx&ss
 | `encoding` | string | `utf-8` | Character encoding |
 | `keepAlive` | bool | `true` | TCP keep-alive |
 | `noDelay` | bool | `true` | Disable Nagle's algorithm |
-| `receiveBufferSize` | int | `8192` | Socket receive buffer (bytes) |
-| `sendBufferSize` | int | `8192` | Socket send buffer (bytes) |
+| `receiveBufferSize` | int | `0` | Socket receive buffer (bytes); 0 lets the system size and grow it. Also the Raw/TextLine read chunk (8192 when 0) |
+| `sendBufferSize` | int | `0` | Socket send buffer (bytes); 0 lets the system size it |
 | `connectTimeout` | int | `10000` | Client connect timeout (ms) |
 | `reconnect` | bool | `false` | Auto-reconnect on connection loss |
 | `reconnectInterval` | int | `5000` | Delay between reconnect attempts (ms) |

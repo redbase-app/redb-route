@@ -11,14 +11,42 @@ public static class MqttHeaders
 
     // ── Topic ─────────────────────────────────────────────────────────
 
-    /// <summary>Topic the message was received on (consumer) or sent to (producer).</summary>
+    /// <summary>
+    /// Topic the message was received on (consumer) or sent to (producer). Informational: the connector writes it, a
+    /// publish never reads it. To publish elsewhere than the endpoint's topic, set <see cref="OverrideTopic"/>.
+    /// </summary>
     public const string Topic = "redbMqtt.topic";
 
-    /// <summary>QoS level of the received or published message.</summary>
+    /// <summary>
+    /// Topic a publish goes to instead of the endpoint's topic, set by the route. The connector never writes it, so a
+    /// received topic or an earlier publish cannot steer the next one (Apache Camel keeps CamelMqttTopic and
+    /// CamelPahoOverrideTopic apart the same way).
+    /// </summary>
+    public const string OverrideTopic = "redbMqtt.overrideTopic";
+
+    /// <summary>
+    /// QoS level of the received or published message. Informational: the connector writes it, a publish never reads
+    /// it. To publish with another QoS than the endpoint's, set <see cref="OverrideQos"/>.
+    /// </summary>
     public const string Qos = "redbMqtt.qos";
 
-    /// <summary>Whether the message had the retain flag set.</summary>
+    /// <summary>
+    /// QoS level (an <see cref="int"/>, 0 to 2) a publish uses instead of the endpoint's, set by the route. The connector
+    /// never writes it, so the QoS of a received message does not carry over to a republish.
+    /// </summary>
+    public const string OverrideQos = "redbMqtt.overrideQos";
+
+    /// <summary>
+    /// Whether the received or published message had the retain flag set. Informational: the connector writes it, a
+    /// publish never reads it. To set the retain flag of a publish, set <see cref="OverrideRetain"/>.
+    /// </summary>
     public const string Retain = "redbMqtt.retain";
+
+    /// <summary>
+    /// Retain flag (a <see cref="bool"/>) a publish uses instead of the endpoint's, set by the route. The connector never
+    /// writes it, so a retained message received and republished is not retained again unless the route asks for it.
+    /// </summary>
+    public const string OverrideRetain = "redbMqtt.overrideRetain";
 
     // ── Payload ───────────────────────────────────────────────────────
 

@@ -24,8 +24,7 @@ public sealed class RedisConsumerReviewTests
         return (RedisEndpoint)new RedisComponent().CreateEndpoint(EndpointUriParser.Parse($"redis:{path}?{query}"));
     }
 
-    private static async Task<IDatabase> Database() =>
-        (await ConnectionMultiplexer.ConnectAsync(ConnectionString)).GetDatabase();
+    private static Task<IDatabase> Database() => TestRedis.Database();
 
     private sealed class Recorder : IProcessor
     {
@@ -75,9 +74,17 @@ public sealed class RedisConsumerReviewTests
     {
         var prefix = $"psub-{Guid.NewGuid():N}";
         var (consumer, recorder) = await Consume($"PSUBSCRIBE:{prefix}.*", null);
-        await Task.Delay(500);
 
-        await (await Database()).PublishAsync(RedisChannel.Literal($"{prefix}.orders"), "matched");
+        // The consumer subscribes in its background loop, after Start returned, and pub/sub keeps nothing for a late
+        // subscriber: a fixed pause lost the message on a slow machine. PUBLISH answers how many subscribers got it, so
+        // the message is sent again until the pattern subscription has taken one, and exactly one arrives.
+        var db = await Database();
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (await db.PublishAsync(RedisChannel.Literal($"{prefix}.orders"), "matched") == 0)
+        {
+            DateTime.UtcNow.Should().BeBefore(deadline, "the PSUBSCRIBE consumer never subscribed to the pattern");
+            await Task.Delay(50);
+        }
         await Until(() => recorder.Calls > 0, 5_000);
         await consumer.Stop();
 

@@ -11,7 +11,7 @@ namespace redb.Route.Tests.Components;
 /// caller's own exchange: every header goes, and every header the called route sets or removes is the caller's when
 /// the call returns. <c>vm:</c> hands it a copy: every header goes, and nothing comes back.
 /// </summary>
-public sealed class InterContextHeaderCharacterizationTests : IAsyncDisposable
+public sealed class InterContextHeaderCharacterizationTests : IAsyncLifetime
 {
     private readonly ServiceProvider _sp;
 
@@ -22,7 +22,9 @@ public sealed class InterContextHeaderCharacterizationTests : IAsyncDisposable
         _sp = services.BuildServiceProvider();
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _sp.DisposeAsync();
         GC.SuppressFinalize(this);

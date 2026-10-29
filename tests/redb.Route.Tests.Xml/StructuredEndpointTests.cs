@@ -12,11 +12,13 @@ namespace redb.Route.Tests.Xml;
 /// Exact-string assertions on the normalizer plus behavioral proof that the canon is identical
 /// (a structured address and a hand-written URI meet at the same endpoint).
 /// </summary>
-public class StructuredEndpointTests : IAsyncDisposable
+public class StructuredEndpointTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

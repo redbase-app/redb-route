@@ -9,11 +9,13 @@ namespace redb.Route.Tests.Processors;
 /// <summary>
 /// Integration tests for the 6 EIP patterns through the DSL → Compiler → Engine pipeline.
 /// </summary>
-public class EipPatternIntegrationTests : IAsyncDisposable
+public class EipPatternIntegrationTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

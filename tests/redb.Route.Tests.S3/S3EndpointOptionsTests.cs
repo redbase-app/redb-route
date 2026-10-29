@@ -70,6 +70,32 @@ public sealed class S3EndpointOptionsTests
     }
 
     [Fact]
+    public void Validate_MoveAfterRead_WithTheDefaultDelete_Passes()
+    {
+        // s3://incoming?moveAfterRead=true&destinationBucket=archive: the move takes the place of the default delete.
+        var opts = new S3EndpointOptions
+        {
+            AccessKey = "key", SecretKey = "secret",
+            MoveAfterRead = true, DestinationBucket = "archive"
+        };
+
+        var act = () => opts.Validate();
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Uri_MoveAfterRead_WithoutDeleteAfterRead_CreatesTheEndpoint()
+    {
+        var component = new S3Component();
+
+        var act = () => component.CreateEndpoint(redb.Route.Core.EndpointUriParser.Parse(
+            "s3://incoming?accessKey=key&secretKey=secret&moveAfterRead=true&destinationBucket=archive"));
+
+        act.Should().NotThrow("the template's consumer started only with an explicit deleteAfterRead=false");
+    }
+
+    [Fact]
     public void Validate_NegativeDelay_Throws()
     {
         var opts = new S3EndpointOptions { AccessKey = "key", SecretKey = "secret", Delay = -1 };

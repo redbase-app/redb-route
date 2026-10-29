@@ -12,8 +12,11 @@ public class MqttHeadersTests
 
     [Theory]
     [InlineData(nameof(MqttHeaders.Topic), "redbMqtt.topic")]
+    [InlineData(nameof(MqttHeaders.OverrideTopic), "redbMqtt.overrideTopic")]
     [InlineData(nameof(MqttHeaders.Qos), "redbMqtt.qos")]
+    [InlineData(nameof(MqttHeaders.OverrideQos), "redbMqtt.overrideQos")]
     [InlineData(nameof(MqttHeaders.Retain), "redbMqtt.retain")]
+    [InlineData(nameof(MqttHeaders.OverrideRetain), "redbMqtt.overrideRetain")]
     [InlineData(nameof(MqttHeaders.ContentType), "redbMqtt.contentType")]
     [InlineData(nameof(MqttHeaders.ResponseTopic), "redbMqtt.responseTopic")]
     [InlineData(nameof(MqttHeaders.CorrelationData), "redbMqtt.correlationData")]

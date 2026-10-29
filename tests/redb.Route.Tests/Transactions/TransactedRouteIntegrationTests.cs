@@ -10,11 +10,13 @@ namespace redb.Route.Tests.Transactions;
 /// Integration tests that verify the DSL → OldRouteCompiler → TransactedProcessor pipeline.
 /// Uses real RouteContext with direct:// components to test the full compilation flow.
 /// </summary>
-public class TransactedRouteIntegrationTests : IAsyncDisposable
+public class TransactedRouteIntegrationTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

@@ -85,7 +85,7 @@ public class WsProducerTests : IAsyncLifetime
         await producer.Start();
 
         await producer.Process(new Exchange(new Message("hello ws")));
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange.Should().NotBeNull();
         _lastExchange!.In.Body.Should().Be("hello ws");
@@ -101,7 +101,7 @@ public class WsProducerTests : IAsyncLifetime
 
         var data = new byte[] { 1, 2, 3, 4, 5 };
         await producer.Process(new Exchange(new Message(data)));
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange.Should().NotBeNull();
         _lastExchange!.In.Body.Should().BeOfType<byte[]>();
@@ -144,7 +144,7 @@ public class WsProducerTests : IAsyncLifetime
         for (var i = 0; i < 5; i++)
             await producer.Process(new Exchange(new Message($"msg-{i}")));
 
-        await Task.Delay(300);
+        await TestWait.Until(() => _serverConsumer!.ProcessedCount >= 5);
 
         _serverConsumer!.ProcessedCount.Should().Be(5);
         await producer.Stop();
@@ -199,7 +199,7 @@ public class WsProducerTests : IAsyncLifetime
         await producer.Start();
 
         await producer.Process(new Exchange(new Message(null)));
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange.Should().NotBeNull();
         await producer.Stop();
@@ -214,7 +214,7 @@ public class WsProducerTests : IAsyncLifetime
 
         var ms = new MemoryStream(Encoding.UTF8.GetBytes("stream body"));
         await producer.Process(new Exchange(new Message(ms)));
-        await Task.Delay(200);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange!.In.Body.Should().Be("stream body");
         await producer.Stop();

@@ -225,4 +225,21 @@ public class As2ReceivedMicTests
         var expected = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(Encoding.Latin1.GetBytes(part)));
         mic.Should().Be(new As2Mic(expected, "sha-256"));
     }
+
+    [Fact]
+    public void Mic_OfAReceivedTextPart_IsOverItsCrlfBytes_OnEveryPlatform()
+    {
+        // A 7bit part is written through MimeKit's line-end filter; with the platform's line ends it would be hashed with
+        // LF on Linux and differ from the sender's MIC, which is over the CRLF bytes on the wire.
+        const string part = "Content-Type: application/edi-x12\r\nContent-Transfer-Encoding: 7bit\r\n\r\nISA*00*TEXT~\r\nGS*IN~\r\n";
+        var raw = "Content-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; micalg=sha-256; boundary=\"b\"\r\n\r\n" +
+                  "--b\r\n" + part + "\r\n--b\r\nContent-Type: application/pkcs7-signature\r\nContent-Transfer-Encoding: base64\r\n\r\nAAAA\r\n--b--\r\n";
+        using var stream = new MemoryStream(Encoding.ASCII.GetBytes(raw));
+        var signed = (MultipartSigned)MimeEntity.Load(stream, persistent: true);
+
+        var mic = new As2CryptoEngine().ComputeReceivedMic(signed[0], "sha-256");
+
+        var expected = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(Encoding.ASCII.GetBytes(part)));
+        mic.Should().Be(new As2Mic(expected, "sha-256"));
+    }
 }

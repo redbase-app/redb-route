@@ -127,6 +127,17 @@ public sealed class SqlEndpointOptions : EndpointOptions
     /// <summary>SQL to execute when processing a row fails.</summary>
     public string? OnFailure { get; set; }
 
+    /// <summary>
+    /// With <see cref="Transacted"/>: keep the <see cref="OnFailure"/> mark of a failed row. By default (false) a failure
+    /// rolls the poll's transaction back with its <c>onFailure</c> and ends the cycle, so the row is read again on the next
+    /// poll, as in Apache Camel. With true, one exchange per row: each row runs under a savepoint, a failed row is rolled back
+    /// to it, gets <c>onFailure</c> in the poll's transaction and the cycle goes on with the next row; one exchange for the
+    /// poll (<c>pollDelivery=List</c>, <c>Scalar</c>, <c>SelectOne</c>): the transaction rolls back, then <c>onFailure</c> runs in a
+    /// short transaction of its own. Either way a row that fails every time is marked once instead of holding up the rows
+    /// behind it.
+    /// </summary>
+    public bool OnFailureAfterRollback { get; set; }
+
     /// <summary>SQL to execute after the entire batch is processed.</summary>
     public string? OnBatchComplete { get; set; }
 
@@ -227,6 +238,16 @@ public sealed class SqlEndpointOptions : EndpointOptions
             throw new ArgumentException(
                 $"pollDelivery=List delivers the polled rows as one list, and outputType={OutputType} reads a single value. " +
                 "Use outputType=SelectList or StreamList with pollDelivery=List, or pollDelivery=PerRow.");
+
+        if (OnFailureAfterRollback && !Transacted)
+            throw new ArgumentException(
+                "onFailureAfterRollback=true changes what a failure does to the poll's transaction, so it needs transacted=true. " +
+                "Without it every onSuccess and onFailure already commits on its own.");
+
+        if (OnFailureAfterRollback && OutputType == SqlOutputType.StreamList)
+            throw new ArgumentException(
+                "onFailureAfterRollback=true marks a failed row while the poll goes on, and outputType=StreamList keeps the reader " +
+                "open on the poll's connection, where PostgreSQL and SQL Server take no other command. Use outputType=SelectList.");
 
         if (CommandTimeout < 0)
             throw new ArgumentException("CommandTimeout must be non-negative.");

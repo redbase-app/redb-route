@@ -17,7 +17,7 @@ namespace redb.Route.Tests.Xslt;
 /// the default staying the default.
 /// </para>
 /// </summary>
-public class XsltEngineSubstitutionTests : IAsyncDisposable
+public class XsltEngineSubstitutionTests : IAsyncLifetime
 {
     private const string Stylesheet =
         """
@@ -38,11 +38,13 @@ public class XsltEngineSubstitutionTests : IAsyncDisposable
         File.WriteAllText(_stylesheetFile, Stylesheet);
     }
 
-    public ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public Task DisposeAsync()
     {
         try { File.Delete(_stylesheetFile); } catch (IOException) { /* the temp file outlives the test at worst */ }
         GC.SuppressFinalize(this);
-        return ValueTask.CompletedTask;
+        return Task.CompletedTask;
     }
 
     // ── A stand-in processor ──

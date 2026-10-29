@@ -148,11 +148,11 @@
 
   <!-- redb packages: the monorepo ProjectReferences, rewritten for the public repository. -->
   <ItemGroup>
-    <PackageVersion Include="redb.Core.Pro" Version="4.4.2" />
-    <PackageVersion Include="redb.MSSql" Version="4.4.2" />
-    <PackageVersion Include="redb.MSSql.Pro" Version="4.4.2" />
-    <PackageVersion Include="redb.Postgres" Version="4.4.2" />
-    <PackageVersion Include="redb.Postgres.Pro" Version="4.4.2" />
+    <PackageVersion Include="redb.Core.Pro" Version="4.5.0" />
+    <PackageVersion Include="redb.MSSql" Version="4.5.0" />
+    <PackageVersion Include="redb.MSSql.Pro" Version="4.5.0" />
+    <PackageVersion Include="redb.Postgres" Version="4.5.0" />
+    <PackageVersion Include="redb.Postgres.Pro" Version="4.5.0" />
   </ItemGroup>
 </Project>
 

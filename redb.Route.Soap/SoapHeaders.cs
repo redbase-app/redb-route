@@ -79,11 +79,6 @@ public static class SoapHeaders
     /// <summary>Pojo mode: per-message override of the response CLR <see cref="System.Type"/> to deserialize into.</summary>
     public const string ResponseType = "redbSoap.responseType";
 
-    /// <summary>MTOM/XOP attachments plane: an <see cref="IReadOnlyList{T}"/> of <see cref="SoapAttachment"/>.</summary>
-    public const string Attachments = "redbSoap.attachments";
-    /// <summary>Whether the message carries MTOM attachments (bool).</summary>
-    public const string HasAttachments = "redbSoap.hasAttachments";
-
     /// <summary>Prefix for individual <c>&lt;soap:Header&gt;</c> block elements (the envelope header plane).</summary>
     public const string HeaderPrefix = "redbSoap.header.";
 

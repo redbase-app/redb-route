@@ -65,4 +65,7 @@ public sealed class RouteEngineOptions
     /// all routes automatically wrap Stream bodies with a seekable cache.
     /// </summary>
     public StreamCacheOptions StreamCaching { get; set; } = new();
+
+    /// <summary>Message attachment options (<c>RedbRoute:Attachments</c>).</summary>
+    public AttachmentOptions Attachments { get; set; } = new();
 }

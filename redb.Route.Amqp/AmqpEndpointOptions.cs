@@ -19,7 +19,10 @@ public sealed class AmqpEndpointOptions : EndpointOptions
     /// <summary>Named connection factory from registry. Takes priority over inline params.</summary>
     public string? ConnectionFactory { get; set; }
 
-    /// <summary>Broker host. Comma-separated for failover. (default: localhost)</summary>
+    /// <summary>
+    /// Broker host (default: localhost). In a comma-separated list the connection opens to the first host; the others
+    /// are not tried.
+    /// </summary>
     public string Host { get; set; } = "localhost";
 
     /// <summary>

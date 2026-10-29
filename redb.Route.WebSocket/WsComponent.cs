@@ -17,8 +17,17 @@ public class WsComponent : ComponentBase
     private readonly string _scheme;
     private SharedHttpServerManager? _ownedServerManager;
 
+    /// <summary>
+    /// Creates the <c>ws</c> component. A parameterless constructor of its own: the assembly scan
+    /// (<c>context.AddComponents</c>, the Tsak worker's module contexts) creates components through it and skips a type
+    /// whose only constructor has optional parameters.
+    /// </summary>
+    public WsComponent() : this("ws")
+    {
+    }
+
     /// <summary>Creates a WebSocket component with the given scheme.</summary>
-    public WsComponent(string scheme = "ws")
+    public WsComponent(string scheme)
     {
         _scheme = scheme;
     }

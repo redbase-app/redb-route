@@ -12,7 +12,7 @@ namespace redb.Route.Tests.Transactions;
 /// <c>.Threads()</c> for InOnly) is a unit of work of its own, and a copy that outlives its block must not see the block
 /// as still running: a send registered there would be committed by nobody and lost.
 /// </summary>
-public class TransactedAsyncBoundaryTests : IAsyncDisposable
+public class TransactedAsyncBoundaryTests : IAsyncLifetime
 {
     private readonly ServiceProvider _services;
     private readonly RouteContext _context;
@@ -25,7 +25,9 @@ public class TransactedAsyncBoundaryTests : IAsyncDisposable
         _context = new RouteContext(_services, "tx-boundary");
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         await _services.DisposeAsync();

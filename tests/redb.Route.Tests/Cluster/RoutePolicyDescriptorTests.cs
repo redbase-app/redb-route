@@ -12,7 +12,7 @@ namespace redb.Route.Tests.Cluster;
 /// policy: <c>AllNodes</c> for standalone routes, <c>ClusterLeader</c> when a
 /// <see cref="IRoutePolicyFactory"/> is registered, <c>Custom</c> for explicit policies.
 /// </summary>
-public class RoutePolicyDescriptorTests : IAsyncDisposable
+public class RoutePolicyDescriptorTests : IAsyncLifetime
 {
     private readonly RouteContext _context;
     private readonly CapturingLoggerProvider _capture = new();
@@ -23,7 +23,9 @@ public class RoutePolicyDescriptorTests : IAsyncDisposable
         _context = new RouteContext(loggerFactory: lf, options: new RouteEngineOptions { StartupChecks = true });
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

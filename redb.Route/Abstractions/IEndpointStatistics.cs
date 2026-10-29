@@ -66,6 +66,24 @@ public interface IEndpointStatistics
     /// </summary>
     long Cancelled { get; }
 
+    /// <summary>
+    /// Requests the transport refused as the caller's fault and answered with the protocol's own error: malformed or
+    /// oversized, not authenticated, not what the agreement allows (an AS4 ebMS error, a SOAP <c>Sender</c> fault). No
+    /// exchange was created, so like <see cref="Rejected"/> they are counted in neither <see cref="MessagesIn"/> nor
+    /// <see cref="Errors"/>, and they do not feed <see cref="HealthStatus"/>: a partner sending what the endpoint cannot
+    /// accept is not a failure of the route. A rise is still worth a look: a partner's broken configuration, or our
+    /// key or agreement changed under it. <see cref="LastRefusalMessage"/> says why the last one was refused.
+    /// The refusal members have default implementations (none counted) so that an implementation written before them
+    /// still compiles; <c>EndpointBase</c> counts them.
+    /// </summary>
+    long Refused => 0;
+
+    /// <summary>Timestamp of the last refusal, or null if none.</summary>
+    DateTime? LastRefusalTime => null;
+
+    /// <summary>Why the last request was refused, or empty string.</summary>
+    string LastRefusalMessage => string.Empty;
+
     /// <summary>Timestamp of the last message activity (in or out), or null if no activity yet.</summary>
     DateTime? LastActivity { get; }
 
@@ -128,6 +146,9 @@ public interface IEndpointStatistics
 
     /// <summary>Record an exchange abandoned by a cooperative cancellation. Thread-safe.</summary>
     void RecordCancelled();
+
+    /// <summary>Record a request refused as the caller's fault, with the reason (see <see cref="Refused"/>). Thread-safe.</summary>
+    void RecordRefused(string reason) { }
 
     /// <summary>Record incoming bytes (message body size). Thread-safe.</summary>
     void RecordBytesIn(long bytes);

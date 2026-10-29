@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
+using redb.Route.Core;
 
 namespace redb.Route.Xml;
 
@@ -221,6 +222,10 @@ public sealed class XmlCodeWriter
 
     /// <summary>An expression argument: the route-language string wrapped in <c>Expr(...)</c>.</summary>
     public static string Expr(string template) => $"Expr({Str(template)})";
+
+    /// <summary>A markup <c>value=</c> as code: a literal, or <c>Placeholder("…")</c> when it carries <c>{{key}}</c>.</summary>
+    public static string Value(string value)
+        => PropertyPlaceholderResolver.HasPlaceholder(value) ? $"Placeholder({Str(value)})" : Str(value);
 
     /// <summary>A <see cref="TimeSpan"/> as code (§3.3): round values by unit, otherwise Parse.</summary>
     public static string Ts(TimeSpan value)

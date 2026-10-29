@@ -21,7 +21,17 @@ public static class As4
     public static As4Builder Receive(string path) => new(As4BuilderMode.Receive, path);
 
     /// <summary>AS4 sender posting to the given partner URL.</summary>
-    public static As4Builder Send(string url) => new(As4BuilderMode.Send, url);
+    public static As4Builder Send(string url)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(url);
+        return new(As4BuilderMode.Send, url);
+    }
+
+    /// <summary>
+    /// AS4 sender posting to the <see cref="As4Partner.Address"/> of its partner: <c>as4:?partner=...</c>. A partner chosen
+    /// per message by an expression gets its own address.
+    /// </summary>
+    public static As4Builder Send() => new(As4BuilderMode.Send, "");
 }
 
 /// <summary>Which side of the exchange a builder produces.</summary>
@@ -150,6 +160,13 @@ public sealed class As4Builder
 
     private string BuildSend()
     {
+        if (_target.Length == 0)
+        {
+            var own = new StringBuilder("as4:");
+            AppendQuery(own, '?');
+            return own.ToString();
+        }
+
         var scheme = "as4";
         var rest = _target;
         if (rest.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) { scheme = "as4s"; rest = rest["https://".Length..]; }
@@ -157,15 +174,19 @@ public sealed class As4Builder
         else if (rest.StartsWith("as4s://", StringComparison.OrdinalIgnoreCase)) { scheme = "as4s"; rest = rest["as4s://".Length..]; }
         else if (rest.StartsWith("as4://", StringComparison.OrdinalIgnoreCase)) { rest = rest["as4://".Length..]; }
 
-        // The query of an as4: URI holds the endpoint's options, as http:'s does; an address with a query of its own
-        // would fail later as an unknown option, which reads as the author's typo.
-        if (rest.Contains('?'))
-            throw new ArgumentException(
-                $"AS4 partner address '{_target}' has a query: the query of an as4 URI holds the endpoint's options, so a " +
-                "partner address with one cannot be written. Ask the partner for an address without a query.", nameof(_target));
+        // The query of an as4: URI holds the endpoint's options, as http:'s does: the address's own query (Domibus
+        // domains, ?domain=name) travels in the addressQuery option, as one encoded value.
+        if (rest.Contains('#'))
+            throw new ArgumentException($"AS4 partner address '{_target}' has a fragment; a partner address has none.", nameof(_target));
+        var query = rest.IndexOf('?');
+        var addressQuery = query >= 0 ? rest[(query + 1)..] : "";
+        if (query >= 0)
+            rest = rest[..query];
 
         var sb = new StringBuilder(scheme).Append("://").Append(rest);
-        AppendQuery(sb, '?');
+        if (addressQuery.Length > 0)
+            sb.Append("?addressQuery=").Append(Uri.EscapeDataString(addressQuery));
+        AppendQuery(sb, addressQuery.Length > 0 ? '&' : '?');
         return sb.ToString();
     }
 

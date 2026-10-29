@@ -10,11 +10,14 @@ namespace redb.Route.Tests.Components;
 /// #12): the context keeps its components and endpoints, so a queue that the stop closed for good left every hop
 /// behind it dead while the routes reported Started.
 /// </summary>
-public sealed class ContextRestartQueueTests : IAsyncDisposable
+public sealed class ContextRestartQueueTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync() => await _context.DisposeAsync();
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    // IAsyncLifetime, not IAsyncDisposable: xUnit 2 never calls DisposeAsync of IAsyncDisposable on a test class.
+    public async Task DisposeAsync() => await _context.DisposeAsync();
 
     private async Task SendAsync(string uri, object body)
     {

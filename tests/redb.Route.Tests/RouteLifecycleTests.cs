@@ -8,11 +8,13 @@ namespace redb.Route.Tests;
 /// Tests for route lifecycle: start/stop individual routes by routeId,
 /// route status tracking, and GetRoute API.
 /// </summary>
-public class RouteLifecycleTests : IAsyncDisposable
+public class RouteLifecycleTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

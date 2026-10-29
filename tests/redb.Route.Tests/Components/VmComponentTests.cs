@@ -10,7 +10,7 @@ namespace redb.Route.Tests.Components;
 /// <summary>
 /// Tests for DirectVm (cross-context synchronous) component.
 /// </summary>
-public class DirectVmComponentTests : IAsyncDisposable
+public class DirectVmComponentTests : IAsyncLifetime
 {
     private readonly SharedVmRegistry _registry = new();
     private readonly ServiceProvider _sp;
@@ -22,7 +22,9 @@ public class DirectVmComponentTests : IAsyncDisposable
         _sp = sc.BuildServiceProvider();
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         _sp.Dispose();
         GC.SuppressFinalize(this);
@@ -201,7 +203,7 @@ public class DirectVmComponentTests : IAsyncDisposable
 /// <summary>
 /// Tests for Vm (cross-context asynchronous) component.
 /// </summary>
-public class VmComponentTests : IAsyncDisposable
+public class VmComponentTests : IAsyncLifetime
 {
     private readonly SharedVmRegistry _registry = new();
     private readonly ServiceProvider _sp;
@@ -213,7 +215,9 @@ public class VmComponentTests : IAsyncDisposable
         _sp = sc.BuildServiceProvider();
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         _sp.Dispose();
         GC.SuppressFinalize(this);

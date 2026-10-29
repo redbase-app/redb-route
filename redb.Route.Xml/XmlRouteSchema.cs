@@ -309,7 +309,11 @@ public static class XmlRouteSchema
             type.Add(Attribute(new AttributeSpec("id", AttributeType.String)));
         if (spec.Attributes.All(a => a.Name != "description"))
             type.Add(Attribute(new AttributeSpec("description", AttributeType.String)));
-        type.Add(ForeignAttributes());
+        // An element whose further attributes are the options of a type it names (a serializer's Delimiter, Indented)
+        // takes any attribute; the loader holds each against the type's writable properties.
+        type.Add(spec.OpenAttributes
+            ? new XElement(Xs + "anyAttribute", new XAttribute("namespace", "##any"), new XAttribute("processContents", "lax"))
+            : ForeignAttributes());
         return type;
     }
 

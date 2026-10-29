@@ -9,6 +9,7 @@
     <ProjectReference Include="..\..\redb.Route.Templates\redb.Route.Templates.csproj" />
     <ProjectReference Include="..\..\redb.Route.Http\redb.Route.Http.csproj" />
     <ProjectReference Include="..\..\redb.Route.Core\redb.Route.Core.csproj" />
+    <ProjectReference Include="..\..\redb.Route.DataFormats.Mime\redb.Route.DataFormats.Mime.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -17,6 +18,8 @@
 
   <ItemGroup>
     <Compile Include="../Shared/TestPorts.cs" Link="Shared/TestPorts.cs" />
+    <!-- The loader redb-route-xml reads connector contributions with: the tool is a net9.0 executable, so its file is linked. -->
+    <Compile Include="../../tools/redb.Route.Xml.CodeGen/ContributionLoader.cs" Link="CodeGen/ContributionLoader.cs" />
   </ItemGroup>
 </Project>
 

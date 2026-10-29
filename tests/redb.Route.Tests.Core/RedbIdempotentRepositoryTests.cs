@@ -61,8 +61,15 @@ public sealed class RedbIdempotentRepositoryTests
     [Fact]
     public void Ctor_NullScopeFactory_Throws()
     {
-        var act = () => new RedbIdempotentRepository(null!, _defaultOptions);
+        var act = () => new RedbIdempotentRepository((IServiceScopeFactory)null!, _defaultOptions);
         act.Should().Throw<ArgumentNullException>().WithParameterName("scopeFactory");
+    }
+
+    [Fact]
+    public void Ctor_NullOpenScope_Throws()
+    {
+        var act = () => new RedbIdempotentRepository((Func<RedbScope>)null!, _defaultOptions);
+        act.Should().Throw<ArgumentNullException>().WithParameterName("openScope");
     }
 
     [Fact]

@@ -72,7 +72,7 @@ public sealed class DogsComponent : DogComponent
 /// already has, the path synonym is read FROM the component, and the catalog-aware XSD makes
 /// the structured endpoint children strict and enum-hinted.
 /// </summary>
-public class CatalogAndSynonymTests : IAsyncDisposable
+public class CatalogAndSynonymTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
@@ -82,7 +82,9 @@ public class CatalogAndSynonymTests : IAsyncDisposable
         _context.AddComponent(new SqlishComponent());
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

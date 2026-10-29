@@ -10,11 +10,13 @@ namespace redb.Route.Tests.Definitions;
 /// <summary>
 /// Tests for W5 F2 — all leaf ProcessorDefinition subclasses.
 /// </summary>
-public class LeafDefinitionTests : IAsyncDisposable
+public class LeafDefinitionTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

@@ -11,7 +11,7 @@ namespace redb.Route.Tests.Sql.E2E.MsSql;
 [Trait("Category", "Integration")]
 [Trait("SqlProvider", "mssql")]
 [Trait("SqlSuite", "Connector")]
-public sealed class MsSqlRepositoryBootstrapE2ETests : IAsyncDisposable
+public sealed class MsSqlRepositoryBootstrapE2ETests : IAsyncLifetime
 {
     private const int ClusteredKeyLimit = 900;
 
@@ -73,7 +73,9 @@ public sealed class MsSqlRepositoryBootstrapE2ETests : IAsyncDisposable
         return table;
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await using var connection = await Factory.CreateConnectionAsync();
         foreach (var table in _tables)

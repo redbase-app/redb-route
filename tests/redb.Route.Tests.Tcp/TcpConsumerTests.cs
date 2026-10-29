@@ -64,22 +64,24 @@ public class TcpConsumerTests : IAsyncLifetime
         return _consumer;
     }
 
-    /// <summary>Sends a text line to the consumer and waits briefly for processing.</summary>
+    /// <summary>Sends a text line to the consumer and waits until it has been processed.</summary>
     private async Task<TcpClient> SendTextLine(string text, string delimiter = "\n")
     {
+        var before = _consumer!.ProcessedCount;
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, _port);
         var stream = client.GetStream();
         var data = Encoding.UTF8.GetBytes(text + delimiter);
         await stream.WriteAsync(data);
         await stream.FlushAsync();
-        await Task.Delay(150);
+        await TestWait.Until(() => _consumer!.ProcessedCount > before);
         return client;
     }
 
     /// <summary>Sends a length-prefixed message.</summary>
     private async Task<TcpClient> SendLengthPrefixed(byte[] payload)
     {
+        var before = _consumer!.ProcessedCount;
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, _port);
         var stream = client.GetStream();
@@ -88,7 +90,7 @@ public class TcpConsumerTests : IAsyncLifetime
         await stream.WriteAsync(header);
         await stream.WriteAsync(payload);
         await stream.FlushAsync();
-        await Task.Delay(150);
+        await TestWait.Until(() => _consumer!.ProcessedCount > before);
         return client;
     }
 
@@ -147,7 +149,7 @@ public class TcpConsumerTests : IAsyncLifetime
             await stream.WriteAsync(data);
         }
         await stream.FlushAsync();
-        await Task.Delay(300);
+        await TestWait.Until(() => consumer.ProcessedCount >= 5);
 
         lock (_capturedExchanges) _capturedExchanges.Should().HaveCount(5);
         consumer.ProcessedCount.Should().Be(5);
@@ -287,13 +289,13 @@ public class TcpConsumerTests : IAsyncLifetime
 
         var client1 = new TcpClient();
         await client1.ConnectAsync(IPAddress.Loopback, _port);
-        await Task.Delay(100);
+        await TestWait.Until(() => consumer.ActiveConnections >= 1);
 
         consumer.ActiveConnections.Should().BeGreaterThanOrEqualTo(1);
 
         var client2 = new TcpClient();
         await client2.ConnectAsync(IPAddress.Loopback, _port);
-        await Task.Delay(100);
+        await TestWait.Until(() => consumer.ActiveConnections >= 2);
 
         consumer.ActiveConnections.Should().BeGreaterThanOrEqualTo(2);
 
@@ -328,7 +330,7 @@ public class TcpConsumerTests : IAsyncLifetime
         var stream = client.GetStream();
         await stream.WriteAsync(Encoding.UTF8.GetBytes("two\n"));
         await stream.FlushAsync();
-        await Task.Delay(150);
+        await TestWait.Until(() => consumer.ProcessedCount >= 2);
 
         consumer.ProcessedCount.Should().Be(2);
     }
@@ -346,7 +348,7 @@ public class TcpConsumerTests : IAsyncLifetime
         var stream = client.GetStream();
         await stream.WriteAsync(Encoding.UTF8.GetBytes("pipe-msg|"));
         await stream.FlushAsync();
-        await Task.Delay(150);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange!.In.Body.Should().Be("pipe-msg");
         client.Dispose();
@@ -395,7 +397,7 @@ public class TcpConsumerTests : IAsyncLifetime
         }
 
         var clients = await Task.WhenAll(tasks);
-        await Task.Delay(300);
+        await TestWait.Until(() => { lock (_capturedExchanges) return _capturedExchanges.Count >= 3; });
 
         lock (_capturedExchanges) _capturedExchanges.Should().HaveCount(3);
 
@@ -434,7 +436,7 @@ public class TcpConsumerTests : IAsyncLifetime
         // empty line: just the delimiter
         await stream.WriteAsync(Encoding.UTF8.GetBytes("\n"));
         await stream.FlushAsync();
-        await Task.Delay(150);
+        await TestWait.Until(() => _lastExchange is not null);
 
         _lastExchange.Should().NotBeNull();
         _lastExchange!.In.Body.Should().Be("");

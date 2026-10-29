@@ -13,7 +13,7 @@ namespace redb.Route.Tests.Telemetry;
 /// Verifies compilation, execution, metric recording, and cardinality protection.
 /// </summary>
 [Collection("Telemetry")]
-public class MeteredDslTests : IAsyncDisposable
+public class MeteredDslTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
     private readonly MeterListener _listener;
@@ -38,7 +38,9 @@ public class MeteredDslTests : IAsyncDisposable
         _listener.Start();
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.Stop();
         _listener.Dispose();

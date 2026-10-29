@@ -9,7 +9,7 @@ namespace redb.Route.Tests.Xslt;
 /// Integration tests for XSLT through the DSL → Compiler → Engine pipeline, covering the inline
 /// <c>.XsltContent(...)</c> and file-based <c>.Xslt(...)</c> leaf forms and the <c>xslt:</c> component.
 /// </summary>
-public class XsltIntegrationTests : IAsyncDisposable
+public class XsltIntegrationTests : IAsyncLifetime
 {
     private const string Stylesheet =
         """
@@ -53,7 +53,9 @@ public class XsltIntegrationTests : IAsyncDisposable
         File.WriteAllText(_altStylesheetFile, AltStylesheet);
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         try { File.Delete(_stylesheetFile); } catch { /* best-effort */ }

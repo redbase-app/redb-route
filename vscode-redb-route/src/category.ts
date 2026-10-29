@@ -31,7 +31,8 @@ const ERRORS = [
 const TRANSFORM = [
     "setBody", "setHeader", "setHeaders", "setProperty", "setProperties", "removeBody", "removeHeader",
     "removeHeaders", "removeProperty", "removeProperties", "transform", "convertBody",
-    "marshal", "unmarshal", "normalize", "xslt", "sort", "claimCheck",
+    "marshal", "unmarshal", "dataFormat", "normalize", "xslt", "sort", "claimCheck",
+    "addAttachment", "removeAttachment", "removeAttachments",
     // neutral observability and infrastructure — the lightest weight on purpose
     "log", "metered", "traced", "spanTag", "streamCaching", "messageHistory", "controlBus", "routePolicy",
     "intercept", "interceptFrom", "interceptSendToEndpoint",

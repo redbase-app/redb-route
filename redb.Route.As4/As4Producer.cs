@@ -48,15 +48,13 @@ internal sealed class As4Producer : ConnectableProducer
 
     // The name reaches the started/stopped logs; a partner URL may carry userinfo no [Sensitive] reaches.
     /// <inheritdoc />
-    protected override string ProducerName => $"as4:{EndpointUri.Sanitize(_endpoint.PartnerUrl)}";
+    protected override string ProducerName => _endpoint.PartnerUrl is { } url
+        ? $"as4:{EndpointUri.Sanitize(url)}"
+        : EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey);
 
     /// <inheritdoc />
     protected override Task ConnectAsync(CancellationToken ct)
     {
-        if (_endpoint.PartnerUrl is null)
-            throw new InvalidOperationException(
-                $"AS4 send endpoint {_endpoint.Uri} has no partner address: use the host-style form as4s://host[:port]/path.");
-
         var node = As4Node.Resolve(_endpoint.Context, _options.ConnectionFactory!);
         _spool = As4Spool.Options(_endpoint.Context);
 
@@ -67,9 +65,10 @@ internal sealed class As4Producer : ConnectableProducer
         if (!partner.IsDynamic)
         {
             var name = partner.Resolve(null!);   // static: the exchange is not read
-            if (string.IsNullOrWhiteSpace(name) || !node.Partners.ContainsKey(name))
+            if (string.IsNullOrWhiteSpace(name) || !node.Partners.TryGetValue(name, out var agreement))
                 throw new InvalidOperationException(
                     $"AS4 send endpoint {_endpoint.Uri}: partner '{name}' is not a partner of connection factory '{node.Name}'.");
+            AddressOf(agreement);
         }
 
         // One client per producer, as the AS2 and HTTP producers keep.
@@ -246,6 +245,7 @@ internal sealed class As4Producer : ConnectableProducer
         ArgumentNullException.ThrowIfNull(exchange);
         var node = Node!;
         var partner = ResolvePartner(exchange, node);
+        var address = AddressOf(partner);
         var host = node.Factory.ExternalHostName;
 
         // The id is fixed on the exchange before the first attempt: a redelivery resends the same message.
@@ -284,9 +284,9 @@ internal sealed class As4Producer : ConnectableProducer
         // replacing one already there: HttpClient writes none of its own when the header is present.
         using var activity = RouteTelemetryExtensions.StartTransportSpan(
             _endpoint.Context, $"{partner.Name} send", ActivityKind.Client, "messaging.system", "as4",
-            _endpoint.Uri.NormalizedKey, destination: _endpoint.PartnerUrl, operation: "send");
+            _endpoint.Uri.NormalizedKey, destination: EndpointUri.Sanitize(address), operation: "send");
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint.PartnerUrl) { Content = transmission.Content() };
+        using var request = new HttpRequestMessage(HttpMethod.Post, address) { Content = transmission.Content() };
         RouteTelemetryExtensions.InjectTraceContext(activity, request, static (r, name, value) =>
         {
             r.Headers.Remove(name);
@@ -393,6 +393,25 @@ internal sealed class As4Producer : ConnectableProducer
             throw new InvalidOperationException(
                 $"AS4 send endpoint {_endpoint.Uri}: partner '{name}' is not a partner of connection factory '{node.Name}'.");
         return partner;
+    }
+
+    /// <summary>
+    /// Where the message goes: the address of the send endpoint, or the partner's <see cref="As4Partner.Address"/>. Exactly
+    /// one of them: two would leave the reader of the route to guess which one is used.
+    /// </summary>
+    private string AddressOf(As4Partner partner)
+    {
+        if (_endpoint.PartnerUrl is { } url)
+        {
+            if (partner.Address is not null)
+                throw new InvalidOperationException(
+                    $"AS4 send endpoint {EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey)} gives an address and partner '{partner.Name}' has " +
+                    "one in its Address: give it in one place.");
+            return url;
+        }
+        return partner.Address ?? throw new InvalidOperationException(
+            $"AS4 send endpoint {EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey)} has no address and partner '{partner.Name}' has no Address: " +
+            "set the partner's Address, or send to as4s://host[:port]/path.");
     }
 
     /// <summary>

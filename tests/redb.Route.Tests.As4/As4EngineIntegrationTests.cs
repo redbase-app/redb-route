@@ -199,7 +199,33 @@ public class As4EngineIntegrationTests
 
         using var unsigned = await PostResponse(port, sign: false);
         stats.MessagesIn.Should().Be(2, "a message refused before the route is not a message in");
-        stats.Errors.Should().Be(2, "the refusal is one error");
+        stats.Errors.Should().Be(1, "the partner's bad message is not a failure of this endpoint");
+        stats.Refused.Should().Be(1, "the refusal is counted once, as a refusal");
+        stats.LastRefusalMessage.Should().StartWith("EBMS:0103");
+    }
+
+    [Fact]
+    public async Task Statistics_RefusalsLeaveHealthAndErrorsAlone()
+    {
+        // A partner sending what the agreement does not allow, again and again, must not turn the route red: the endpoint
+        // is fine, the partner is not. The refusals are visible on their own counter, with the reason of the last one.
+        var port = TestPort();
+        await using var context = NewContext();
+        var uri = Receive(port).Build();
+        context.AddRoutes(r => r.From(uri).Process(_ => { }));
+        await context.Start();
+        var stats = (IEndpointStatistics)context.GetEndpoint(uri);
+
+        for (var i = 0; i < 5; i++)
+        {
+            using var _ = await PostResponse(port, sign: false);
+        }
+
+        stats.Refused.Should().Be(5);
+        stats.Errors.Should().Be(0);
+        stats.LastErrorTime.Should().BeNull();
+        stats.LastRefusalTime.Should().NotBeNull();
+        stats.HealthStatus.Should().Be(EndpointHealthStatus.Healthy);
     }
 
     [Fact]

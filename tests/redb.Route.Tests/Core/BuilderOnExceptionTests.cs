@@ -8,11 +8,13 @@ namespace redb.Route.Tests.Core;
 /// Tests for builder-level <c>OnException&lt;T&gt;()</c> — global exception handlers
 /// defined at the RouteBuilder level and compiled into the RouteContext.
 /// </summary>
-public class BuilderOnExceptionTests : IAsyncDisposable
+public class BuilderOnExceptionTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

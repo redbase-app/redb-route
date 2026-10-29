@@ -66,9 +66,10 @@ public sealed class SoapConnectionFactory
     [Sensitive] public string? Password { get; set; }
 
     /// <summary>
-    /// Use MTOM/XOP for binary attachments. When set, a producer with attachments on
-    /// <see cref="SoapHeaders.Attachments"/> sends <c>multipart/related</c>; a consumer always parses inbound
-    /// <c>multipart/related</c> regardless of this flag.
+    /// Use MTOM/XOP for binary attachments. When set, a producer sends the message attachments
+    /// (<see cref="redb.Route.Abstractions.IMessage.Attachments"/>) as <c>multipart/related</c> and a consumer
+    /// replies with them; a consumer always parses inbound <c>multipart/related</c> into message attachments
+    /// regardless of this flag.
     /// </summary>
     public bool Mtom { get; set; }
 

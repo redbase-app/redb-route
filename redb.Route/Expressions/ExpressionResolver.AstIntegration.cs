@@ -677,6 +677,7 @@ public static partial class ExpressionResolver
             "warnings" => stats.Warnings,
             "rejected" => stats.Rejected,
             "cancelled" => stats.Cancelled,
+            "refused" => stats.Refused,
             "bytesin" => stats.BytesIn,
             "bytesout" => stats.BytesOut,
             "throughputpersecond" => stats.ThroughputPerSecond,
@@ -685,17 +686,18 @@ public static partial class ExpressionResolver
             "health" => stats.HealthStatus.ToString(),
             "healthreason" => stats.HealthReason,
             "lasterror" => stats.LastErrorMessage,
+            "lastrefusal" => stats.LastRefusalMessage,
             _ => throw new ArgumentException(
                 $"stats(): unknown statistic '{metric}'. Known: messagesIn, messagesOut, errors, " +
-                "warnings, rejected, cancelled, bytesIn, bytesOut, throughputPerSecond, " +
-                "averageProcessingTimeMs, health, healthReason, lastError.")
+                "warnings, rejected, cancelled, refused, bytesIn, bytesOut, throughputPerSecond, " +
+                "averageProcessingTimeMs, health, healthReason, lastError, lastRefusal.")
         };
 
     /// <summary>True when <paramref name="metric"/> is a name <see cref="ReadStatistic"/> accepts.</summary>
     internal static bool IsKnownStatistic(string metric) => metric.ToLowerInvariant() is
-        "messagesin" or "messagesout" or "errors" or "warnings" or "rejected" or "cancelled"
+        "messagesin" or "messagesout" or "errors" or "warnings" or "rejected" or "cancelled" or "refused"
         or "bytesin" or "bytesout" or "throughputpersecond" or "averageprocessingtimems"
-        or "health" or "healthreason" or "lasterror";
+        or "health" or "healthreason" or "lasterror" or "lastrefusal";
 
     /// <summary>
     /// Evaluates the two-argument <c>xpath(path, source)</c>, which reads the source instead of the
@@ -1268,6 +1270,18 @@ public static partial class ExpressionResolver
                             nameof(Ast_MessageHistory), BindingFlags.Public | BindingFlags.Static)!;
                         return SysExpression.Call(historyMethod, historyKind, exchangeParam);
                     }
+
+                    case "attachmentcontent":
+                        return CompileSingleArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_AttachmentContent));
+
+                    case "attachmentcontentastext":
+                        return CompileSingleArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_AttachmentContentAsText));
+
+                    case "attachmentcontenttype":
+                        return CompileSingleArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_AttachmentContentType));
+
+                    case "attachmentheader":
+                        return CompileTwoArgFunctionWithExchange(functionNode, exchangeParam, nameof(Ast_AttachmentHeader));
 
                     case "stats":
                         // A literal metric name is checked while the route is being built — the

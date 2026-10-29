@@ -11,7 +11,9 @@ import {
 } from "./textedit";
 import { buildPalette } from "./palette";
 import { parseEndpointUri, setUriOption, setUriPath, parameterSpelling } from "./endpointuri";
-import { ConfigMap, flattenConfig, resolvePlaceholders } from "./placeholders";
+import {
+    ConfigMap, mergeContextLayer, moduleContextName, packageName, resolvePlaceholders,
+} from "./placeholders";
 import { UriResolver } from "./graphmodel";
 
 /** One row of the properties panel (§8). */
@@ -101,31 +103,36 @@ export class RouteGraphEditorProvider implements vscode.CustomTextEditorProvider
     }
 
     /**
-     * §8: the placeholder is shown together with its resolved value. The values come from
-     * the scaffold's own convention — `config/*.json` and `context.sample.json` found by
-     * walking up from the route document (sample first, named configs override).
+     * §8: the placeholder is shown together with its resolved value, read the way the Tsak
+     * runtime fills the context properties from a module's files. The module is the nearest
+     * folder with a .csproj above the route document; its config/context.sample.json (deployed
+     * as context.json) and over it its config/<package>.config.json are each read by their
+     * Contexts section for the module's context, or by their root keys without one. The host's appsettings and
+     * environment are not visible here, so a key that only they provide shows unresolved.
      */
     private loadConfig(documentPath: string): { config: ConfigMap; sources: string[] } {
         const config: ConfigMap = new Map();
         const sources: string[] = [];
-        const read = (file: string): void => {
+        const moduleDir = findModuleDir(path.dirname(documentPath));
+        if (!moduleDir)
+            return { config, sources };
+        const readJson = (file: string): unknown => {
+            if (!fs.existsSync(file)) return undefined;
             try {
-                flattenConfig(JSON.parse(fs.readFileSync(file, "utf8")), config);
-                sources.push(path.basename(file));
-            } catch { /* not JSON or unreadable — the view just resolves less */ }
+                const json: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+                sources.push(path.relative(moduleDir.dir, file));
+                return json;
+            } catch {
+                return undefined; // not JSON: the view just resolves less
+            }
         };
-        let dir = path.dirname(documentPath);
-        for (let level = 0; level < 4; level++) {
-            const sample = path.join(dir, "context.sample.json");
-            if (fs.existsSync(sample)) read(sample);
-            const configDir = path.join(dir, "config");
-            if (fs.existsSync(configDir))
-                for (const file of fs.readdirSync(configDir).filter(f => f.endsWith(".json")).sort())
-                    read(path.join(configDir, file));
-            const parent = path.dirname(dir);
-            if (parent === dir) break;
-            dir = parent;
-        }
+        const csprojText = fs.readFileSync(path.join(moduleDir.dir, moduleDir.csproj), "utf8");
+        const pkg = packageName(moduleDir.csproj, csprojText);
+        const moduleConfig = readJson(path.join(moduleDir.dir, "config", `${pkg}.config.json`));
+        const contextFile = readJson(path.join(moduleDir.dir, "config", "context.sample.json"));
+        const contextName = moduleContextName(moduleConfig, csprojText, pkg);
+        mergeContextLayer(contextFile, contextName, config);
+        mergeContextLayer(moduleConfig, contextName, config);
         return { config, sources };
     }
 
@@ -564,4 +571,17 @@ export class RouteGraphEditorProvider implements vscode.CustomTextEditorProvider
 </body>
 </html>`;
     }
+}
+
+/** The module a route document belongs to: the nearest folder with a .csproj, up to three levels above it. */
+function findModuleDir(start: string): { dir: string; csproj: string } | null {
+    let dir = start;
+    for (let level = 0; level < 4; level++) {
+        const csproj = fs.readdirSync(dir).find(f => f.toLowerCase().endsWith(".csproj"));
+        if (csproj) return { dir, csproj };
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+    }
+    return null;
 }

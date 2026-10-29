@@ -65,6 +65,9 @@ public class RouteContext : IRouteContext, IAsyncDisposable
     /// <summary>The engine's stream caching options (<see cref="RouteEngineOptions.StreamCaching"/>).</summary>
     internal Configuration.StreamCacheOptions StreamCacheOptions => _options.StreamCaching;
 
+    /// <summary>The engine's attachment options (<see cref="RouteEngineOptions.Attachments"/>).</summary>
+    internal Configuration.AttachmentOptions AttachmentOptions => _options.Attachments;
+
     // The static targets of the route being compiled (To, WireTap, Enrich, load-balancer targets, fixed recipients):
     // their endpoints are created once the route compiles, as Camel resolves a static to(...) at route startup.
     private List<string>? _compilingStaticEndpoints;

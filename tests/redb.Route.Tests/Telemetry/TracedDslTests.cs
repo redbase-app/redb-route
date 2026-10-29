@@ -12,7 +12,7 @@ namespace redb.Route.Tests.Telemetry;
 /// Verifies compilation, execution, Activity creation, and expression template support.
 /// </summary>
 [Collection("Telemetry")]
-public class TracedDslTests : IAsyncDisposable
+public class TracedDslTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
@@ -23,7 +23,9 @@ public class TracedDslTests : IAsyncDisposable
 
     private IReadOnlyList<Activity> _completedActivities => _probe.Activities;
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.Stop();
         _probe.Dispose();

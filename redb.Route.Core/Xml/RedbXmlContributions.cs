@@ -341,7 +341,8 @@ public sealed class RedbContextXmlContribution : IXmlContextContribution
                     if (parseContext.RequiredAttr(child, "name") is { } name)
                         context.AddRedbIdempotentRepository(name,
                             parseContext.Convert<TimeSpan>(child, "ttl"),
-                            parseContext.Attr(child, "processorName"));
+                            parseContext.Attr(child, "processorName"),
+                            storage);
                     break;
 
                 default:

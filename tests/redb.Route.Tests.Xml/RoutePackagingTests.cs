@@ -71,24 +71,91 @@ public class RoutePackagingTests : IDisposable
     [Fact]
     public void FreshScaffold_PassesTheChecks_AndBuildsThePackage()
     {
-        var dir = NewProject("Orders", "orders");
+        // The package name `pack` infers is the project name; the context comes from config/Orders.config.json.
+        var dir = NewProject("Orders", "sales");
+        var outDir = Path.Combine(_root, "out");
+
+        var result = RoutePackage.Build(dir, "Orders", "1.2.3", outDir);
+
+        result.Errors.Should().BeEmpty();
+        result.Warnings.Should().BeEmpty();
+        result.Manifest.Artifacts.Should().Equal("routes/main.route.xml");
+        result.Manifest.Context.Should().Be("sales");
+
+        var stage = Path.Combine(outDir, "Orders-1.2.3");
+        File.Exists(Path.Combine(stage, "manifest.json")).Should().BeTrue();
+        File.Exists(Path.Combine(stage, "Orders.config.json")).Should().BeTrue();
+        File.Exists(Path.Combine(stage, "routes", "main.route.xml")).Should().BeTrue();
+        File.Exists(Path.Combine(stage, "context.xml")).Should().BeTrue();
+
+        using var zip = ZipFile.OpenRead(Path.Combine(outDir, "Orders-1.2.3.tpkg"));
+        zip.Entries.Select(e => e.FullName.Replace('\\', '/'))
+            .Should().Contain(["manifest.json", "Orders.config.json", "routes/main.route.xml"]);
+    }
+
+    /// <summary>
+    /// The config file name is matched with its letter case on every system. File.Exists ignored the case on Windows
+    /// and kept it on Linux, so the same project and the same --name gave two different packages.
+    /// </summary>
+    [Fact]
+    public void NameDifferingOnlyInCase_IsAWarning_AndPacksTheDefaultConfig_OnEverySystem()
+    {
+        var dir = NewProject("Orders", "sales");
         var outDir = Path.Combine(_root, "out");
 
         var result = RoutePackage.Build(dir, "orders", "1.2.3", outDir);
 
         result.Errors.Should().BeEmpty();
-        result.Manifest.Artifacts.Should().Equal("routes/main.route.xml");
-        result.Manifest.Context.Should().Be("orders");
+        result.Warnings.Should().ContainSingle(w => w.File == "config/orders.config.json")
+            .Which.Message.Should().Contain("config/Orders.config.json");
+        result.Manifest.Context.Should().BeNull("config/Orders.config.json is not the config of the package 'orders'");
+        using var l4 = JsonDocument.Parse(File.ReadAllText(Path.Combine(outDir, "orders-1.2.3", "orders.config.json")));
+        l4.RootElement.GetProperty("ContextName").GetString().Should().Be("orders");
+    }
 
-        var stage = Path.Combine(outDir, "orders-1.2.3");
-        File.Exists(Path.Combine(stage, "manifest.json")).Should().BeTrue();
-        File.Exists(Path.Combine(stage, "orders.config.json")).Should().BeTrue();
-        File.Exists(Path.Combine(stage, "routes", "main.route.xml")).Should().BeTrue();
-        File.Exists(Path.Combine(stage, "context.xml")).Should().BeTrue();
+    [Fact]
+    public void EntryGivenAsABuildPath_IsNamedInTheManifestAsTheZipEntry()
+    {
+        var dir = NewProject("Orders", "orders");
+        var bin = Path.Combine(dir, "bin", "Release", "net10.0");
+        Directory.CreateDirectory(bin);
+        File.WriteAllBytes(Path.Combine(bin, "Orders.dll"), [0x4D, 0x5A]);
+        var outDir = Path.Combine(_root, "out");
 
-        using var zip = ZipFile.OpenRead(Path.Combine(outDir, "orders-1.2.3.tpkg"));
-        zip.Entries.Select(e => e.FullName.Replace('\\', '/'))
-            .Should().Contain(["manifest.json", "orders.config.json", "routes/main.route.xml"]);
+        var result = RoutePackage.Build(dir, "orders", "1.0.0", outDir, entryPoints: ["bin/Release/net10.0/Orders.dll"]);
+
+        result.Errors.Should().BeEmpty();
+        result.Manifest.EntryPoints.Should().Equal("Orders.dll");
+        using var zip = ZipFile.OpenRead(Path.Combine(outDir, "orders-1.0.0.tpkg"));
+        zip.GetEntry("Orders.dll").Should().NotBeNull("the loader looks the entry point up by the manifest's name");
+        using var manifest = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
+        manifest.RootElement.GetProperty("EntryPoints").EnumerateArray().Select(e => e.GetString())
+            .Should().Equal("Orders.dll");
+    }
+
+    [Fact]
+    public void ConfigOfAnotherName_IsAWarning_NamingBothFiles()
+    {
+        var dir = NewProject("Orders", "orders");
+
+        var result = RoutePackage.Check(dir, "billing", "1.0.0");
+
+        result.Errors.Should().BeEmpty();
+        result.Warnings.Should().ContainSingle(w => w.File == "config/billing.config.json")
+            .Which.Message.Should().Contain("config/billing.config.json").And.Contain("config/Orders.config.json");
+    }
+
+    [Fact]
+    public void ConfigOfThePackageName_OrNoConfigAtAll_IsNotWarned()
+    {
+        var dir = NewProject("Orders", "orders");
+        RoutePackage.Check(dir, "Orders", "1.0.0").Warnings
+            .Should().NotContain(w => w.Message.Contains("reads its config from"));
+
+        File.Delete(Path.Combine(dir, "config", "Orders.config.json"));
+        RoutePackage.Check(dir, "billing", "1.0.0").Warnings
+            .Should().NotContain(w => w.Message.Contains("reads its config from"),
+                "without any *.config.json the default config is the intended one");
     }
 
     [Fact]

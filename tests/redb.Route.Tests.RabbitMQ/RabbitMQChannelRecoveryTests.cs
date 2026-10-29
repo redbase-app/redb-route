@@ -24,7 +24,8 @@ public sealed class RabbitMQChannelRecoveryTests
         await using (var setup = await ConnectAsync())
         await using (var channel = await setup.CreateChannelAsync())
         {
-            await channel.QueueDeclareAsync(queue, durable: false, exclusive: false, autoDelete: false);
+            // Durable: RabbitMQ 4.3 refuses transient non-exclusive queues (541, transient_nonexcl_queues).
+            await channel.QueueDeclareAsync(queue, durable: true, exclusive: false, autoDelete: false);
             await channel.QueueBindAsync(queue, "amq.direct", queue);
         }
 

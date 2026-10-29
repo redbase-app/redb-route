@@ -354,6 +354,92 @@ public sealed class MailIntegrationTests
         mailBody.Attachments.Should().HaveCount(1);
         mailBody.Attachments[0].FileName.Should().Be("data.bin");
         mailBody.Attachments[0].Content.Should().BeEquivalentTo(fileData);
+
+        var onMessage = rx.In.Attachments.Should().ContainSingle().Subject;
+        onMessage.FileName.Should().Be("data.bin");
+        onMessage.Content.ReadAllBytes().Should().Equal(fileData);
+    }
+
+    [Fact]
+    public async Task SmtpProducer_SendsMessageAttachments_ByteForByte_AndIgnoresTheOldProperty()
+    {
+        var user = UniqueUser();
+        await ProvisionUserAsync(user);
+        var binary = Enumerable.Range(0, 256).Select(i => (byte)i).ToArray();
+
+        var ep = CreateSmtpEndpoint(user);
+        var producer = (SmtpProducer)ep.CreateProducer();
+        await producer.Start();
+
+        var exchange = new Exchange(new Message("files attached"));
+        exchange.In.Headers[MailHeaders.To] = $"{user}@localhost";
+        exchange.In.Headers[MailHeaders.Subject] = "Message attachments";
+        exchange.In.Attachments.Add(new Attachment
+        {
+            Name = "report", FileName = "отчёт.bin", Content = AttachmentContent.FromBytes(binary),
+        });
+        exchange.In.Attachments.Add(new Attachment
+        {
+            Name = "logo", FileName = "logo.png", ContentType = "image/png", ContentId = "logo@redb",
+            Content = AttachmentContent.FromBytes([0x89, 0x50, 0x4E, 0x47]),
+        });
+        // The old convention is an ordinary property now: smtp: does not read it.
+        exchange.Properties["Attachments"] = new List<MailAttachment> { new("ignored.pdf", [1], "application/pdf") };
+        await producer.Process(exchange);
+        await producer.Stop();
+
+        using var imap = new ImapClient();
+        await imap.ConnectAsync(ImapHost, ImapPort, MailKit.Security.SecureSocketOptions.None);
+        await imap.AuthenticateAsync(user, "secret");
+        await imap.Inbox.OpenAsync(MailKit.FolderAccess.ReadOnly);
+        var msg = await imap.Inbox.GetMessageAsync(0);
+        await imap.DisconnectAsync(true);
+
+        var parts = msg.Attachments.OfType<MimePart>().ToList();
+        parts.Select(p => p.FileName).Should().Equal("отчёт.bin", "logo.png");
+        Decode(parts[0]).Should().Equal(binary);
+        parts[0].ContentType.MimeType.Should().Be("application/octet-stream");
+        parts[1].ContentType.MimeType.Should().Be("image/png");
+        parts[1].ContentId.Should().Be("logo@redb");
+        Decode(parts[1]).Should().Equal(0x89, 0x50, 0x4E, 0x47);
+    }
+
+    [Fact]
+    public async Task ImapToSmtp_ForwardsTheAttachments_WithoutAMappingStep()
+    {
+        var source = UniqueUser();
+        var target = UniqueUser();
+        await ProvisionUserAsync(target);
+        var fileData = new byte[] { 0x00, 0xFF, 0x10, 0x20 };
+        await SendWithAttachmentAsync(source, "To forward", "forward me", "scan.bin", fileData);
+
+        var rx = await ConsumeOneAsync(CreateImapEndpoint(source, extraParams: "delay=500&fetchFilter=All"));
+
+        var producer = (SmtpProducer)CreateSmtpEndpoint(target).CreateProducer();
+        await producer.Start();
+        rx.In.Headers[MailHeaders.To] = $"{target}@localhost";
+        await producer.Process(rx);
+        await producer.Stop();
+
+        using var imap = new ImapClient();
+        await imap.ConnectAsync(ImapHost, ImapPort, MailKit.Security.SecureSocketOptions.None);
+        await imap.AuthenticateAsync(target, "secret");
+        await imap.Inbox.OpenAsync(MailKit.FolderAccess.ReadOnly);
+        var msg = await imap.Inbox.GetMessageAsync(0);
+        await imap.DisconnectAsync(true);
+
+        msg.Subject.Should().Be("To forward");
+        msg.TextBody.Should().Contain("forward me");
+        var part = msg.Attachments.OfType<MimePart>().Should().ContainSingle().Subject;
+        part.FileName.Should().Be("scan.bin");
+        Decode(part).Should().Equal(fileData);
+    }
+
+    private static byte[] Decode(MimePart part)
+    {
+        using var ms = new MemoryStream();
+        part.Content.DecodeTo(ms);
+        return ms.ToArray();
     }
 
     // ───── POP3 Consumer Tests ─────

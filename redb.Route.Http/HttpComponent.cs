@@ -17,8 +17,17 @@ public class HttpComponent : ComponentBase
 {
     private readonly string _scheme;
 
+    /// <summary>
+    /// Creates the <c>http</c> component. A parameterless constructor of its own: the assembly scan
+    /// (<c>context.AddComponents</c>, the Tsak worker's module contexts) creates components through it and skips a type
+    /// whose only constructor has optional parameters.
+    /// </summary>
+    public HttpComponent() : this("http")
+    {
+    }
+
     /// <summary>Creates an HTTP component with the specified scheme.</summary>
-    public HttpComponent(string scheme = "http")
+    public HttpComponent(string scheme)
     {
         _scheme = scheme;
     }

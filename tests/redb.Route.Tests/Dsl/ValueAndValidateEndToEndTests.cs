@@ -12,11 +12,13 @@ namespace redb.Route.Tests.Dsl;
 /// reads an operator without caring about the whitespace around it.
 /// </summary>
 [Collection("ExpressionResolver")]
-public class ValueAndValidateEndToEndTests : IAsyncDisposable
+public class ValueAndValidateEndToEndTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

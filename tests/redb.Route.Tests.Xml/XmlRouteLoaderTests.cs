@@ -17,11 +17,13 @@ public class XmlGreeter
 /// existing DSL — with every error of a document collected in one pass, positions included,
 /// and the load-time checks the format promises (consumer ${...}, unregistered schemes).
 /// </summary>
-public class XmlRouteLoaderTests : IAsyncDisposable
+public class XmlRouteLoaderTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);
@@ -57,6 +59,81 @@ public class XmlRouteLoaderTests : IAsyncDisposable
         await producer.Process(new Exchange(new Message("payload")));
 
         delivered.Should().Be("loaded:payload");
+    }
+
+    [Fact]
+    public async Task Placeholders_InStepValues_ResolveAtLoad_LikeInAUri()
+    {
+        IExchange? delivered = null;
+        _context.SetProperty("demo.key", "from-config");
+        _context.AddRoutes(r => r.From("direct://xml-ph-out").Process(e => delivered = e));
+        _context.AddXmlRoutesFromContent("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="xml-ph">
+                <from uri="direct://xml-ph-in"/>
+                <setHeader name="configured" value="{{demo.key:fallback}}"/>
+                <setHeader name="defaulted" value="{{demo.absent:fallback}}"/>
+                <setProperty name="mixed" value="user={{demo.key}}"/>
+                <setBody value="{{demo.key}}"/>
+                <to uri="direct://xml-ph-out"/>
+              </route>
+            </routes>
+            """);
+        var producer = await StartAndProducer("direct://xml-ph-in");
+
+        await producer.Process(new Exchange(new Message("payload")));
+
+        delivered!.In.Headers["configured"].Should().Be("from-config");
+        delivered.In.Headers["defaulted"].Should().Be("fallback");
+        delivered.Properties["mixed"].Should().Be("user=from-config");
+        delivered.In.Body.Should().Be("from-config");
+    }
+
+    [Fact]
+    public async Task Placeholder_WithoutValueOrDefault_FailsTheExchange_InTheWordsOfAUri()
+    {
+        _context.AddXmlRoutesFromContent("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="xml-ph-missing">
+                <from uri="direct://xml-ph-missing"/>
+                <setHeader name="secret" value="{{demo.missing}}"/>
+              </route>
+            </routes>
+            """);
+        var producer = await StartAndProducer("direct://xml-ph-missing");
+        var exchange = new Exchange(new Message("payload"));
+
+        Exception? failure = null;
+        try { await producer.Process(exchange); }
+        catch (Exception ex) { failure = ex; }
+
+        (failure ?? exchange.Exception).Should().NotBeNull()
+            .And.Subject.As<Exception>().Message.Should().Contain("'demo.missing'").And.Contain("no default");
+    }
+
+    [Fact]
+    public async Task TokenizeJsonArray_SplitsTheArrayAJpathSetBodyLeft()
+    {
+        var parts = new List<string>();
+        _context.AddRoutes(r => r.From("direct://xml-line").Process(e => { lock (parts) parts.Add((string)e.In.Body!); }));
+        _context.AddXmlRoutesFromContent("""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="xml-jpath-split">
+                <from uri="direct://xml-order"/>
+                <setBody expr="${jpath('$.lines')}"/>
+                <split>
+                  <tokenizeJsonArray/>
+                  <to uri="direct://xml-line"/>
+                </split>
+              </route>
+            </routes>
+            """);
+        var producer = await StartAndProducer("direct://xml-order");
+
+        await producer.Process(new Exchange(new Message(
+            """{"id":"o-1","lines":[{"sku":"A-1","qty":1},{"sku":"B-2","qty":2}]}""")));
+
+        parts.Should().Equal("""{"sku":"A-1","qty":1}""", """{"sku":"B-2","qty":2}""");
     }
 
     [Fact]

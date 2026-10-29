@@ -8,6 +8,7 @@ import { elementPosition } from "./elementposition";
 import { skeletonsFor } from "./skeletons";
 import { skeletonPlace } from "./skeletonscope";
 import { beanNames, referencePosition } from "./beanref";
+import { NewProjectPanel } from "./newprojectpanel";
 import { buildIndex, ElementInfo, ElementIndex } from "./graphmodel";
 import { RouteGraphEditorProvider } from "./grapheditor";
 
@@ -30,7 +31,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         context.asAbsolutePath(path.join("media", "redb-route-elements.json")), "utf8"));
 
     const tree = new RouteTreeProvider();
+    const output = vscode.window.createOutputChannel("redb Route");
     context.subscriptions.push(
+        output,
+        vscode.commands.registerCommand("redbRoute.newProject", () => NewProjectPanel.show(context, output)),
         vscode.window.registerTreeDataProvider("redbRoutes", tree),
         vscode.commands.registerCommand("redbRoute.refreshTree", () => tree.refresh()),
         vscode.commands.registerCommand("redbRoute.open", openAtLine),

@@ -46,6 +46,8 @@ internal sealed class StreamingSplitterProcessor : IProcessor
             // Copy headers from original
             foreach (var header in exchange.In.Headers)
                 splitMessage.Headers[header.Key] = header.Value;
+            // and the attachments, as Camel's split copies the exchange: every part carries them, content shared.
+            MessageAttachments.CopyInto(exchange.In, splitMessage);
 
             // Set split metadata headers (Camel-compatible)
             splitMessage.Headers["CamelSplitIndex"] = index;

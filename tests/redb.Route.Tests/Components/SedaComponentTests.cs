@@ -8,11 +8,13 @@ namespace redb.Route.Tests.Components;
 /// <summary>
 /// Tests for the SEDA (Staged Event-Driven Architecture) component.
 /// </summary>
-public class SedaComponentTests : IAsyncDisposable
+public class SedaComponentTests : IAsyncLifetime
 {
     private readonly RouteContext _context = new();
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         await _context.DisposeAsync();
         GC.SuppressFinalize(this);

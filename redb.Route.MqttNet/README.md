@@ -59,6 +59,31 @@ From(Mqtt.Subscribe("events/#")
 
 > Most builder methods accept both constant values and `IExpression` for runtime resolution via the expression engine.
 
+## Headers
+
+| Header | Written by | Read by the publish |
+|--------|------------|---------------------|
+| `redbMqtt.topic` | the consumer (received topic), the producer (topic it published to) | no |
+| `redbMqtt.overrideTopic` | the route only | yes: the topic instead of the endpoint's |
+| `redbMqtt.qos`, `redbMqtt.retain` | the consumer (received message), the producer (its publish) | no |
+| `redbMqtt.overrideQos` (0, 1 or 2), `redbMqtt.overrideRetain` (true or false), typed or as text | the route only | yes: QoS and retain flag instead of the endpoint's |
+| `redbMqtt.contentType`, `redbMqtt.responseTopic`, `redbMqtt.correlationData`, `redbMqtt.messageExpiryInterval` | the consumer | yes, passed through: the MQTT 5 properties of the publish |
+| `redbMqtt.userProperties` | the consumer | yes, passed through: MQTT 5 user properties |
+| `redbMqtt.broker`, `redbMqtt.clientId` | the consumer, the producer | no |
+
+The topic a publish goes to is the endpoint's (an expression such as `sensors/${header.room}` included), or
+`redbMqtt.overrideTopic` when the route set it. `redbMqtt.topic` only tells where the last message came from or went,
+so two publishes in one route each reach their own endpoint, and a received message republished to a fixed topic goes
+there, not back to the topic it came from.
+
+QoS and the retain flag work the same way: the endpoint's (`qos`, `qosExpression`, `retain`), or
+`redbMqtt.overrideQos` / `redbMqtt.overrideRetain` when the route set them. A retained message received and
+republished is not retained again, and goes out with the endpoint's QoS, not the QoS it arrived with.
+
+The MQTT 5 properties are the exception: a message received and republished keeps its content type, response topic,
+correlation data, expiry interval and user properties, so request/response and metadata survive a hop. A route that
+does not want them on the publish removes those headers first.
+
 ### Concurrent processing
 
 `.ConcurrentConsumers(n)` (default `1` = serial) processes up to `n` received messages in parallel on a
