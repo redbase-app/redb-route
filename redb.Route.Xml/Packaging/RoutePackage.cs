@@ -93,19 +93,53 @@ public static class RoutePackage
     /// endpoint's parameters against its connector: a name a strict connector does not know
     /// (<see cref="CatalogComponent.Lenient"/> false) is an error here, in the engine's own words,
     /// instead of a refusal when the route starts.
+    /// <paramref name="dependencies"/> — the manifest names of the packages this one needs opened first (a carrier of
+    /// shared companion DLLs) — go into <c>manifest.json</c> as written; only their shape is checked here, since the
+    /// packages they name are on the worker, not in this project.
     /// </summary>
     public static PackageResult Check(string projectDir, string name, string version,
         Func<string, Type?>? typeResolver = null,
         IReadOnlyList<IXmlElementContribution>? extensions = null,
-        IReadOnlyList<CatalogComponent>? catalog = null)
+        IReadOnlyList<CatalogComponent>? catalog = null,
+        IReadOnlyList<string>? dependencies = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectDir);
         var findings = new List<PackageFinding>();
         var artifacts = CollectArtifacts(projectDir, findings);
         CheckPackageConfigName(projectDir, name, findings);
+        CheckDependencies(name, dependencies ?? [], findings);
         var requiredKeys = RunChecks(projectDir, artifacts, findings, typeResolver, extensions, catalog);
-        var manifest = BuildManifest(projectDir, name, version, artifacts, requiredKeys);
+        var manifest = BuildManifest(projectDir, name, version, artifacts, requiredKeys)
+            with { Dependencies = [.. dependencies ?? []] };
         return new PackageResult(manifest, findings);
+    }
+
+    /// <summary>
+    /// A dependency is another package's manifest name: not blank, not a file (<c>carrier.tpkg</c>, a path), not this
+    /// package, and listed once. Names compare ignoring case, as the worker matches them.
+    /// </summary>
+    private static void CheckDependencies(string name, IReadOnlyList<string> dependencies, List<PackageFinding> findings)
+    {
+        const string where = "--depends";
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var dependency in dependencies)
+        {
+            if (string.IsNullOrWhiteSpace(dependency) || dependency.Trim() != dependency)
+                findings.Add(new PackageFinding(true, where,
+                    $"'{dependency}' is not a package name: a dependency names another package's manifest Name, without spaces around it."));
+            else if (dependency.StartsWith('-'))
+                findings.Add(new PackageFinding(true, where,
+                    $"'{dependency}' is an option, not a package name: --depends needs the name of the package after it."));
+            else if (dependency.IndexOfAny(['/', '\\']) >= 0
+                     || dependency.EndsWith(".tpkg", StringComparison.OrdinalIgnoreCase)
+                     || dependency.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                findings.Add(new PackageFinding(true, where,
+                    $"'{dependency}' is a file; a dependency names the other package by its manifest Name (the --name it was packed with)."));
+            else if (string.Equals(dependency, name, StringComparison.OrdinalIgnoreCase))
+                findings.Add(new PackageFinding(true, where, $"the package '{name}' cannot depend on itself."));
+            else if (!seen.Add(dependency))
+                findings.Add(new PackageFinding(true, where, $"'{dependency}' is listed more than once."));
+        }
     }
 
     /// <summary>
@@ -116,9 +150,10 @@ public static class RoutePackage
     public static PackageResult Build(string projectDir, string name, string version, string outDir,
         IReadOnlyList<string>? entryPoints = null, Func<string, Type?>? typeResolver = null,
         IReadOnlyList<IXmlElementContribution>? extensions = null,
-        IReadOnlyList<CatalogComponent>? catalog = null)
+        IReadOnlyList<CatalogComponent>? catalog = null,
+        IReadOnlyList<string>? dependencies = null)
     {
-        var result = Check(projectDir, name, version, typeResolver, extensions, catalog);
+        var result = Check(projectDir, name, version, typeResolver, extensions, catalog, dependencies);
         if (result.Errors.Any())
             return result;
 

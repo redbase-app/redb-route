@@ -133,6 +133,66 @@ public class RoutePackagingTests : IDisposable
             .Should().Equal("Orders.dll");
     }
 
+    /// <summary>
+    /// --depends writes the manifest Dependencies: the worker opens the named packages (a carrier of shared companion
+    /// DLLs) before this one. The tool had no way to write them, so a pure XML package could not declare its carrier.
+    /// </summary>
+    [Fact]
+    public void Dependencies_AreWrittenToTheManifest_AsGiven()
+    {
+        var dir = NewProject("Orders", "orders");
+        var outDir = Path.Combine(_root, "out");
+
+        var result = RoutePackage.Build(dir, "orders", "1.0.0", outDir, dependencies: ["shared-beans", "Billing"]);
+
+        result.Errors.Should().BeEmpty();
+        result.Manifest.Dependencies.Should().Equal("shared-beans", "Billing");
+        using var zip = ZipFile.OpenRead(Path.Combine(outDir, "orders-1.0.0.tpkg"));
+        using var manifest = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
+        manifest.RootElement.GetProperty("Dependencies").EnumerateArray().Select(e => e.GetString())
+            .Should().Equal("shared-beans", "Billing");
+    }
+
+    [Fact]
+    public void Without_dependencies_the_manifest_lists_none()
+    {
+        var dir = NewProject("Orders", "orders");
+
+        var result = RoutePackage.Check(dir, "orders", "1.0.0");
+
+        result.Errors.Should().BeEmpty();
+        result.Manifest.Dependencies.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("", "not a package name")]
+    [InlineData(" billing", "not a package name")]
+    [InlineData("--bin", "is an option")]
+    [InlineData("carrier.tpkg", "is a file")]
+    [InlineData("pkg/carrier", "is a file")]
+    [InlineData("Shared.Beans.dll", "is a file")]
+    [InlineData("ORDERS", "cannot depend on itself")]
+    public void A_dependency_of_the_wrong_shape_is_an_error(string dependency, string message)
+    {
+        var dir = NewProject("Orders", "orders");
+
+        var result = RoutePackage.Check(dir, "orders", "1.0.0", dependencies: [dependency]);
+
+        result.Errors.Should().ContainSingle(e => e.File == "--depends").Which.Message.Should().Contain(message);
+    }
+
+    [Fact]
+    public void A_dependency_listed_twice_is_an_error_and_refuses_the_build()
+    {
+        var dir = NewProject("Orders", "orders");
+        var outDir = Path.Combine(_root, "out");
+
+        var result = RoutePackage.Build(dir, "orders", "1.0.0", outDir, dependencies: ["billing", "Billing"]);
+
+        result.Errors.Should().ContainSingle(e => e.File == "--depends").Which.Message.Should().Contain("more than once");
+        File.Exists(Path.Combine(outDir, "orders-1.0.0.tpkg")).Should().BeFalse();
+    }
+
     [Fact]
     public void ConfigOfAnotherName_IsAWarning_NamingBothFiles()
     {

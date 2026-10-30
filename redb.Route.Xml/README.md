@@ -541,8 +541,8 @@ of the runtime):
 | Command | What it does |
 |---|---|
 | `new Orders --context orders` | scaffolds a route project: an ordinary `.csproj`, `context.xml`, `routes/`, `resources/`, layered `config/`, the generated XSD wired into `.vscode` |
-| `pack . --version 1.0.0 [--bin bin/Debug/net9.0] [--entry bin/Debug/net9.0/Orders.dll]` | runs the checks, then builds the package layout (`manifest.json`, config, artifacts, resources) and a `.tpkg` zip; `--entry` (repeatable) adds a DLL as the package's entry point |
-| `check .` | the same gate for CI — findings only |
+| `pack . --version 1.0.0 [--bin bin/Debug/net9.0] [--entry bin/Debug/net9.0/Orders.dll] [--depends shared-beans]` | runs the checks, then builds the package layout (`manifest.json`, config, artifacts, resources) and a `.tpkg` zip; `--entry` (repeatable) adds a DLL as the package's entry point; `--depends` (repeatable) names a package the worker opens before this one |
+| `check . [--depends shared-beans]` | the same gate for CI — findings only |
 | `catalog <binDir> --out dir` | builds the component catalog + catalog-aware XSD from built connector assemblies |
 | `csharp routes/x.route.xml --namespace My.Routes` | fluent C# (readable, or `--style machine` with `#line` mapping diagnostics back to the XML) |
 | `mermaid routes/x.route.xml` | a flowchart from the same parse |
@@ -570,6 +570,12 @@ MyModule"/>`) passes its build output: `--entry "$(TargetPath)"` in the build ta
 root and named in `manifest.json` by its file name; Tsak loads it into the package's own load context, where the markup's
 bean types are looked up first. The route-xml templates of `redb.Templates` do this when the project sets
 `<RoutePackageIncludeAssembly>true</RoutePackageIncludeAssembly>`.
+
+A package whose markup uses types another package ships (a carrier of shared companion DLLs) names that package with
+`--depends <name>`, the manifest `Name` the carrier was packed with. The names go into `manifest.json` `Dependencies`, and
+the Tsak worker opens the carrier first, at startup and on hot reload. The gate checks only the shape of each name: not
+blank, not a file or a path, not the package itself, listed once. Whether the carrier is deployed is the worker's
+business, so `check` does not look for it.
 
 What the gate **warns** about, leaving the decision to the author: a step that never runs
 (anything after `<stop/>`, `<rollbackAll/>` or `<throwException/>` in the same list), an

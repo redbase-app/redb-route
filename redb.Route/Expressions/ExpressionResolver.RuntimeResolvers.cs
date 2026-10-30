@@ -382,8 +382,7 @@ public static partial class ExpressionResolver
                 }
                 
                 // Get property info
-                var property = current.GetType().GetProperty(part, 
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+                var property = FindProperty(current.GetType(), part);
                 
                 if (property != null)
                 {
@@ -413,8 +412,7 @@ public static partial class ExpressionResolver
                 }
                 
                 // Try to find a field
-                var field = current.GetType().GetField(part, 
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+                var field = FindField(current.GetType(), part);
                 
                 if (field != null)
                 {
@@ -458,7 +456,7 @@ public static partial class ExpressionResolver
                 DebugLog($"Failed to find property, field or indexer '{part}' in type {current.GetType().Name}");
                 return null;
             }
-            catch (Exception ex) when (ex is not ExpressionSandboxViolationException)
+            catch (Exception ex) when (ex is not ExpressionSandboxViolationException and not ExpressionEvaluationException)
             {
                 DebugLog($"Error resolving path part '{part}': {ex.Message}");
                 return null;
@@ -495,7 +493,7 @@ public static partial class ExpressionResolver
                 else
                 {
                     // Access object's property
-                    var property = current.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                    var property = FindProperty(current.GetType(), propertyName);
                     if (property != null)
                     {
                         targetObject = property.GetValue(current);
@@ -503,7 +501,7 @@ public static partial class ExpressionResolver
                     else
                     {
                         // Same rule as the plain member step: a public field is a member too.
-                        var field = current.GetType().GetField(propertyName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                        var field = FindField(current.GetType(), propertyName);
                         if (field == null)
                         {
                             DebugLog($"Member '{propertyName}' not found");
@@ -546,7 +544,7 @@ public static partial class ExpressionResolver
 
         // Regular property access
         DebugLog($"Looking for property '{part}' in type {current.GetType().Name}");
-        var normalProperty = current.GetType().GetProperty(part, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+        var normalProperty = FindProperty(current.GetType(), part);
         if (normalProperty != null)
         {
             var value = normalProperty.GetValue(current);
@@ -556,7 +554,7 @@ public static partial class ExpressionResolver
 
         // A public field is a member like any other: header.x.Field, property.x.Field and
         // body.Field must all read it. Until 2026-08-29 only one of the three paths did.
-        var normalField = current.GetType().GetField(part, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+        var normalField = FindField(current.GetType(), part);
         if (normalField != null)
         {
             var value = normalField.GetValue(current);

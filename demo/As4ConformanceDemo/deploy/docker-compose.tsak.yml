@@ -44,6 +44,11 @@ services:
       - Tsak__Contexts__as4-conformance__Override__TestDriver__PartyId=${AS4CT_TESTDRIVER_PARTY:-test_driver}
       - Tsak__Contexts__as4-conformance__Override__TestDriver__ControllerPartyId=${AS4CT_TESTDRIVER_CONTROLLER_PARTY:-test_driver_sut_controller_domain}
       - Tsak__Contexts__as4-conformance__Override__TestDriver__Certificate=/app/keys/${AS4CT_TESTDRIVER_CERT_FILE:?AS4CT_TESTDRIVER_CERT_FILE required}
+      # Optional, full paths in the container (empty = not set): the command channel's certificate, the authorities
+      # a path token must chain to, and the authorities above the SUT certificate (";" between files).
+      - Tsak__Contexts__as4-conformance__Override__TestDriver__ControllerCertificate=${AS4CT_TESTDRIVER_CONTROLLER_CERT:-}
+      - Tsak__Contexts__as4-conformance__Override__TestDriver__TrustAnchors=${AS4CT_TESTDRIVER_TRUST_ANCHORS:-}
+      - Tsak__Contexts__as4-conformance__Override__Sut__Chain=${AS4CT_SUT_CHAIN:-}
       - Tsak__Contexts__as4-conformance__Override__Sut__PartyId=${AS4CT_SUT_PARTY:-system_under_test}
       - Tsak__Contexts__as4-conformance__Override__Sut__ControllerPartyId=${AS4CT_CONTROLLER_PARTY:-sut_controller_domain}
       - Tsak__Contexts__as4-conformance__Override__Sut__Pfx=/app/keys/${AS4CT_SUT_PFX_FILE:?AS4CT_SUT_PFX_FILE required}

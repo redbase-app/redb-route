@@ -65,6 +65,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Pending changes live in `changelog/unreleased/` until the release; `pwsh scripts/changelog.ps1 -Preview` shows them.
 
+## [4.5.1] — 2026-10-30
+
+### Added
+
+- **`redb-route-xml pack --depends <package>` writes the manifest `Dependencies`.** A package that uses types of a carrier
+  package names it (repeatable, by the carrier's manifest name), and the Tsak worker opens the carrier first. `check`
+  takes the same option and refuses a blank, file-like, self or repeated name. Packages: `redb.Route.Xml.CodeGen`.
+
+### Fixed
+
+- **`${body.Id}` reads a redb object.** A member name in an expression matched case-insensitively, so `Id` and the
+  JSON-named `id` of a `RedbObject<T>` body failed with "Ambiguous match found". The exact case now wins; a name that
+  fits several members only when case is ignored fails naming them. Packages: `redb.Route`.
+
 ## [4.5.0] — 2026-10-29
 
 ### Breaking

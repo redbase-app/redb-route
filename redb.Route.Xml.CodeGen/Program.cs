@@ -17,8 +17,8 @@ if (args.Length == 0)
 {
     Console.Error.WriteLine("usage: redb-route-xml new|pack|check|csharp|mermaid|xsd … " +
                             "(new <Name> [--context name] [--dir parent]; " +
-                            "pack <projectDir> --version 1.0.0 [--name n] [--out dir] [--entry dll]; " +
-                            "check <projectDir> [--name n])");
+                            "pack <projectDir> --version 1.0.0 [--name n] [--out dir] [--entry dll] [--depends package]; " +
+                            "check <projectDir> [--name n] [--depends package])");
     return 2;
 }
 
@@ -177,6 +177,8 @@ try
                 ?? throw new ArgumentException($"{command} needs the project directory."));
             var name = Option("--name") ?? InferPackageName(projectDir);
             var version = Option("--version") ?? "0.0.0";
+            // --depends <package> (repeatable): the manifest Dependencies, the packages the worker opens before this one.
+            var dependencies = args.Where((a, i) => i > 0 && args[i - 1] == "--depends").ToList();
             // --bin <dir>: the built output — turns the bean checks deep (types, properties,
             // method= targets are verified against the real assemblies) and brings the Р21
             // markup contributions those assemblies carry (<cache>, <redbQuery>, …) into the
@@ -195,10 +197,10 @@ try
             if (catalog is not null)
                 Console.Error.WriteLine($"--bin connectors: {catalog.Count} ({string.Join(", ", catalog.Select(c => c.Scheme + (c.Lenient ? "" : "*")))}; * strict)");
             var result = command == "check"
-                ? redb.Route.Xml.Packaging.RoutePackage.Check(projectDir, name, version, resolver, extensions, catalog)
+                ? redb.Route.Xml.Packaging.RoutePackage.Check(projectDir, name, version, resolver, extensions, catalog, dependencies)
                 : redb.Route.Xml.Packaging.RoutePackage.Build(projectDir, name, version,
                     outDir ?? Path.Combine(projectDir, "pkg"),
-                    args.Where((a, i) => i > 0 && args[i - 1] == "--entry").ToList(), resolver, extensions, catalog);
+                    args.Where((a, i) => i > 0 && args[i - 1] == "--entry").ToList(), resolver, extensions, catalog, dependencies);
             foreach (var finding in result.Findings)
                 (finding.IsError ? Console.Error : Console.Out).WriteLine(finding.ToString());
             if (result.Errors.Any())
