@@ -157,7 +157,7 @@ public sealed class XmlContextLoader
             {
                 var provider = _context.GetServiceProvider();
                 var component = (IComponent)(provider is not null
-                    ? ActivatorUtilities.CreateInstance(provider, type)
+                    ? ActivatorUtilities.CreateInstance(CollectibleTypeServiceProvider.For(provider), type)
                     : Activator.CreateInstance(type)
                       ?? throw new InvalidOperationException($"Activator returned null for {type}."));
                 _context.AddComponent(component);

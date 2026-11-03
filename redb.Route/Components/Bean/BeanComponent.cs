@@ -86,7 +86,7 @@ public sealed class BeanComponent : ComponentBase
                 "work through exported types only — make the class public.");
 
         var provider = Context?.GetServiceProvider() ?? EmptyServiceProvider.Instance;
-        var instance = ActivatorUtilities.CreateInstance(provider, type);
+        var instance = ActivatorUtilities.CreateInstance(CollectibleTypeServiceProvider.For(provider), type);
 
         BindProperties(instance, type, properties);
         return instance;

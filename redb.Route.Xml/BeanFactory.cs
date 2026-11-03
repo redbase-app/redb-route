@@ -46,12 +46,15 @@ internal static class BeanFactory
             // parameter's type — no guessing among overloads, no DI-supplied parameters.
             return Invoke(Constructor(type, args.Count, argumentTypes), args, "constructorArg", resolve)!;
         }
+        // A module's bean asks for services closed over its own types (ILogger<TheBean>): they never reach the host's
+        // container, which would keep them, and with them the module's load context, for good.
+        var services = CollectibleTypeServiceProvider.For(provider);
         if (args.Count == 0)
-            return ActivatorUtilities.CreateInstance(provider, type);
+            return ActivatorUtilities.CreateInstance(services, type);
         var built = new object[args.Count];
         for (var i = 0; i < args.Count; i++)
             built[i] = Materialize(args[i], $"constructorArg {i + 1}", resolve);
-        return ActivatorUtilities.CreateInstance(provider, type, built);
+        return ActivatorUtilities.CreateInstance(services, type, built);
     }
 
     /// <summary>
