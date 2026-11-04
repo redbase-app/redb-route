@@ -67,10 +67,10 @@ public static class RoutePackage
     public const string ContextFile = "context.xml";
 
     /// <summary>
-    /// The directory a route's <c>file=</c> references resolve against outside a package - the
-    /// tool's <c>csharp</c> and <c>mermaid</c>. A route under <c>{project}/routes/</c> reads
-    /// <c>{project}/resources/</c>, where the gate checks and the Tsak loader looks; any other
-    /// file reads its own directory.
+    /// The first directory a route's <c>file=</c> references are looked up in outside a package. A
+    /// route under <c>{project}/routes/</c> reads <c>{project}/resources/</c>; any other file reads its
+    /// own directory. The full search, with the project root after it, is
+    /// <see cref="ResourceCandidatesFor"/>.
     /// </summary>
     public static string ResourceRootFor(string routeFile)
     {
@@ -82,6 +82,31 @@ public static class RoutePackage
         var resources = Path.Combine(project, ResourcesDir);
         return Directory.Exists(resources) ? resources : project;
     }
+
+    /// <summary>
+    /// Where a route's <c>file=</c> reference is read from outside a package, in order. A route under
+    /// <c>{project}/routes/</c> reads <c>{project}/resources/{reference}</c> (<c>file="order.xsd"</c>), then
+    /// <c>{project}/{reference}</c> (<c>file="resources/order.xsd"</c>): the rule the packaging checks hold a
+    /// project to and the Tsak loader applies to a package. Any other route file reads its own directory; a
+    /// rooted reference is itself.
+    /// </summary>
+    public static IReadOnlyList<string> ResourceCandidatesFor(string routeFile, string reference)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(routeFile);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reference);
+        if (Path.IsPathRooted(reference))
+            return [reference];
+        var directory = Path.GetDirectoryName(Path.GetFullPath(routeFile))!;
+        return string.Equals(Path.GetFileName(directory), RoutesDir, StringComparison.OrdinalIgnoreCase)
+            ? ProjectResourceCandidates(Path.GetDirectoryName(directory)!, reference)
+            : [Path.GetFullPath(Path.Combine(directory, reference))];
+    }
+
+    private static string[] ProjectResourceCandidates(string projectDir, string reference) =>
+    [
+        Path.GetFullPath(Path.Combine(projectDir, ResourcesDir, reference)),
+        Path.GetFullPath(Path.Combine(projectDir, reference)),
+    ];
 
     /// <summary>
     /// Runs the packaging checks for a project directory without producing anything — the CI
@@ -554,9 +579,7 @@ public static class RoutePackage
             || value.Contains("{{", StringComparison.Ordinal)
             || value.Contains("${", StringComparison.Ordinal))
             return;
-        var resource = Path.Combine(projectDir, ResourcesDir, value);
-        var direct = Path.Combine(projectDir, value);
-        if (!File.Exists(resource) && !File.Exists(direct))
+        if (!ProjectResourceCandidates(projectDir, value).Any(File.Exists))
         {
             var line = (IXmlLineInfo)attribute;
             findings.Add(new PackageFinding(true, $"{file}({line.LineNumber},{line.LinePosition})",

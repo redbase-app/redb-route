@@ -1,10 +1,12 @@
 /**
  * Registry references (`#name`) in attribute values: where the cursor sits on one, and which
- * names the document declares with `<bean name>`. The positions are the ones the pack gate
- * reads as references (RoutePackage.RegistryReferences): the whole value (`dataSource="#db"`),
+ * names the document and its module's `context.xml` declare with `<bean name>`. The positions are
+ * the ones the pack gate reads as references (RoutePackage.RegistryReferences): the whole value (`dataSource="#db"`),
  * the path right after the scheme (`bean:#x`) and a URI option value (`?headerFilterStrategy=#f`).
  * A '#' anywhere else is text, so the sql parameter `:#name` is left alone.
  */
+
+import { sniff } from "./sniff";
 
 const NAME = /[A-Za-z0-9_.\-]*$/;
 
@@ -74,4 +76,25 @@ export function beanNames(text: string): string[] {
             names.push(value);
     }
     return names;
+}
+
+/** A bean name `#` offers, and whether it comes from the module's `context.xml`. */
+export interface BeanCandidate {
+    name: string;
+    fromContext: boolean;
+}
+
+/**
+ * The names `#` offers in a document: its own `<bean name>` first, then those of the module's
+ * `context.xml`, each name once. The context text counts only when it is a redb context document
+ * (root `<context>` in the redb namespace); any other file at that path adds nothing.
+ */
+export function beanCandidates(documentText: string, contextText: string | null): BeanCandidate[] {
+    const own = beanNames(documentText);
+    const candidates: BeanCandidate[] = own.map(name => ({ name, fromContext: false }));
+    if (contextText !== null && sniff(contextText)?.kind === "context")
+        for (const name of beanNames(contextText))
+            if (!own.includes(name))
+                candidates.push({ name, fromContext: true });
+    return candidates;
 }

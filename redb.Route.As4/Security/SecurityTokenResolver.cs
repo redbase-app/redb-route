@@ -45,11 +45,15 @@ internal static class SecurityTokenResolver
             if (issuer is null || serial is null)
                 throw new CryptographicException("ds:X509IssuerSerial lacks the issuer name or the serial number.");
             // The serial is decimal in XML Signature; the issuer is compared as a parsed name, because the
-            // same name can be encoded with different ASN.1 string types.
-            var serialNumber = System.Numerics.BigInteger.Parse(serial, System.Globalization.CultureInfo.InvariantCulture);
-            var issuerName = new X500DistinguishedName(issuer).Name;
+            // same name can be encoded with different ASN.1 string types. Both sides are rendered from their
+            // encoding: X500DistinguishedName.Name of a parsed string returns that string as given, so
+            // "CN=a,O=b" (RFC 2253, as WSS4J and Domibus write it) would never equal "CN=a, O=b".
+            if (!System.Numerics.BigInteger.TryParse(serial, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var serialNumber))
+                throw new CryptographicException("ds:X509SerialNumber is not a decimal number.");
+            var issuerName = new X500DistinguishedName(issuer).Decode(X500DistinguishedNameFlags.None);
             return candidates.FirstOrDefault(c =>
-                string.Equals(c.IssuerName.Name, issuerName, StringComparison.OrdinalIgnoreCase)
+                string.Equals(c.IssuerName.Decode(X500DistinguishedNameFlags.None), issuerName, StringComparison.OrdinalIgnoreCase)
                 && new System.Numerics.BigInteger(c.GetSerialNumber(), isUnsigned: true, isBigEndian: false) == serialNumber);
         }
 
@@ -57,7 +61,7 @@ internal static class SecurityTokenResolver
         {
             if (keyIdentifier.GetAttribute("ValueType") != WsSecurityNames.X509SubjectKeyIdentifier)
                 throw new CryptographicException($"wsse:KeyIdentifier of type '{keyIdentifier.GetAttribute("ValueType")}' is not supported.");
-            var ski = Convert.FromBase64String(keyIdentifier.InnerText.Trim());
+            var ski = Base64(keyIdentifier);
             return candidates.FirstOrDefault(c =>
                 c.Extensions.OfType<X509SubjectKeyIdentifierExtension>().FirstOrDefault() is { } ext
                 && Convert.FromHexString(ext.SubjectKeyIdentifier!).AsSpan().SequenceEqual(ski));
@@ -82,7 +86,7 @@ internal static class SecurityTokenResolver
         var token = FindById(envelope, uri[1..], "BinarySecurityToken", WsSecurityNames.Wsse)
             ?? throw new CryptographicException($"No wsse:BinarySecurityToken carries the id '{uri[1..]}'.");
         return token.GetAttribute("ValueType") == PkiPath.ValueType
-            ? PkiPath.Decode(Convert.FromBase64String(token.InnerText.Trim()))
+            ? PkiPath.Decode(Base64(token))
             : null;
     }
 
@@ -95,18 +99,74 @@ internal static class SecurityTokenResolver
         var valueType = token.GetAttribute("ValueType");
         if (valueType == PkiPath.ValueType)
         {
-            var path = PkiPath.Decode(Convert.FromBase64String(token.InnerText.Trim()));
+            var path = PkiPath.Decode(Base64(token));
             PkiPath.Release(path, keep: path[^1]);
             return path[^1];
         }
         if (valueType != WsSecurityNames.X509V3)
             throw new CryptographicException($"wsse:BinarySecurityToken of type '{valueType}' is not an X.509 v3 certificate.");
-        var der = Convert.FromBase64String(token.InnerText.Trim());
+        var der = Base64(token);
 #if NET9_0_OR_GREATER
         return X509CertificateLoader.LoadCertificate(der);
 #else
         return new X509Certificate2(der);
 #endif
+    }
+
+    /// <summary>
+    /// Whether the certificate <paramref name="keyInfo"/> references is one this node trusts for another reason than
+    /// the sender's agreement: one of <paramref name="trusted"/> itself, or issued by one of them that is a
+    /// certification authority.
+    /// Only chooses the ebMS code of a refusal; nothing is accepted on it, so a reference by issuer and serial number
+    /// is judged by its issuer name.
+    /// </summary>
+    public static bool IsTrustedElsewhere(XmlElement keyInfo, XmlDocument envelope, IReadOnlyCollection<X509Certificate2> trusted)
+    {
+        try
+        {
+            if (Resolve(keyInfo, envelope, trusted) is { } found && trusted.Any(c => c.Thumbprint == found.Thumbprint))
+                return true;
+            var issuer = ReferencedIssuer(keyInfo, envelope);
+            return issuer is not null && trusted.Any(c =>
+                c.Extensions.OfType<X509BasicConstraintsExtension>().Any(b => b.CertificateAuthority)
+                && string.Equals(c.SubjectName.Decode(X500DistinguishedNameFlags.None), issuer, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (CryptographicException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The issuer of the referenced certificate, rendered from its encoding; null for a key identifier.</summary>
+    private static string? ReferencedIssuer(XmlElement keyInfo, XmlDocument envelope)
+    {
+        if (FirstChild(keyInfo, "SecurityTokenReference", WsSecurityNames.Wsse) is not { } str)
+            return null;
+        if (FirstChild(str, "X509Data", WsSecurityNames.Ds) is { } x509Data
+            && FirstChild(x509Data, "X509IssuerSerial", WsSecurityNames.Ds) is { } issuerSerial
+            && FirstChild(issuerSerial, "X509IssuerName", WsSecurityNames.Ds)?.InnerText.Trim() is { Length: > 0 } issuer)
+            return new X500DistinguishedName(issuer).Decode(X500DistinguishedNameFlags.None);
+        if (FirstChild(str, "Reference", WsSecurityNames.Wsse) is { } reference
+            && reference.GetAttribute("URI") is ['#', .. var id]
+            && FindById(envelope, id, "BinarySecurityToken", WsSecurityNames.Wsse) is { } token)
+            return FromBinarySecurityToken(token).IssuerName.Decode(X500DistinguishedNameFlags.None);
+        return null;
+    }
+
+    /// <summary>
+    /// The base64 content of a security element. Malformed base64 is a security failure of the message, refused
+    /// like any other (<see cref="CryptographicException"/>), not an unexpected failure of the receiver.
+    /// </summary>
+    public static byte[] Base64(XmlElement element)
+    {
+        try
+        {
+            return Convert.FromBase64String(element.InnerText.Trim());
+        }
+        catch (FormatException)
+        {
+            throw new CryptographicException($"{element.Name} is not valid base64.");
+        }
     }
 
     /// <summary>The element named <paramref name="localName"/> in <paramref name="ns"/> with <c>wsu:Id</c> (or <c>Id</c>) <paramref name="id"/>.</summary>

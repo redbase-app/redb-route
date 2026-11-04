@@ -129,6 +129,43 @@ public class As4SecurityRoundTripTests
         act.Should().Throw<CryptographicException>().WithMessage("The signature does not verify.");
     }
 
+    [Theory]
+    // The signature over SignedInfo is checked first, and a DigestValue is part of SignedInfo.
+    [InlineData("SignatureValue", "ds:SignatureValue is not valid base64.")]
+    [InlineData("DigestValue", "The signature does not verify.")]
+    public void Verify_ValueThatIsNotBase64_IsRefusedAsASecurityFailure(string element, string reason)
+    {
+        // A security failure (EBMS:0101), not an unexpected failure of the receiver (AS4_CP_TA66).
+        var received = Transfer(Build(As4KeyReference.BinarySecurityToken, timestamp: false));
+        As4SecurityEngine.Decrypt(received, [Receiver]);
+        ((XmlElement)received.Envelope.GetElementsByTagName(element, WsSecurityNames.Ds)[0]!).InnerText = "not*base64!";
+
+        var act = () => As4SecurityEngine.Verify(received, [PublicOnly(Sender)], Tolerance, DateTimeOffset.UtcNow);
+        act.Should().Throw<CryptographicException>().WithMessage(reason);
+    }
+
+    [Fact]
+    public void Verify_SignatureValueThatIsNotBase64_IsAMalformedSignatureValue()
+    {
+        // AS4_CP_TA66: answered with EBMS:0102; a value that decodes and does not verify stays EBMS:0101.
+        var received = Transfer(Build(As4KeyReference.BinarySecurityToken, timestamp: false));
+        As4SecurityEngine.Decrypt(received, [Receiver]);
+        ((XmlElement)received.Envelope.GetElementsByTagName("SignatureValue", WsSecurityNames.Ds)[0]!).InnerText = "not*base64!";
+
+        var act = () => As4SecurityEngine.Verify(received, [PublicOnly(Sender)], Tolerance, DateTimeOffset.UtcNow);
+        act.Should().Throw<MalformedSignatureValueException>();
+    }
+
+    [Fact]
+    public void Decrypt_CipherValueThatIsNotBase64_IsRefusedAsASecurityFailure()
+    {
+        var received = Transfer(Build(As4KeyReference.BinarySecurityToken, timestamp: false));
+        ((XmlElement)received.Envelope.GetElementsByTagName("CipherValue", WsSecurityNames.Xenc)[0]!).InnerText = "not*base64!";
+
+        var act = () => As4SecurityEngine.Decrypt(received, [Receiver]);
+        act.Should().Throw<CryptographicException>().WithMessage("xenc:CipherValue is not valid base64.");
+    }
+
     [Fact]
     public void Verify_SignedByAStranger_IsRefused()
     {
@@ -137,6 +174,68 @@ public class As4SecurityRoundTripTests
 
         var act = () => As4SecurityEngine.Verify(received, [PublicOnly(Stranger)], Tolerance, DateTimeOffset.UtcNow);
         act.Should().Throw<CryptographicException>().WithMessage("*not one of the partner's*");
+    }
+
+    [Theory]
+    [InlineData(As4KeyReference.BinarySecurityToken)]
+    [InlineData(As4KeyReference.IssuerSerial)]
+    public void Verify_SignedWithTheCertificateOfAnotherKnownParty_IsNotAuthorized(As4KeyReference form)
+    {
+        // AS4_CP_TA78: a certificate the node trusts, but not the sender's: EBMS:0004, not 0101.
+        var received = Transfer(Build(form, timestamp: false));
+        As4SecurityEngine.Decrypt(received, [Receiver]);
+
+        var act = () => As4SecurityEngine.Verify(received, [PublicOnly(Stranger)], Tolerance, DateTimeOffset.UtcNow,
+            trustedElsewhere: [PublicOnly(Sender)]);
+        act.Should().Throw<SignerNotAuthorizedException>();
+    }
+
+    [Theory]
+    [InlineData(As4KeyReference.BinarySecurityToken)]
+    [InlineData(As4KeyReference.IssuerSerial)]
+    public void Verify_SignedWithACertificateOfATrustedAuthority_IsNotAuthorized(As4KeyReference form)
+    {
+        // The certificate itself is known nowhere; with an issuer-serial reference only its issuer is seen.
+        var (authority, otherParty) = IssuedByAnAuthority();
+        var received = Transfer(Build(form, timestamp: false, otherParty));
+        As4SecurityEngine.Decrypt(received, [Receiver]);
+
+        var act = () => As4SecurityEngine.Verify(received, [PublicOnly(Sender)], Tolerance, DateTimeOffset.UtcNow,
+            trustedElsewhere: [authority]);
+        act.Should().Throw<SignerNotAuthorizedException>();
+    }
+
+    [Theory]
+    [InlineData(As4KeyReference.BinarySecurityToken)]
+    [InlineData(As4KeyReference.IssuerSerial)]
+    public void Verify_AStrangerBesideTrustedAuthorities_StaysAnAuthenticationFailure(As4KeyReference form)
+    {
+        // AS4_CP_TA77: issued by an authority the node does not trust; and a self-signed impostor whose issuer name is
+        // the subject of a trusted certificate that is no authority.
+        var (authority, _) = IssuedByAnAuthority();
+        var impostor = KeyPair(Sender.Subject);
+        var received = Transfer(Build(form, timestamp: false, impostor));
+        As4SecurityEngine.Decrypt(received, [Receiver]);
+
+        var act = () => As4SecurityEngine.Verify(received, [PublicOnly(Stranger)], Tolerance, DateTimeOffset.UtcNow,
+            trustedElsewhere: [authority, PublicOnly(Sender)]);
+        act.Should().Throw<CryptographicException>().WithMessage("*not one of the partner's*")
+            .Which.Should().NotBeOfType<SignerNotAuthorizedException>();
+    }
+
+    [Fact]
+    public void Verify_AttachmentSignedWithAttachmentComplete_IsAnUnsupportedTransform()
+    {
+        // AS4_CP_TA72: a valid signature whose attachment reference uses the transform the profile forbids: EBMS:0102.
+        var received = Transfer(Build(As4KeyReference.BinarySecurityToken, timestamp: false));
+        As4SecurityEngine.Decrypt(received, [Receiver]);
+        var transform = received.Envelope.GetElementsByTagName("Transform", WsSecurityNames.Ds).Cast<XmlElement>()
+            .Single(t => t.GetAttribute("Algorithm") == "http://docs.oasis-open.org/wss/oasis-wss-SwAProfile-1.1#Attachment-Content-Signature-Transform");
+        transform.SetAttribute("Algorithm", "http://docs.oasis-open.org/wss/oasis-wss-SwAProfile-1.1#Attachment-Complete-Signature-Transform");
+        Resign(received.Envelope, Sender);
+
+        var act = () => As4SecurityEngine.Verify(received, [PublicOnly(Sender)], Tolerance, DateTimeOffset.UtcNow);
+        act.Should().Throw<UnsupportedAttachmentTransformException>().WithMessage("*Attachment-Complete*not supported*");
     }
 
     [Theory]
@@ -256,7 +355,35 @@ public class As4SecurityRoundTripTests
     }
 
     private static X509Certificate2 PublicOnly(X509Certificate2 certificate) => new(certificate.Export(X509ContentType.Cert));
+
+    /// <summary>An authority (public part only) and a certificate with its key that it issued to another party.</summary>
+    private static (X509Certificate2 Authority, X509Certificate2 Issued) IssuedByAnAuthority()
+    {
+        using var authorityKey = RSA.Create(2048);
+        var authorityRequest = new CertificateRequest("CN=Trusted Test CA, O=redb test", authorityKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        authorityRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        authorityRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign, true));
+        using var authority = authorityRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(1));
+
+        using var key = RSA.Create(2048);
+        var request = new CertificateRequest("CN=other party, O=redb test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, critical: false));
+        using var issued = request.Create(authority, DateTimeOffset.UtcNow.AddHours(-1), DateTimeOffset.UtcNow.AddMonths(6), [1, 2, 3, 4, 5, 6, 7, 8]);
+        using var withKey = issued.CopyWithPrivateKey(key);
+        return (PublicOnly(authority), new X509Certificate2(withKey.Export(X509ContentType.Pfx), (string?)null, X509KeyStorageFlags.Exportable));
+    }
 #pragma warning restore SYSLIB0057
+
+    /// <summary>Signs SignedInfo again after a test changed it, so that only the change itself is judged.</summary>
+    private static void Resign(XmlDocument envelope, X509Certificate2 signer)
+    {
+        var signedInfo = (XmlElement)envelope.GetElementsByTagName("SignedInfo", WsSecurityNames.Ds)[0]!;
+        var c14nMethod = (XmlElement)signedInfo.GetElementsByTagName("CanonicalizationMethod", WsSecurityNames.Ds)[0]!;
+        var canonical = ExclusiveCanonicalizer.Canonicalize(signedInfo, ExclusiveCanonicalizer.PrefixList(c14nMethod));
+        using var rsa = signer.GetRSAPrivateKey()!;
+        ((XmlElement)envelope.GetElementsByTagName("SignatureValue", WsSecurityNames.Ds)[0]!).InnerText =
+            Convert.ToBase64String(rsa.SignData(canonical, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1));
+    }
 
     private static byte[] Gzip(byte[] data) => As4TestMessages.Gzip(data);
 

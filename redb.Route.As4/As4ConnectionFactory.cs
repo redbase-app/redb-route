@@ -1,5 +1,6 @@
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using redb.Route.Abstractions;
 using redb.Route.As4.Security;
 using redb.Route.Core;
 
@@ -104,6 +105,24 @@ public sealed class As4ConnectionFactory
     /// <summary>The agreements of this node, one per trading partner, told apart by <see cref="As4Partner.Name"/>.</summary>
     public IList<As4Partner> Partners { get; set; } = new List<As4Partner>();
 
+    /// <summary>
+    /// Where the receipts this node sends are kept, so that a duplicate of a received message is answered with the
+    /// very receipt of the original (AS4 profile, reception awareness; eDelivery conformance AS4_CP_TA63). Null keeps
+    /// them in memory, up to <see cref="ReceiptRetention"/> and the newest 100 000; give a shared store (SQL, Redis,
+    /// file) when several workers receive for this node or the receipts must outlive a restart. A duplicate whose
+    /// receipt is no longer kept is answered with a new receipt for the same message.
+    /// </summary>
+    public IClaimCheckRepository? ReceiptStore { get; set; }
+
+    /// <summary>How long a sent receipt is kept for answering duplicates. Default one day.</summary>
+    public TimeSpan ReceiptRetention { get; set; } = TimeSpan.FromDays(1);
+
+    private IClaimCheckRepository? _receipts;
+
+    /// <summary>The store of sent receipts: <see cref="ReceiptStore"/>, or this node's own memory.</summary>
+    internal IClaimCheckRepository Receipts =>
+        ReceiptStore ?? LazyInitializer.EnsureInitialized(ref _receipts, () => new Signals.RecentReceipts(ReceiptRetention, 100_000));
+
     /// <summary>Throws when the node cannot be used; called when an endpoint that names it starts.</summary>
     /// <param name="name">The factory's registry name, for the error text.</param>
     public void Validate(string name)
@@ -114,6 +133,8 @@ public sealed class As4ConnectionFactory
             throw new InvalidOperationException($"{owner}: OurPartyId is required.");
         if (string.IsNullOrWhiteSpace(ExternalHostName))
             throw new InvalidOperationException($"{owner}: ExternalHostName must not be empty.");
+        if (ReceiptRetention <= TimeSpan.Zero)
+            throw new InvalidOperationException($"{owner}: ReceiptRetention must be positive.");
         if (SslProtocols == SslProtocols.None || (SslProtocols & ~(SslProtocols.Tls12 | SslProtocols.Tls13)) != 0)
             throw new InvalidOperationException($"{owner}: SslProtocols '{SslProtocols}' is not allowed; eDelivery AS4 1.16 permits TLS 1.2 and TLS 1.3 only.");
         if (SigningCertificate is not { HasPrivateKey: true })

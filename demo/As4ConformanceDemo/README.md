@@ -109,7 +109,7 @@ arrives through the Override layer, environment variables on the worker of the f
 | `Receive:SutPath`, `Receive:ControllerPath` | `/as4/sut`, `/as4/controller` | Their paths. |
 | `Receive:DuplicateStore` | `memory` | Where the ids of received messages are remembered: `memory` (lost with the process) or `redb` (the worker's redb: a resend is still a duplicate after a restart, and on every node of a cluster). |
 | `Receive:DuplicateWindowDays` | `7` | How long an id is remembered. |
-| `Retry:Count`, `Retry:DelaySeconds` | `5`, `20` | Redeliveries of the retry profile (the guide asks for 5, less than 3 minutes apart). |
+| `Retry:Count`, `Retry:DelaySeconds` | `4`, `20` | Redeliveries of the retry profile: the test driver takes 5 transmissions (the message and 4 redeliveries), less than 3 minutes apart, then expects the Notify. |
 | `Retry:SendTimeoutMs` | `60000` | Milliseconds to wait for the test driver's response. |
 | `PkiPath:Policy` | none | Certificate policy OID required on the leg `bstPkiPathSutC3PolicyFail`; without it that leg is left out. |
 | `ExtraLegs` | none | More legs: `service\|action;service\|action`. |

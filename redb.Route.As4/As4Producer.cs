@@ -326,6 +326,47 @@ internal sealed class As4Producer : ConnectableProducer
     // ── Receipt ──────────────────────────────────────────────────────────────
 
     /// <summary>
+    /// Whether the answer is an <c>eb:SignalMessage</c> about <paramref name="messageId"/> (or about no message) with no
+    /// receipt, error or pull request in it: what is left of a receipt when the receipt is taken out.
+    /// </summary>
+    private static bool IsSignalWithoutReceipt(System.Xml.XmlDocument envelope, string messageId)
+    {
+        var signals = envelope.GetElementsByTagName("SignalMessage", EbmsNamespaces.Eb).OfType<System.Xml.XmlElement>().ToList();
+        return signals.Count > 0 && signals.All(signal =>
+        {
+            var children = signal.ChildNodes.OfType<System.Xml.XmlElement>().Where(c => c.NamespaceURI == EbmsNamespaces.Eb).ToList();
+            if (children.Any(c => c.LocalName is "Receipt" or "Error" or "PullRequest"))
+                return false;
+            var refTo = children.FirstOrDefault(c => c.LocalName == "MessageInfo")?.ChildNodes.OfType<System.Xml.XmlElement>()
+                .FirstOrDefault(c => c.LocalName == "RefToMessageId" && c.NamespaceURI == EbmsNamespaces.Eb)?.InnerText.Trim();
+            return refTo is null || refTo == messageId;
+        });
+    }
+
+    /// <summary>
+    /// The start of a textual answer that is not an ebMS signal (a proxy's or firewall's page often names who refused
+    /// and a support reference), for the error text: at most 160 characters, whitespace collapsed, control characters
+    /// dropped. Empty for a binary answer.
+    /// </summary>
+    private static string AnswerExcerpt(byte[] body, string contentType)
+    {
+        if (!contentType.StartsWith("text/", StringComparison.OrdinalIgnoreCase))
+            return "";
+        var text = System.Text.Encoding.UTF8.GetString(body, 0, Math.Min(body.Length, 4096));
+        var excerpt = new System.Text.StringBuilder(160);
+        var space = false;
+        foreach (var c in text)
+        {
+            if (excerpt.Length >= 160) break;
+            if (char.IsWhiteSpace(c)) { space = excerpt.Length > 0; continue; }
+            if (char.IsControl(c)) continue;
+            if (space) { excerpt.Append(' '); space = false; }
+            excerpt.Append(c);
+        }
+        return excerpt.Length == 0 ? "" : $" ({contentType.Split(';')[0].Trim()}: \"{excerpt}\")";
+    }
+
+    /// <summary>
     /// The verified receipt for <paramref name="messageId"/> in the partner's response, or the exception that
     /// says why there is none: the partner's own error signal, a response without a signal (missing receipt),
     /// or a receipt that does not verify or does not echo what we signed (invalid receipt).
@@ -338,17 +379,25 @@ internal sealed class As4Producer : ConnectableProducer
             throw new As4ReceiptException(As4ErrorCode.MissingReceipt, messageId,
                 $"the partner answered HTTP {(int)response.StatusCode} without a signal.");
 
+        SwaMessage? read = null;
         SwaMessage answer;
         EbmsMessaging messaging;
         try
         {
-            answer = SwaMessage.Read(contentType, body, _options.MaxEnvelopeCharacters);
+            answer = read = SwaMessage.Read(contentType, body, _options.MaxEnvelopeCharacters);
             messaging = MessagingReader.Read(answer.Envelope);
+        }
+        catch (As4ProcessingException e) when (read is not null && IsSignalWithoutReceipt(read.Envelope, messageId))
+        {
+            // A signal about our message that holds neither a receipt nor an error: no receipt came (reception awareness,
+            // EBMS:0301), as the conformance test driver simulates a lost receipt (AS4_CP_TA15).
+            throw new As4ReceiptException(As4ErrorCode.MissingReceipt, messageId,
+                $"the partner's HTTP {(int)response.StatusCode} answer is a signal without a receipt.", e);
         }
         catch (Exception e) when (e is As4ProcessingException or FormatException or System.Xml.XmlException or MimeKit.ParseException)
         {
             throw new As4ReceiptException(As4ErrorCode.InvalidReceipt, messageId,
-                $"the partner's HTTP {(int)response.StatusCode} answer is not an ebMS signal.", e);
+                $"the partner's HTTP {(int)response.StatusCode} answer is not an ebMS signal{AnswerExcerpt(body, contentType)}.", e);
         }
 
         // Signals about our message; an error that names no message at all is about it too — a partner that could not

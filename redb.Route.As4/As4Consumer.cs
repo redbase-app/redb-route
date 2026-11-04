@@ -254,8 +254,8 @@ internal sealed class As4Consumer : IConsumer
             _logger?.LogWarning("AS4 receiver {Path}: message {MessageId} refused with {Code} (ref {Reference}): {Detail}",
                 Path, messageId, e.Code.Code, reference, e.Detail);
             // The partner's message does not hold (security, agreement, profile): a refusal answered by protocol. EBMS:0004
-            // stays an error: it names a failure on this side.
-            if (e.Code == As4ErrorCode.Other)
+            // stays an error: it names a failure on this side, except the impersonation refused with it.
+            if (e.Code == As4ErrorCode.Other && e.InnerException is not SignerNotAuthorizedException)
                 _endpoint.RecordError(e);
             else
                 _endpoint.RecordRefused($"{e.Code.Code} for {messageId}: {e.Detail}");
@@ -292,10 +292,13 @@ internal sealed class As4Consumer : IConsumer
 
             if (!claimed)
             {
-                // Received before: answer with a receipt again — built from the same bytes, so the same non-repudiation
-                // information — and do not deliver it twice. The sender stops resending once it has a receipt.
-                _logger?.LogInformation("AS4 receiver {Path}: message {MessageId} is a duplicate; receipt sent again, not delivered.", Path, messageId);
-                await WriteSignal(http, Responses.Receipt(messageId!, verification.References, host,
+                // Received before: answer with the receipt of the original, the very same signal (AS4_CP_TA63), and do
+                // not deliver it twice. The sender stops resending once it has a receipt. A receipt no longer kept is
+                // built again from the same bytes, so with the same non-repudiation information.
+                var kept = await KeptReceiptAsync(node, partner!, messageId!).ConfigureAwait(false);
+                _logger?.LogInformation("AS4 receiver {Path}: message {MessageId} is a duplicate; {Receipt}, not delivered.",
+                    Path, messageId, kept is null ? "a new receipt sent (the original is no longer kept)" : "its receipt sent again");
+                await WriteSignal(http, kept ?? Responses.Receipt(messageId!, verification.References, host,
                     node.Factory.SigningCertificate!, partner!.KeyReference, partner.TimestampTtl, node.SigningPath)).ConfigureAwait(false);
                 return;
             }
@@ -326,8 +329,10 @@ internal sealed class As4Consumer : IConsumer
             }
 
             await ConfirmClaimAsync(messageId!).ConfigureAwait(false);
-            await WriteSignal(http, Responses.Receipt(messageId!, verification.References, host,
-                node.Factory.SigningCertificate!, partner!.KeyReference, partner.TimestampTtl, node.SigningPath)).ConfigureAwait(false);
+            var receipt = Responses.Receipt(messageId!, verification.References, host,
+                node.Factory.SigningCertificate!, partner!.KeyReference, partner.TimestampTtl, node.SigningPath);
+            await KeepReceiptAsync(node, partner, messageId!, receipt).ConfigureAwait(false);
+            await WriteSignal(http, receipt).ConfigureAwait(false);
         }
         finally
         {
@@ -350,6 +355,54 @@ internal sealed class As4Consumer : IConsumer
             _logger?.LogWarning(e, "AS4 receiver {Path}: confirming duplicate claim for message {MessageId} failed.", Path, messageId);
         }
     }
+
+    /// <summary>
+    /// Keeps the receipt sent for a message, for its duplicates. Under the sending party and the message id, so a
+    /// receipt goes back only to the party it was signed for. The receipt goes out whether or not it was kept.
+    /// </summary>
+    private async Task KeepReceiptAsync(As4Node node, As4Partner partner, string messageId, (string ContentType, byte[] Body) receipt)
+    {
+        try
+        {
+            var contentType = System.Text.Encoding.UTF8.GetBytes(receipt.ContentType);
+            var data = new byte[contentType.Length + 1 + receipt.Body.Length];
+            contentType.CopyTo(data, 0);
+            data[contentType.Length] = (byte)'\n';
+            receipt.Body.CopyTo(data, contentType.Length + 1);
+            await node.Factory.Receipts.Store(ReceiptKey(partner, messageId), data, node.Factory.ReceiptRetention, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _logger?.LogWarning(e, "AS4 receiver {Path}: keeping the receipt of message {MessageId} failed; a duplicate gets a new receipt.", Path, messageId);
+        }
+    }
+
+    /// <summary>The receipt kept for a message of this party, or null when none is kept (or the store fails).</summary>
+    private async Task<(string ContentType, byte[] Body)?> KeptReceiptAsync(As4Node node, As4Partner partner, string messageId)
+    {
+        try
+        {
+            var data = await node.Factory.Receipts.Retrieve(ReceiptKey(partner, messageId), CancellationToken.None).ConfigureAwait(false);
+            var split = data is null ? -1 : Array.IndexOf(data, (byte)'\n');
+            if (split < 0) return null;
+            return (System.Text.Encoding.UTF8.GetString(data!, 0, split), data![(split + 1)..]);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _logger?.LogWarning(e, "AS4 receiver {Path}: reading the kept receipt of message {MessageId} failed.", Path, messageId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// A key every store takes (a file store makes a file name of it): a hash of the sending party and the message id.
+    /// The party, not the agreement: a resend may match another agreement with the same party (the conformance test
+    /// driver resends AS4_CP_TA63 under another action), and it is still the same message of the same sender.
+    /// </summary>
+    private static string ReceiptKey(As4Partner partner, string messageId) =>
+        "as4-receipt-" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(partner.PartyIdType + "\n" + partner.PartyId + "\n" + messageId))).ToLowerInvariant();
 
     /// <summary>Releases the claim of a message the route did not process, so its resend is delivered (as the S3 consumer does).</summary>
     private async Task ReleaseClaimAsync(string messageId)
@@ -385,7 +438,9 @@ internal sealed class As4Consumer : IConsumer
         var signed = security is not null && security.ChildNodes.OfType<XmlElement>().Any(e => e.LocalName == "Signature" && e.NamespaceURI == WsSecurityNames.Ds);
         var encrypted = security is not null && security.ChildNodes.OfType<XmlElement>().Any(e => e.LocalName == "EncryptedKey" && e.NamespaceURI == WsSecurityNames.Xenc);
         if (!signed)
-            throw new As4ProcessingException(As4ErrorCode.PolicyNoncompliance, "the message is not signed.");
+            // Every agreement asks for a signed message, so an unsigned one does not match the processing mode: EBMS:0010,
+            // as the eDelivery conformance test driver expects (AS4_CP_TA80).
+            throw new As4ProcessingException(As4ErrorCode.ProcessingModeMismatch, "the message is not signed.");
         if (message.Parts.Count > 0 && !encrypted)
             throw new As4ProcessingException(As4ErrorCode.PolicyNoncompliance, "the payloads are not encrypted.");
 
@@ -401,17 +456,42 @@ internal sealed class As4Consumer : IConsumer
         try
         {
             return As4SecurityEngine.Verify(message, partner.PartnerSigningCertificates.ToList(), partner.TimestampTolerance, DateTimeOffset.UtcNow,
-                node.Factory.Revocation, partner.TimestampTimeToLive, partner.PkiPathTrust);
+                node.Factory.Revocation, partner.TimestampTimeToLive, partner.PkiPathTrust, TrustedElsewhere(node, partner));
         }
         catch (SignatureCoverageException e)
         {
             // Signed, and what is signed is intact, but not everything the profile requires: the policy is not met.
             throw new As4ProcessingException(As4ErrorCode.PolicyNoncompliance, e.Message, e);
         }
+        catch (Exception e) when (e is UnsupportedAttachmentTransformException or MalformedSignatureValueException)
+        {
+            throw new As4ProcessingException(As4ErrorCode.FailedDecryption, e.Message, e);
+        }
+        catch (SignerNotAuthorizedException e)
+        {
+            throw new As4ProcessingException(As4ErrorCode.Other, e.Message, e);
+        }
         catch (CryptographicException e)
         {
             throw new As4ProcessingException(As4ErrorCode.FailedAuthentication, e.Message, e);
         }
+    }
+
+    /// <summary>
+    /// The certificates this node trusts apart from the sender's agreement: the signing certificates of its other
+    /// agreements and the trust anchors of all of them. A message signed with one of these, or with a certificate one of
+    /// them issued, is an impersonation of the sender, not a stranger's message.
+    /// </summary>
+    private static List<System.Security.Cryptography.X509Certificates.X509Certificate2> TrustedElsewhere(As4Node node, As4Partner partner)
+    {
+        var trusted = new List<System.Security.Cryptography.X509Certificates.X509Certificate2>();
+        foreach (var other in node.Factory.Partners)
+        {
+            if (!ReferenceEquals(other, partner))
+                trusted.AddRange(other.PartnerSigningCertificates);
+            trusted.AddRange(other.PartnerTrustAnchors);
+        }
+        return trusted;
     }
 
     private Exchange CreateExchange(HttpContext http, UserMessage user, SwaMessage message, As4Partner partner, SignatureVerification verification)

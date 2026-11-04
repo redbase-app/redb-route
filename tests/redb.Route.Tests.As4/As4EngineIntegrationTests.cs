@@ -201,7 +201,7 @@ public class As4EngineIntegrationTests
         stats.MessagesIn.Should().Be(2, "a message refused before the route is not a message in");
         stats.Errors.Should().Be(1, "the partner's bad message is not a failure of this endpoint");
         stats.Refused.Should().Be(1, "the refusal is counted once, as a refusal");
-        stats.LastRefusalMessage.Should().StartWith("EBMS:0103");
+        stats.LastRefusalMessage.Should().StartWith("EBMS:0010");
     }
 
     [Fact]

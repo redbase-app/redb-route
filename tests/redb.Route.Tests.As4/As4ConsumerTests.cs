@@ -134,6 +134,83 @@ public class As4ConsumerTests
         (await duplicates.Contains(messageId)).Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Resend_OfADeliveredMessage_GetsTheVeryReceiptOfTheOriginal(bool payloadList)
+    {
+        // AS4_CP_TA63: the same receipt, not a new one for the same message (its own id, time and signature).
+        await using var stand = await Stand.StartAsync(_ => Task.CompletedTask, payloadList: payloadList);
+        var (message, _) = SecuredRawMessage();
+
+        using var first = await stand.PostBytes(message.ContentType, message.Body);
+        using var second = await stand.PostBytes(message.ContentType, message.Body);
+
+        second.Content.Headers.ContentType!.ToString().Should().Be(first.Content.Headers.ContentType!.ToString());
+        (await second.Content.ReadAsByteArrayAsync()).Should().Equal(await first.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task Resend_UnderAnotherAgreementOfTheSameParty_GetsTheReceiptOfTheOriginal()
+    {
+        // AS4_CP_TA63: the test driver resends the message id under another action, so another agreement with the same
+        // party matches it. It is still the same message of the same sender.
+        await using var stand = await Stand.StartAsync(_ => Task.CompletedTask, receiver: node =>
+        {
+            var first = node.Partners.Single();
+            node.Partners.Add(new As4Partner
+            {
+                Name = first.Name + "-other", PartyId = first.PartyId, Service = first.Service, Action = "Other",
+                PartnerSigningCertificates = { first.PartnerSigningCertificates.Single() },
+                PartnerEncryptionCertificate = first.PartnerEncryptionCertificate,
+            });
+        });
+        var messageId = Guid.NewGuid().ToString("N") + "@a.example";
+        var (original, _) = SecuredRawMessage(messageId, action: "Submit");
+        var (resend, _) = SecuredRawMessage(messageId, action: "Other");
+        original.Body.Should().NotEqual(resend.Body, "the resend is another transmission");
+
+        using var first = await stand.PostBytes(original.ContentType, original.Body);
+        using var second = await stand.PostBytes(resend.ContentType, resend.Body);
+
+        (await second.Content.ReadAsByteArrayAsync()).Should().Equal(await first.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task Receipts_GoToTheNodesReceiptStore()
+    {
+        var store = new InMemoryClaimCheckRepository();
+        await using var stand = await Stand.StartAsync(_ => Task.CompletedTask, receiver: node => node.ReceiptStore = store);
+        var (message, _) = SecuredRawMessage();
+
+        using var first = await stand.PostBytes(message.ContentType, message.Body);
+        using var second = await stand.PostBytes(message.ContentType, message.Body);
+
+        store.Count.Should().Be(1);
+        (await second.Content.ReadAsByteArrayAsync()).Should().Equal(await first.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task ReceiptStoreFailure_StillAnswersEveryMessageWithAReceipt()
+    {
+        var store = Substitute.For<IClaimCheckRepository>();
+        store.Store(Arg.Any<string>(), Arg.Any<ReadOnlyMemory<byte>>(), Arg.Any<TimeSpan?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("store down")));
+        store.Retrieve(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<byte[]?>(new InvalidOperationException("store down")));
+        var deliveries = 0;
+        await using var stand = await Stand.StartAsync(_ => { Interlocked.Increment(ref deliveries); return Task.CompletedTask; },
+            receiver: node => node.ReceiptStore = store);
+        var (message, _) = SecuredRawMessage();
+
+        var first = await stand.PostRaw(message);
+        var second = await stand.PostRaw(message);
+
+        first.Should().Be((HttpStatusCode.OK, (string?)null, true));
+        second.Should().Be((HttpStatusCode.OK, (string?)null, true));
+        deliveries.Should().Be(1);
+    }
+
     [Fact]
     public async Task Resend_AfterARouteFailure_IsDelivered()
     {
@@ -404,8 +481,9 @@ public class As4ConsumerTests
     // ── Raw requests ─────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task UnsignedMessage_IsPolicyNoncompliance_AndNeverReachesTheRoute()
+    public async Task UnsignedMessage_IsProcessingModeMismatch_AndNeverReachesTheRoute()
     {
+        // EBMS:0010, as the eDelivery conformance test driver expects (AS4_CP_TA80).
         var reached = false;
         await using var stand = await Stand.StartAsync(_ => { reached = true; return Task.CompletedTask; });
 
@@ -413,7 +491,7 @@ public class As4ConsumerTests
         var (status, errorCode, _) = await stand.PostRaw(message.Write());
 
         status.Should().Be(HttpStatusCode.OK);
-        errorCode.Should().Be("EBMS:0103");
+        errorCode.Should().Be("EBMS:0010");
         reached.Should().BeFalse();
     }
 
@@ -858,11 +936,11 @@ public class As4ConsumerTests
     }
 
     /// <summary>A user message from A to B, compressed, not yet signed or encrypted.</summary>
-    private static SwaMessage RawMessage()
+    private static SwaMessage RawMessage(string? messageId = null, string action = "Submit")
     {
         const string contentId = "p1@a.example";
-        var message = SwaMessage.Create(As4TestMessages.UserMessage(Guid.NewGuid().ToString("N") + "@a.example", contentId,
-            from: "urn:redb:a", to: "urn:redb:b", service: "urn:example", action: "Submit"));
+        var message = SwaMessage.Create(As4TestMessages.UserMessage(messageId ?? Guid.NewGuid().ToString("N") + "@a.example", contentId,
+            from: "urn:redb:a", to: "urn:redb:b", service: "urn:example", action: action));
         message.AddPart(contentId, "application/gzip", As4TestMessages.Gzip(Encoding.UTF8.GetBytes(Payload)));
         return message;
     }
@@ -885,9 +963,9 @@ public class As4ConsumerTests
     }
 
     /// <summary>A user message from A to B, signed and encrypted as A sends it; the bytes resend unchanged.</summary>
-    private static ((string ContentType, byte[] Body) Message, string MessageId) SecuredRawMessage()
+    private static ((string ContentType, byte[] Body) Message, string MessageId) SecuredRawMessage(string? id = null, string action = "Submit")
     {
-        var message = RawMessage();
+        var message = RawMessage(id, action);
         var messageId = MessagingReader.Read(message.Envelope).UserMessages.Single().MessageInfo.MessageId;
         As4SecurityEngine.Sign(message, NodeA, As4KeyReference.BinarySecurityToken, null, DateTimeOffset.UtcNow);
         As4SecurityEngine.Encrypt(message, As4TestMessages.PublicOnly(NodeB), As4KeyReference.BinarySecurityToken);
@@ -1086,7 +1164,7 @@ public class As4ConsumerTests
         public static async Task<Stand> StartAsync(Func<IExchange, Task> route, IIdempotentRepository? duplicates = null,
             bool streamBody = false, redb.Route.Configuration.StreamCacheOptions? spool = null,
             redb.Route.Configuration.RouteEngineOptions? engine = null, bool payloadList = false,
-            Action<As4Partner>? agreement = null)
+            Action<As4Partner>? agreement = null, Action<As4ConnectionFactory>? receiver = null)
         {
             var port = global::redb.Route.Tests.Shared.TestPorts.Next();
             var context = new RouteContext(options: engine);
@@ -1098,7 +1176,9 @@ public class As4ConsumerTests
             var bAtA = Partner("b", NodeB);
             agreement?.Invoke(aAtB);
             agreement?.Invoke(bAtA);
-            context.AddToRegistry("b", Node("b", NodeB, aAtB));
+            var nodeB = Node("b", NodeB, aAtB);
+            receiver?.Invoke(nodeB);
+            context.AddToRegistry("b", nodeB);
             context.AddToRegistry("a", Node("a", NodeA, bAtA));
             context.AddToRegistry("c", Node("c", Stranger, Partner("b", NodeB)));
 

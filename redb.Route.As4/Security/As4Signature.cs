@@ -29,7 +29,7 @@ internal static class As4Signature
     /// </summary>
     public static SignatureVerification Verify(SwaMessage message, IReadOnlyCollection<X509Certificate2> trustedSigners,
         TimeSpan timestampTolerance, DateTimeOffset now, RevocationPolicy? revocation = null, TimeSpan? timestampTimeToLive = null,
-        PkiPathTrust? pkiPath = null)
+        PkiPathTrust? pkiPath = null, IReadOnlyCollection<X509Certificate2>? trustedElsewhere = null)
     {
         ArgumentNullException.ThrowIfNull(message);
         var envelope = message.Envelope;
@@ -79,13 +79,26 @@ internal static class As4Signature
         {
             signer = SecurityTokenResolver.Resolve(keyInfo, envelope, trustedSigners);
             if (signer is null || !trustedSigners.Any(c => c.Thumbprint == signer.Thumbprint))
+            {
+                if (trustedElsewhere is { Count: > 0 } && SecurityTokenResolver.IsTrustedElsewhere(keyInfo, envelope, trustedElsewhere))
+                    throw new SignerNotAuthorizedException(
+                        "The signing certificate is trusted here but is not the partner's: it belongs to another party.");
                 throw new CryptographicException("The signing certificate is not one of the partner's.");
+            }
             CertificateValidity.EnsureSigner(signer, now, revocation ?? RevocationPolicy.None);
         }
 
-        var signatureValue = Convert.FromBase64String(
-            (Child(signature, "SignatureValue", WsSecurityNames.Ds)
-             ?? throw new CryptographicException("ds:Signature has no ds:SignatureValue.")).InnerText.Trim());
+        var signatureValueElement = Child(signature, "SignatureValue", WsSecurityNames.Ds)
+            ?? throw new CryptographicException("ds:Signature has no ds:SignatureValue.");
+        byte[] signatureValue;
+        try
+        {
+            signatureValue = SecurityTokenResolver.Base64(signatureValueElement);
+        }
+        catch (CryptographicException e)
+        {
+            throw new MalformedSignatureValueException(e.Message);
+        }
 
         var canonicalSignedInfo = ExclusiveCanonicalizer.Canonicalize(signedInfo, ExclusiveCanonicalizer.PrefixList(c14nMethod));
         using (var rsa = signer.GetRSAPublicKey() ?? throw new CryptographicException("The signing certificate has no RSA key."))
@@ -108,9 +121,9 @@ internal static class As4Signature
             var digestMethod = Child(reference, "DigestMethod", WsSecurityNames.Ds)?.GetAttribute("Algorithm");
             if (!As4Algorithms.IsSupportedDigest(digestMethod))
                 throw new CryptographicException($"Digest method '{digestMethod}' is not supported.");
-            var expected = Convert.FromBase64String(
-                (Child(reference, "DigestValue", WsSecurityNames.Ds)
-                 ?? throw new CryptographicException($"ds:Reference '{uri}' has no ds:DigestValue.")).InnerText.Trim());
+            var expected = SecurityTokenResolver.Base64(
+                Child(reference, "DigestValue", WsSecurityNames.Ds)
+                ?? throw new CryptographicException($"ds:Reference '{uri}' has no ds:DigestValue."));
 
             var actual = ReferenceDigest(reference, uri, message);
             if (!CryptographicOperations.FixedTimeEquals(actual, expected))
@@ -146,7 +159,7 @@ internal static class As4Signature
         if (uri.StartsWith(WsSecurityNames.CidPrefix, StringComparison.OrdinalIgnoreCase))
         {
             if (algorithm != WsSecurityNames.AttachmentContentSignatureTransform)
-                throw new CryptographicException($"Transform '{algorithm}' of '{uri}' is not supported.");
+                throw new UnsupportedAttachmentTransformException($"Transform '{algorithm}' of '{uri}' is not supported.");
             var id = WsSecurityNames.ContentId(uri);
             return message.Parts.TryGetValue(id, out var part)
                 ? AttachmentCanonicalizer.Sha256(part)
@@ -374,3 +387,23 @@ internal sealed record SignatureVerification(X509Certificate2 Signer, IReadOnlyL
 /// signed has been altered.
 /// </summary>
 internal sealed class SignatureCoverageException(string message) : System.Security.Cryptography.CryptographicException(message);
+
+/// <summary>
+/// An attachment is signed with a transform the profile does not allow (Attachment-Complete instead of
+/// Attachment-Content): answered with EBMS:0102, as the eDelivery conformance test driver expects (AS4_CP_TA72).
+/// </summary>
+internal sealed class UnsupportedAttachmentTransformException(string message) : System.Security.Cryptography.CryptographicException(message);
+
+/// <summary>
+/// The <c>ds:SignatureValue</c> is not a value at all (not base64): answered with EBMS:0102, as the eDelivery conformance
+/// test driver expects for a modified signature value (AS4_CP_TA66). A value that decodes but does not verify stays
+/// EBMS:0101.
+/// </summary>
+internal sealed class MalformedSignatureValueException(string message) : System.Security.Cryptography.CryptographicException(message);
+
+/// <summary>
+/// The message is signed with a certificate this node trusts (another agreement's, or issued by an authority one of its
+/// agreements trusts), but not with the sender's: an impersonation, answered as an authorization failure with EBMS:0004
+/// (AS4_CP_TA78). A certificate the node does not know at all stays an authentication failure, EBMS:0101.
+/// </summary>
+internal sealed class SignerNotAuthorizedException(string message) : System.Security.Cryptography.CryptographicException(message);

@@ -1734,7 +1734,8 @@ redb-route-xml pack . --version 1.0.0                              # package it 
 
 `--bin` gives `mermaid` the project's build output: a route that names its own types (`<unmarshal
 target=>`) or package elements (`<redbSave>`, `<cache>`) needs it, a plain one does not. Schemas and other
-`file=` references resolve from the project's `resources/`, as they do in the package.
+`file=` references resolve in `csharp`, `mermaid` and `check` alike: under the project's `resources/` first
+(`file="order.xsd"`), then from the project root (`file="resources/order.xsd"`), as they do in the package.
 
 Keep the tool on the same version as the runtime. Whenever it reads a bin directory (`xsd`, `elements`,
 `catalog`, `check`, `pack`, `mermaid --bin`) it compares its own `redb.Route.Xml` with the one there and refuses to run on

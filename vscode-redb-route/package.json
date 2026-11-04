@@ -2,7 +2,7 @@
   "name": "redb-route-xml",
   "displayName": "redb Route XML",
   "description": "Completion and validation for redb.Route XML routes, a route tree, bean reference hints and a graph editor over the XML text.",
-  "version": "0.2.25",
+  "version": "0.2.26",
   "publisher": "redb",
   "license": "Apache-2.0",
   "icon": "media/icon.png",

@@ -65,14 +65,11 @@ try
             foreach (var scheme in CollectSchemes(file))
                 if (context.GetComponent<redb.Route.Abstractions.IComponent>(scheme) is null)
                     context.AddComponent(new SchemeStub(scheme));
-            // file= references resolve where the package keeps them (resources/); with --bin the
-            // project's own types and the package elements of its build output are visible too,
-            // which a diagram of a real project needs (SerialNumbers.Xml, 2026-09-18).
+            // file= references resolve by the rule check holds the project to (resources/, then the
+            // project root); with --bin the project's own types and the package elements of its
+            // build output are visible too, which a diagram of a real project needs.
             context.AddService(typeof(redb.Route.Abstractions.IRouteResourceResolver),
-                new redb.Route.Core.RouteResourceResolver
-                {
-                    ResourceRoot = redb.Route.Xml.Packaging.RoutePackage.ResourceRootFor(file),
-                });
+                new redb.Route.Xml.Packaging.RouteProjectResourceResolver(file));
             XmlRouteLoaderOptions? diagramOptions = null;
             if (Option("--bin") is { } diagramBin)
             {

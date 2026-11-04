@@ -183,10 +183,12 @@ public static class InitRoute
         int redeliveries, TimeSpan delay)
     {
         // No receipt: redelivered as the same message (same id, same bytes), then EBMS:0301 is reported (AS4_CP_TA09, TA15).
+        // The Notify carries the ebMS code only; what went wrong in our words goes to our log.
         r.OnException<As4ReceiptException>()
             .MaximumRedeliveries(redeliveries)
             .RedeliveryDelay(delay)
             .Handled()
+            .Log("Send of ${header.redbAs4.messageId} failed, Notify follows: ${exception.message}")
             .Process(Commands.FailureToNotify)
             .To(notify);
         // The test driver's access point unreachable: the same policy.
@@ -194,11 +196,13 @@ public static class InitRoute
             .MaximumRedeliveries(redeliveries)
             .RedeliveryDelay(delay)
             .Handled()
+            .Log("Send of ${header.redbAs4.messageId} failed, Notify follows: ${exception.message}")
             .Process(Commands.FailureToNotify)
             .To(notify);
         // An ebMS error is the test driver's answer: reported as it came, never redelivered.
         r.OnException<As4ErrorSignalException>()
             .Handled()
+            .Log("Send of ${header.redbAs4.messageId} answered with an ebMS error, Notify follows: ${exception.message}")
             .Process(Commands.FailureToNotify)
             .To(notify);
 

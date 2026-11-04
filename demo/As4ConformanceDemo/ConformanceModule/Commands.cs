@@ -121,21 +121,21 @@ public static class Commands
                 if (!string.IsNullOrEmpty(error.ShortDescription)) properties.Add(("shortDescription", error.ShortDescription, null));
                 if (!string.IsNullOrEmpty(error.Description)) properties.Add(("description", error.Description, null));
                 break;
+            // Our own failures are reported by code only, never with the text of our exception (it stays in our log), as
+            // our ebMS errors are. The test driver reads the code (AS4_CP_TA15, TA81); and Notifies that quoted our
+            // exception were refused by the gateway in front of the conformance service (HTTP 403, Azure WAF).
             case As4ReceiptException receipt:
                 properties.Add(("errorCode", receipt.Code.Code, null));
                 properties.Add(("shortDescription", receipt.Code.ShortDescription, null));
-                properties.Add(("description", receipt.Message, null));
                 break;
             case HttpRequestException:
                 // The partner was not reached on any attempt: no receipt arrived, which is what reception awareness reports.
                 properties.Add(("errorCode", As4ErrorCode.MissingReceipt.Code, null));
                 properties.Add(("shortDescription", As4ErrorCode.MissingReceipt.ShortDescription, null));
-                properties.Add(("description", failure.Message, null));
                 break;
             default:
                 properties.Add(("errorCode", "EBMS:0004", null));
                 properties.Add(("shortDescription", "Other", null));
-                properties.Add(("description", failure?.Message ?? "the message was not sent", null));
                 break;
         }
         Notify(exchange, sent, properties);

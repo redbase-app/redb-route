@@ -54,7 +54,7 @@ services:
       - Tsak__Contexts__as4-conformance__Override__Sut__Pfx=/app/keys/${AS4CT_SUT_PFX_FILE:?AS4CT_SUT_PFX_FILE required}
       - Tsak__Contexts__as4-conformance__Override__Sut__PfxPassword=${AS4CT_SUT_PFX_PASSWORD:?AS4CT_SUT_PFX_PASSWORD required}
       - Tsak__Contexts__as4-conformance__Override__Sut__HostName=${AS4CT_HOST_NAME:-redb.route}
-      - Tsak__Contexts__as4-conformance__Override__Retry__Count=${AS4CT_RETRY_COUNT:-5}
+      - Tsak__Contexts__as4-conformance__Override__Retry__Count=${AS4CT_RETRY_COUNT:-4}
       - Tsak__Contexts__as4-conformance__Override__Retry__DelaySeconds=${AS4CT_RETRY_DELAY_SECONDS:-20}
     volumes:
       - ./modules:/app/modules

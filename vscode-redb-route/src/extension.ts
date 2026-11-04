@@ -7,7 +7,8 @@ import { scanRoutes, RouteEntry } from "./routescan";
 import { elementPosition } from "./elementposition";
 import { skeletonsFor } from "./skeletons";
 import { skeletonPlace } from "./skeletonscope";
-import { beanNames, referencePosition } from "./beanref";
+import { beanCandidates, referencePosition } from "./beanref";
+import { moduleContextText } from "./moduledir";
 import { NewProjectPanel } from "./newprojectpanel";
 import { buildIndex, ElementInfo, ElementIndex } from "./graphmodel";
 import { RouteGraphEditorProvider } from "./grapheditor";
@@ -124,27 +125,37 @@ class SkeletonCompletionProvider implements vscode.CompletionItemProvider {
 // ── registry references: `#` offers the beans the document declares ──
 
 /**
- * The names of the document's `<bean name>` at a registry-reference position (beanref.ts). No
- * type filter and no diagnostics: a wrong or missing bean is the pack gate's finding.
+ * The `<bean name>` values at a registry-reference position (beanref.ts): the document's own, then
+ * those of its module's `context.xml` (moduledir.ts), where the templates declare them. No type
+ * filter and no diagnostics: a wrong or missing bean is the pack gate's finding.
  */
 class BeanReferenceCompletionProvider implements vscode.CompletionItemProvider {
     provideCompletionItems(
         document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem[] {
         const text = document.getText();
-        if (sniff(text)?.kind !== "routes")
+        if (!sniff(text))
             return [];
         const where = referencePosition(text, document.offsetAt(position));
         if (!where.ok)
             return [];
 
+        const contextText = document.uri.scheme === "file"
+            ? moduleContextText(document.uri.fsPath, openDocumentText)
+            : null;
         const range = new vscode.Range(document.positionAt(where.replaceFrom), position);
-        return beanNames(text).map(name => {
-            const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Reference);
-            item.detail = "<bean> of this document";
+        return beanCandidates(text, contextText).map(candidate => {
+            const item = new vscode.CompletionItem(candidate.name, vscode.CompletionItemKind.Reference);
+            item.detail = candidate.fromContext ? "<bean> of context.xml" : "<bean> of this document";
             item.range = range;
             return item;
         });
     }
+}
+
+/** The text of a file open in an editor, unsaved edits included. */
+function openDocumentText(file: string): string | undefined {
+    const target = vscode.Uri.file(file).toString();
+    return vscode.workspace.textDocuments.find(d => d.uri.toString() === target)?.getText();
 }
 
 // ── the route tree ───────────────────────────────────────────────────

@@ -24,7 +24,7 @@ public class As4ProducerTests
     private static readonly System.Security.Cryptography.X509Certificates.X509Certificate2 Stranger = As4TestMessages.KeyPair("CN=stranger.as4.test");
     private const string Payload = "<invoice xmlns=\"urn:example\"><total>42</total></invoice>";
 
-    private enum Answer { Receipt, Error, Nothing, WrongDigest, SignedByStranger, Unsigned, Late, Huge }
+    private enum Answer { Receipt, Error, Nothing, WrongDigest, SignedByStranger, Unsigned, Late, Huge, Forbidden, ReceiptTakenOut }
 
     [Fact]
     public async Task Send_GetsAVerifiedReceipt_AndPutsTheOutcomeOnOut()
@@ -378,6 +378,36 @@ public class As4ProducerTests
         var error = (await act.Should().ThrowAsync<As4ReceiptException>()).Which;
         error.Code.Should().Be(As4ErrorCode.InvalidReceipt);
         error.Message.Should().Contain("1048576");
+    }
+
+    [Fact]
+    public async Task Send_ASignalWithTheReceiptTakenOut_IsMissingReceipt()
+    {
+        // AS4_CP_TA15: the test driver answers with the signal of its receipt, the eb:Receipt removed.
+        await using var fake = new FakePartner(Answer.ReceiptTakenOut);
+        var (context, producer) = await Start(fake.Port);
+        await using var _ = context;
+
+        var act = () => producer.Process(NewExchange());
+
+        var error = (await act.Should().ThrowAsync<As4ReceiptException>()).Which;
+        error.Code.Should().Be(As4ErrorCode.MissingReceipt);
+        error.Message.Should().Contain("a signal without a receipt");
+    }
+
+    [Fact]
+    public async Task Send_AGatewaysRefusalPage_IsInvalidReceipt_QuotingTheStartOfThePage()
+    {
+        // Who refused, and the support reference, are on the page: the error text carries its start.
+        await using var fake = new FakePartner(Answer.Forbidden);
+        var (context, producer) = await Start(fake.Port);
+        await using var _ = context;
+
+        var act = () => producer.Process(NewExchange());
+
+        var error = (await act.Should().ThrowAsync<As4ReceiptException>()).Which;
+        error.Code.Should().Be(As4ErrorCode.InvalidReceipt);
+        error.Message.Should().Contain("HTTP 403").And.Contain("text/html: \"<html><head><title>403 Forbidden</title></head><body> <h1>Forbidden</h1> <p>Request rejected, support ID 4711</p>");
     }
 
     [Fact]
@@ -808,12 +838,28 @@ public class As4ProducerTests
                     continue;
                 }
 
+                if (mode == Answer.Forbidden)
+                {
+                    // A gateway's refusal page in front of the partner's access point.
+                    var page = System.Text.Encoding.UTF8.GetBytes(
+                        "<html><head><title>403 Forbidden</title></head><body>\r\n<h1>Forbidden</h1>\r\n<p>Request rejected, support ID 4711</p>\r\n<hr></body></html>");
+                    http.Response.StatusCode = 403;
+                    http.Response.ContentType = "text/html; charset=utf-8";
+                    await http.Response.OutputStream.WriteAsync(page);
+                    http.Response.Close();
+                    continue;
+                }
+
                 var info = new MessageInfo(DateTimeOffset.UtcNow, MessageIdFactory.New("acme.example"), messageId);
-                SignalMessage signal = mode == Answer.Error
-                    ? new SignalMessage(info, null,
+                SignalMessage signal = mode switch
+                {
+                    Answer.Error => new SignalMessage(info, null,
                         [new EbmsError("EBMS:0010", As4ErrorSeverity.Failure, "Processing", "ebms", messageId, "ProcessingModeMismatch", null, "no P-Mode")],
-                        null)
-                    : new SignalMessage(info, Receipts.NonRepudiation(mode == Answer.WrongDigest ? Tampered(verification.References) : verification.References), [], null);
+                        null),
+                    // The receipt taken out of the signal, as the conformance test driver simulates a lost one.
+                    Answer.ReceiptTakenOut => new SignalMessage(info, null, [], null),
+                    _ => new SignalMessage(info, Receipts.NonRepudiation(mode == Answer.WrongDigest ? Tampered(verification.References) : verification.References), [], null),
+                };
 
                 var answer = SwaMessage.Create(MessagingWriter.CreateEnvelope(signal));
                 if (mode != Answer.Unsigned)

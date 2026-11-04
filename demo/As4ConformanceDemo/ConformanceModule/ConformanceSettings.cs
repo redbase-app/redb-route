@@ -58,8 +58,11 @@ public sealed class ConformanceSettings
     /// </summary>
     public X509Certificate2? TestDriverControllerCertificate { get; init; }
 
-    /// <summary>Redeliveries of the ONEWAY_RETRY profile; the user guide asks for 5.</summary>
-    public int RetryCount { get; init; } = 5;
+    /// <summary>
+    /// Redeliveries of the ONEWAY_RETRY profile. The test driver takes 5 transmissions, the message and 4
+    /// redeliveries, and then expects the Notify (AS4_CP_TA15); a sixth transmission fails the test.
+    /// </summary>
+    public int RetryCount { get; init; } = 4;
 
     /// <summary>Delay between those redeliveries; the user guide asks for less than 3 minutes.</summary>
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromSeconds(20);

@@ -328,7 +328,7 @@ One URL serves every partner of the node. For each request the receiver, in orde
 2. reads `eb:Messaging` strictly — a signal (receipt / error) without a waiting sender is answered 202 and
    logged, since the profile forbids asynchronous signals;
 3. matches the message to one partner (`EBMS:0001` / `EBMS:0010` when none or more than one);
-4. enforces the profile: unsigned or unencrypted → `EBMS:0103`; decrypts (`EBMS:0102`), verifies the
+4. enforces the profile: unsigned → `EBMS:0010`, unencrypted → `EBMS:0103`; decrypts (`EBMS:0102`), verifies the
    signature and `wsu:Timestamp` (`EBMS:0101`), checks the attachments against `eb:PayloadInfo`
    (`EBMS:0007` / `EBMS:0011`), decompresses with a size limit (`EBMS:0303`);
 5. claims the message id in the idempotent repository — a message received before gets its receipt again
@@ -387,6 +387,12 @@ answered with `EBMS:0004` and the route is not run.
   delivered.
 - **A resend that arrives while the first copy is still in the route also gets a receipt**, as in Holodeck
   B2B: `IIdempotentRepository` does not tell a claimed id from a confirmed one.
+- **A duplicate gets the very receipt of the original** (same receipt id, time and signature), as Domibus answers
+  and as conformance test AS4_CP_TA63 checks. The node keeps the receipts it sends in `ReceiptStore` of the
+  connection factory, any `IClaimCheckRepository` (SQL, Redis, file), for `ReceiptRetention` (default one day).
+  Without a store they are kept in memory, the newest 100 000; give a shared store behind a load balancer, as for the
+  duplicate repository. A duplicate whose receipt is no longer kept gets a new receipt for the same message, with
+  the same non-repudiation information.
 - **Business duplicates** (the same invoice sent as two messages) are a route concern: `.IdempotentConsumer(...)`
   on a business key.
 
@@ -464,17 +470,18 @@ outside the profile hits; the answer is the one it gets.
 
 | What | Accepted | Anything else |
 |---|---|---|
-| Signing token | pinned agreement: any reference form; agreement with `PartnerTrustAnchors`: an `X509PKIPathv1` token whose path leads to an anchor | `EBMS:0101` |
-| Signature | RSA-SHA256 | the partner's configuration is refused at start; a received message: `EBMS:0101` |
+| Signing token | pinned agreement: any reference form; agreement with `PartnerTrustAnchors`: an `X509PKIPathv1` token whose path leads to an anchor | `EBMS:0101`; `EBMS:0004` when the certificate is one the node trusts for another party (another agreement's, or issued by a trust anchor of one of its agreements): an impersonation, as the conformance test driver expects |
+| Signature | RSA-SHA256 | the partner's configuration is refused at start; a received message: `EBMS:0101`; a `ds:SignatureValue` that is not base64: `EBMS:0102`, as the conformance test driver expects |
 | Digest | SHA-256 | as above |
 | Payload encryption | AES-128-GCM | refused at start; a received message: `EBMS:0102` (AES-256-GCM, AES-128-CBC) |
 | Key transport | RSA-OAEP with MGF1-SHA256 and SHA-256 | refused at start; a received message: `EBMS:0102` (`rsa-oaep-mgf1p` of XML Encryption 1.0) |
 | Canonicalization | Exclusive C14N | `EBMS:0101` |
-| Reference transforms | exactly one `ds:Transform` per reference | `EBMS:0101` |
+| Reference transforms | exactly one `ds:Transform` per reference; Attachment-Content for an attachment | `EBMS:0101`; an attachment signed with another transform (Attachment-Complete): `EBMS:0102`, as the conformance test driver expects |
 | Signature coverage | `eb:Messaging`, `soap:Body`, every attachment | `EBMS:0103`, as Domibus answers from its policy (`sp:SignedParts`); a `wsu:Timestamp` that is present and not covered: `EBMS:0101` |
 | Envelope structure | depth 32, 32 attributes and 16 namespace declarations on an element, 4096 namespace declarations, `maxEnvelopeCharacters` | SOAP Fault `Sender` |
 | Session keys | exactly one `xenc:EncryptedKey`, each payload decrypted once | `EBMS:0102` |
-| Unsigned or unencrypted message | never | `EBMS:0103` |
+| Unsigned message | never | `EBMS:0010` (the processing mode asks for a signature), as the conformance test driver expects |
+| Unencrypted payloads | never | `EBMS:0103` |
 | Payload in the SOAP body | never (payloads are attachments) | `EBMS:0002` |
 | Compression | gzip, with `MimeType` | `EBMS:0303` / `EBMS:0003` |
 | `eb:PartyId` per side | exactly one | `EBMS:0010` |

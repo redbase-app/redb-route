@@ -58,12 +58,15 @@ Single elements come from the schema completion.
 
 ### Bean references
 
-Typing `#` where a value names a registry object lists the `<bean name>` declarations of the current document.
-This works in three places: the whole attribute value (`dataSource="#"`), the path right after the scheme
-(`bean:#`) and a URI option value (`?headerFilterStrategy=#`). A `#` inside other text, such as the SQL parameter
-`:#name`, is not a reference and gets no hint.
+Typing `#` where a value names a registry object lists the `<bean name>` declarations of the current document,
+then those of the module's `context.xml`. The module is the nearest folder with a `.csproj` up to three levels
+above the file, the project root `redb-route-xml pack` builds from; an unsaved `context.xml` open in an editor is
+read as it stands. This works in route files and in `context.xml` itself, in three places: the whole attribute
+value (`dataSource="#"`), the path right after the scheme (`bean:#`) and a URI option value
+(`?headerFilterStrategy=#`). A `#` inside other text, such as the SQL parameter `:#name`, is not a reference and
+gets no hint.
 
-The list is not filtered by type. A reference to a bean that is not declared, or of the wrong type, is reported by
+The list is not filtered by type, and beans registered from C# code are not in it. A reference to a bean that is not declared, or of the wrong type, is reported by
 `redb-route-xml check` and `redb-route-xml pack`.
 
 ### Route tree

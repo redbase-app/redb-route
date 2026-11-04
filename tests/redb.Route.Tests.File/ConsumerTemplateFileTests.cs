@@ -43,9 +43,19 @@ public class ConsumerTemplateFileTests : IAsyncLifetime
 
     private int FilesLeft() => Directory.GetFiles(_root).Length;
 
+    /// <summary>For files that must stay: nothing to wait for, so give a wrong delete time to happen.</summary>
     private async Task<int> SettleAndCount()
     {
         await Task.Delay(300);
+        return FilesLeft();
+    }
+
+    /// <summary>For files that must go: the commit runs after the call returns, so poll for it.</summary>
+    private async Task<int> WaitUntilAllGone()
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (FilesLeft() > 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(50);
         return FilesLeft();
     }
 
@@ -70,7 +80,7 @@ public class ConsumerTemplateFileTests : IAsyncLifetime
 
         (await SettleAndCount()).Should().Be(1, "the caller has not said it is done");
         await _template.DoneUoW(exchange);
-        (await SettleAndCount()).Should().Be(0);
+        (await WaitUntilAllGone()).Should().Be(0);
     }
 
     [Fact]
@@ -87,7 +97,7 @@ public class ConsumerTemplateFileTests : IAsyncLifetime
         }
 
         names.Should().BeEquivalentTo(["f0.txt", "f1.txt", "f2.txt"]);
-        (await SettleAndCount()).Should().Be(0);
+        (await WaitUntilAllGone()).Should().Be(0);
     }
 
     [Fact]
@@ -124,7 +134,7 @@ public class ConsumerTemplateFileTests : IAsyncLifetime
         var body = await _template.ReceiveBody<byte[]>(Uri(), TimeSpan.FromSeconds(5));
 
         System.Text.Encoding.UTF8.GetString(body!).Should().Be("payload 0");
-        (await SettleAndCount()).Should().Be(0);
+        (await WaitUntilAllGone()).Should().Be(0);
     }
 
     [Fact]

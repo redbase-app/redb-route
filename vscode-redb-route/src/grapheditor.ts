@@ -15,6 +15,7 @@ import {
     ConfigMap, mergeContextLayer, moduleContextName, packageName, resolvePlaceholders,
 } from "./placeholders";
 import { UriResolver } from "./graphmodel";
+import { findModuleDir } from "./moduledir";
 
 /** One row of the properties panel (§8). */
 interface PropField {
@@ -573,15 +574,3 @@ export class RouteGraphEditorProvider implements vscode.CustomTextEditorProvider
     }
 }
 
-/** The module a route document belongs to: the nearest folder with a .csproj, up to three levels above it. */
-function findModuleDir(start: string): { dir: string; csproj: string } | null {
-    let dir = start;
-    for (let level = 0; level < 4; level++) {
-        const csproj = fs.readdirSync(dir).find(f => f.toLowerCase().endsWith(".csproj"));
-        if (csproj) return { dir, csproj };
-        const parent = path.dirname(dir);
-        if (parent === dir) break;
-        dir = parent;
-    }
-    return null;
-}

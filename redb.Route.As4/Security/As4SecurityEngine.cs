@@ -196,8 +196,8 @@ internal static class As4SecurityEngine
     /// <summary>Verifies the message signature; see <see cref="As4Signature.Verify"/>.</summary>
     public static SignatureVerification Verify(SwaMessage message, IReadOnlyCollection<X509Certificate2> partnerCertificates,
         TimeSpan timestampTolerance, DateTimeOffset now, RevocationPolicy? revocation = null, TimeSpan? timestampTimeToLive = null,
-        PkiPathTrust? pkiPath = null) =>
-        As4Signature.Verify(message, partnerCertificates, timestampTolerance, now, revocation, timestampTimeToLive, pkiPath);
+        PkiPathTrust? pkiPath = null, IReadOnlyCollection<X509Certificate2>? trustedElsewhere = null) =>
+        As4Signature.Verify(message, partnerCertificates, timestampTolerance, now, revocation, timestampTimeToLive, pkiPath, trustedElsewhere);
 
     /// <summary>Signs the message; see <see cref="As4Signature"/>.</summary>
     public static IReadOnlyList<XmlElement> Sign(SwaMessage message, X509Certificate2 signer, As4KeyReference keyReference,
@@ -226,6 +226,6 @@ internal static class As4SecurityEngine
             ?? throw new CryptographicException($"xenc:{encrypted.LocalName} has no xenc:CipherData.");
         var value = SecurityTokenResolver.FirstChild(cipherData, "CipherValue", WsSecurityNames.Xenc)
             ?? throw new CryptographicException($"xenc:{encrypted.LocalName} has no xenc:CipherValue.");
-        return Convert.FromBase64String(value.InnerText.Trim());
+        return SecurityTokenResolver.Base64(value);
     }
 }

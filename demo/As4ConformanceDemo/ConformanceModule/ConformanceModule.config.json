@@ -18,7 +18,7 @@
     "DuplicateWindowDays": 7
   },
   "Retry": {
-    "Count": 5,
+    "Count": 4,
     "DelaySeconds": 20,
     "SendTimeoutMs": 60000
   }

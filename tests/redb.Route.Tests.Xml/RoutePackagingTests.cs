@@ -442,6 +442,57 @@ public class RoutePackagingTests : IDisposable
         RoutePackage.ResourceRootFor(Path.Combine(loose, "any.route.xml")).Should().Be(loose);
     }
 
+    [Theory]
+    [InlineData("order.xsd")]
+    [InlineData("resources/order.xsd")]
+    public void Generator_And_Check_ReadAResource_TheSameWay(string reference)
+    {
+        // The redb-route-file template writes file="resources/order.xsd": check accepted it, the
+        // generator prefixed resources/ again and failed on resources/resources/order.xsd.
+        var dir = NewProject("Both");
+        File.WriteAllText(Path.Combine(dir, "resources", "order.xsd"), """
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="order"/></xs:schema>
+            """);
+        var route = Path.Combine(dir, "routes", "both.route.xml");
+        File.WriteAllText(route, $"""
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="both-in">
+                <from uri="direct://both-in"/>
+                <validateXsd file="{reference}"/>
+              </route>
+            </routes>
+            """);
+
+        RoutePackage.Check(dir, "both", "1.0.0").Errors.Should().NotContain(e => e.Message.Contains("order.xsd"));
+        new RouteProjectResourceResolver(route).Resolve(reference)
+            .Should().Be(Path.Combine(dir, "resources", "order.xsd"));
+        XmlCodeGenerator.Generate(System.Xml.Linq.XDocument.Load(route), "BothRoutes", "Tests.Generated",
+                sourceName: route)
+            .Should().Contain("xs:element name=", "the schema body is found and inlined");
+    }
+
+    [Fact]
+    public void Generator_NamesEveryPlaceItLooked_WhenAResourceIsMissing()
+    {
+        var dir = NewProject("Missing");
+        var route = Path.Combine(dir, "routes", "missing.route.xml");
+        File.WriteAllText(route, """
+            <routes xmlns="urn:redb:route:1.0">
+              <route id="missing-in">
+                <from uri="direct://missing-in"/>
+                <validateXsd file="nothing.xsd"/>
+              </route>
+            </routes>
+            """);
+
+        var act = () => XmlCodeGenerator.Generate(System.Xml.Linq.XDocument.Load(route), "MissingRoutes",
+            "Tests.Generated", sourceName: route);
+
+        act.Should().Throw<FileNotFoundException>()
+            .Where(e => e.Message.Contains(Path.Combine(dir, "resources", "nothing.xsd"))
+                        && e.Message.Contains(Path.Combine(dir, "nothing.xsd")));
+    }
+
     // ── steps that can never run ─────────────────────────────────────────────
 
     [Fact]

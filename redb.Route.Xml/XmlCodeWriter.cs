@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
+using redb.Route.Abstractions;
 using redb.Route.Core;
 
 namespace redb.Route.Xml;
@@ -27,26 +28,29 @@ public sealed class XmlCodeWriter
     private readonly StringBuilder _text = new();
     private readonly ElementRegistry _registry;
     private readonly string _sourceName;
-    private readonly string? _resourceRoot;
+    private readonly IRouteResourceResolver? _resources;
     private int _indent;
 
-    internal XmlCodeWriter(ElementRegistry registry, CodeGenStyle style, string sourceName, string? resourceRoot)
+    internal XmlCodeWriter(ElementRegistry registry, CodeGenStyle style, string sourceName, IRouteResourceResolver? resources)
     {
         _registry = registry;
         Style = style;
         _sourceName = sourceName;
-        _resourceRoot = resourceRoot;
+        _resources = resources;
     }
 
     /// <summary>
     /// Reads a file the way the loader would (schema bodies referenced by <c>file=</c>): the
     /// generator inlines the content into the generated code.
     /// </summary>
+    /// <exception cref="FileNotFoundException">No probed location holds the file; the message names each one.</exception>
     public string ReadResource(string reference)
     {
-        var path = Path.IsPathRooted(reference) || _resourceRoot is null
-            ? reference
-            : Path.Combine(_resourceRoot, reference);
+        if (Path.IsPathRooted(reference) || _resources is null)
+            return File.ReadAllText(reference);
+        var path = _resources.Resolve(reference)
+            ?? throw new FileNotFoundException(
+                $"resource '{reference}' not found. Searched: {_resources.DescribeSearch(reference)}.", reference);
         return File.ReadAllText(path);
     }
 
