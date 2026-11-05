@@ -21,7 +21,7 @@ public sealed class KafkaErrorHandlingTests : IAsyncLifetime
     private const string BootstrapServers = "localhost:29092,localhost:29094,localhost:29096";
     private readonly List<IConsumer> _consumers = [];
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public Task InitializeAsync() => KafkaReadiness.GroupCoordinatorAsync();
 
     public async Task DisposeAsync()
     {
@@ -43,7 +43,11 @@ public sealed class KafkaErrorHandlingTests : IAsyncLifetime
         producer.Flush(TimeSpan.FromSeconds(10));
     }
 
-    private static async Task WaitUntil(Func<bool> condition, int timeoutMs = 20000)
+    /// <summary>
+    /// Waits for the observed condition. The bound only keeps a broken run from hanging: a passing run
+    /// returns as soon as the condition holds, so it is generous for a slow shared stand.
+    /// </summary>
+    private static async Task WaitUntil(Func<bool> condition, int timeoutMs = 60000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (!condition() && DateTime.UtcNow < deadline)
@@ -53,7 +57,8 @@ public sealed class KafkaErrorHandlingTests : IAsyncLifetime
     [Fact]
     public async Task BreakOnFirstError_FailedMessage_IsRetriedNotLost()
     {
-        var topic = $"a2-break-{Guid.NewGuid():N}"[..30];
+        // One partition: "after" is behind the poisoned record, so it can only arrive once the retry passed.
+        var topic = await KafkaReadiness.CreateSinglePartitionTopicAsync("a2-break");
         await Produce(topic, "poison-once", "after");
 
         var attempts = new ConcurrentQueue<string>();
@@ -84,7 +89,9 @@ public sealed class KafkaErrorHandlingTests : IAsyncLifetime
     [Fact]
     public async Task Default_FailedMessage_IsSkippedExplicitly_AndCountedByTheRoute()
     {
-        var topic = $"a2-skip-{Guid.NewGuid():N}"[..30];
+        // One partition: the poisoned record is consumed before "after". With the cluster's three partitions and
+        // an empty key the two landed on random partitions, and "after" could finish before the failure was counted.
+        var topic = await KafkaReadiness.CreateSinglePartitionTopicAsync("a2-skip");
         await Produce(topic, "poison-always", "after");
 
         // The PRODUCT path: a real route. Pipeline statistics belong to the core's
@@ -103,12 +110,13 @@ public sealed class KafkaErrorHandlingTests : IAsyncLifetime
         }));
         await context.Start();
 
-        await WaitUntil(() => processed.Contains("after"));
+        var statistics = (IEndpointStatistics)context.GetEndpoint(uri);
+        await WaitUntil(() => processed.Contains("after") && statistics.Errors >= 1);
 
         // The default stays "move on" (Camel's default too), but it is visible:
         // the escaping exception lands in the endpoint statistics via the core wrapper.
         processed.Should().Contain("after");
-        ((IEndpointStatistics)context.GetEndpoint(uri)).Errors.Should().BeGreaterThanOrEqualTo(1,
+        statistics.Errors.Should().BeGreaterThanOrEqualTo(1,
             "пропуск отравленного сообщения обязан быть виден в статистике эндпоинта");
     }
 
@@ -123,8 +131,8 @@ public sealed class KafkaErrorHandlingTests : IAsyncLifetime
         {
             await admin.CreateTopicsAsync([new Confluent.Kafka.Admin.TopicSpecification
                 { Name = topic, NumPartitions = 3, ReplicationFactor = 1 }]);
+            await KafkaReadiness.WaitForLeaders(admin, topic, partitions: 3);
         }
-        await Task.Delay(1500);
 
         var config = new ProducerConfig { BootstrapServers = BootstrapServers };
         using (var producer = new ProducerBuilder<string, string>(config).Build())
@@ -152,13 +160,18 @@ public sealed class KafkaErrorHandlingTests : IAsyncLifetime
         await consumer.Start();
 
         await WaitUntil(() => Volatile.Read(ref processedTotal) >= 30);
-        await Task.Delay(1500); // let the inline commit land
 
-        // The consumer is STILL RUNNING - no revoked-handler safety net involved.
+        // The consumer is STILL RUNNING - no revoked-handler safety net involved. The inline commit lands
+        // after the processor returns: read the committed offsets until they settle on the end of each partition.
         using var check = new ConsumerBuilder<string, string>(new ConsumerConfig
             { BootstrapServers = BootstrapServers, GroupId = groupId }).Build();
         var tps = Enumerable.Range(0, 3).Select(i => new TopicPartition(topic, new Partition(i))).ToList();
-        var committed = check.Committed(tps, TimeSpan.FromSeconds(10));
+        List<TopicPartitionOffset> committed = [];
+        await WaitUntil(() =>
+        {
+            committed = check.Committed(tps, TimeSpan.FromSeconds(10));
+            return committed.All(c => c.Offset.Value == 10);
+        });
         check.Close();
 
         committed.Should().OnlyContain(c => c.Offset.Value == 10,

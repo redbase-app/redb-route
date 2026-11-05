@@ -65,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Pending changes live in `changelog/unreleased/` until the release; `pwsh scripts/changelog.ps1 -Preview` shows them.
 
+## [4.6.2] — 2026-11-05
+
+### Changed
+
+- **Released in lockstep with redb.Identity 4.6.2.** No change in redb.Route itself: the packages move to 4.6.2 so the
+  whole ecosystem stays on one number. Nothing to do on your side.
+
 ## [4.6.1] — 2026-11-04
 
 ### Changed

@@ -16,9 +16,18 @@ namespace redb.Route.Tests.Kafka;
 /// in that transaction (exactly-once within Kafka), a send outside a block is a transaction of its own, and producers
 /// sharing a prefix do not fence each other.
 /// </summary>
-public sealed class KafkaTransactionsTests
+public sealed class KafkaTransactionsTests : IAsyncLifetime
 {
     private const string BootstrapServers = "localhost:29092,localhost:29094,localhost:29096";
+
+    /// <summary>
+    /// A producer's <c>InitTransactions</c> gives up after 30 s with "Coordinator load in progress" on a cluster that
+    /// is still loading its transaction log; the tests start once the coordinators answer.
+    /// </summary>
+    public Task InitializeAsync() =>
+        Task.WhenAll(KafkaReadiness.TransactionCoordinatorAsync(), KafkaReadiness.GroupCoordinatorAsync());
+
+    public Task DisposeAsync() => Task.CompletedTask;
 
     /// <summary>Over librdkafka's default message.max.bytes: refused before it leaves the client.</summary>
     private static byte[] TooLarge => new byte[2_000_000];
@@ -65,7 +74,8 @@ public sealed class KafkaTransactionsTests
         using var consumer = new ConsumerBuilder<string, byte[]>(config).Build();
         consumer.Subscribe(topic);
         var values = new List<string>();
-        var deadline = DateTime.UtcNow + (expected == 0 ? TimeSpan.FromSeconds(6) : TimeSpan.FromSeconds(20));
+        // Expected records end the read as soon as they are in; the bound only stops a broken run.
+        var deadline = DateTime.UtcNow + (expected == 0 ? TimeSpan.FromSeconds(6) : TimeSpan.FromSeconds(60));
         try
         {
             while (DateTime.UtcNow < deadline && (expected == 0 || values.Count < expected))
