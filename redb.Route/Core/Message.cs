@@ -1,0 +1,85 @@
+using System.Collections.ObjectModel;
+using redb.Route.Abstractions;
+
+namespace redb.Route.Core;
+
+/// <summary>
+/// Default implementation of IMessage.
+/// Holds a payload Body and a dictionary of Headers.
+/// </summary>
+public class Message : IMessage
+{
+    private readonly Dictionary<string, object?> _headers = new(StringComparer.OrdinalIgnoreCase);
+    private MessageAttachments? _attachments;
+
+    /// <inheritdoc />
+    public object? Body { get; set; }
+
+    /// <inheritdoc />
+    public IMessageAttachments Attachments => _attachments ??= new MessageAttachments();
+
+    /// <summary>The attachment list when one was created and holds something; <c>null</c> otherwise (no allocation).</summary>
+    internal MessageAttachments? AttachmentsOrNull => _attachments is { Count: > 0 } a ? a : null;
+
+    /// <inheritdoc />
+    public string? ContentType { get; set; }
+
+    /// <inheritdoc />
+    public IDictionary<string, object?> Headers => _headers;
+
+    /// <summary>Creates an empty message.</summary>
+    public Message() { }
+
+    /// <summary>Creates a message with the specified body.</summary>
+    /// <param name="body">Initial payload.</param>
+    public Message(object? body) => Body = body;
+
+    /// <inheritdoc />
+    public T? GetHeader<T>(string key)
+        => _headers.TryGetValue(key, out var value) ? TypedValue.Convert<T>(value, $"header '{key}'") : default;
+
+    /// <inheritdoc />
+    public IMessage Clone()
+    {
+        var clone = new Message(Body) { ContentType = ContentType };
+        foreach (var kvp in _headers)
+            clone._headers[kvp.Key] = kvp.Value;
+        // A new list over the same content sources, as the body reference is shared.
+        clone._attachments = AttachmentsOrNull?.Copy();
+        return clone;
+    }
+
+    /// <inheritdoc />
+    public IMessage Snapshot()
+    {
+        var snapshot = new Message(DeepCopyBody(Body)) { ContentType = ContentType };
+        // Header values are shared like Clone — they carry immutable metadata, not payload.
+        foreach (var kvp in _headers)
+            snapshot._headers[kvp.Key] = kvp.Value;
+        // Attachments are payload: their content is copied, like the body.
+        snapshot._attachments = AttachmentsOrNull?.DeepCopy();
+        return snapshot;
+    }
+
+    /// <summary>
+    /// Deep-copies a message body for a checkpoint snapshot. Handles the faithful, non-lossy cases
+    /// only: <c>null</c> / <see cref="string"/> / value types are immutable and shared as-is;
+    /// <c>byte[]</c> is copied; anything implementing <see cref="ICloneable"/> is cloned via its own
+    /// contract (the author is responsible for that clone being deep). Everything else throws — we
+    /// never silently share a mutable reference behind a "snapshot", nor round-trip through a
+    /// serializer (which would be lossy for many types). A serializer-based deep clone can be added
+    /// as an opt-in strategy later without changing this contract.
+    /// </summary>
+    internal static object? DeepCopyBody(object? body) => body switch
+    {
+        null => null,
+        string => body,                    // immutable
+        ValueType => body,                 // int/bool/DateTime/Guid/decimal/enum/tuples/structs — boxed copy is safe to share
+        byte[] bytes => bytes.Clone(),     // must precede ICloneable (byte[] is ICloneable but we copy the array)
+        ICloneable cloneable => cloneable.Clone(),
+        _ => throw new NotSupportedException(
+            $"Checkpoint snapshot cannot deep-copy a message body of type '{body.GetType().FullName}'. " +
+            "A replayable body must be immutable, a byte[], or implement ICloneable (with deep semantics). " +
+            "Materialize it into a snapshot-able form before the .Replayable() marker.")
+    };
+}

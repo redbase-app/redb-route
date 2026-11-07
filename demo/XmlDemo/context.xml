@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Context-level document: components, context-wide beans, the one-time init
+     pipeline. Loaded before the route artifacts, so #references resolve. -->
+<context xmlns="urn:redb:route:1.0">
+
+  <!-- The redb bridge contribution: sync the props scheme once at context start,
+       so the routes' redbSave/redbQuery never race the DDL. -->
+  <redb>
+    <syncScheme type="redb.Route.RedbCore.Models.IdempotentEntryProps, redb.Route.Core"/>
+  </redb>
+
+</context>

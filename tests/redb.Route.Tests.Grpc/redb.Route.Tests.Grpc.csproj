@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Grpc\redb.Route.Grpc.csproj" />
+    <!-- Shared Kestrel host: the gRPC consumer serves its methods as path routes on it,
+         the same way Http/As2/Soap do. -->
+    <ProjectReference Include="..\..\redb.Route.Http.Hosting\redb.Route.Http.Hosting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.Net.Client" />
+    <PackageReference Include="Google.Protobuf" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- One span capture for the smoke tests: the test root trace keeps parallel test classes out. -->
+    <Compile Include="../Shared/SpanCapture.cs" Link="Shared/SpanCapture.cs" />
+    <Compile Include="../redb.Route.Tests/Telemetry/RouteTelemetryProbe.cs" Link="Shared/RouteTelemetryProbe.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/TestPorts.cs" Link="Shared/TestPorts.cs" />
+  </ItemGroup>
+</Project>
+

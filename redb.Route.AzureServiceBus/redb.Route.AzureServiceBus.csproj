@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.AzureServiceBus</PackageId>
+    <Description>Azure Service Bus connector for redb.Route ESB framework. Event-driven consumer with PeekLock/ReceiveAndDelete, sessions, dead-letter queues, transacted acknowledge; producer with single/batch send and scheduled delivery.</Description>
+    <PackageTags>esb;messaging;azure;servicebus;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.AzureServiceBus" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Azure.Messaging.ServiceBus" />
+    <!-- Lifts the transitive 10.0.10 to the version the other projects bring, so the Tsak shared layer carries one copy. -->
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

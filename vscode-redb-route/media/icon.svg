@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- a message enters (green), passes a step (orange) and fans out to two exits (blue) -->
+  <text x="28" y="64" font-family="Segoe UI, Arial, sans-serif" font-size="44" font-weight="700" fill="#c2410c">redb</text>
+  <line x1="46" y1="150" x2="148" y2="150" stroke="#8b8fa3" stroke-width="14" stroke-linecap="round"/>
+  <g transform="translate(148 150) rotate(-36)">
+    <line x1="0" y1="0" x2="62" y2="0" stroke="#8b8fa3" stroke-width="14" stroke-linecap="round"/>
+    <path d="M58 -21 L86 0 L58 21 Z" fill="#0078d4" stroke="#0078d4" stroke-width="8" stroke-linejoin="round"/>
+  </g>
+  <g transform="translate(148 150) rotate(36)">
+    <line x1="0" y1="0" x2="62" y2="0" stroke="#8b8fa3" stroke-width="14" stroke-linecap="round"/>
+    <path d="M58 -21 L86 0 L58 21 Z" fill="#0078d4" stroke="#0078d4" stroke-width="8" stroke-linejoin="round"/>
+  </g>
+  <circle cx="50" cy="150" r="20" fill="#22c55e"/>
+  <rect x="100" y="126" width="48" height="48" rx="11" fill="#f97316"/>
+</svg>

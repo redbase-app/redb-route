@@ -1,0 +1,674 @@
+# redb.Route.Xml
+
+Declarative XML routes for [redb.Route](https://www.nuget.org/packages/redb.Route): `.route.xml`
+documents load into the existing fluent DSL — **one engine, no second semantics**. Every element
+is a thin facade over exactly one DSL verb; whatever the XML can say, C# can say, and the two
+spellings produce byte-identical definition trees (the test suite proves it for every shipped
+example).
+
+What you get on top of the engine:
+
+- the **full EIP vocabulary** as XML — ~60 elements covering every string-expressible verb of
+  the DSL, plus container-level handlers and the REST DSL;
+- **load-time failure** for everything that can fail early: unknown elements (with a
+  *did-you-mean* hint), malformed expressions, unregistered URI schemes, attribute typos —
+  all collected in **one pass** with `file(line,column)` positions;
+- a **generated XSD** for editor autocompletion (VS Code / Visual Studio / Rider, no plugin of
+  ours), a **component catalog** for property panels, a **C# generator** and **Mermaid
+  diagrams** from the same parse;
+- **project scaffolding and packaging**: `redb-route-xml new` → an ordinary `.csproj` with
+  routes, resources and layered configuration; `pack` → a signed-ready package layout with a
+  manifest and a hard-error check gate.
+
+## Quick start
+
+```csharp
+await using var context = new RouteContext()
+    .AddXmlRoutesFromContent("""
+        <routes xmlns="urn:redb:route:1.0">
+          <route id="orders-in" description="Orders intake">
+            <from uri="direct://orders"/>
+            <setHeader name="priority" expr="${header.amount > 1000 ? 'high' : 'normal'}"/>
+            <filter expr="header.amount > 0">
+              <choice>
+                <when expr="header.priority == 'high'">
+                  <to uri="direct://orders-vip"/>
+                </when>
+                <otherwise>
+                  <to uri="direct://orders-std"/>
+                </otherwise>
+              </choice>
+            </filter>
+          </route>
+        </routes>
+        """);
+await context.Start();
+```
+
+Files and globs work the same way — `AddXmlRoutes("routes/*.route.xml")` loads every match in
+deterministic order (relative paths resolve through the route resource resolver, never the
+process working directory), and a pattern matching nothing is an error naming the searched
+places. In a DI host, register inside `AddRedbRoute`:
+
+```csharp
+services.AddRedbRoute(r => r.AddXmlRoutes("routes/*.route.xml"));
+```
+
+A document with errors registers **nothing** — there is no half-loaded state.
+
+## The format at a glance
+
+The namespace is `urn:redb:route:1.0`; the major part changes only on a breaking format change,
+and a document carrying a newer minor is refused with "update the redb.Route.Xml package" rather
+than a confusing parse error. Every element lives in this namespace — a foreign-namespace
+element never passes just because its local name matches.
+
+Every element accepts `id=` and `description=`: they flow into step identity (message history
+node ids and labels, `WeaveById` targets, generated-code comments).
+
+**Leaf steps** — `to`, `toD`, `setHeader`, `setProperty`, `setBody`, `setHeaders`, `setProperties`, `transform`,
+`removeHeader/Property/Body/Headers/Properties`, `addAttachment` (exactly one of `expr`, `fromBody="true"`, `file`,
+`fileExpr`; `name`, `fileName` or `fileNameExpr`, `contentType`), `removeAttachment`, `removeAttachments`, `log`,
+`delay`, `stop`, `throwException`,
+`convertBody`, `wireTap`, `validate`, `sort`, `sample`, `streamCaching`, `validateJsonSchema`,
+`validateXsd`, `xslt`, `marshal`, `unmarshal`, `controlBus`, `enrich`, `pollEnrich`,
+`recipientList`, `dynamicRouter`, `routingSlip`, `claimCheck`, `beginTransaction`,
+`commitTransaction`, `rollbackTransaction`, `rollbackAll`, `exceptionHandled`, `routePolicy`,
+`saga`, `scatterGather`, `loadBalance`, `normalize`, `spanTag` (`key`, `value` or `expr`,
+`target="Inbound"` for the request's own span — a business key to find the trace by; exported unfiltered).
+
+**Scopes** (children are steps) — `filter`, `split` (with `tokenizeLines` / `tokenizeXml` /
+`tokenizeJsonArray` children), `multicast`, `aggregate`, `tryCatch` (`try`/`catch`/`finally`),
+`loop` (count / expr / while), `throttle` (plain and keyed), `debounce`, `circuitBreaker`
+(with `fallback`), `idempotentConsumer`, `resequence`, `transaction`, `traced`, `metered`,
+`replayable`, `threads`, `ofType`, `onException`, `intercept`, `interceptFrom`,
+`interceptSendToEndpoint`, `onCompletion`.
+
+**Branching** — `choice` with `when` (expression or `predicate="#name"` registry reference)
+and `otherwise`.
+
+**Container level** (directly under `<routes>`; the handlers apply to the routes of this file) —
+`bean`, `onException`, `intercept`, `interceptFrom`, `interceptSendToEndpoint`,
+`onCompletion`, and package-contributed top-level elements such as `rest`. `routeConfiguration` is the
+container-level element whose `onException` blocks reach the routes of **other** files too.
+
+A few rules that keep documents unambiguous:
+
+- `value=` is a constant, `expr=` is an expression — **both at once is a schema error**, and
+  which one you used decides the meaning, never the content of the string;
+- file-or-content elements (`xslt`, `validateXsd`, `validateJsonSchema`, `transformJson`,
+  `payload`) take `file=`/locator **or** inline content (CDATA welcome) — not both;
+- `<validateXsd file="…">` keeps the file, so the schema's imports and includes resolve relative to it, from under
+  `schemaRoot=` (relative to the schema's directory, which is the default); inline content is one schema, and
+  `schemaRoot=` on it is an error;
+- `<aggregate>` requires an explicit `strategy` — there is no silent default;
+- a condition is written `header.kind == 'order'`, **not** `${header.kind} == 'order'`: with
+  `${…}` the line is a template, and a template in a condition position renders to a non-empty
+  string, which is true whatever the header holds;
+- a `${…}` placeholder in a **consumer** URI (`<from>`) is refused at load: there is no
+  message to resolve it against.
+
+## Expressions
+
+Positions decide meaning — the same rule the fluent DSL follows:
+
+| Position | Elements | Becomes |
+|---|---|---|
+| condition | `filter`, `when`, `validate`, `loop while=` | a predicate |
+| value | `setBody`, `setHeader`, `transform`, `toD`, keys and correlations | an evaluated object |
+| plain string | `uri`, `id`, `description`, `name`, literal `value=` | a literal, never parsed |
+
+The expression language is the engine's own — `${header.x}`, `count(property.items) > 2 ?
+'many' : 'few'`, `${jpath('$.order.id')}`, `${xpath('/order/@id')}`, arithmetic, `uuid()`,
+`datediff(...)`, `messageHistory(...)` (the exchange's own trail: `'compact'`, `'count'`,
+`'slowestMs'`, ...), `stats(...)` (endpoint statistics, and the OpenTelemetry layer through
+`'otel:<instrument>'`), the message attachments (`attachments.size`, `attachmentContentAsText('note')`,
+`attachmentContentType(...)`, `attachmentHeader(...)`) — and a broken expression fails **when the document loads**, not on the
+first message. Whitespace around operators is insignificant, so `expr="header.amount>1000"` avoids
+XML escaping entirely (`>` needs no escape in attribute values; `<` does).
+
+Membership is `in` / `not in`, against a list the message carries or a literal in parentheses:
+
+```xml
+<when expr="header.region in ('eu', 'uk')">…</when>
+<filter expr="header.status not in property.closedStatuses">…</filter>
+
+<!-- in a redb query it becomes one SQL IN, for props and base fields alike -->
+<redbQuery type="Hub.Order, Hub" whereRedb="ValueString in header.codes" outputType="List"/>
+<redbQuery type="Hub.Order, Hub" where="Status in ('open', 'held')" whereRedb="Id not in (7, 9)"/>
+```
+
+Type-shaped checks the language cannot express go through the registry:
+`<when predicate="#isStringList">` resolves an `IPredicate` you registered from code.
+
+### Calling code
+
+A bean declared with `<bean name type>` (or registered from code) is called as a step, or from any expression:
+
+```xml
+<bean ref="#pricing" method="Gross(${header.qty}, ${header.price})"/>   <!-- the step: <to><bean/></to> without the wrapper -->
+<filter expr="bean:loyalty.IsGold(header.customer)">                    <!-- the bean: function in a condition -->
+  <setBody expr="${bean:pricing.Badge(header.customer, ${header.points})}"/>
+</filter>
+```
+
+The step may call an asynchronous method; the `bean:` function is synchronous, as in Apache Camel's Simple, and
+refuses a method returning a task. `check` / `pack` verify each call, the method and its number of arguments included
+with `--bin`. The language guide is [EXPRESSIONS.md](../EXPRESSIONS.md).
+
+## Endpoints: URI form and structured form
+
+Short addresses stay URIs. Long or option-heavy ones can be written structurally — the loader
+normalizes the element into **the same URI string** before any endpoint exists, so the whole
+engine pipeline (endpoint cache, statistics, mock masks, secret redaction) sees one canon:
+
+```xml
+<to uri="kafka://orders?key=${header.tripId}"/>          <!-- same thing -->
+<to>
+  <kafka topic="orders" key="${header.tripId}" groupId="orders-svc"/>
+</to>
+
+<to>
+  <sql dataSource="#main-db">
+    <![CDATA[ INSERT INTO auth_log(login, at) VALUES (:#login, :#at) ]]>
+    <param name="login" value="${header.login}"/>
+    <param name="at" value="${dateformat(now(), 'o')}"/>
+  </sql>
+</to>
+```
+
+The rules are generic — **no connector has XML-specific code**:
+
+- the element name is the scheme; every attribute becomes a query option verbatim — except an
+  attribute in a foreign namespace, which is metadata for other tools and never reaches the connector;
+- the path part is the universal `path=` attribute, the component's declared one-line synonym
+  (`kafka` → `topic`, `file` → `directory`), or the element's text content for text-path
+  components (`sql` — and `path=` on those is refused: the query belongs in CDATA);
+- `<param name="…" value="…"/>` children become `param.name=…` family options; a child with
+  content and no `name` becomes a long text option (`<onSuccess><![CDATA[…]]></onSuccess>`);
+- connection factories are ordinary options carrying registry references:
+  `connectionFactory="#mainKafka"`, `dataSource="#main-db"`.
+
+## Container level: beans, handlers, REST
+
+`<bean>` declares objects in the context registry — the factories your endpoints reference:
+
+```xml
+<bean name="main-db" type="redb.Route.Sql.Connection.SqlConnectionFactory, redb.Route.Sql">
+  <constructorArg>
+    <bean type="redb.Route.Sql.Connection.SqlConnectionOptions, redb.Route.Sql">
+      <property key="ConnectionString" value="{{db.main.connection}}"/>
+    </bean>
+  </constructorArg>
+</bean>
+```
+
+Values resolve `{{key}}` / `{{key:default}}` through the context's configuration chain
+(`IConfiguration` with the host's own sources, then context properties, then the OS environment
+only when the context has no `IConfiguration`) **before** type conversion — `{{ldap.port:636}}`
+binds to an `int`. Nested anonymous beans build option graphs inline. Objects with real
+dependencies stay in code; XML references them by `#name`.
+
+The same placeholders work in endpoint URIs, in `enabled=` of a route and in `value=` of `<setHeader>`, `<setProperty>`
+and `<setBody>`: `<setHeader name="redbLdap.AuthDn" value="{{ldap.user}}"/>` sets the configured value, resolved through
+the same chain when the route first runs (`Placeholder("{{ldap.user}}")` in C#). A key with no value and no default fails
+the exchange, in the words a URI uses. Inside an `expr=` the expression language reads the message, not the
+configuration: put a configured value into a header first and read `${header.…}`.
+
+A `<property>` or `<constructorArg>` takes exactly one of: `value=`, `ref=`, one nested anonymous
+`<bean>`, one `<list>`. So a factory that holds an OBJECT - a certificate, a credentials object, a
+serializer - is declarable too. When the type is
+built by a static creator rather than a constructor, `factoryMethod=` names it and the
+`<constructorArg>` values are its arguments:
+
+```xml
+<bean name="globex" type="redb.Route.As2.As2ConnectionFactory, redb.Route.As2">
+  <property key="OurCertificate">
+    <bean type="System.Security.Cryptography.X509Certificates.X509CertificateLoader, System.Security.Cryptography.X509Certificates"
+          factoryMethod="LoadPkcs12FromFile">
+      <constructorArg value="{{as2.certificates}}/hub.pfx"/>
+      <constructorArg value="{{as2.password}}"/>
+    </bean>
+  </property>
+  <property key="As2From" value="{{as2.id}}"/>
+  <property key="Sign" value="true"/>
+</bean>
+```
+
+A constructor or factory method is called the way C# calls it: the parameters after the given
+arguments must be optional and take their defaults (`LoadPkcs12FromFile` has two more), and an
+overload no markup value can reach (a `ReadOnlySpan<char>` password) is not a candidate. When
+several overloads still fit the values, name the parameter types with `type=` on every
+`<constructorArg>`, Spring's `constructor-arg type`; the values are then converted to exactly those
+types. `X509CertificateLoader` exists from .NET 9; on .NET 8 the certificate comes from its own
+`(string, string)` constructor, one of several two-argument ones:
+
+```xml
+<bean name="node-cert" type="System.Security.Cryptography.X509Certificates.X509Certificate2, System.Security.Cryptography">
+  <constructorArg type="System.String" value="{{as4.certificates}}/node.pfx"/>
+  <constructorArg type="System.String" value="{{as4.password}}"/>
+</bean>
+```
+
+`type=` goes on every argument or on none. Without it an ambiguous choice is a load error that
+lists the candidates, never a guess.
+
+A bean can point at another bean and hold a list. `ref="name"` (or `<ref bean="name"/>` inside a
+list) is the registered instance itself, not a copy. A `<list>` holds `<value>` text, `<ref>`,
+anonymous `<bean>` and nested `<list>` items, and builds into the declared type of the property:
+`T[]`, `List<T>`, `IList<T>`, `ICollection<T>`, `IReadOnlyList<T>`, `IReadOnlyCollection<T>` or
+`IEnumerable<T>`. Each item is converted to or checked against `T`:
+
+```xml
+<bean name="acme"   type="Hub.Partner, Hub"><property key="Id" value="{{as4.acme.id}}"/></bean>
+<bean name="globex" type="Hub.Partner, Hub"><property key="Id" value="{{as4.globex.id}}"/></bean>
+
+<bean name="as4-node" type="Hub.Node, Hub">
+  <property key="Partners">
+    <list>
+      <ref bean="acme"/>
+      <ref bean="globex"/>
+      <bean type="Hub.Partner, Hub"><property key="Id" value="{{as4.partner3.id}}"/></bean>
+    </list>
+  </property>
+  <property key="Ports"><list><value>{{as4.port}}</value><value>8443</value></list></property>
+  <property key="Signing" ref="node-cert"/>
+</bean>
+```
+
+Rules:
+
+- **References look back only.** Beans are built in load order: the context file first, then the
+  route files in the order the package manifest lists them, each file from top to bottom. A
+  reference must name a bean declared above it, or one that module code registers before the XML
+  loads. A forward or unknown reference is a load error with its position, never a `null`.
+- **`ref` is the bare name:** `ref="acme"`, not `ref="#acme"`. The `#` belongs to URI options.
+- **`of=` names the element type where nothing else does.** On a property or a `factoryMethod`
+  argument the target type is known, so `of=` may be left out. When `of=` is written, it must equal
+  that element type. A constructor is chosen only after its arguments are built, so a list passed
+  to a constructor needs `<list of="Hub.Partner, Hub">`; it is built as `T[]`, which a constructor
+  taking `T[]`, `IEnumerable<T>` or `IReadOnlyList<T>` accepts.
+- `<value>` appears only inside a `<list>`; a single value is `value=` on the slot.
+
+`redb-route-xml check` reads beans with the loader's grammar. It reports a forward reference as an
+error. A reference the package does not declare is a warning, because module code may register it.
+With `--bin` it also checks every value against its target type: list items, nested beans, and the
+type a `factoryMethod` returns.
+
+Repositories are beans like any other. `repository="#dedup"` on `<idempotentConsumer>` or
+`<claimCheck>`, and a consumer's `idempotentRepository=dedup`, look up the bare name `dedup` and
+check its type:
+
+```xml
+<bean name="dedup" type="redb.Route.Processors.InMemoryIdempotentRepository, redb.Route"/>
+<!-- or, stored in redb, in context.xml: -->
+<redb><idempotentRepository name="dedup" ttl="7.00:00:00"/></redb>
+
+<idempotentConsumer key="${header.messageId}" repository="#dedup">…</idempotentConsumer>
+```
+
+The gate counts `<redb><idempotentRepository name>` as a declaration of `dedup`, the same as a
+`<bean name>`. With `--bin` it also checks that the named object implements what the reference
+needs: `IIdempotentRepository` for `<idempotentConsumer>`, `IClaimCheckRepository` for
+`<claimCheck>`.
+
+Handlers declared at the container level apply to the routes **of their own file** — each file is a route builder,
+and a builder's `onException`, `intercept*` and `onCompletion` cover its own routes (Apache Camel's RouteBuilder scope;
+they used to leak to every route of the context — see the CHANGELOG). For a failure of any route of the context that
+no `onException` took, the context has its dead letter channel: `<deadLetterChannel uri="..."/>` in `context.xml`
+(see [The context document](#the-context-document)).
+
+```xml
+<onException exceptions="System.Exception" handled="true"
+             maximumRedeliveries="2" redeliveryDelay="00:00:01" exponentialBackOff="true">
+  <log level="Error">[ERR] ${routeId}: ${exception.message}</log>
+</onException>
+```
+
+### Handlers shared by several files: `<routeConfiguration>`
+
+Apache Camel's Route Configuration. Its `<onException>` blocks apply to the routes of every file and every C#
+builder of the context, so one file can hold the error handling of a whole module:
+
+```xml
+<!-- errors.route.xml: no routes, only the shared handlers -->
+<routes xmlns="urn:redb:route:1.0">
+  <!-- No id: the default, for every route that names no configuration. -->
+  <routeConfiguration>
+    <onException exceptions="System.Exception" handled="true" maximumRedeliveries="2">
+      <log level="Error">[ERR] ${routeId}: ${exception.message}</log>
+    </onException>
+  </routeConfiguration>
+
+  <!-- With an id: for the routes that name it. -->
+  <routeConfiguration id="audit">
+    <onException exceptions="System.IO.IOException" handled="true">
+      <to uri="direct://audit-failed"/>
+    </onException>
+  </routeConfiguration>
+</routes>
+```
+
+```xml
+<route id="audit-publish" routeConfigurationId="audit">
+  <from uri="direct://audit"/>
+  ...
+</route>
+```
+
+- `routeConfigurationId` takes exact ids, a wildcard ending in `*` or a regular expression, separated by commas.
+  A route that names configurations does not get the default one.
+- An id is unique within the context; an exact id nobody declares fails `Start()`, naming the route.
+- The same element is valid in `context.xml`, beside `<deadLetterChannel>`.
+- Which handler takes a failure: the one whose exception type is nearest to it, among the route's own
+  `<onException>`, its file's and its configurations'. On a tie the route's own wins, and a configuration's handler
+  is used instead of its file's handler of the same type.
+- `<routeConfiguration>` takes `<onException>` only; intercepts and `<onCompletion>` stay at the container level of
+  the file whose routes they serve.
+
+### The retry policy of a handler
+
+`<onException>` spells everything its fluent counterpart does:
+
+```xml
+<onException exceptions="System.Net.Http.HttpRequestException"
+             handled="true" maximumRedeliveries="3" redeliveryDelay="00:00:02"
+             exponentialBackOff="true" backOffMultiplier="2.0"
+             useOriginalBody="true" logStackTrace="false" logExhausted="true" logHandled="true"
+             retryAttemptedLogLevel="Debug" retriesExhaustedLogLevel="Critical"
+             onExceptionOccurred="#countFailure" onRedelivery="#stampAttempt"
+             onPrepareFailure="#stampDead">
+  <when expr="header.retryable == 'true'"/>
+  <retryWhile expr="property.attempt &lt; 5"/>
+  <to uri="direct://dead-letters"/>
+</onException>
+```
+
+`<when>` decides whether this handler takes the failure at all, `<retryWhile>` whether another
+attempt follows; both are conditions of the handler, not steps of it. The three references name
+`IProcessor` beans from the registry and run at their own moments: `onExceptionOccurred` on every
+occurrence, `onRedelivery` before each retry, `onPrepareFailure` once, before the handler takes
+over for good. A name the registry does not hold is refused at load, with its position.
+
+The entry written when the retries are over follows `logHandled` / `logContinued`: a failure the handler
+handled is logged only with `logHandled="true"`, one it continued only with `logContinued="true"` (both
+`false` by default, as in Camel), and an unhandled failure is always logged. A rollback-only exchange is
+logged either way, its work having been rolled back. `logExhausted="false"` silences the entry altogether.
+
+`handled="true"` ends the route after the handler; `continued="true"` resumes it at the step
+**after** the one that failed, as Camel's `continued(true)` does. What the resumption does not
+replay:
+
+- the failing step itself — it is skipped, the rest goes on;
+- a `.Transacted()` block whose step failed: the transaction rolled back, so the route picks up
+  after the block, not inside it;
+- the body of a `<tryCatch>` whose failure a `<catch>` already took.
+
+A failure in a resumed step is handled again, but not retried: a redelivery restarts the route
+from its first step, so `maximumRedeliveries` does not apply to what the resumption replays.
+
+The REST DSL is a container-level element from the `redb.Route.Http` package:
+
+```xml
+<rest path="/api/orders" port="5099" bindingMode="json">
+  <get path="/{id}" id="orders-get" to="direct://orders-get-handler"/>
+  <post produces="application/json">
+    <setHeader name="accepted" value="true"/>
+    <to uri="kafka://orders"/>
+  </post>
+</rest>
+```
+
+A verb handles its request with `to=` **or** inline steps — one of the two. Path parameters
+arrive as `header.id`, query as `header.query.*`; OpenAPI is served at `{path}/openapi.json`.
+
+## The context document
+
+Besides route files, a package can carry a `context.xml` — the context-level concerns:
+
+```xml
+<context xmlns="urn:redb:route:1.0">
+  <components>
+    <component type="redb.Route.Sql.SqlComponent, redb.Route.Sql"/>
+  </components>
+  <bean name="main-db" type="…"> … </bean>
+  <!-- the context's dead letter channel: a failure of any route no onException took -->
+  <deadLetterChannel uri="direct://errors"/>
+  <!-- a data format for <marshal format="csv"/>: the serializer type, extra names, its options -->
+  <dataFormat type="redb.Route.DataFormats.Csv.CsvDataFormat, redb.Route.DataFormats.Csv" name="csv" delimiter=";"/>
+  <!-- C# routes of the same context: a RouteBuilder of the module's own assembly -->
+  <routeBuilder type="Orders.Routes.OrdersRoute, Orders"/>
+  <onInit>
+    <to uri="sql:CREATE TABLE IF NOT EXISTS demo_log (id BIGINT)?dataSource=#main-db"/>
+    <to uri="bean:#seeder?method=EnsureDefaults"/>
+  </onInit>
+</context>
+```
+
+`<dataFormat>` registers a format on the context, as `context.AddDataFormat(...)` does in code: `<marshal format="…"/>`,
+`<unmarshal format="…"/>` and content-type dispatch find it under its own content type and media types and under each
+name in `name` (comma-separated). The other attributes set the serializer's options by property name, as on the per-step
+`<marshal type="…" delimiter=";"/>`, which needs no registration and suits a format used in one place.
+
+XML to JSON without a class is the xmljson format ([redb.Route.DataFormats.XmlJson](../redb.Route.DataFormats.XmlJson/README.md)):
+a named instance with its schema, `<dataFormat name="orders-json" type="redb.Route.DataFormats.XmlJson.XmlJsonDataFormat,
+redb.Route.DataFormats.XmlJson" schema="schemas/order.xsd"/>`, then `<marshal format="orders-json"/>`. `check` and
+`pack` verify that the schema is in the package and compiles and that its `arrays=` paths name declared elements.
+
+`<routeBuilder>` adds a C# route builder to the context, as `context.AddRoutes(new OrdersRoute())` does in code, so one
+package keeps routes in markup and in the DSL side by side, in one context. The type resolves like a `<bean type>`: in a
+Tsak package, from the package's own assemblies first, so a module built with `RoutePackageIncludeAssembly=true` names
+its builders by `Namespace.Type, Assembly`. The type must be a public, non-abstract class deriving from `RouteBuilder`
+with a public parameterless constructor, the rule of `AddRoutes(Assembly[])`. A builder reads its configuration through
+`{{key}}` properties and reaches the beans of `context.xml` by their registry name (`bean:#name`). It is added once
+the whole document is valid, and a builder already in the context, or named twice, is a load error. Route ids share one
+context with the markup routes: a clash fails the start. `redb-route-xml check --bin` and `pack --bin` hold the type
+against the same rule, so a wrong one fails the build.
+
+`<onInit>` is a pipeline of ordinary format steps, run **once** in the engine's fail-fast
+bootstrap phase: a failed step keeps the context from accepting traffic, and the error names
+the source file. Load it with `AddXmlContext("context.xml")` / `AddXmlContextFromContent(...)`
+— before the route files, so `#references` and schemes resolve.
+
+## Configuration and `enabled=`
+
+Configuration is layered; the package itself carries **identity only** (`ContextName`,
+`AutoStart`) — settings and secrets arrive from the host's merged configuration at deploy time.
+Every `{{key}}` without a `{{key:default}}` is recorded by the packaging tool in the manifest's
+`RequiredConfigKeys`, so a missing value fails fast at module init instead of surfacing as a
+malformed URI at 3 a.m.
+
+`enabled="{{features.orders:false}}"` on a `<route>` resolves from the same chain at load — a
+route can be switched per environment without touching the package. `enabled="false"` skips
+registration entirely (stronger than `autoStart="false"`, which registers but does not start).
+
+## Errors: one pass, positions, no half-states
+
+Everything wrong with a document is reported together:
+
+```text
+routes/orders.route.xml(4,6): unknown element <setHeaderr>. Did you mean <setHeader>?
+routes/orders.route.xml(7,10): <setHeader> takes 'value' or 'expr', not both.
+routes/orders.route.xml(12,8): [schema] The 'bogus' attribute is not allowed.
+routes/orders.route.xml(15,6): scheme 'kafkaa' is not registered in this context.
+```
+
+The parser's own findings win on a shared line; the generated-XSD pass (on by default,
+`ValidateAgainstSchema = false` to opt out) adds what the parser deliberately leaves to it —
+above all, attribute typos. Fixing ten mistakes takes one run, not ten.
+
+## Testing an XML route
+
+An XML route is tested exactly like a C# route — with `redb.Route.TestKit`, no test host of
+its own:
+
+```csharp
+await using var ctx = new RouteContext().AddXmlRoutesFromContent(xml);
+ctx.AdviceAllRoutes(a => a.MockEndpoints("kafka://*", "sql:*"));
+await ctx.Start();
+
+var mock = ctx.Mock("kafka://orders").ExpectMessageCount(1).ExpectHeader("seen", "true");
+await ctx.SendBody("direct://in", "payload");
+await mock.AssertIsSatisfiedAsync(TimeSpan.FromSeconds(2));
+```
+
+- **Swapping transports.** `MockEndpoints("kafka://*")` rewrites the definition tree between
+  load and `Start()` — the same seam for both spellings of a route.
+- **Weaving by id.** `AdviceRoute(id, a => a.WeaveById("step-id").Replace(...))` finds a step
+  by its XML `id=` attribute.
+- **Secrets stay out of reports.** The query string of a URI — where passwords live — is not
+  part of the mock name and never appears in a failed assertion's report (nor, from there, in
+  CI logs).
+- **Why `mock:` and not a real broker.** A unit test asserts the ROUTE — branching, headers,
+  bodies; a broker adds latency and flakiness to that claim. Keep one integration test per
+  transport against the real thing; let every route test run on mocks.
+- **Structural comparison.** `redb.Route.Diagnostics.RouteDescriber` renders a definition tree
+  as stable, diffable text — equivalence tests compare XML against its fluent C# twin
+  byte-for-byte, and golden files pin the parse of every shipped example.
+
+## Schema and editor support
+
+The XSD is **generated from the element registry** — the same list the parser reads, so they
+cannot drift. `XmlRouteSchema.Generate(registry)` covers the vocabulary with enum value hints
+(`level=`, `policy=`, `strategy=` complete from a list), required attributes, and rejection of
+unknown elements; foreign-**namespace** attributes are tolerated by design so other tools can
+annotate route files. Pass a `ComponentCatalog` to make structured endpoint children strict and
+typed per connector. A connector that refuses parameters it has no option for (every connector
+not marked `[LenientProperties]`; `http:`, `sql:` and `bean:` are lenient) gets no room for
+unknown attributes in that schema, so the editor flags `<timer perod="…">` the way the engine
+would refuse it at start. An option only one side of an endpoint reads (`[EndpointRole]`) is
+refused on the other side the same way: `username` / `authScheme` are what an `http:` producer
+sends and are an error inside `<from>` (the editor names the type `producerOnlyOption`), while
+`inboundAuth` and its companions are what an `http:` consumer requires and are an error inside
+`<to>` (`consumerOnlyOption`). `<from>` creates the consumer; every other address-carrying step,
+`pollEnrich` included, creates a producer. Point any XSD-aware editor at it — VS Code with the RedHat XML extension:
+
+```jsonc
+// .vscode/settings.json
+{
+  "xml.fileAssociations": [
+    { "pattern": "**/*.route.xml", "systemId": "./schema/redb-route-1.0.xsd" }
+  ]
+}
+```
+
+The component catalog (`ComponentCatalog.Build`, `ToJson`) describes every connector for a
+property panel — scheme, path synonym, options with types, defaults, enum values, `[Sensitive]`
+marks — by reflection over the connector's own `Options` class. A new connector appears in the
+structured form, the catalog and the schema with **zero XML-specific code**.
+
+An option whose value names a registry object (`connectionFactory=main`, `headerFilterStrategy=#filter`) carries
+`[RegistryReference(typeof(T))]` from `redb.Route.Core` (`[ConnectionFactoryReference]` is one too). The catalog
+writes it as the option's `reference`: the expected type as `Full.Name, Assembly`, or `object` when the mark names
+none; an option without the mark has no `reference`. A connector author marks such options so the editor and the
+package gate know them: in a marked option `check` reads a bare name (`connectionFactory=main`) as a reference, as it
+reads `#main` anywhere, in the URI and the structured form, and warns when no `<bean>` of the package declares it. The
+core's options are known without `--bin`, a connector's with it; values with `{{…}}` or `${…}` are left alone. With
+`--bin` a name in an option marked with a type is held against it, per connector: a `<bean>` of the package whose type
+is not assignable to the expected one is an error (`'main' is registered as Acme.Pool, which is not an
+RabbitMQConnectionFactory.`). An option marked without a type is not checked, and a bean whose type does not load, or
+that the package does not declare, gives no type error.
+
+## Tooling: scaffold, pack, generate
+
+The `redb-route-xml` dotnet tool (package `redb.Route.Xml.CodeGen` — a developer tool, not part
+of the runtime):
+
+| Command | What it does |
+|---|---|
+| `new Orders --context orders` | scaffolds a route project: an ordinary `.csproj`, `context.xml`, `routes/`, `resources/`, layered `config/`, the generated XSD wired into `.vscode` |
+| `pack . --version 1.0.0 [--bin bin/Debug/net9.0] [--entry bin/Debug/net9.0/Orders.dll] [--depends shared-beans]` | runs the checks, then builds the package layout (`manifest.json`, config, artifacts, resources) and a `.tpkg` zip; `--entry` (repeatable) adds a DLL as the package's entry point; `--depends` (repeatable) names a package the worker opens before this one |
+| `check . [--depends shared-beans]` | the same gate for CI — findings only |
+| `catalog <binDir> --out dir` | builds the component catalog + catalog-aware XSD from built connector assemblies |
+| `csharp routes/x.route.xml --namespace My.Routes` | fluent C# (readable, or `--style machine` with `#line` mapping diagnostics back to the XML) |
+| `mermaid routes/x.route.xml` | a flowchart from the same parse |
+| `xsd --out dir` | the generated schema for the core set |
+
+Packaging checks are **hard errors, not advice**: schema validation with positions, `]]>`
+inside CDATA, files missing from `resources/` (`file=`, and the files package elements name:
+`<payload template=>`, `<transformJson spec=>`), undeclared `#name` references;
+with `--bin`, bean types are verified against the real assemblies — a renamed type, a
+non-public type, a typo in a `<property>` or in `bean:…?method=` refuses the build. With `--bin`
+the gate also reads the connectors of that output and holds every endpoint's parameters against
+them, in the URI form and the structured form alike: a name a strict connector does not know is
+an error with its position, in the engine's own words (`'perod' is not an option of the Timer
+endpoint. Did you mean 'period'?`), instead of a refusal when the route starts. An option written
+on the side that does not read it is an error too, on any connector (`'username' is read only by
+the producer side of the http endpoint; <from> creates the consumer, which refuses it.`). So is a
+connection parameter written beside the option that names a connection factory (`[ConnectionParameter]`,
+`[ConnectionFactoryReference]`): the factory is the whole connection (`connectionFactory 'main' sets the
+whole connection, so host cannot be given on the URI as well.`). A literal
+secret in a URI is a warning that names the fix (supply it through configuration). Add
+`-p:PackRouteOnBuild=true` to a scaffolded project to pack on every `dotnet build`.
+
+With `--bin` the gate also runs the package checks of that output: every public, non-abstract `IPackageCheck`
+(`redb.Route.Xml.Packaging`) with a parameterless constructor in its `redb.Route.*.dll`, found the way element
+contributions are. A check receives the project's route documents with line information and the package's resource
+lookup, and reports errors and warnings at nodes of those documents; one that throws is an error naming it. The xmljson
+format ships one: without `--bin` the gate checks only that its schema is a file of the package and that its
+`arrays=` paths are well formed, with `--bin` the format compiles the schema with its own reader and walks it (see the
+redb.Route.DataFormats.XmlJson README).
+
+The schema of `<validateXsd file="…">` is compiled by the gate as the route compiles it when it starts, without
+`--bin`: an import or include that is missing, lies outside `schemaRoot` or points to the network, and anything else
+the schema compiler reports, is an error at the `file=` attribute (`validateXsd schema 'order.xsd' does not compile:
+…`). A `schemaRoot` that leads out of `resources/` is an error too, since pack ships only that tree. A value that holds
+a placeholder is left to configuration, and inline content is not compiled here.
+
+A package carries only the DLLs passed with `--entry`. A project whose markup uses its own C# types (`<bean type="My.Beans.X,
+MyModule"/>`) passes its build output: `--entry "$(TargetPath)"` in the build target. The DLL is packed at the package
+root and named in `manifest.json` by its file name; Tsak loads it into the package's own load context, where the markup's
+bean types are looked up first. The route-xml templates of `redb.Templates` do this when the project sets
+`<RoutePackageIncludeAssembly>true</RoutePackageIncludeAssembly>`.
+
+A package whose markup uses types another package ships (a carrier of shared companion DLLs) names that package with
+`--depends <name>`, the manifest `Name` the carrier was packed with. The names go into `manifest.json` `Dependencies`, and
+the Tsak worker opens the carrier first, at startup and on hot reload. The gate checks only the shape of each name: not
+blank, not a file or a path, not the package itself, listed once. Whether the carrier is deployed is the worker's
+business, so `check` does not look for it.
+
+What the gate **warns** about, leaving the decision to the author: a step that never runs
+(anything after `<stop/>`, `<rollbackAll/>` or `<throwException/>` in the same list), an
+undeclared `#name` (module code may register it at startup), a literal secret in a URI, and a
+condition that compares outside a placeholder — `expr="${header.kind} == 'order'"` renders to
+text before it is read, and non-empty text is true whatever it says, so the branch always wins.
+A lone `${header.enabled}` and a comparison written entirely inside the braces are both read
+correctly and stay silent.
+
+About the generated C#: it is what the XML says, pronounced in C# — not what a person would
+have written. There are no lambdas in it, because there are none in XML. For migration that is
+exactly right; the mechanical guarantee is stronger than style — the generated code produces a
+definition tree **byte-identical** to loading the XML.
+
+## Extending the format from your package
+
+A package with DSL of its own ships one class per element — parse, schema shape and C# printing
+together, so the loader, the XSD and the generator see the element together or not at all:
+
+```csharp
+public sealed class CacheXmlContribution : IXmlElementContribution
+{
+    public string Name => "cache";
+    public XmlElementKind Kind => XmlElementKind.Scope;
+    public ElementSpec Spec => …;          // attributes, enum values, children — feeds the XSD
+    public IRouteDefinition Apply(…) => …; // calls the package's own fluent DSL, nothing else
+    public void Print(…) => …;             // the generator's face; missing = loud error
+}
+```
+
+Hosts register contributions via `XmlRouteLoaderOptions.Extensions`. A duplicate element name
+is a hard error, never a silent override. Container-level elements (like `<rest>`) implement
+`IXmlTopLevelContribution` and apply to the route builder. Shipping today:
+`<cache>` (redb.Route.Cache), `<transformJson>` (redb.Route.JsonTransform), `<payload>`
+(redb.Route.Templates), `<rest>` (redb.Route.Http).
+
+## What XML deliberately does not do
+
+Lambdas, custom processors' logic, complex seeding — code. XML references it (`bean:#name`,
+`predicate="#name"`, `<saga><step processor="#name"/>`), never embeds it: there is no compiler
+in the runtime and no second trust contour — a package's code is signed and verified before
+anything runs, and the XML only chooses which already-trusted types to use.
+
+The schema of the format is generated from the element registry: `redb-route-xml xsd <bin directory>`
+writes it for exactly the packages in that directory, their contributed elements included, and the
+VS Code extension validates against it. See [XML Route Tools](../README.md#xml-route-tools).

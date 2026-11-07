@@ -1,0 +1,364 @@
+import * as vscode from "vscode";
+import * as fs from "fs";
+import * as path from "path";
+import { execFile } from "child_process";
+import { sniff } from "./sniff";
+import { scanRoutes, RouteEntry } from "./routescan";
+import { elementPosition } from "./elementposition";
+import { skeletonsFor } from "./skeletons";
+import { skeletonPlace } from "./skeletonscope";
+import {
+    beanCallPosition, beanCandidates, referencePosition, ReferencePosition, typedReferencePosition,
+} from "./beanref";
+import {
+    catalogByScheme, CatalogComponent, catalogReferenceHover, catalogReferencePosition, expectedType,
+} from "./catalog";
+import { moduleContextText, moduleResources } from "./moduledir";
+import { NewProjectPanel } from "./newprojectpanel";
+import { buildIndex, ElementInfo, ElementIndex } from "./graphmodel";
+import { DataFormatInfo, formatCompletions, formatHover } from "./dataformats";
+import { RouteGraphEditorProvider } from "./grapheditor";
+
+const FILE_GLOBS = ["**/*.route.xml", "**/*.redb-route.xml"];
+
+/**
+ * Ф7, text mode. Completion, validation and enum hints come from redhat.vscode-xml reading
+ * our shipped XSD; the binding is NAMESPACE-driven through an XML catalog, so only documents
+ * whose root says urn:redb:route get the schema — a foreign route.xml is untouched (the
+ * activation contract, owner decision 2026-09-04). This extension adds the catalog, the
+ * route tree, snippets and the Mermaid command. No canvas, no webview, no parser of the
+ * format.
+ */
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    await wireSchemaCatalog(context);
+
+    // The generated element list, the same one the graph reads: the skeleton completion asks it
+    // which element holds steps (skeletonscope.ts), so the answer cannot drift from the schema.
+    const elements: ElementInfo[] = JSON.parse(fs.readFileSync(
+        context.asAbsolutePath(path.join("media", "redb-route-elements.json")), "utf8"));
+
+    // The data formats of the same generator run: names, type names and the options of each.
+    const formats: DataFormatInfo[] = JSON.parse(fs.readFileSync(
+        context.asAbsolutePath(path.join("media", "redb-route-dataformats.json")), "utf8"));
+
+    // The connector catalog: the options that name a registry object get the bean list (catalog.ts).
+    const catalog = catalogByScheme(JSON.parse(fs.readFileSync(
+        context.asAbsolutePath(path.join("media", "redb-route-catalog.json")), "utf8")) as CatalogComponent[]);
+
+    const index = buildIndex(elements);
+    const tree = new RouteTreeProvider();
+    const output = vscode.window.createOutputChannel("redb Route");
+    context.subscriptions.push(
+        output,
+        vscode.commands.registerCommand("redbRoute.newProject", () => NewProjectPanel.show(context, output)),
+        vscode.window.registerTreeDataProvider("redbRoutes", tree),
+        vscode.commands.registerCommand("redbRoute.refreshTree", () => tree.refresh()),
+        vscode.commands.registerCommand("redbRoute.open", openAtLine),
+        vscode.commands.registerCommand("redbRoute.showMermaid", showMermaid),
+        vscode.languages.registerCompletionItemProvider(
+            "xml", new SkeletonCompletionProvider(index), "<"),
+        vscode.languages.registerCompletionItemProvider(
+            "xml", new BeanReferenceCompletionProvider(index, catalog), "#", ":", "=", "\"", "'"),
+        vscode.languages.registerCompletionItemProvider(
+            "xml", new DataFormatCompletionProvider(formats), "\"", "'", " ", "/"),
+        vscode.languages.registerHoverProvider("xml", new DataFormatHoverProvider(formats)),
+        vscode.languages.registerHoverProvider("xml", new CatalogReferenceHoverProvider(catalog)),
+        RouteGraphEditorProvider.register(context),
+        vscode.commands.registerCommand("redbRoute.openGraph", async (uri?: vscode.Uri) => {
+            const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+            if (target)
+                await vscode.commands.executeCommand("vscode.openWith", target, RouteGraphEditorProvider.viewType);
+        }),
+    );
+    for (const glob of FILE_GLOBS) {
+        const watcher = vscode.workspace.createFileSystemWatcher(glob);
+        context.subscriptions.push(watcher,
+            watcher.onDidChange(() => tree.refresh()),
+            watcher.onDidCreate(() => tree.refresh()),
+            watcher.onDidDelete(() => tree.refresh()));
+    }
+    await tree.refresh();
+}
+
+/**
+ * Registers the shipped XML catalog with redhat.vscode-xml — its extension API when present,
+ * the user setting as the fallback. The catalog binds the NAMESPACE to the XSD (see
+ * media/catalog.xml), which is the whole point: no file-pattern association anywhere.
+ */
+async function wireSchemaCatalog(context: vscode.ExtensionContext): Promise<void> {
+    const catalogPath = context.asAbsolutePath(path.join("media", "catalog.xml"));
+    const xmlExtension = vscode.extensions.getExtension("redhat.vscode-xml");
+    if (xmlExtension) {
+        const api = await xmlExtension.activate();
+        if (api && typeof api.addXMLCatalogs === "function") {
+            api.addXMLCatalogs([catalogPath]);
+            return;
+        }
+    }
+    // Older vscode-xml without the API: merge into the user's xml.catalogs once.
+    const configuration = vscode.workspace.getConfiguration("xml");
+    const catalogs = configuration.get<string[]>("catalogs") ?? [];
+    if (!catalogs.includes(catalogPath)) {
+        await configuration.update("catalogs", [...catalogs, catalogPath],
+            vscode.ConfigurationTarget.Global);
+    }
+}
+
+// ── composite skeletons (our completion provider, not declarative snippets) ──
+
+/**
+ * Declarative snippets appear in EVERY completion list — attribute positions included, any
+ * XML file included (live finding, 2026-09-04). This provider serves the skeletons only in
+ * OUR documents (the sniff) and only at a new-element position.
+ */
+class SkeletonCompletionProvider implements vscode.CompletionItemProvider {
+    constructor(private readonly index: ElementIndex) {}
+
+    provideCompletionItems(
+        document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem[] {
+        const text = document.getText();
+        if (sniff(text)?.kind !== "routes")
+            return [];
+        const where = elementPosition(text, document.offsetAt(position));
+        if (!where.ok)
+            return [];
+        // Only what the position takes: a `<route>` beside the routes, a step skeleton inside an
+        // element that holds steps. Offering the whole list here is how `<choice>` used to appear
+        // under `<routes>`, where the loader refuses it (skeletonscope.ts).
+        const place = skeletonPlace(text, where.replaceFrom, this.index);
+        if (!place)
+            return [];
+
+        const range = new vscode.Range(document.positionAt(where.replaceFrom), position);
+        return skeletonsFor(place).map(skeleton => {
+            const item = new vscode.CompletionItem(
+                skeleton.label, vscode.CompletionItemKind.Snippet);
+            item.detail = skeleton.detail;
+            item.insertText = new vscode.SnippetString(skeleton.body);
+            item.range = range;
+            return item;
+        });
+    }
+}
+
+// ── registry references: `#` and the bean calls of expressions offer the declared beans ──
+
+/**
+ * The `<bean name>` values at a registry-reference position (beanref.ts): the document's own, then
+ * those of its module's `context.xml` (moduledir.ts), where the templates declare them. An attribute
+ * the element list types as a reference gets them before the `#` too, inserted with it; a bean call of
+ * the expression language (`${bean:` in a template, a bare `bean:` in an expression) gets them as the
+ * name before its `.`, a registry read (`${ref:`, bare `ref:`) as its whole name. No type
+ * filter and no diagnostics: a wrong or missing bean is the pack gate's finding.
+ */
+class BeanReferenceCompletionProvider implements vscode.CompletionItemProvider {
+    constructor(
+        private readonly index: ElementIndex,
+        private readonly catalog: ReadonlyMap<string, CatalogComponent>) {}
+
+    provideCompletionItems(
+        document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem[] {
+        const text = document.getText();
+        if (!sniff(text))
+            return [];
+        const offset = document.offsetAt(position);
+        let prefix = "";
+        let expected: string | null = null;
+        let where: ReferencePosition = { ok: false };
+        // A component option the catalog marks as a reference: before or after its '#', with the
+        // expected type in the detail. Everything else goes by the '#' rule and the element list.
+        const option = catalogReferencePosition(text, offset, this.catalog);
+        if (option) {
+            where = { ok: true, replaceFrom: option.replaceFrom };
+            prefix = option.hashTyped ? "" : "#";
+            expected = expectedType(option.option);
+        }
+        if (!where.ok)
+            where = referencePosition(text, offset);
+        if (!where.ok)
+            where = beanCallPosition(text, offset, this.index);
+        if (!where.ok) {
+            where = typedReferencePosition(text, offset, this.index);
+            prefix = "#";
+        }
+        if (!where.ok)
+            return [];
+
+        const contextText = document.uri.scheme === "file"
+            ? moduleContextText(document.uri.fsPath, openDocumentText)
+            : null;
+        const range = new vscode.Range(document.positionAt(where.replaceFrom), position);
+        return beanCandidates(text, contextText).map(candidate => {
+            const item = new vscode.CompletionItem(prefix + candidate.name, vscode.CompletionItemKind.Reference);
+            item.detail = (candidate.fromContext ? "<bean> of context.xml" : "<bean> of this document")
+                + (expected ? `, expects ${expected}` : "");
+            item.filterText = candidate.name;
+            item.range = range;
+            return item;
+        });
+    }
+}
+
+// ── data formats: names, type names and options of `<marshal>`, `<unmarshal>`, `<dataFormat>` ──
+
+/**
+ * The hints of dataformats.ts in redb documents: `format=` names, `type=` type names, `target=` of
+ * `<unmarshal>`, once `type=` names a format its options with their values, and for a Path option the
+ * files and folders of the module's `resources/` (moduledir.ts).
+ */
+class DataFormatCompletionProvider implements vscode.CompletionItemProvider {
+    constructor(private readonly formats: readonly DataFormatInfo[]) {}
+
+    provideCompletionItems(
+        document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem[] {
+        const text = document.getText();
+        if (!sniff(text))
+            return [];
+        const resources = () => document.uri.scheme === "file" ? moduleResources(document.uri.fsPath) : null;
+        return formatCompletions(text, document.offsetAt(position), this.formats, resources).map(completion => {
+            const item = new vscode.CompletionItem(completion.label, completion.kind === "attribute"
+                ? vscode.CompletionItemKind.Property : vscode.CompletionItemKind.Value);
+            item.detail = completion.detail;
+            if (completion.documentation)
+                item.documentation = new vscode.MarkdownString(completion.documentation);
+            item.range = new vscode.Range(document.positionAt(completion.replaceFrom), position);
+            if (completion.kind === "attribute")
+                item.insertText = new vscode.SnippetString(`${completion.label}="$1"`);
+            return item;
+        });
+    }
+}
+
+class DataFormatHoverProvider implements vscode.HoverProvider {
+    constructor(private readonly formats: readonly DataFormatInfo[]) {}
+
+    provideHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | null {
+        const text = document.getText();
+        if (!sniff(text))
+            return null;
+        const hover = formatHover(text, document.offsetAt(position), this.formats);
+        return hover ? new vscode.Hover(new vscode.MarkdownString(hover)) : null;
+    }
+}
+
+/** The hover of a component option the catalog marks as a registry reference, with its expected type. */
+class CatalogReferenceHoverProvider implements vscode.HoverProvider {
+    constructor(private readonly catalog: ReadonlyMap<string, CatalogComponent>) {}
+
+    provideHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | null {
+        const text = document.getText();
+        if (!sniff(text))
+            return null;
+        const hover = catalogReferenceHover(text, document.offsetAt(position), this.catalog);
+        return hover ? new vscode.Hover(new vscode.MarkdownString(hover)) : null;
+    }
+}
+
+/** The text of a file open in an editor, unsaved edits included. */
+function openDocumentText(file: string): string | undefined {
+    const target = vscode.Uri.file(file).toString();
+    return vscode.workspace.textDocuments.find(d => d.uri.toString() === target)?.getText();
+}
+
+// ── the route tree ───────────────────────────────────────────────────
+
+type TreeNode =
+    | { kind: "file"; uri: vscode.Uri; routes: RouteEntry[] }
+    | { kind: "route"; uri: vscode.Uri; entry: RouteEntry };
+
+class RouteTreeProvider implements vscode.TreeDataProvider<TreeNode> {
+    private readonly changed = new vscode.EventEmitter<void>();
+    readonly onDidChangeTreeData = this.changed.event;
+    private files: { uri: vscode.Uri; routes: RouteEntry[] }[] = [];
+
+    async refresh(): Promise<void> {
+        const found = new Map<string, vscode.Uri>();
+        for (const glob of FILE_GLOBS)
+            for (const uri of await vscode.workspace.findFiles(glob, "**/{node_modules,bin,obj}/**"))
+                found.set(uri.toString(), uri);
+
+        const files: { uri: vscode.Uri; routes: RouteEntry[] }[] = [];
+        for (const uri of found.values()) {
+            const text = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
+            // The negative half of the activation contract: a file that does not carry our
+            // namespace — someone else's route.xml — never enters the tree.
+            if (sniff(text)?.kind !== "routes") continue;
+            files.push({ uri, routes: scanRoutes(text) });
+        }
+        files.sort((a, b) => a.uri.fsPath.localeCompare(b.uri.fsPath));
+        this.files = files;
+        await vscode.commands.executeCommand(
+            "setContext", "redbRoute.hasRoutes", files.length > 0);
+        this.changed.fire();
+    }
+
+    getTreeItem(node: TreeNode): vscode.TreeItem {
+        if (node.kind === "file") {
+            const item = new vscode.TreeItem(
+                path.basename(node.uri.fsPath), vscode.TreeItemCollapsibleState.Expanded);
+            item.resourceUri = node.uri;
+            item.description = vscode.workspace.asRelativePath(path.dirname(node.uri.fsPath));
+            item.iconPath = vscode.ThemeIcon.File;
+            return item;
+        }
+        const item = new vscode.TreeItem(
+            node.entry.id ?? "(no id)", vscode.TreeItemCollapsibleState.None);
+        item.description = node.entry.from ?? "";
+        item.tooltip = node.entry.description ?? undefined;
+        item.iconPath = new vscode.ThemeIcon("symbol-event");
+        item.command = {
+            command: "redbRoute.open",
+            title: "Open route",
+            arguments: [node.uri, node.entry.line],
+        };
+        return item;
+    }
+
+    getChildren(node?: TreeNode): TreeNode[] {
+        if (!node)
+            return this.files.map(f => ({ kind: "file", uri: f.uri, routes: f.routes }));
+        if (node.kind === "file")
+            return node.routes.map(entry => ({ kind: "route", uri: node.uri, entry }));
+        return [];
+    }
+}
+
+async function openAtLine(uri: vscode.Uri, line: number): Promise<void> {
+    const document = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(document);
+    const position = new vscode.Position(line, 0);
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position),
+        vscode.TextEditorRevealType.InCenter);
+}
+
+// ── Mermaid via the Ф6 generator, when the dotnet tool is around ─────
+
+async function showMermaid(): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || sniff(editor.document.getText())?.kind !== "routes") {
+        void vscode.window.showInformationMessage(
+            "redb Route: open a routes document (urn:redb:route) first.");
+        return;
+    }
+    if (editor.document.isDirty) await editor.document.save();
+
+    // No shell on purpose: a dotnet global tool is a plain executable shim, and only a
+    // shell-less spawn reports a missing tool as ENOENT (through a shell it is exit code 1
+    // plus a CP866 complaint on Windows — mojibake in the warning, live finding 2026-09-08).
+    execFile("redb-route-xml", ["mermaid", editor.document.uri.fsPath],
+        async (error, stdout, stderr) => {
+        if (error) {
+            const notFound = (error as NodeJS.ErrnoException).code === "ENOENT";
+            void vscode.window.showWarningMessage(notFound
+                ? "redb Route: install the generator to render diagrams: dotnet tool install -g redb.Route.Xml.CodeGen"
+                : `redb Route: the generator failed: ${stderr || error.message}`);
+            return;
+        }
+        const document = await vscode.workspace.openTextDocument({
+            content: stdout, language: "markdown" });
+        await vscode.window.showTextDocument(document, { preview: true });
+    });
+}
+
+export function deactivate(): void { /* nothing to release */ }

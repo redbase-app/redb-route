@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The same RequestId as SNREQ_ACME_0001, in a different file: answered as a duplicate. -->
+<SerialNumberRequest>
+  <RequestId>ACME-2026-0001</RequestId>
+  <Gtin>04607001234567</Gtin>
+  <Quantity>30000</Quantity>
+</SerialNumberRequest>

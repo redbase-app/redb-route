@@ -1,0 +1,33 @@
+<Project>
+
+  <!-- Import the root Directory.Build.props (TFMs, Nullable, etc.) -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- Common test packages — same versions everywhere -->
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="AwesomeAssertions" />
+    <PackageReference Include="NSubstitute" />
+    <!-- Telemetry assertion exporters for transport-span smoke tests: the latest stable line, past the
+         NU1902 advisory GHSA-g94r-2vxg-569j (fixed in 1.13). Needs Microsoft.Extensions.* 10.0.x, as the
+         rest of the repository has. -->
+    <PackageReference Include="OpenTelemetry" />
+    <PackageReference Include="OpenTelemetry.Exporter.InMemory" />
+  </ItemGroup>
+
+  <!-- Global usings for all test projects -->
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="AwesomeAssertions" />
+    <Using Include="NSubstitute" />
+  </ItemGroup>
+
+</Project>

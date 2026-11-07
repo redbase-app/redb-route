@@ -1,0 +1,282 @@
+[
+  {
+    "name": "avro",
+    "type": "redb.Route.DataFormats.Avro.AvroDataFormat, redb.Route.DataFormats.Avro",
+    "contentType": "application/avro",
+    "mediaTypes": [
+      "application/avro",
+      "avro/binary",
+      "application/vnd.apache.avro\u002Bbinary"
+    ],
+    "attributes": [
+      {
+        "name": "confluentWireFormat",
+        "kind": "Bool",
+        "default": "false",
+        "description": "Frame the payload the Confluent Schema Registry way: magic byte 0, schema id as big-endian int32."
+      },
+      {
+        "name": "schema",
+        "kind": "String",
+        "description": "Explicit Avro schema (JSON)."
+      },
+      {
+        "name": "schemaId",
+        "kind": "Int",
+        "default": "0",
+        "description": "Schema id written into the frame when ConfluentWireFormat is on."
+      }
+    ]
+  },
+  {
+    "name": "csv",
+    "type": "redb.Route.DataFormats.Csv.CsvDataFormat, redb.Route.DataFormats.Csv",
+    "contentType": "text/csv",
+    "mediaTypes": [
+      "text/csv",
+      "application/csv"
+    ],
+    "attributes": [
+      {
+        "name": "delimiter",
+        "kind": "String",
+        "default": ",",
+        "description": "Field delimiter."
+      },
+      {
+        "name": "hasHeaderRecord",
+        "kind": "Bool",
+        "default": "true",
+        "description": "Whether the first record is a header (written on marshal, read on unmarshal)."
+      },
+      {
+        "name": "newLine",
+        "kind": "String",
+        "default": "\r\n",
+        "description": "Record terminator written on marshal."
+      },
+      {
+        "name": "trimFields",
+        "kind": "Bool",
+        "default": "false",
+        "description": "Trim whitespace around fields on read."
+      }
+    ]
+  },
+  {
+    "name": "mimeMultipart",
+    "type": "redb.Route.DataFormats.Mime.MimeMultipartDataFormat, redb.Route.DataFormats.Mime",
+    "contentType": "multipart/form-data",
+    "mediaTypes": [
+      "multipart/form-data"
+    ],
+    "attributes": [
+      {
+        "name": "maxFileNameLength",
+        "kind": "Int",
+        "default": "255",
+        "description": "Longest file name of a part, in characters."
+      },
+      {
+        "name": "maxPartBytes",
+        "kind": "Int",
+        "default": "10485760",
+        "description": "Largest decoded part, in bytes."
+      },
+      {
+        "name": "maxParts",
+        "kind": "Int",
+        "default": "1000",
+        "description": "Most parts one body may have."
+      },
+      {
+        "name": "maxTotalBytes",
+        "kind": "Int",
+        "default": "33554432",
+        "description": "Largest body, in bytes as it arrives."
+      },
+      {
+        "name": "multipartWithoutAttachment",
+        "kind": "Bool",
+        "default": "false",
+        "description": "Marshal with the mixed subtype writes a multipart even when the message has no attachments (Camel\u0027s multipartWithoutAttachment); otherwise such a body is left as it is."
+      },
+      {
+        "name": "subType",
+        "kind": "String",
+        "default": "form-data",
+        "description": "The subtype Marshal writes and the format registers under: form-data (the default: a FormBody body and file attachments) or mixed (the body as the first part, as Camel\u0027s mimeMultipart)."
+      }
+    ]
+  },
+  {
+    "name": "protobuf",
+    "type": "redb.Route.DataFormats.Protobuf.ProtobufDataFormat, redb.Route.DataFormats.Protobuf",
+    "contentType": "application/x-protobuf",
+    "mediaTypes": [
+      "application/x-protobuf",
+      "application/protobuf",
+      "application/vnd.google.protobuf"
+    ],
+    "attributes": [
+      {
+        "name": "confluentWireFormat",
+        "kind": "Bool",
+        "default": "false",
+        "description": "Frame the payload the Confluent Schema Registry way: magic byte 0, schema id as big-endian int32, message-index list ([0], the first message of the schema)."
+      },
+      {
+        "name": "schemaId",
+        "kind": "Int",
+        "default": "0",
+        "description": "Schema id written into the frame when ConfluentWireFormat is on."
+      }
+    ]
+  },
+  {
+    "name": "xmljson",
+    "type": "redb.Route.DataFormats.XmlJson.XmlJsonDataFormat, redb.Route.DataFormats.XmlJson",
+    "contentType": "application/x-xmljson",
+    "mediaTypes": [
+      "application/x-xmljson"
+    ],
+    "attributes": [
+      {
+        "name": "arrays",
+        "kind": "String",
+        "description": "The arrays paths, comma-separated: //Item,/Order/Tag (Arrays)."
+      },
+      {
+        "name": "attributePrefix",
+        "kind": "String",
+        "default": "@",
+        "description": "The attribute prefix (AttributePrefix)."
+      },
+      {
+        "name": "indent",
+        "kind": "Bool",
+        "default": "false",
+        "description": "Whether the output is indented (Indent)."
+      },
+      {
+        "name": "namespaces",
+        "kind": "Enum",
+        "enumValues": [
+          "Keep",
+          "Drop"
+        ],
+        "default": "Keep",
+        "description": "How names carry their namespaces (Namespaces)."
+      },
+      {
+        "name": "plural",
+        "kind": "Bool",
+        "default": "false",
+        "description": "The plural-wrapper rule (Plural)."
+      },
+      {
+        "name": "prefixes",
+        "kind": "String",
+        "description": "Namespace prefixes, comma-separated prefix=uri pairs: o=urn:orders (Prefixes)."
+      },
+      {
+        "name": "root",
+        "kind": "String",
+        "description": "The root element of JSON to XML (Root)."
+      },
+      {
+        "name": "schema",
+        "kind": "Path",
+        "description": "The schema path (Schema)."
+      },
+      {
+        "name": "schemaRoot",
+        "kind": "Path",
+        "description": "The directory imports may read from, relative to the schema\u0027s directory (SchemaRoot)."
+      },
+      {
+        "name": "textKey",
+        "kind": "String",
+        "default": "#text",
+        "description": "The text key (TextKey)."
+      }
+    ],
+    "unmarshalTargets": [
+      "System.String",
+      "System.Byte[]",
+      "System.Xml.Linq.XDocument",
+      "System.Xml.Linq.XElement",
+      "System.Xml.XmlDocument",
+      "System.Text.Json.Nodes.JsonNode, System.Text.Json"
+    ]
+  },
+  {
+    "name": "yaml",
+    "type": "redb.Route.DataFormats.Yaml.YamlDataFormat, redb.Route.DataFormats.Yaml",
+    "contentType": "application/yaml",
+    "mediaTypes": [
+      "application/yaml",
+      "application/x-yaml",
+      "text/yaml",
+      "text/x-yaml"
+    ],
+    "attributes": [
+      {
+        "name": "ignoreUnmatchedProperties",
+        "kind": "Bool",
+        "default": "true",
+        "description": "Ignore document keys that have no matching property on unmarshal."
+      }
+    ]
+  },
+  {
+    "type": "redb.Route.Serialization.Base64MessageSerializer, redb.Route",
+    "contentType": "application/base64",
+    "mediaTypes": [
+      "application/base64"
+    ],
+    "attributes": []
+  },
+  {
+    "type": "redb.Route.Serialization.FormUrlEncodedMessageSerializer, redb.Route",
+    "contentType": "application/x-www-form-urlencoded",
+    "mediaTypes": [
+      "application/x-www-form-urlencoded"
+    ],
+    "attributes": []
+  },
+  {
+    "type": "redb.Route.Serialization.GZipMessageSerializer, redb.Route",
+    "contentType": "application/gzip",
+    "mediaTypes": [
+      "application/gzip",
+      "application/x-gzip"
+    ],
+    "attributes": []
+  },
+  {
+    "type": "redb.Route.Serialization.JsonMessageSerializer, redb.Route",
+    "contentType": "application/json",
+    "mediaTypes": [
+      "application/json"
+    ],
+    "attributes": []
+  },
+  {
+    "type": "redb.Route.Serialization.XmlMessageSerializer, redb.Route",
+    "contentType": "application/xml",
+    "mediaTypes": [
+      "application/xml"
+    ],
+    "attributes": []
+  },
+  {
+    "type": "redb.Route.Serialization.ZipMessageSerializer, redb.Route",
+    "contentType": "application/zip",
+    "mediaTypes": [
+      "application/zip",
+      "application/x-zip-compressed"
+    ],
+    "attributes": []
+  }
+]

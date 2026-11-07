@@ -1,0 +1,69 @@
+# Organizational Units
+dn: ou=users,dc=redb,dc=test
+objectClass: organizationalUnit
+ou: users
+description: Test users
+
+dn: ou=groups,dc=redb,dc=test
+objectClass: organizationalUnit
+ou: groups
+description: Test groups
+
+# Users
+dn: cn=alice,ou=users,dc=redb,dc=test
+objectClass: inetOrgPerson
+cn: alice
+sn: Wonderland
+uid: alice
+mail: alice@redb.test
+userPassword: alice123
+telephoneNumber: +7-495-001-0001
+
+dn: cn=bob,ou=users,dc=redb,dc=test
+objectClass: inetOrgPerson
+cn: bob
+sn: Builder
+uid: bob
+mail: bob@redb.test
+userPassword: bob123
+telephoneNumber: +7-495-001-0002
+
+dn: cn=charlie,ou=users,dc=redb,dc=test
+objectClass: inetOrgPerson
+cn: charlie
+sn: Chaplin
+uid: charlie
+mail: charlie@redb.test
+userPassword: charlie123
+
+dn: cn=diana,ou=users,dc=redb,dc=test
+objectClass: inetOrgPerson
+cn: diana
+sn: Prince
+uid: diana
+mail: diana@redb.test
+userPassword: diana123
+
+dn: cn=eve,ou=users,dc=redb,dc=test
+objectClass: inetOrgPerson
+cn: eve
+sn: Crypto
+uid: eve
+mail: eve@redb.test
+userPassword: eve123
+
+# Groups
+dn: cn=developers,ou=groups,dc=redb,dc=test
+objectClass: groupOfNames
+cn: developers
+description: Development team
+member: cn=alice,ou=users,dc=redb,dc=test
+member: cn=bob,ou=users,dc=redb,dc=test
+member: cn=charlie,ou=users,dc=redb,dc=test
+
+dn: cn=admins,ou=groups,dc=redb,dc=test
+objectClass: groupOfNames
+cn: admins
+description: Administrators
+member: cn=alice,ou=users,dc=redb,dc=test
+member: cn=diana,ou=users,dc=redb,dc=test

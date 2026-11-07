@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Redis\redb.Route.Redis.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Testcontainers.Redis" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- One span capture for the smoke tests: the test root trace keeps parallel test classes out. -->
+    <Compile Include="../Shared/SpanCapture.cs" Link="Shared/SpanCapture.cs" />
+    <Compile Include="../redb.Route.Tests/Telemetry/RouteTelemetryProbe.cs" Link="Shared/RouteTelemetryProbe.cs" />
+  </ItemGroup>
+</Project>
+

@@ -1,0 +1,71 @@
+namespace redb.Route.Configuration;
+
+/// <summary>
+/// Root configuration options for the route engine.
+/// Bound from configuration section "RedbRoute".
+/// </summary>
+public sealed class RouteEngineOptions
+{
+    /// <summary>Configuration section name.</summary>
+    public const string SectionName = "RedbRoute";
+
+    /// <summary>
+    /// Whether to enable OpenTelemetry tracing: the route spans and the transport spans connectors open through
+    /// <see cref="Telemetry.RouteTelemetryExtensions"/> with this context. Off, neither is opened, so a trace never
+    /// holds a transport span without the route it belongs to; an incoming or ambient trace context is still passed
+    /// on to the next hop. Default: <c>true</c>.
+    /// </summary>
+    public bool EnableTelemetry { get; set; } = true;
+
+    /// <summary>
+    /// Whether to enable metrics collection (exchange count, duration, failures).
+    /// Default: <c>true</c>.
+    /// </summary>
+    public bool EnableMetrics { get; set; } = true;
+
+    /// <summary>
+    /// Whether to record per-node message history on every exchange (Apache Camel Message History EIP):
+    /// each node is timed and appended to <c>exchange.Properties["CamelMessageHistory"]</c>, and the
+    /// trail is dumped on failure. A route may override this with <c>.MessageHistory(bool)</c>.
+    /// Default: <c>false</c> (matches Camel — slight overhead, opt-in).
+    /// </summary>
+    public bool EnableMessageHistory { get; set; }
+
+    /// <summary>
+    /// Graceful shutdown timeout when stopping routes.
+    /// Default: 30 seconds.
+    /// </summary>
+    public TimeSpan ShutdownTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Whether to throw on startup if a route fails to compile.
+    /// When <c>false</c>, failed routes are logged and skipped.
+    /// Default: <c>true</c>.
+    /// </summary>
+    public bool ThrowOnCompilationError { get; set; } = true;
+
+    /// <summary>
+    /// Whether the engine performs cross-cutting startup checks during route compilation
+    /// and emits warnings for misconfigurations (e.g., a route declares <c>.Cluster(true)</c>
+    /// but no <see cref="Abstractions.IRoutePolicyFactory"/> is registered, so it would run
+    /// on all nodes despite the intent).
+    /// Default: <c>true</c>. Set to <c>false</c> in tests that intentionally exercise mis-wiring.
+    /// </summary>
+    public bool StartupChecks { get; set; } = true;
+
+    /// <summary>
+    /// Default per-exchange processing timeout applied to all routes
+    /// that don't specify their own via <c>.ProcessingTimeout()</c>.
+    /// Default: <see cref="Timeout.InfiniteTimeSpan"/> (no timeout).
+    /// </summary>
+    public TimeSpan DefaultProcessingTimeout { get; set; } = Timeout.InfiniteTimeSpan;
+
+    /// <summary>
+    /// Stream caching options. When <see cref="StreamCacheOptions.Enabled"/> is true,
+    /// all routes automatically wrap Stream bodies with a seekable cache.
+    /// </summary>
+    public StreamCacheOptions StreamCaching { get; set; } = new();
+
+    /// <summary>Message attachment options (<c>RedbRoute:Attachments</c>).</summary>
+    public AttachmentOptions Attachments { get; set; } = new();
+}

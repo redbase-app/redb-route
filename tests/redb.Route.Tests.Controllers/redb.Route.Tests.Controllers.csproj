@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Controllers\redb.Route.Controllers.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Http\redb.Route.Http.csproj" />
+    <ProjectReference Include="..\..\redb.Route.SignalR\redb.Route.SignalR.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Grpc\redb.Route.Grpc.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Soap\redb.Route.Soap.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.Net.Client" />
+    <PackageReference Include="Google.Protobuf" />
+  </ItemGroup>
+
+  <!-- The SignalR client major follows the target framework, as in redb.Route.SignalR: the security baseline
+       (Directory.Build.targets) gives each target framework its version. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../Shared/TestPorts.cs" Link="Shared/TestPorts.cs" />
+  </ItemGroup>
+</Project>
+

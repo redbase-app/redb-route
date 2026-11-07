@@ -1,0 +1,87 @@
+namespace redb.Route.Soap;
+
+/// <summary>SOAP protocol version.</summary>
+public enum SoapVersion
+{
+    /// <summary>SOAP 1.1: <c>text/xml</c> + a separate <c>SOAPAction</c> HTTP header.</summary>
+    Soap11,
+    /// <summary>SOAP 1.2: <c>application/soap+xml</c> with the action as a Content-Type parameter.</summary>
+    Soap12
+}
+
+/// <summary>How the route sees the SOAP message (Apache Camel <c>camel-cxf</c> dataFormat parity).</summary>
+public enum SoapDataFormat
+{
+    /// <summary>The XML of the <c>&lt;soap:Body&gt;</c> content. Default; works with any service, no codegen.</summary>
+    Payload,
+    /// <summary>The whole SOAP envelope (transparent proxy).</summary>
+    Message,
+    /// <summary>Typed request/response objects via <see cref="System.Xml.Serialization.XmlSerializer"/> (DTOs may be <c>dotnet-svcutil</c>-generated).</summary>
+    Pojo
+}
+
+/// <summary>
+/// Well-known exchange header keys for the SOAP component. Metadata with no standard wire name is
+/// <c>redbSoap.</c>-prefixed and stripped on send (<see cref="IsRedbHeader"/>), mirroring
+/// <c>RmqHeaders</c>/<c>HttpHeaders</c>. Envelope <c>&lt;soap:Header&gt;</c> elements map under
+/// <see cref="HeaderPrefix"/> — a second header plane distinct from the transport HTTP headers.
+/// </summary>
+public static class SoapHeaders
+{
+    /// <summary>Prefix for redb-specific SOAP metadata headers.</summary>
+    public const string Prefix = "redbSoap.";
+
+    /// <summary>SOAPAction of the request/operation.</summary>
+    public const string Action = "redbSoap.action";
+    /// <summary>Operation name.</summary>
+    public const string Operation = "redbSoap.operation";
+    /// <summary>Target namespace.</summary>
+    public const string Namespace = "redbSoap.namespace";
+    /// <summary>Fault code (SOAP 1.1 <c>faultcode</c> / 1.2 <c>Code</c>).</summary>
+    public const string FaultCode = "redbSoap.faultCode";
+    /// <summary>Fault string (SOAP 1.1 <c>faultstring</c> / 1.2 <c>Reason</c>).</summary>
+    /// <remarks>
+    /// On a consumer reply this header is also the instruction: set it, return normally, and the
+    /// consumer answers with a <c>soap:Fault</c> carrying it, while the exchange stays successful —
+    /// a fault the service is designed to give ("no such order") is an answer, not a failure. Use
+    /// <see cref="FaultCode"/> to name the code; without it the fault is the sender's, because a
+    /// refusal about the content of the request is what SOAP calls Sender / Client.
+    /// </remarks>
+    public const string FaultString = "redbSoap.faultString";
+
+    /// <summary>
+    /// Set by the producer on a reply that is a fault (bool), so a route with
+    /// <c>throwOnFault=false</c> can branch without catching.
+    /// </summary>
+    public const string IsFault = "redbSoap.isFault";
+    /// <summary>WS-Security UsernameToken user (surfaced on the consumer).</summary>
+    public const string Username = "redbSoap.username";
+    /// <summary>WS-Security UsernameToken password (surfaced on the consumer).</summary>
+    public const string Password = "redbSoap.password";
+    /// <summary>Whether an inbound WS-Security Body signature verified (bool).</summary>
+    public const string SignatureValid = "redbSoap.signatureValid";
+
+    /// <summary>Caller's IP address, from the connection rather than from anything the caller sent.</summary>
+    public const string RemoteAddress = "redbSoap.remoteAddress";
+
+    /// <summary>Caller's source port.</summary>
+    public const string RemotePort = "redbSoap.remotePort";
+
+    /// <summary>Thumbprint of the TLS client certificate, when the handshake presented one (mTLS).</summary>
+    public const string ClientCertThumbprint = "redbSoap.clientCertThumbprint";
+
+    /// <summary>Subject of the TLS client certificate.</summary>
+    public const string ClientCertSubject = "redbSoap.clientCertSubject";
+
+    /// <summary>Expiry of the TLS client certificate, ISO-8601 UTC.</summary>
+    public const string ClientCertNotAfter = "redbSoap.clientCertNotAfter";
+
+    /// <summary>Pojo mode: per-message override of the response CLR <see cref="System.Type"/> to deserialize into.</summary>
+    public const string ResponseType = "redbSoap.responseType";
+
+    /// <summary>Prefix for individual <c>&lt;soap:Header&gt;</c> block elements (the envelope header plane).</summary>
+    public const string HeaderPrefix = "redbSoap.header.";
+
+    /// <summary>Whether the header key is redb-internal SOAP metadata (stripped before the envelope goes out).</summary>
+    public static bool IsRedbHeader(string key) => key.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase);
+}

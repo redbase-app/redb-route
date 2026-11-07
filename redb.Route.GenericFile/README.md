@@ -1,0 +1,277 @@
+# redb.Route.GenericFile
+
+Shared base library for file-based transports in the [redb.Route](../README.md) ESB framework.  
+Provides abstract consumer, producer, options, and file-operations interfaces that concrete transports (**File**, **FTP**, **SFTP**) inherit from. Not used directly — include one of the transport-specific packages instead.
+
+[![NuGet](https://img.shields.io/nuget/v/redb.Route.GenericFile?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.GenericFile)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
+
+## Architecture
+
+```
+GenericFileEndpointOptions          ← base options (polling, filtering, producer write)
+ └─ RemoteFileEndpointOptions       ← + host/port/auth/reconnect
+
+GenericFileConsumer<TOptions>       ← template-method poll loop
+ └─ RemoteFileConsumer<TOptions>    ← + connect/reconnect lifecycle
+
+GenericFileProducer<TOptions>       ← template-method write flow
+ └─ RemoteFileProducer<TOptions>    ← + connect/reconnect lifecycle
+
+IFileOperations                     ← protocol abstraction (list, read, write, move, delete)
+ └─ IRemoteFileOperations           ← + connect/disconnect
+```
+
+Transport implementations (`File`, `Ftp`, `Sftp`) provide concrete `IFileOperations` and transport-specific headers/DSL. All polling logic, filtering, idempotency, post-processing, atomic write, and file-exist strategies are implemented in this base library.
+
+## Consumer Pipeline
+
+The `GenericFileConsumer` runs a poll loop with the following steps:
+
+1. **List files** in the base directory (optionally recursive)
+2. **Filter** — exclude temp/internal files (`.redb_*`, temp prefix), apply glob `include`/`exclude` patterns
+3. **Sort** — by name, date, or size (ascending or descending)
+4. **Limit** — apply `maxMessagesPerPoll`
+5. **Eligibility checks** — `minAge`, `maxAge`, done-file presence
+6. **Read lock** — transport-specific claim on the file (local file only)
+7. **Idempotency** — skip files already in the repository
+8. **Pre-move** — optionally move to a staging directory before processing
+9. **Read body** — as `byte[]` (default) or `Stream` (`streamBody=true`)
+10. **Invoke processor** — pass exchange to the downstream pipeline
+11. **Post-process** — `Noop` (leave in place) / `Delete` / `MoveTo`
+12. **Confirm** — mark idempotent key, delete done file
+
+The read lock is taken **before** the idempotency claim: a consumer that loses the lock race
+must not consume the idempotent key, or the file would never be picked up again by anyone.
+
+On processing failure: remove idempotent key, leave the file in place, move to `moveFailed`
+directory (if configured). A file that cannot be **read** is treated the same way — it is
+never delivered as an empty message.
+
+## Producer Pipeline
+
+The `GenericFileProducer` writes files with atomic temp-then-rename:
+
+1. **Resolve body** — from `exchange.Out` (if set) or `exchange.In`
+2. **Resolve target path** — from `FileName` option / header / auto-generated GUID
+3. **Validate path** — jail-directory check (transport-specific)
+4. **Create directories** — if `autoCreate=true`
+5. **Write to temp file** — using `tempPrefix` or `tempFileName`
+6. **Handle existing** — apply `fileExist` strategy (Override / Append / Fail / Ignore / Move / TryRename)
+7. **Atomic rename** — move temp file to target
+8. **Cleanup** — delete temp file on failure
+
+## Options Reference
+
+### GenericFileEndpointOptions (Base)
+
+#### Consumer / Polling
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `Delay` | `int` | `500` | Poll interval (ms) |
+| `InitialDelay` | `int` | `0` | Delay before first poll (ms) |
+| `Include` | `string` | `""` | Glob include pattern (`*.csv,*.xml`) — file name only |
+| `Exclude` | `string` | `""` | Glob exclude pattern — file name only |
+| `AntInclude` | `string` | `""` | Ant patterns over the path relative to the polled directory (`TYPE_A/outbox/*.csv`): `*` stops at a separator, `**` spans levels |
+| `AntExclude` | `string` | `""` | Ant patterns over the relative path that drop a file (`archive/**`) |
+| `AntFilterCaseSensitive` | `bool` | `true` | Whether the Ant patterns respect case |
+| `FilterDirectory` | `string` | `""` | Condition over a subdirectory, evaluated before it is listed |
+| `FilterFile` | `string` | `""` | Condition over a polled file, evaluated before it is read or moved |
+| `Filter` | `string` | `""` | Registry name of an `IGenericFileFilter` (`#myFilter`) |
+| `Recursive` | `bool` | `false` | Recurse subdirectories |
+| `MaxDepth` | `int` | `0` | Max recursion depth (0 = unlimited) |
+| `MinDepth` | `int` | `0` | Min depth for file selection |
+| `SortBy` | `GenericFileSortBy` | `None` | Sort: `Name`, `NameDesc`, `Modified`, `ModifiedDesc`, `Size`, `SizeDesc` |
+| `MaxMessagesPerPoll` | `int` | `0` | Max files per poll (0 = unlimited) |
+| `MinAge` | `long` | `0` | Min file age (ms) |
+| `BackoffMultiplier` | `int` | `0` | Skip this many polls once a threshold is hit (0 = backoff off) |
+| `BackoffIdleThreshold` | `int` | `0` | Consecutive idle polls (no exchange created) that arm the skip |
+| `BackoffErrorThreshold` | `int` | `0` | Consecutive failed polls (the poll itself threw) that arm the skip |
+| `BackoffOnFailedExchanges` | `bool` | `false` | Beyond Camel: count a poll whose every exchange failed as an error for `BackoffErrorThreshold` |
+
+**Poll backoff** follows Apache Camel `ScheduledPollConsumer`: after `BackoffIdleThreshold` idle
+polls or `BackoffErrorThreshold` error polls, the next `BackoffMultiplier` polls are skipped (no
+listing, no connect), then the counters reset. A skipped poll still waits `Delay`, so stopping the
+consumer during a skip resolves within `Delay`. Entering backoff logs one warning; resuming logs one
+info line. `BackoffMultiplier` requires at least one threshold, and a threshold requires a multiplier —
+otherwise the endpoint refuses the configuration.
+
+**A file that fails in the route.** By default (Camel parity) a poll that created exchanges counts as
+success even if the route failed them, so a deterministically-bad file, or every file while the
+downstream is down, is retried every `Delay`. Two remedies:
+
+- **Poison file** → `OnException<T>().MaximumRedeliveries(n).RedeliveryDelay(...)` and/or `MoveFailed`
+  to quarantine it out of the poll directory.
+- **Downstream down** (every file fails) → set `BackoffOnFailedExchanges = true` (with an error
+  threshold + multiplier): a poll whose every created exchange failed unhandled then counts as an
+  error and the consumer backs off instead of hammering the downstream. A poll with any success still
+  counts as success.
+
+#### Consumer / Post-Processing
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `Noop` | `bool` | `false` | Leave file in place after processing |
+| `Delete` | `bool` | `false` | Delete file after processing |
+| `MoveTo` | `string` | `""` | Move after processing. Supports the file keys (see below) |
+| `MoveExisting` | `GenericFileExistStrategy` | `Override` | Strategy at move target |
+| `PreMove` | `string` | `""` | Move before processing. Supports the file keys (see below) |
+
+Only one of `Noop`, `Delete`, `MoveTo` can be set.
+
+#### Consumer / Idempotency
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `Idempotent` | `bool` | `false` | Enable idempotent consumer |
+| `IdempotentKey` | `string` | `""` | Custom key. Supports the file keys only (see below) |
+| `DoneFileName` | `string` | `""` | Done-file pattern (`${file:name}.done`) |
+
+Default idempotent key: `"{fullPath}|{lastModifiedUtc:O}|{length}"`.
+
+#### Consumer / Body
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `StreamBody` | `bool` | `false` | `false` → `byte[]`, `true` → `Stream` |
+| `Charset` | `string` | `utf-8` | Character encoding |
+
+#### Producer
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `FileName` | `DynamicValue<string>?` | — | Target file name (expression) |
+| `FileExist` | `GenericFileExistStrategy` | `Override` | `Override`, `Append`, `Fail`, `Ignore`, `Move`, `TryRename` |
+| `TempPrefix` | `string` | — | Temp file prefix, put before the target name as written |
+| `TempFileName` | `string` | — | Full temp file name in the target directory; file keys read the file being written (`${file:name}.part`) |
+| `AutoCreate` | `bool` | `true` | Auto-create parent directories |
+| `AllowNullBody` | `bool` | `false` | Allow null body (empty file) |
+| `EagerDeleteTargetFile` | `bool` | `true` | Delete target before writing |
+| `AppendChars` | `string?` | — | Chars appended after each write |
+
+### RemoteFileEndpointOptions (extends Base)
+
+#### Connection
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `Host` | `string` | `localhost` | Server hostname |
+| `Port` | `int` | (transport-specific) | Server port |
+| `Username` | `string?` | — | Auth username |
+| `Password` | `string?` | — | Auth password |
+| `ConnectionTimeout` | `int` | `30000` | Connection timeout (ms) |
+| `OperationTimeout` | `int` | `60000` | Operation timeout (ms) |
+
+#### Reconnection
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `MaximumReconnectAttempts` | `int` | `3` | Max reconnect attempts on failure |
+| `ReconnectDelay` | `int` | `1000` | Delay between attempts (ms) |
+| `Disconnect` | `bool` | `false` | Disconnect after each poll/write |
+
+#### Consumer-Specific
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `MaxAge` | `long` | `0` | Max file age (ms, 0 = unlimited) |
+| `MoveFailed` | `string` | `""` | Move on failure. Supports the file keys (see below) |
+| `StartingDirectoryMustExist` | `bool` | `false` | Fail if base dir doesn't exist |
+| `SendEmptyMessageWhenIdle` | `bool` | `false` | Send empty exchange when no files |
+
+## Enums
+
+### GenericFileExistStrategy
+
+| Value | Description |
+|-------|-------------|
+| `Override` | Overwrite existing file |
+| `Append` | Append to existing file |
+| `Fail` | Throw exception |
+| `Ignore` | Skip silently |
+| `Move` | Rename existing file before writing |
+| `TryRename` | Try alternate names |
+
+### GenericFileSortBy
+
+| Value | Description |
+|-------|-------------|
+| `None` | No sorting |
+| `Name` / `NameDesc` | Sort by name |
+| `Modified` / `ModifiedDesc` | Sort by last modified |
+| `Size` / `SizeDesc` | Sort by size |
+
+## File Operations Interface
+
+Transport implementations provide `IFileOperations` (or `IRemoteFileOperations` for network transports):
+
+- `ListFilesAsync` — enumerate files in a directory
+- `ReadAllBytesAsync` / `OpenReadAsync` — read file contents
+- `WriteAsync` (byte[] / Stream) / `AppendAsync` / `AppendTextAsync` — write
+- `ExistsAsync` / `DeleteAsync` / `MoveAsync` — file operations
+- `CreateDirectoryAsync` / `DirectoryExistsAsync` — directory operations
+- Path helpers: `CombinePath`, `GetParentPath`, `GetFileName`, `GetExtension`, etc.
+
+## Glob Patterns
+
+Include/exclude patterns support comma-separated values and `*`/`?` wildcards:
+
+```
+*.csv          — all CSV files
+*.csv,*.xml    — CSV and XML files
+report_*       — files starting with "report_"
+data?.txt      — data1.txt, dataA.txt, etc.
+```
+
+## Path Filters
+
+A glob sees only the file name, so it cannot say *which directory* a recursive poll should take.
+Four options decide by path, in the order the poll applies them (Apache Camel parity):
+
+```
+antInclude=TYPE_A/outbox/*.csv,TYPE_B/outbox/*.csv   — Ant patterns over the path relative to the
+antExclude=archive/**                                  polled directory; '*' stops at a separator,
+                                                       '**' spans levels, ',' separates patterns
+filterDirectory=header.redbSftp.Name != 'archive'    — asked per subdirectory BEFORE it is listed
+filterFile=header.redbSftp.Length > 1024             — asked per file before it is read or moved
+filter=#partnerFilter                                — an IGenericFileFilter from the registry,
+                                                       for both files and directories
+```
+
+`filterDirectory` and the bean's `AcceptDirectory` decide while the listing is still walking, so a
+directory they turn down costs nothing — no listing, no round trip. That is what makes one consumer
+over a partner tree of two hundred directories affordable, and it is the only way to keep one
+connection when the server allows only one.
+
+Everything these filters reject is left exactly as it was found: no exchange is created for it, so
+`delete`, `move` and `preMove` never touch it. Polling a parent recursively and sorting it out in
+the route does the opposite — the file is downloaded and post-processed first.
+
+## File keys in the consumer options
+
+`moveTo`, `preMove`, `moveFailed`, `doneFileName` and `idempotentKey` take the keys of Apache Camel's file language,
+resolved against the file being handled. They are the keys of a route template (`${file:name}` over the `redbFile.*`
+headers), with the same values; here they match ignoring case (`${FILE:NAME}` works), in a template exactly. A key
+that is not in the table fails when the endpoint is created.
+
+| Key | Value |
+|-----|-------|
+| `${file:name}`, `${file:onlyname}` | File name with extension |
+| `${file:name.noext}`, `${file:onlyname.noext}` | File name without extension |
+| `${file:ext}`, `${file:name.ext}` | Extension without the dot, lowercased (`csv`) |
+| `${file:parent}` | Directory that holds the file |
+| `${file:path}`, `${file:absolute.path}` | Full path of the file |
+| `${file:relative.path}` | Path relative to the polled directory |
+| `${file:length}`, `${file:size}` | Size in bytes |
+| `${file:modified}` | Last write time, ISO 8601 |
+
+A subclass of `GenericFileConsumer` that moves files itself overrides `PostProcessAsync(GenericFileInfo, string,
+CancellationToken)` and `OnProcessingFailedAsync(GenericFileInfo, string, CancellationToken)`; the forms with
+`(filePath, fileName, basePath)` are still called for a subclass that overrides them, without the size and the time.
+
+## Requirements
+
+- .NET 8.0 / 9.0 / 10.0. 4.7 is the last release that targets .NET 8 and .NET 9 (Microsoft's support for both ends on
+  10 November 2026); from 4.8 the package targets .NET 10 and later.
+- `redb.Route` (core) — no external dependencies

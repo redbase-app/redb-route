@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- OASIS XML catalog: binds the redb.Route markup NAMESPACE to the shipped XSD.
+     Namespace-driven on purpose (Ф7 activation contract, owner decision 2026-09-04):
+     a document gets the schema because its root says urn:redb:route:1.0 - never because
+     of its file name - so a foreign route.xml is left alone, and any file carrying the
+     namespace validates. LemMinX (redhat.vscode-xml) resolves this via uri entries.
+
+     The bound file is the CATALOG-AWARE schema: it carries the package elements
+     (<redb>, <redbSave>, <cache>, ...) and the typed endpoint options of every connector.
+     The lean redb-route-1.0.xsd beside it is the registry-only schema a scaffolded project
+     keeps for standalone use; binding it here made every package element red in a project
+     without its own .vscode binding (owner finding 2026-09-17). -->
+<catalog xmlns="urn:oasis:names:tc:entity:xmlns:xml:catalog">
+  <uri name="urn:redb:route:1.0" uri="redb-route-1.0.catalog.xsd"/>
+</catalog>

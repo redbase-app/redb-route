@@ -1,0 +1,990 @@
+using Json.Schema;
+using Microsoft.Extensions.Logging;
+using redb.Route.Definitions;
+using redb.Route.Transactions;
+using redb.Route.Validation;
+using redb.Route.Xslt;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Xml.Schema;
+
+namespace redb.Route.Abstractions;
+
+/// <summary>
+/// New fluent DSL for defining a message route using the canonical ProcessorDefinition model.
+/// All leaf methods return <see cref="IRouteDefinition"/> for chaining.
+/// Scope-opener methods (Filter, Choice, Split, TryCatch, etc.) return the opened definition
+/// and expose an End()/EndXxx() method that returns the parent definition.
+/// </summary>
+public interface IRouteDefinition : IProcessorDefinition
+{
+    // ── Identity ──
+
+    /// <summary>Assigns a unique route identifier.</summary>
+    IRouteDefinition RouteId(string routeId);
+
+    /// <summary>Gets the assigned route ID (null if not set).</summary>
+    string? GetRouteId();
+
+    /// <summary>
+    /// Names the most recently added step (Apache Camel <c>id()</c>), for AdviceWith weaving
+    /// (<c>WeaveById</c>) and diagnostics. Before any step has been added it names the route itself.
+    /// </summary>
+    IRouteDefinition Id(string id);
+
+    /// <summary>
+    /// Gives the most recently added step a human-readable label (Apache Camel <c>description()</c>).
+    /// The label replaces the type-derived one in message history; the node id is unaffected. Before
+    /// any step has been added it describes the route itself.
+    /// </summary>
+    IRouteDefinition Description(string description);
+
+    // ── Interception and completion (declared on the route; RouteBuilder has the same verbs for every route) ──
+
+    /// <summary>Opens steps that run before <b>every</b> step of this route, including steps nested in scopes (Camel <c>intercept()</c>). Close with <c>EndIntercept()</c>.</summary>
+    Definitions.InterceptDefinition Intercept();
+
+    /// <summary>Opens steps that run once when a message enters the route, optionally only for a <c>From</c> URI matching the mask (Camel <c>interceptFrom()</c>).</summary>
+    Definitions.InterceptDefinition InterceptFrom(string? uriPattern = null);
+
+    /// <summary>Opens steps that run before a <c>To</c> / <c>ToD</c> whose target matches the mask; <c>.SkipSendToOriginalEndpoint()</c> replaces the send (Camel <c>interceptSendToEndpoint()</c>).</summary>
+    Definitions.InterceptDefinition InterceptSendToEndpoint(string uriPattern);
+
+    /// <summary>Opens steps that run after the route finished with an exchange, on a copy, outside the route's transaction (Camel <c>onCompletion()</c>). Close with <c>EndOnCompletion()</c>.</summary>
+    Definitions.OnCompletionDefinition OnCompletion();
+
+    // ── Header / property / body sugar ──
+
+    /// <summary>Sets several headers in one step; an <see cref="IExpression"/> or <c>Func&lt;IExchange, object?&gt;</c> value is evaluated per message, anything else is a constant.</summary>
+    IRouteDefinition SetHeaders(params (string Name, object? Value)[] headers);
+
+    /// <summary>Sets several exchange properties in one step, in order; an <see cref="IExpression"/> or <c>Func&lt;IExchange, object?&gt;</c> value is evaluated per message, anything else is a constant.</summary>
+    IRouteDefinition SetProperties(params (string Name, object? Value)[] properties);
+
+    /// <summary>Removes every header whose name matches the mask (exact, trailing <c>*</c>, or <c>regex:</c>), except those listed.</summary>
+    IRouteDefinition RemoveHeaders(string pattern, params string[] except);
+
+    /// <summary>Removes every exchange property whose key matches the mask, except those listed.</summary>
+    IRouteDefinition RemoveProperties(string pattern, params string[] except);
+
+    /// <summary>Sorts the collection selected by a route-language expression and puts the sorted list into the body; the key expression sees each element as <c>body</c> (<c>Sort("body.items", "body.priority")</c>).</summary>
+    IRouteDefinition Sort(string collectionExpression, string? keyExpression = null, bool descending = false);
+
+    /// <summary>Sorts a typed collection selected from the exchange; the body becomes a <c>List&lt;T&gt;</c>.</summary>
+    IRouteDefinition Sort<T>(Func<IExchange, IEnumerable<T>> source, Func<T, object?>? key = null, bool descending = false, IComparer<object?>? comparer = null);
+
+    /// <summary>Sets whether this route should auto-start. Default is true.</summary>
+    IRouteDefinition AutoStart(bool value = true);
+
+    /// <summary>Gets whether this route auto-starts.</summary>
+    bool GetAutoStart();
+
+    /// <summary>Sets the per-exchange processing timeout for this route.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="timeout"/> is zero or negative (excluding <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>).</exception>
+    IRouteDefinition ProcessingTimeout(TimeSpan timeout);
+
+    // ── Source ──
+
+    /// <summary>Sets the source (consumer) endpoint URI.</summary>
+    IRouteDefinition From(string uri);
+
+    /// <summary>Gets the source endpoint URI (null if not set).</summary>
+    string? GetFromUri();
+
+    // ── Destination ──
+
+    /// <summary>Sends the exchange to an endpoint via producer.</summary>
+    IRouteDefinition To(string uri);
+
+    /// <summary>Camel-style dynamic-to: sends the exchange to an endpoint URI computed
+    /// per message from a <c>${...}</c> template (e.g. <c>.ToD("kafka://orders-${header.region}")</c>).
+    /// Producers are cached per resolved URI and tracked by <see cref="Core.RouteContext"/>.</summary>
+    IRouteDefinition ToD(string uriTemplate);
+
+    /// <summary>Camel-style dynamic-to using an <see cref="IExpression"/> that yields the URI.</summary>
+    IRouteDefinition ToD(IExpression uriExpression);
+
+    /// <summary>Camel-style dynamic-to using a delegate that yields the URI per exchange.</summary>
+    IRouteDefinition ToD(Func<IExchange, string> uriFactory);
+
+    // ── Processing delegates ──
+
+    /// <summary>Processes the exchange with a synchronous action.</summary>
+    IRouteDefinition Process(Action<IExchange> action);
+
+    /// <summary>Processes the exchange with an asynchronous action.</summary>
+    IRouteDefinition Process(Func<IExchange, CancellationToken, Task> action);
+
+    /// <summary>Processes the exchange with a pre-built processor instance.</summary>
+    IRouteDefinition Process(IProcessor processor);
+
+    // ── Transform / body ──
+
+    /// <summary>Sets the exchange body to a static value.</summary>
+    IRouteDefinition SetBody(object? value);
+
+    /// <summary>Sets the exchange body using a factory.</summary>
+    IRouteDefinition SetBody(Func<IExchange, object?> factory);
+
+    /// <summary>
+    /// Sets the exchange body using an <see cref="IExpression"/>. A <c>${...}</c> template is one:
+    /// <c>SetBody(Expr("Hello ${header.name}"))</c>. A plain <c>string</c> passed to
+    /// <see cref="SetBody(object?)"/> stays a literal — the position decides, the content never does.
+    /// </summary>
+    IRouteDefinition SetBody(IExpression expression);
+
+    /// <summary>Transforms the exchange body using a factory.</summary>
+    IRouteDefinition Transform(Func<IExchange, object?> transform);
+
+    /// <summary>Transforms the exchange body using an <see cref="IExpression"/>.</summary>
+    IRouteDefinition Transform(IExpression expression);
+
+    /// <summary>Removes (nulls) the exchange body.</summary>
+    IRouteDefinition RemoveBody();
+
+    // ── Headers ──
+
+    /// <summary>Sets a header to a static value.</summary>
+    IRouteDefinition SetHeader(string key, object? value);
+
+    /// <summary>Sets a header using a factory.</summary>
+    IRouteDefinition SetHeader(string key, Func<IExchange, object?> factory);
+
+    /// <summary>
+    /// Sets a header using an <see cref="IExpression"/>; a <c>${...}</c> template is one:
+    /// <c>SetHeader("target", Expr("queue-${header.tenant}"))</c>.
+    /// </summary>
+    IRouteDefinition SetHeader(string name, IExpression expression);
+
+    /// <summary>Removes a header.</summary>
+    IRouteDefinition RemoveHeader(string key);
+
+    // ── Attachments ──
+
+    /// <summary>
+    /// Adds an attachment to the message with the value of <paramref name="content"/> (<c>byte[]</c>, <c>string</c> as
+    /// UTF-8, a <c>Stream</c>, an <see cref="AttachmentContent"/>). The text arguments are literal.
+    /// </summary>
+    IRouteDefinition AddAttachment(string name, IExpression content, string? fileName = null, string? contentType = null);
+
+    /// <summary>As <see cref="AddAttachment(string, IExpression, string?, string?)"/> with the file name evaluated per message.</summary>
+    IRouteDefinition AddAttachment(string name, IExpression content, IExpression fileName, string? contentType = null);
+
+    /// <summary>
+    /// Adds the message body as an attachment; the body stays. The content type defaults to the message's. The text
+    /// arguments are literal.
+    /// </summary>
+    IRouteDefinition AddAttachmentFromBody(string name, string? fileName = null, string? contentType = null);
+
+    /// <summary>As <see cref="AddAttachmentFromBody(string, string?, string?)"/> with the file name evaluated per message.</summary>
+    IRouteDefinition AddAttachmentFromBody(string name, IExpression fileName, string? contentType = null);
+
+    /// <summary>
+    /// Adds the file at <paramref name="path"/> as an attachment, read from disk whenever it is sent; the name and file
+    /// name default to the file's name. The text arguments are literal.
+    /// </summary>
+    IRouteDefinition AddAttachmentFromFile(string path, string? name = null, string? contentType = null);
+
+    /// <summary>As <see cref="AddAttachmentFromFile(string, string?, string?)"/> with the path evaluated per message.</summary>
+    IRouteDefinition AddAttachmentFromFile(IExpression path, string? name = null, string? contentType = null);
+
+    /// <summary>Removes the attachments named <paramref name="name"/>.</summary>
+    IRouteDefinition RemoveAttachment(string name);
+
+    /// <summary>Removes every attachment of the message.</summary>
+    IRouteDefinition RemoveAttachments();
+
+    // ── Properties ──
+
+    /// <summary>Sets a property to a static value.</summary>
+    IRouteDefinition SetProperty(string key, object? value);
+
+    /// <summary>Sets a property using a factory.</summary>
+    IRouteDefinition SetProperty(string key, Func<IExchange, object?> factory);
+
+    /// <summary>
+    /// Sets a property using an <see cref="IExpression"/>; a <c>${...}</c> template is one:
+    /// <c>SetProperty("tenant", Expr("${header.tenant}"))</c>.
+    /// </summary>
+    IRouteDefinition SetProperty(string key, IExpression expression);
+
+    /// <summary>Removes a property.</summary>
+    IRouteDefinition RemoveProperty(string key);
+
+    // ── Logging ──
+
+    /// <summary>Logs a static message.</summary>
+    IRouteDefinition Log(string message, LogLevel level = LogLevel.Information);
+
+    /// <summary>Logs a dynamic message from a factory.</summary>
+    IRouteDefinition Log(Func<IExchange, string> messageFactory, LogLevel level = LogLevel.Information);
+
+    // ── Stop / Throw ──
+
+    /// <summary>Stops exchange processing.</summary>
+    IRouteDefinition Stop();
+
+    /// <summary>Rethrows the exception stored on the exchange.</summary>
+    IRouteDefinition ThrowException();
+
+    /// <summary>Throws a new exception with the given message.</summary>
+    IRouteDefinition ThrowException(string message);
+
+    /// <summary>Throws a specific pre-built exception instance.</summary>
+    IRouteDefinition ThrowException(Exception exception);
+
+    /// <summary>Instantiates and throws an exception by type and message.</summary>
+    IRouteDefinition ThrowException(Type exceptionType, string message);
+
+    /// <summary>Instantiates and throws a typed exception.</summary>
+    IRouteDefinition ThrowException<TException>(string? message = null) where TException : Exception, new();
+
+    // ── Delay / Sampling ──
+
+    /// <summary>Delays processing by a fixed duration.</summary>
+    IRouteDefinition Delay(TimeSpan duration);
+
+    /// <summary>Delays processing by a dynamic duration computed from the exchange.</summary>
+    IRouteDefinition Delay(Func<IExchange, TimeSpan> factory);
+
+    /// <summary>Delays by a route-language expression evaluated per message: milliseconds (<c>"${header.backoff}"</c>, <c>"header.attempt * 500"</c>), a <see cref="TimeSpan"/>, or <c>hh:mm:ss</c> text.</summary>
+    IRouteDefinition Delay(string durationExpression);
+
+    /// <summary>Samples messages by passing every N-th message (count-based).</summary>
+    IRouteDefinition Sample(long messageFrequency);
+
+    /// <summary>Samples messages by period — at most one message per <paramref name="period"/>.</summary>
+    IRouteDefinition Sample(TimeSpan period);
+
+    // ── Stream caching ──
+
+    /// <summary>
+    /// Wraps a forward-only <see cref="System.IO.Stream"/> body with a seekable cache so
+    /// subsequent steps can re-read it multiple times. Non-Stream bodies pass through unchanged.
+    /// </summary>
+    /// <param name="spoolThreshold">Bytes threshold before spooling to a temp file (null = default 128 KB).</param>
+    IRouteDefinition StreamCaching(long? spoolThreshold = null);
+
+    // ── Validation ──
+
+    /// <summary>Validates the exchange using the provided <see cref="IMessageValidator"/> instance.</summary>
+    IRouteDefinition Validate(IMessageValidator validator, bool throwOnFailure = true);
+
+    /// <summary>Validates the exchange using a predicate function.</summary>
+    IRouteDefinition Validate(Func<IExchange, bool> predicate, string errorMessage = "Validation failed", bool throwOnFailure = true);
+
+    /// <summary>Validates the exchange against an <see cref="IPredicate"/>.</summary>
+    IRouteDefinition Validate(IPredicate predicate, string errorMessage = "Validation failed", bool throwOnFailure = true);
+
+    /// <summary>
+    /// Validates the exchange against an expression read as a condition, as <c>Filter</c> and <c>When</c> read one:
+    /// <c>Validate(Expr("header.amount &gt; 0"))</c>, <c>Validate(Method("#rules", "IsValid(${body})"))</c>, where a
+    /// <c>Task&lt;bool&gt;</c> method is awaited.
+    /// </summary>
+    IRouteDefinition Validate(IExpression condition, string errorMessage = "Validation failed", bool throwOnFailure = true)
+        => Validate(Predicates.PredicateFactory.FromExpression(condition), errorMessage, throwOnFailure);
+
+    /// <summary>Validates the exchange body against a JSON Schema provided as a string.</summary>
+    IRouteDefinition ValidateJsonSchema(string schemaJson, bool throwOnFailure = true);
+
+    /// <summary>Validates the exchange body against a pre-parsed <see cref="JsonSchema"/>.</summary>
+    IRouteDefinition ValidateJsonSchema(JsonSchema schema, bool throwOnFailure = true);
+
+    /// <summary>Validates the exchange body against an XSD schema string.</summary>
+    IRouteDefinition ValidateXsd(string xsdContent, bool throwOnFailure = true);
+
+    /// <summary>Validates the exchange body against an XSD schema string with an explicit target namespace.</summary>
+    IRouteDefinition ValidateXsd(string? targetNamespace, string xsdContent, bool throwOnFailure = true);
+
+    /// <summary>Validates the exchange body against a pre-built <see cref="XmlSchemaSet"/>.</summary>
+    IRouteDefinition ValidateXsd(XmlSchemaSet schemaSet, bool throwOnFailure = true);
+
+    /// <summary>
+    /// Validates the exchange body against an XSD file whose <c>xs:import</c> and <c>xs:include</c> are read relative
+    /// to it, from under <paramref name="schemaRoot"/> only (never the network); a reference that does not load is an
+    /// error when the route is built. The path resolves through the context's resource resolver.
+    /// </summary>
+    /// <param name="schemaPath">The XSD file (<c>schemas/order.xsd</c>).</param>
+    /// <param name="targetNamespace">Target namespace; <c>null</c> takes the schema's own.</param>
+    /// <param name="schemaRoot">
+    /// The directory imports stay under, relative to the schema's directory; <c>null</c> is that directory.
+    /// </param>
+    /// <param name="throwOnFailure">Whether a validation failure throws.</param>
+    IRouteDefinition ValidateXsdFile(string schemaPath, string? targetNamespace = null, string? schemaRoot = null,
+        bool throwOnFailure = true);
+
+    // ── XSLT ──
+
+    /// <summary>Apache Camel <c>xslt:</c> parity: transform the body through an XSLT stylesheet file.</summary>
+    IRouteDefinition Xslt(string stylesheetPath, XsltOutput output = XsltOutput.String, bool failOnNullBody = true, bool allowTemplateFromHeader = false);
+
+    /// <summary>Transform the body through an inline XSLT stylesheet document.</summary>
+    IRouteDefinition XsltContent(string stylesheetXml, XsltOutput output = XsltOutput.String, bool failOnNullBody = true, bool allowTemplateFromHeader = false);
+
+    // ── Control Bus ──
+
+    /// <summary>Apache Camel <c>controlbus:</c> parity: manage a route at runtime (start/stop/suspend/resume/restart/status/stats/fail).</summary>
+    IRouteDefinition ControlBus(redb.Route.ControlBus.ControlBusAction action, string routeId, bool async = false);
+
+    // ── Serialization ──
+
+    /// <summary>Marshals (serializes) the exchange body using the specified serializer type.</summary>
+    IRouteDefinition Marshal(Type serializerType);
+
+    /// <summary>Marshals (serializes) the exchange body using the specified serializer type.</summary>
+    IRouteDefinition Marshal<TSerializer>() where TSerializer : class;
+
+    /// <summary>Unmarshals (deserializes) the exchange body to <paramref name="targetType"/> using the specified serializer type.</summary>
+    IRouteDefinition Unmarshal(Type serializerType, Type targetType);
+
+    /// <summary>Unmarshals (deserializes) the exchange body using the specified serializer and target types.</summary>
+    IRouteDefinition Unmarshal<TSerializer, TTarget>() where TSerializer : class;
+
+    /// <summary>Marshals the body with the data format registered for <paramref name="contentType"/> (<c>"text/csv"</c>); an unregistered format fails <c>Start()</c>.</summary>
+    IRouteDefinition Marshal(string contentType);
+
+    /// <summary>Marshals the body with a configured serializer instance (per-node options): <c>Marshal(new CsvDataFormat(o))</c>.</summary>
+    IRouteDefinition Marshal(IMessageSerializer serializer);
+
+    /// <summary>Unmarshals the body to <typeparamref name="T"/> with the data format registered for <paramref name="contentType"/>.</summary>
+    IRouteDefinition Unmarshal<T>(string contentType);
+
+    /// <summary>Unmarshals the body to <paramref name="targetType"/> with the data format registered for <paramref name="contentType"/>.</summary>
+    IRouteDefinition Unmarshal(string contentType, Type targetType);
+
+    /// <summary>Unmarshals the body to <typeparamref name="T"/> with a configured serializer instance.</summary>
+    IRouteDefinition Unmarshal<T>(IMessageSerializer serializer);
+
+    /// <summary>Unmarshals the body to <paramref name="targetType"/> with a configured serializer instance.</summary>
+    IRouteDefinition Unmarshal(IMessageSerializer serializer, Type targetType);
+
+    /// <summary>Apache Camel parity: unmarshal the body to <typeparamref name="T"/> using the data format
+    /// registry entry resolved from the incoming message ContentType.</summary>
+    IRouteDefinition Unmarshal<T>();
+
+    /// <summary>Apache Camel parity: convert the exchange body to <typeparamref name="T"/>.</summary>
+    IRouteDefinition ConvertBody<T>();
+
+    /// <summary>Apache Camel parity: convert the exchange body to <paramref name="targetType"/>.</summary>
+    IRouteDefinition ConvertBody(Type targetType);
+
+    /// <summary>Apache Camel parity: open a typed scope auto-converting the body to <typeparamref name="T"/>.</summary>
+    OfTypeDefinition<T> OfType<T>();
+
+    // ── Transactions ──
+
+    /// <summary>Begins an imperative transaction scope on the exchange (default Required policy).</summary>
+    IRouteDefinition BeginTransaction();
+
+    /// <summary>Begins an imperative transaction scope with the specified <see cref="TransactionPolicy"/>.</summary>
+    IRouteDefinition BeginTransaction(TransactionPolicy policy);
+
+    /// <summary>Commits the imperative transaction scope and all deferred actions.</summary>
+    IRouteDefinition CommitTransaction();
+
+    /// <summary>Rolls back the imperative transaction scope and all deferred actions.</summary>
+    IRouteDefinition RollbackTransaction();
+
+    /// <summary>
+    /// Opens a declarative transaction scope. All child steps execute inside a
+    /// <c>TransactedProcessor</c> that auto-commits on success and auto-rolls-back on failure.
+    /// Close the scope with <see cref="Definitions.TransactionDefinition.EndTransaction"/> or
+    /// the universal <see cref="IRouteScope.End"/>.
+    /// </summary>
+    Definitions.TransactionDefinition Transaction(TransactionPolicy? policy = null);
+
+    // ── Replay checkpoints ──
+
+    /// <summary>
+    /// Opens a replay checkpoint (save-point). The steps that follow are the marker's body (the tail
+    /// re-run on replay); the exchange is snapshotted into <c>route.checkpoint</c> on each pass. At
+    /// the start of a route no <c>End</c> is needed; otherwise close with
+    /// <see cref="Definitions.ReplayableDefinition.EndReplayable"/> or use the lambda-body overload.
+    /// </summary>
+    Definitions.ReplayableDefinition Replayable(string name, bool exposed = false);
+
+    /// <summary>Lambda-body form of <see cref="Replayable(string, bool)"/>; the chain stays on the current definition.</summary>
+    IRouteDefinition Replayable(string name, Action<Definitions.ReplayableDefinition> body, bool exposed = false);
+
+    // ── Telemetry ──
+
+    /// <summary>
+    /// Opens a tracing scope. All child steps run inside a single Activity span named <paramref name="operationName"/>.
+    /// Close with <see cref="Definitions.TracedDefinition.EndTraced"/> or <see cref="IRouteScope.End"/>.
+    /// </summary>
+    Definitions.TracedDefinition Traced(string operationName);
+
+    /// <summary>
+    /// Inline tracing — wraps a single synchronous action in an Activity span named <paramref name="operationName"/>.
+    /// </summary>
+    IRouteDefinition Traced(string operationName, Action<IExchange> action);
+
+    /// <summary>
+    /// Inline tracing — wraps an asynchronous action in an Activity span named <paramref name="operationName"/>.
+    /// </summary>
+    IRouteDefinition Traced(string operationName, Func<IExchange, CancellationToken, Task> action);
+
+    /// <summary>
+    /// Inline tracing — wraps an <see cref="IProcessor"/> in an Activity span named <paramref name="operationName"/>.
+    /// </summary>
+    IRouteDefinition Traced(string operationName, IProcessor processor);
+
+    /// <summary>
+    /// Opens a metrics scope. All child steps are measured by <c>MeteredStepProcessor</c>
+    /// tagged with <paramref name="stepName"/>.
+    /// Close with <see cref="Definitions.MeteredDefinition.EndMetered"/> or <see cref="IRouteScope.End"/>.
+    /// </summary>
+    Definitions.MeteredDefinition Metered(string stepName);
+
+    /// <summary>
+    /// Inline metering — wraps a single synchronous action in a MeteredStepProcessor tagged with <paramref name="stepName"/>.
+    /// </summary>
+    IRouteDefinition Metered(string stepName, Action<IExchange> action);
+
+    /// <summary>
+    /// Inline metering — wraps an asynchronous action in a MeteredStepProcessor tagged with <paramref name="stepName"/>.
+    /// </summary>
+    IRouteDefinition Metered(string stepName, Func<IExchange, CancellationToken, Task> action);
+
+    /// <summary>
+    /// Inline metering — wraps an <see cref="IProcessor"/> in a MeteredStepProcessor tagged with <paramref name="stepName"/>.
+    /// </summary>
+    IRouteDefinition Metered(string stepName, IProcessor processor);
+
+    /// <summary>
+    /// Puts the attribute <paramref name="key"/> = <paramref name="value"/> (a literal) on a span of the engine, so the
+    /// trace can be found by it. See <see cref="SpanTag(string, IExpression, Telemetry.SpanTarget)"/>.
+    /// </summary>
+    /// <param name="key">Attribute name: lowercase, dot-separated, outside the reserved namespaces (<c>redb.</c>, <c>http.</c>, ...).</param>
+    /// <param name="value">The value, as is — a literal, never a template; a template is <c>Expr("${...}")</c>.</param>
+    /// <param name="target">Which span receives it; the enclosing <c>Traced</c> scope or route span by default.</param>
+    IRouteDefinition SpanTag(string key, string value, Telemetry.SpanTarget target = Telemetry.SpanTarget.Enclosing);
+
+    /// <summary>
+    /// Puts the attribute <paramref name="key"/> on a span of the engine, its value evaluated per message — the way to
+    /// find a trace by a business key (<c>.SpanTag("sap.order.id", XPath("/Ack/OrderNo"))</c>). The exchange is not
+    /// touched. Nothing is set without a listener, on an unsampled span (the value is then not evaluated), for a
+    /// <c>null</c> or empty value, or when the value fails to evaluate (logged at Debug). The value is exported
+    /// unfiltered: never personal data or credentials. Its length is limited by the OpenTelemetry SDK
+    /// (<c>OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT</c>).
+    /// </summary>
+    /// <param name="key">Attribute name: lowercase, dot-separated, outside the reserved namespaces (<c>redb.</c>, <c>http.</c>, ...).</param>
+    /// <param name="value">Expression producing the value.</param>
+    /// <param name="target">Which span receives it; the enclosing <c>Traced</c> scope or route span by default.</param>
+    /// <exception cref="ArgumentException"><paramref name="key"/> is templated, malformed, reserved or names a secret.</exception>
+    IRouteDefinition SpanTag(string key, IExpression value, Telemetry.SpanTarget target = Telemetry.SpanTarget.Enclosing);
+
+    // ── Enrichment ──
+
+    /// <summary>Sends exchange to a URI and continues (wire tap).</summary>
+    IRouteDefinition WireTap(string uri);
+
+    /// <summary>Sends a wire-tap copy to a URI, calling <paramref name="onPrepare"/> on the clone before dispatching.</summary>
+    IRouteDefinition WireTap(string uri, Action<IExchange> onPrepare);
+
+    /// <summary>Sends a wire-tap copy to a URI, replacing the clone's body with the result of <paramref name="newBodyFactory"/>.</summary>
+    IRouteDefinition WireTap(string uri, Func<IExchange, object?> newBodyFactory);
+
+    /// <summary>Sends a wire-tap copy to a URI with both an <paramref name="onPrepare"/> callback and a body replacement factory.</summary>
+    IRouteDefinition WireTap(string uri, Action<IExchange> onPrepare, Func<IExchange, object?> newBodyFactory);
+
+    /// <summary>Wire-tap to a dynamic URI computed per message from a factory.
+    /// Producers are cached per resolved URI.</summary>
+    IRouteDefinition WireTap(Func<IExchange, string> uriFactory);
+
+    /// <summary>Dynamic-URI wire-tap with an <paramref name="onPrepare"/> callback.</summary>
+    IRouteDefinition WireTap(Func<IExchange, string> uriFactory, Action<IExchange> onPrepare);
+
+    /// <summary>Dynamic-URI wire-tap with a body replacement factory.</summary>
+    IRouteDefinition WireTap(Func<IExchange, string> uriFactory, Func<IExchange, object?> newBodyFactory);
+
+    /// <summary>Dynamic-URI wire-tap with both an <paramref name="onPrepare"/> callback and a body factory.</summary>
+    IRouteDefinition WireTap(Func<IExchange, string> uriFactory, Action<IExchange> onPrepare, Func<IExchange, object?> newBodyFactory);
+
+    /// <summary>Content enricher — calls an endpoint and merges the result.</summary>
+    IRouteDefinition Enrich(string resourceUri, Func<IExchange, IExchange, IExchange> mergeStrategy);
+
+    /// <summary>Content enricher with a dynamic endpoint URI computed per message.</summary>
+    IRouteDefinition Enrich(Func<IExchange, string> uriFactory, Func<IExchange, IExchange, IExchange> mergeStrategy);
+
+    /// <summary>Content enricher whose endpoint URI comes from an expression, e.g. <c>Enrich(XPath("/order/service"), merge)</c>.</summary>
+    IRouteDefinition Enrich(IExpression uri, Func<IExchange, IExchange, IExchange> mergeStrategy);
+
+    /// <summary>Content enricher from an expression, keeping the enriched result (<c>UseLatest</c>).</summary>
+    IRouteDefinition Enrich(IExpression uri);
+
+    /// <summary>Apache Camel parity: poll an external endpoint and merge the polled result.</summary>
+    IRouteDefinition PollEnrich(
+        string resourceUri,
+        Func<IExchange, IExchange?, IExchange> mergeStrategy,
+        TimeSpan? timeout = null);
+
+    /// <summary>Poll enricher with a dynamic endpoint URI computed per message.</summary>
+    IRouteDefinition PollEnrich(
+        Func<IExchange, string> uriFactory,
+        Func<IExchange, IExchange?, IExchange> mergeStrategy,
+        TimeSpan? timeout = null);
+
+    /// <summary>Enrich without a strategy: the response becomes the current message (Camel default, <c>AggregationStrategies.UseLatest()</c>).</summary>
+    IRouteDefinition Enrich(string resourceUri);
+
+    /// <summary>Enrich with a dynamic URI and no strategy: the response becomes the current message.</summary>
+    IRouteDefinition Enrich(Func<IExchange, string> uriFactory);
+
+    /// <summary>Poll enricher without a strategy: the polled message becomes the current one; on timeout the original stays.</summary>
+    IRouteDefinition PollEnrich(string resourceUri, TimeSpan? timeout = null);
+
+    /// <summary>Poll enricher with a dynamic URI and no strategy: the polled message becomes the current one; on timeout the original stays.</summary>
+    IRouteDefinition PollEnrich(Func<IExchange, string> uriFactory, TimeSpan? timeout = null);
+
+    /// <summary>Poll enricher whose endpoint URI comes from an expression.</summary>
+    IRouteDefinition PollEnrich(
+        IExpression uri,
+        Func<IExchange, IExchange?, IExchange> mergeStrategy,
+        TimeSpan? timeout = null);
+
+    /// <summary>Poll enricher from an expression with no strategy: the polled message becomes the current one.</summary>
+    IRouteDefinition PollEnrich(IExpression uri, TimeSpan? timeout = null);
+
+    /// <summary>Apache Camel parity: route to a list of recipient URIs computed at runtime.</summary>
+    IRouteDefinition RecipientList(
+        Func<IExchange, IEnumerable<string>> recipientListFactory,
+        bool parallelProcessing = false,
+        bool stopOnException = false,
+        Func<IExchange, IExchange, IExchange>? aggregationStrategy = null);
+
+    /// <summary>
+    /// Recipient list from an expression yielding either a sequence of URIs or one delimited
+    /// string, e.g. <c>RecipientList(XPath("/order/recipients/uri"))</c>.
+    /// </summary>
+    IRouteDefinition RecipientList(
+        IExpression recipients,
+        bool parallelProcessing = false,
+        bool stopOnException = false,
+        Func<IExchange, IExchange, IExchange>? aggregationStrategy = null,
+        string uriDelimiter = ",");
+
+    /// <summary>Apache Camel parity: iteratively route to URIs returned by a routing function.</summary>
+    IRouteDefinition DynamicRouter(Func<IExchange, string?> routingFunction);
+
+    /// <summary>Dynamic router whose next hop comes from an expression; no value ends the routing.</summary>
+    IRouteDefinition DynamicRouter(IExpression routingExpression);
+
+    /// <summary>Apache Camel parity: Routing Slip — pipe the exchange through a list of endpoints
+    /// computed once up front (Out→In between hops).</summary>
+    IRouteDefinition RoutingSlip(Func<IExchange, IEnumerable<string>> slipFactory, bool ignoreInvalidEndpoints = false);
+
+    /// <summary>Apache Camel parity: Routing Slip from an expression yielding a delimited URI string.</summary>
+    IRouteDefinition RoutingSlip(IExpression slip, string uriDelimiter = ",", bool ignoreInvalidEndpoints = false);
+
+    /// <summary>Apache Camel parity: Routing Slip from a <c>${...}</c> template resolving to a delimited URI string.</summary>
+    IRouteDefinition RoutingSlip(string slipTemplate, string uriDelimiter = ",", bool ignoreInvalidEndpoints = false);
+
+    /// <summary>Apache Camel parity: open a Resequencer scope. Child outputs receive exchanges
+    /// in the order determined by <paramref name="keySelector"/>.</summary>
+    ResequenceDefinition Resequence(
+        Func<IExchange, long> keySelector,
+        int batchSize = 100,
+        TimeSpan? timeout = null);
+
+    // ── Scope openers ──
+
+    /// <summary>
+    /// Opens a Filter scope. Only exchanges matching the predicate will be processed by steps
+    /// inside the scope. Close with <see cref="FilterDefinition.EndFilter"/>.
+    /// </summary>
+    FilterDefinition Filter(Func<IExchange, bool> predicate);
+
+    /// <summary>
+    /// Opens a Filter scope using an <see cref="IExpression"/> predicate.
+    /// Close with <see cref="FilterDefinition.EndFilter"/>.
+    /// </summary>
+    FilterDefinition Filter(IExpression expression);
+
+    /// <summary>
+    /// Opens a Filter scope guarded by an <see cref="IPredicate"/>. The predicate is stored as the
+    /// filter's condition and awaited per message through <see cref="IPredicate.MatchesAsync"/>.
+    /// </summary>
+    FilterDefinition Filter(IPredicate predicate);
+
+    /// <summary>
+    /// Opens an Idempotent Consumer scope. Duplicate exchanges (same key) are skipped.
+    /// Close with <see cref="IdempotentConsumerDefinition.EndIdempotentConsumer"/>.
+    /// </summary>
+    IdempotentConsumerDefinition IdempotentConsumer(
+        IIdempotentRepository repository,
+        Func<IExchange, string> keyExtractor,
+        bool skipDuplicate = true);
+
+    /// <summary>
+    /// Opens an Idempotent Consumer scope with the repository looked up by registered name at
+    /// compile time — available on every definition, so the scope nests like any other.
+    /// </summary>
+    IdempotentConsumerDefinition IdempotentConsumer(
+        Func<IExchange, string> keyExtractor,
+        string repositoryName,
+        bool skipDuplicate = true);
+
+    /// <summary>Idempotent Consumer whose message id comes from an expression, e.g. <c>IdempotentConsumer(repo, jpath("$.messageId"))</c>.</summary>
+    IdempotentConsumerDefinition IdempotentConsumer(
+        IIdempotentRepository repository,
+        IExpression messageId,
+        bool skipDuplicate = true);
+
+    /// <summary>Idempotent Consumer from an expression, with the repository looked up by registered name.</summary>
+    IdempotentConsumerDefinition IdempotentConsumer(
+        IExpression messageId,
+        string repositoryName,
+        bool skipDuplicate = true);
+
+    /// <summary>
+    /// Claim Check step (Hohpe/Woolf). Stores the body away and lets a short claim key travel
+    /// the route in its place, or restores the body from such a key.
+    /// </summary>
+    /// <param name="operation">
+    /// <see cref="ClaimCheckOperation.Set"/> / <see cref="ClaimCheckOperation.Get"/> /
+    /// <see cref="ClaimCheckOperation.GetAndRemove"/> address an explicit key;
+    /// <see cref="ClaimCheckOperation.Push"/> / <see cref="ClaimCheckOperation.Pop"/> use an
+    /// exchange-scoped stack and need none.
+    /// </param>
+    /// <param name="key">Explicit claim key for Set/Get/GetAndRemove. Ignored by Push/Pop.</param>
+    /// <param name="ttl">Time-to-live for stored data. Used by Set/Push.</param>
+    /// <param name="repositoryName">
+    /// Logical name of a repository registered with
+    /// <c>context.AddClaimCheckRepository(name, repository)</c>. Null uses the context default.
+    /// </param>
+    IRouteDefinition ClaimCheck(
+        ClaimCheckOperation operation,
+        string? key = null,
+        TimeSpan? ttl = null,
+        string? repositoryName = null);
+
+    /// <summary>
+    /// Claim Check step against an explicit repository instance.
+    /// </summary>
+    IRouteDefinition ClaimCheck(
+        IClaimCheckRepository repository,
+        ClaimCheckOperation operation,
+        string? key = null,
+        TimeSpan? ttl = null);
+
+    /// <summary>
+    /// Opens a Choice (content-based router) scope.
+    /// Add branches with <c>.When()</c> / <c>.Otherwise()</c>, close with <c>.EndChoice()</c>.
+    /// </summary>
+    ChoiceDefinition Choice();
+
+    /// <summary>
+    /// Opens a Split scope. The splitter function splits the exchange body into parts;
+    /// each part is processed through the scope pipeline.
+    /// Close with <see cref="SplitDefinition.EndSplit"/>.
+    /// </summary>
+    SplitDefinition Split(Func<IExchange, IEnumerable<object?>> splitter);
+
+    /// <summary>
+    /// Opens a Split scope using an expression to produce the split parts.
+    /// The expression must evaluate to <see cref="IEnumerable{T}"/>.
+    /// Close with <see cref="SplitDefinition.EndSplit"/>.
+    /// </summary>
+    SplitDefinition Split(IExpression expression);
+
+    /// <summary>
+    /// Opens a streaming Split scope backed by an async enumerable (no parallel / aggregation).
+    /// Parts are processed one at a time without buffering.
+    /// Close with <see cref="SplitDefinition.EndSplit"/>.
+    /// </summary>
+    SplitDefinition Split(Func<IExchange, IAsyncEnumerable<object?>> splitter);
+
+    /// <summary>
+    /// Opens a Multicast scope (fan-out). Add targets with <c>.To()</c> / <c>.Process()</c>.
+    /// Close with <see cref="MulticastDefinition.EndMulticast"/>.
+    /// </summary>
+    MulticastDefinition Multicast();
+
+    /// <summary>
+    /// Opens a Threads scope (Camel-style concurrency handoff). The child pipeline runs on a bounded
+    /// pool of <paramref name="poolSize"/> persistent workers, so a serial polling consumer can process
+    /// up to <paramref name="poolSize"/> exchanges concurrently. Async boundary — does not extend the
+    /// caller's transaction; ordering is not preserved when <paramref name="poolSize"/> &gt; 1.
+    /// Close with <see cref="ThreadsDefinition.EndThreads"/>.
+    /// </summary>
+    /// <param name="poolSize">Number of concurrent workers (must be &gt;= 1).</param>
+    ThreadsDefinition Threads(int poolSize);
+
+    /// <summary>
+    /// Opens a TryCatch scope. Build the try body with leaf methods,
+    /// then open catch branches with <c>.Catch&lt;T&gt;()</c> and optionally <c>.Finally()</c>.
+    /// Close with <c>.EndTryCatch()</c>.
+    /// </summary>
+    TryCatchDefinition TryCatch();
+
+    /// <summary>
+    /// Opens an Aggregate scope. Collects exchanges by correlation key and forwards completed
+    /// aggregates to the body pipeline. Close with <c>.EndAggregate()</c>.
+    /// </summary>
+    AggregateDefinition Aggregate(
+        Func<IExchange, string> correlationKey,
+        Func<IExchange, IExchange, IExchange> aggregationStrategy,
+        Func<IExchange, bool> completionPredicate);
+
+    /// <summary>
+    /// Opens an Aggregate scope whose correlation key comes from an expression, e.g.
+    /// <c>Aggregate(XPath("/order/customerId"), strategy, completion)</c>.
+    /// </summary>
+    AggregateDefinition Aggregate(
+        IExpression correlationKey,
+        Func<IExchange, IExchange, IExchange> aggregationStrategy,
+        Func<IExchange, bool> completionPredicate);
+
+    /// <summary>
+    /// Opens a Throttle scope that limits exchange throughput to <paramref name="maxPerPeriod"/>
+    /// per period. Close with <c>.EndThrottle()</c>.
+    /// </summary>
+    ThrottleDefinition Throttle(int maxPerPeriod);
+
+    /// <summary>
+    /// Opens a Throttle scope whose limit is computed per exchange: the factory runs on every
+    /// message, so the limit can come from a header, a property or an expression and change
+    /// between messages. Close with <c>.EndThrottle()</c>.
+    /// </summary>
+    ThrottleDefinition Throttle(Func<IExchange, int> maxPerPeriodFactory);
+
+    /// <summary>Throttle whose per-period limit is a route-language expression evaluated per message (<c>"${header.rate}"</c>, <c>"header.tier == 'gold' ? 100 : 10"</c>).</summary>
+    ThrottleDefinition Throttle(string maxPerPeriodExpression, TimeSpan? period = null);
+
+    /// <summary>
+    /// Opens a keyed Throttle scope that limits throughput per unique key extracted from the exchange.
+    /// Close with <c>.EndKeyedThrottle()</c>.
+    /// </summary>
+    KeyedThrottleDefinition Throttle(
+        Func<IExchange, string> keyExtractor,
+        int maxPerPeriod,
+        TimeSpan? period = null);
+
+    /// <summary>
+    /// Keyed Throttle whose limit is read from each message as well as its key: "gold customers 100
+    /// per second, others 10, each under its own key". Close with <c>.EndKeyedThrottle()</c>.
+    /// </summary>
+    KeyedThrottleDefinition Throttle(
+        Func<IExchange, string> keyExtractor,
+        Func<IExchange, int> maxPerPeriodFactory,
+        TimeSpan? period = null);
+
+    /// <summary>
+    /// Keyed Throttle from two route-language expressions: the key (<c>"header.customerId"</c>) and the
+    /// per-message limit (<c>"header.tier == 'gold' ? 100 : 10"</c>). Both compile at build.
+    /// </summary>
+    KeyedThrottleDefinition Throttle(
+        string keyExpression,
+        string maxPerPeriodExpression,
+        TimeSpan? period = null);
+
+    /// <summary>
+    /// Opens a CircuitBreaker scope. Configure options before adding downstream steps.
+    /// Optionally add a fallback with <c>.OnFallback()</c>.
+    /// Close with <c>.EndCircuitBreaker()</c>.
+    /// </summary>
+    CircuitBreakerDefinition CircuitBreaker();
+
+    /// <summary>
+    /// Opens a Debounce scope. Suppresses rapid-fire messages per key, forwarding only the last
+    /// exchange after <paramref name="quietPeriod"/> of silence. Close with <c>.EndDebounce()</c>.
+    /// </summary>
+    DebounceDefinition Debounce(Func<IExchange, string> keyExtractor, TimeSpan quietPeriod);
+
+    /// <summary>
+    /// Opens a Loop scope that repeats the body pipeline <paramref name="count"/> times.
+    /// Close with <see cref="LoopDefinition.EndLoop"/>.
+    /// </summary>
+    /// <param name="count">Fixed number of iterations (non-negative).</param>
+    /// <param name="copy">If true each iteration receives a clone of the original exchange.</param>
+    /// <param name="shareScope">If true (default) clone iterations share the parent DI scope.</param>
+    LoopDefinition Loop(int count, bool copy = false, bool shareScope = true);
+
+    /// <summary>
+    /// Opens a Loop scope that repeats the body pipeline while <paramref name="condition"/> holds.
+    /// Close with <see cref="LoopDefinition.EndLoop"/>.
+    /// </summary>
+    LoopDefinition Loop(Func<IExchange, bool> condition, bool copy = false, bool shareScope = true);
+
+    /// <summary>
+    /// Opens a Loop scope that repeats while an <see cref="IPredicate"/> holds; the predicate is
+    /// awaited before every iteration.
+    /// </summary>
+    LoopDefinition Loop(IPredicate condition, bool copy = false, bool shareScope = true);
+
+    /// <summary>
+    /// Opens a Loop scope that repeats the body pipeline a number of times resolved from the exchange at runtime.
+    /// Close with <see cref="LoopDefinition.EndLoop"/>.
+    /// </summary>
+    LoopDefinition Loop(Func<IExchange, int> countFactory, bool copy = false, bool shareScope = true);
+
+    /// <summary>Loop whose iteration count is a route-language expression evaluated per message (<c>"${header.count}"</c>, <c>"header.items.Count"</c>); for a condition use <c>LoopWhile(string)</c>.</summary>
+    LoopDefinition Loop(string countExpression, bool copy = false, bool shareScope = true);
+
+    // ── Bean / Service Activator ──
+
+    /// <summary>Resolves <typeparamref name="TService"/> from the exchange's ServiceProvider and invokes <paramref name="method"/>.</summary>
+    IRouteDefinition Bean<TService>(Func<TService, IExchange, CancellationToken, Task> method);
+
+    /// <summary>Resolves <typeparamref name="TService"/> from the exchange's ServiceProvider and invokes <paramref name="method"/> (no cancellation token).</summary>
+    IRouteDefinition Bean<TService>(Func<TService, IExchange, Task> method);
+
+    /// <summary>Resolves <typeparamref name="TService"/> from the exchange's ServiceProvider and invokes a synchronous <paramref name="method"/>.</summary>
+    IRouteDefinition Bean<TService>(Action<TService, IExchange> method);
+
+    /// <summary>
+    /// Apache Camel's <c>bean(ref, method)</c>: calls user code through the <c>bean:</c> component, as the step
+    /// <c>To("bean:" + reference + "?method=" + method)</c> does, with the same endpoint, cache entry and statistics.
+    /// </summary>
+    /// <param name="reference">
+    /// <c>#name</c> for an object in the context registry, or <c>Namespace.Type, Assembly</c> for an instance the
+    /// endpoint creates.
+    /// </param>
+    /// <param name="method">
+    /// The method in the <c>bean:</c> URI spelling: a name (<c>Handle</c>) or a name with bound arguments
+    /// (<c>Gross(${header.qty}, ${header.price})</c>). Null picks the single suitable method.
+    /// </param>
+    IRouteDefinition Bean(string reference, string? method = null)
+        => To(Components.Bean.BeanComponent.UriFor(reference, method));
+
+    // ── Scatter-Gather ──
+
+    /// <summary>
+    /// Adds a scatter-gather step with static recipients and the specified aggregation strategy.
+    /// </summary>
+    IRouteDefinition ScatterGather(
+        Func<IExchange, IExchange, IExchange> aggregationStrategy,
+        params string[] recipients);
+
+    /// <summary>
+    /// Adds a scatter-gather step configured via a builder callback.
+    /// </summary>
+    IRouteDefinition ScatterGather(Action<IScatterGatherDefinition> configure);
+
+    // ── Saga ──
+
+    /// <summary>
+    /// Adds a saga step configured via a builder callback.
+    /// </summary>
+    IRouteDefinition Saga(Action<ISagaDefinition> configure);
+
+    /// <summary>
+    /// Opens a saga scope. Add steps with <c>SagaStep()</c> / <c>OnSagaCompletion()</c>,
+    /// then close with <see cref="Definitions.SagaDefinition.EndSaga"/> or
+    /// <see cref="IRouteScope.End"/>.
+    /// </summary>
+    Definitions.SagaDefinition Saga();
+
+    // ── LoadBalance ──
+
+    /// <summary>
+    /// Adds a load-balance step with the specified strategy and endpoint URIs.
+    /// </summary>
+    IRouteDefinition LoadBalance(ILoadBalancerStrategy strategy, params string[] uris);
+
+    /// <summary>
+    /// Adds a load-balance step configured via a builder callback.
+    /// </summary>
+    IRouteDefinition LoadBalance(Action<ILoadBalancerDefinition> configure);
+
+    // ── Normalizer ──
+
+    /// <summary>
+    /// Adds a normalizer step configured via a builder callback.
+    /// Each when-clause transforms messages matching its predicate.
+    /// </summary>
+    IRouteDefinition Normalize(Action<INormalizerDefinition> configure);
+
+    // ── Exception handling ──
+
+    /// <summary>Marks the exchange exception as handled: clears the exception and sets <c>ExceptionHandled = true</c>.</summary>
+    IRouteDefinition ExceptionHandled();
+
+    /// <summary>
+    /// Camel's <c>markRollbackOnly()</c>: marks the unit of work for rollback (the <c>RollbackOnly</c> property), rolls
+    /// back the deferred sends and stops the route. The enclosing transaction rolls the database back without an
+    /// exception, and the consumer does not acknowledge the message, so the broker delivers it again.
+    /// </summary>
+    IRouteDefinition RollbackAll();
+
+    /// <summary>
+    /// Opens an OnException scope for <typeparamref name="TException"/>.
+    /// Configure redelivery/handling, then close with <c>.EndOnException()</c> or <c>.End()</c>.
+    /// The child steps (added before closing) form the body to protect.
+    /// </summary>
+    Definitions.OnExceptionDefinition OnException<TException>() where TException : Exception;
+
+    /// <summary>
+    /// Opens an OnException scope for multiple exception types.
+    /// Configure redelivery/handling, then close with <c>.EndOnException()</c> or <c>.End()</c>.
+    /// The child steps (added before closing) form the body to protect.
+    /// </summary>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="exceptionTypes"/> is empty or contains a non-Exception type.</exception>
+    Definitions.OnExceptionDefinition OnException(params Type[] exceptionTypes);
+
+    // ── Route-level policy ──
+
+    /// <summary>Sets whether this route participates in cluster-aware routing. Default: false.</summary>
+    IRouteDefinition Cluster(bool value = true);
+
+    /// <summary>Gets whether this route participates in cluster-aware routing.</summary>
+    bool GetCluster();
+
+    /// <summary>Apache Camel parity: enable/disable per-node message history for this route, overriding
+    /// the global <c>RouteEngineOptions.EnableMessageHistory</c>.</summary>
+    IRouteDefinition MessageHistory(bool value = true);
+
+    /// <summary>Gets the route-level message-history override (<c>null</c> = inherit the global setting).</summary>
+    bool? GetMessageHistory();
+
+    /// <summary>Apache Camel parity: enable/disable OpenTelemetry tracing for this route, overriding
+    /// the global <c>RouteEngineOptions.EnableTelemetry</c>. Pass <c>false</c> for a service route
+    /// (a health check, a metric summary on a timer) whose single-span traces only crowd the collector.</summary>
+    IRouteDefinition Tracing(bool value = true);
+
+    /// <summary>Gets the route-level tracing override (<c>null</c> = inherit the global setting).</summary>
+    bool? GetTracing();
+
+    /// <summary>Sets an explicit route policy, overriding any factory-resolved policy.</summary>
+    IRouteDefinition RoutePolicy(IRoutePolicy policy);
+
+    /// <summary>
+    /// Attaches a route policy by its registry name (Route-XML Ф1.3): the instance is resolved
+    /// from <see cref="IRouteContext.GetFromRegistry{T}"/> when the route compiles, and a missing
+    /// registration fails <c>Start()</c> naming the route. A leading <c>#</c> is accepted.
+    /// </summary>
+    IRouteDefinition RoutePolicy(string policyName);
+
+    /// <summary>Registry name set by <see cref="RoutePolicy(string)"/>, null when unset.</summary>
+    string? GetRoutePolicyName();
+
+    /// <summary>Gets the explicitly set route policy, or null if not set.</summary>
+    IRoutePolicy? GetRoutePolicy();
+
+    /// <summary>
+    /// Assigns route configurations to the route by id (Apache Camel's <c>routeConfigurationId</c>): several ids
+    /// separated by commas, each an exact id, a wildcard ending in <c>*</c> or a regular expression. A route with
+    /// assigned configurations does not get the nameless ones — those are the default for routes without an assignment.
+    /// An exact id no configuration of the context has fails <c>Start()</c>, naming the route.
+    /// </summary>
+    IRouteDefinition RouteConfigurationId(string ids);
+
+    /// <summary>The ids set by <see cref="RouteConfigurationId"/>, null when unset.</summary>
+    string? GetRouteConfigurationId();
+
+    // ── Rich logging scope ──
+
+    /// <summary>
+    /// Opens a rich-log scope at <see cref="LogLevel.Information"/>.
+    /// Shorthand for <see cref="Log(LogLevel)"/>: add messages/headers/properties, then
+    /// close with <c>.EndLog()</c> or <c>.End()</c>.
+    /// </summary>
+    Definitions.RichLogScopeDefinition Log();
+
+    /// <summary>
+    /// Opens a rich-log scope at the given <paramref name="level"/>.
+    /// Add messages/headers/properties, then close with <c>.EndLog()</c> or <c>.End()</c>.
+    /// </summary>
+    Definitions.RichLogScopeDefinition Log(LogLevel level);
+}

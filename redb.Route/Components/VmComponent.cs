@@ -1,0 +1,260 @@
+using System.Collections.Concurrent;
+using System.Threading.Channels;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Transactions;
+
+namespace redb.Route.Components;
+
+/// <summary>
+/// Cross-context asynchronous component. Scheme: "vm".
+/// Like SEDA but the channel is shared across all RouteContexts
+/// via <see cref="SharedVmRegistry"/> (DI singleton).
+/// Producer enqueues the exchange (with clone) and returns immediately;
+/// a consumer in any context dequeues and processes asynchronously.
+/// URI: vm://name?concurrentConsumers=1&amp;size=0
+/// </summary>
+public class VmComponent : ComponentBase
+{
+    private readonly ConcurrentDictionary<string, VmEndpoint> _endpoints = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <inheritdoc />
+    public override string Scheme => "vm";
+
+    /// <inheritdoc />
+    public override IEndpoint CreateEndpoint(EndpointUri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+        var options = new VmEndpointOptions();
+        options.BindFromUri(uri.RawParameters);
+        options.Validate();
+        // Keyed with the parameters: a producer's headerFilterStrategy must not be lost to, or leak into, a consumer of
+        // the same name in this context. Both find the queue by name (Uri.BaseKey) in the shared registry.
+        return _endpoints.GetOrAdd(uri.NormalizedKey, _ => new VmEndpoint(uri, this, options));
+    }
+
+    /// <summary>Resolves the shared registry from DI. Returns null if not registered.</summary>
+    internal SharedVmRegistry? GetRegistry()
+    {
+        return Context?.GetServiceProvider()?.GetService<SharedVmRegistry>();
+    }
+}
+
+/// <summary>
+/// Options for VM endpoints.
+/// </summary>
+public class VmEndpointOptions : EndpointOptions
+{
+    /// <summary>Concurrent consumer workers: a number or "auto" (= max(CPU, 2)). Default 1.</summary>
+    // A string so "auto" binds verbatim instead of silently degrading to the int default (В-7).
+    public string? ConcurrentConsumers { get; set; }
+
+    /// <summary>Resolved worker count (see <see cref="ConcurrencyOption"/>).</summary>
+    public int ResolvedConcurrentConsumers => ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers");
+
+    /// <summary>
+    /// Maximum queue size (default: 1000, as Camel). A full queue makes the sender wait up to <c>timeout</c>. 0 = unbounded,
+    /// an explicit choice: a consumer slower than its senders then grows the queue without limit.
+    /// </summary>
+    public int Size { get; set; } = 1000;
+
+    /// <summary>
+    /// Producer only: a registry reference (<c>#name</c>) to an <see cref="IHeaderFilterStrategy"/> deciding which
+    /// headers the copy handed to the other context carries (its outgoing direction). Without it every header goes.
+    /// Apache Camel's <c>vm</c> has no such option (its <c>direct-vm</c> has); a vm call has no reply to filter.
+    /// </summary>
+    [EndpointRole(EndpointRole.Producer)]
+    [RegistryReference(typeof(IHeaderFilterStrategy))]
+    public string? HeaderFilterStrategy { get; set; }
+
+    /// <inheritdoc />
+    public override void Validate()
+    {
+        _ = ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers"); // loud on garbage
+        if (Size < 0)
+            throw new ArgumentOutOfRangeException(nameof(Size), Size, "Size cannot be negative.");
+    }
+}
+
+/// <summary>
+/// VM endpoint. Uses a shared <see cref="Channel{T}"/> from <see cref="SharedVmRegistry"/>.
+/// </summary>
+public class VmEndpoint : EndpointBase<VmEndpointOptions>
+{
+    internal new VmComponent Component => (VmComponent)base.Component;
+
+    /// <summary>The logical name used as key in the shared registry.</summary>
+    internal string Name => Uri.BaseKey;
+
+    private Channel<IExchange>? _channel;
+
+    /// <summary>Gets the shared channel (lazy-resolved from registry).</summary>
+    internal Channel<IExchange> Channel
+    {
+        get
+        {
+            if (_channel is not null) return _channel;
+            var registry = Component.GetRegistry()
+                ?? throw new InvalidOperationException(
+                    "SharedVmRegistry is not available. Register it in DI to use vm endpoints.");
+            _channel = registry.GetOrCreateChannel(Name, Options.Size);
+            return _channel;
+        }
+    }
+
+    /// <summary>Creates a VM endpoint.</summary>
+    public VmEndpoint(EndpointUri uri, VmComponent component, VmEndpointOptions options)
+        : base(uri, component, options)
+    {
+        _headerFilter = new EndpointHeaderFilter(this, options.HeaderFilterStrategy);
+    }
+
+    private readonly EndpointHeaderFilter _headerFilter;
+
+    /// <summary>
+    /// The strategy <c>headerFilterStrategy=#name</c> names, or <c>null</c>: vm has no default strategy. A name the
+    /// registry does not hold fails when the producer is built.
+    /// </summary>
+    internal IHeaderFilterStrategy? HeaderFilterStrategy => _headerFilter.Configured;
+
+    /// <inheritdoc />
+    public override IProducer CreateProducer() => new VmProducer(this);
+
+    /// <inheritdoc />
+    public override IConsumer CreateConsumer(IProcessor processor)
+    {
+        ArgumentNullException.ThrowIfNull(processor);
+        var written = EndpointOptions.WrittenForOtherRole(Options.GetType(), Uri, EndpointRole.Consumer);
+        if (written.Count > 0)
+            throw new InvalidOperationException(
+                $"vm consumer '{EndpointUri.Sanitize(Uri.NormalizedKey)}' sets {string.Join(", ", written)}, which " +
+                "applies to the sending side (.To); a consumer has nothing to filter. Move it to the producer URI.");
+        return new VmConsumer(this, processor, Options);
+    }
+}
+
+/// <summary>
+/// VM producer. Clones the exchange and enqueues into the shared channel.
+/// </summary>
+public class VmProducer : IProducer
+{
+    private readonly VmEndpoint _endpoint;
+    private readonly IHeaderFilterStrategy? _headerFilter;
+    private ILogger? _logger;
+
+    /// <summary>Creates a VM producer.</summary>
+    public VmProducer(VmEndpoint endpoint)
+    {
+        _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
+        _logger = (endpoint.Component as ComponentBase)?.Logger;
+        _headerFilter = endpoint.HeaderFilterStrategy;
+    }
+
+    /// <inheritdoc />
+    public async Task Process(IExchange exchange, CancellationToken ct = default)
+    {
+        var copy = exchange.Clone();
+        if (_headerFilter is not null)
+        {
+            foreach (var (name, value) in copy.In.Headers.ToList())
+            {
+                if (_headerFilter.FilterOutgoing(name, value, copy))
+                    copy.In.Headers.Remove(name);
+            }
+        }
+        // The copy runs later on the vm consumer, a unit of work of its own: it must not see the sending
+        // .Transacted() block as its own.
+        TransactedActions.DetachFromBlock(copy);
+        try
+        {
+            await _endpoint.Channel.Writer.WriteAsync(copy, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The clone was NOT enqueued (cancellation, or the channel was completed on shutdown), so
+            // the consumer will never dispose it — release its per-exchange DI scope / DB connection
+            // here, then rethrow so the caller still observes the failure.
+            await copy.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public Task Start(CancellationToken ct = default)
+    {
+        _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
+        _logger?.LogInformation("Vm producer started: {Name}", _endpoint.Name);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task Stop(CancellationToken ct = default)
+    {
+        _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
+        _logger?.LogInformation("Vm producer stopped: {Name}", _endpoint.Name);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// VM consumer. Runs N concurrent workers that dequeue from the shared channel and process.
+/// </summary>
+public class VmConsumer : DrainableConsumer
+{
+    private readonly VmEndpoint _endpoint;
+    private readonly VmEndpointOptions _options;
+    private Task[]? _workers;
+    private long _processedCount;
+
+    /// <inheritdoc />
+    protected override IEndpoint ConsumerEndpoint => _endpoint;
+
+    /// <inheritdoc />
+    protected override string ConsumerName => _endpoint.Name;
+
+    /// <summary>Total number of exchanges processed across all workers.</summary>
+    public long ProcessedCount => Interlocked.Read(ref _processedCount);
+
+    /// <summary>Creates a VM consumer.</summary>
+    public VmConsumer(VmEndpoint endpoint, IProcessor processor, VmEndpointOptions options)
+        : base(processor)
+    {
+        _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+    }
+
+    /// <inheritdoc />
+    protected override Task RunAsync(CancellationToken pollCt, CancellationToken processingCt)
+    {
+        _workers = new Task[_options.ResolvedConcurrentConsumers];
+        for (var i = 0; i < _options.ResolvedConcurrentConsumers; i++)
+            _workers[i] = WorkerLoop(pollCt, processingCt);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    protected override async Task AwaitRunTask()
+    {
+        if (_workers != null)
+        {
+            try { await Task.WhenAll(_workers).ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    private async Task WorkerLoop(CancellationToken pollCt, CancellationToken processingCt)
+    {
+        try
+        {
+            await foreach (var exchange in _endpoint.Channel.Reader.ReadAllAsync(pollCt).ConfigureAwait(false))
+            {
+                await ProcessWithTracking(exchange, processingCt).ConfigureAwait(false);
+                Interlocked.Increment(ref _processedCount);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (ChannelClosedException) { }
+    }
+}

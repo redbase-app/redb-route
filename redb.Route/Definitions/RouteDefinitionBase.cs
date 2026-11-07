@@ -1,0 +1,1729 @@
+#pragma warning disable CS0619
+using Microsoft.Extensions.Logging;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Expressions;
+using redb.Route.Processors;
+using redb.Route.Telemetry;
+using redb.Route.Transactions;
+using redb.Route.Validation;
+using redb.Route.Xslt;
+
+namespace redb.Route.Definitions;
+
+/// <summary>
+/// Generic CRTP base for every route / scope definition. All leaf-DSL methods are declared here
+/// exactly once and return <typeparamref name="TSelf"/> for fluent chaining inside the concrete
+/// scope. The class implements <see cref="IRouteDefinition"/>; covariant return types let the
+/// typed leaf-DSL satisfy the interface contract whose declared return type is
+/// <see cref="IRouteDefinition"/>.
+/// <para>
+/// Apache Camel parity: this mirrors <c>ProcessorDefinition&lt;Type extends ProcessorDefinition&lt;Type&gt;&gt;</c>
+/// from camel-core-model. Scope-opener methods (<c>Filter</c>, <c>Choice</c>, <c>Split</c>, ...)
+/// return concrete scope types; child <see cref="ProcessorDefinition.Outputs"/> are populated
+/// via the inherited typed DSL.
+/// </para>
+/// </summary>
+public abstract partial class RouteDefinitionBase<TSelf> : ProcessorDefinition, IRouteDefinition
+    where TSelf : RouteDefinitionBase<TSelf>
+{
+    /// <summary>Typed self-reference for fluent chaining; safe because <typeparamref name="TSelf"/> is constrained to this class.</summary>
+    protected TSelf Self => (TSelf)(object)this;
+
+    // ── Route-level state (carried by the root RouteDefinition; scope instances inherit the
+    //    fields but only the root reads them) ───────────────────────────────────────────────
+    private string? _routeId;
+    private string? _fromUri;
+    private bool _autoStart = true;
+    private TimeSpan? _processingTimeout;
+    private bool _cluster;
+    private bool? _messageHistory;
+    private bool? _tracing;
+    private IRoutePolicy? _routePolicy;
+    private string? _routePolicyName;
+    private string? _routeConfigurationId;
+    internal IRouteContext? _context;
+
+    /// <summary>Route context captured during compile (null until the route is added to a context).</summary>
+    public IRouteContext? Context
+    {
+        get
+        {
+            if (_context is not null) return _context;
+            // Walk up the parent chain to find the root RouteDefinition (which carries the context).
+            for (var p = Parent; p is not null; p = (p as ProcessorDefinition)?.Parent)
+            {
+                if (p is RouteDefinition rd && rd._context is not null) return rd._context;
+            }
+            return null;
+        }
+    }
+
+    /// <summary>Flag controlling whether the route id is shown in log/telemetry output (default false).</summary>
+    public bool ShowRouteIdValue { get; internal set; }
+
+    /// <summary>
+    /// True when this route's compiled pipeline opens an explicit declarative
+    /// <see cref="Transaction(TransactionPolicy?)"/> scope at the top level (Apache Camel parity).
+    /// </summary>
+    public bool IsTransacted => Outputs.Any(o => o is TransactionDefinition);
+
+    // ── Route-level identity ──────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf RouteId(string routeId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(routeId);
+        _routeId = routeId;
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public string? GetRouteId() => _routeId;
+
+    /// <inheritdoc />
+    public TSelf Id(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        if (Outputs.Count == 0)
+            return RouteId(id);
+        if (Outputs[^1] is ProcessorDefinition step)
+            step.StepId = id;
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Description(string description)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(description);
+        if (Outputs.Count == 0)
+        {
+            StepDescription = description;
+            return Self;
+        }
+        if (Outputs[^1] is ProcessorDefinition step)
+            step.StepDescription = description;
+        return Self;
+    }
+
+    // ── Interception / completion: registered on the root route, applied at compile ──────────
+
+    /// <inheritdoc />
+    public InterceptDefinition Intercept() => RegisterIntercept(new InterceptDefinition(InterceptKind.EveryStep, null));
+
+    /// <inheritdoc />
+    public InterceptDefinition InterceptFrom(string? uriPattern = null) => RegisterIntercept(new InterceptDefinition(InterceptKind.From, uriPattern));
+
+    /// <inheritdoc />
+    public InterceptDefinition InterceptSendToEndpoint(string uriPattern) => RegisterIntercept(new InterceptDefinition(InterceptKind.SendToEndpoint, uriPattern));
+
+    /// <inheritdoc />
+    public OnCompletionDefinition OnCompletion()
+    {
+        var def = new OnCompletionDefinition { Parent = this };
+        RootRoute("OnCompletion()").OnCompletions.Add(def);
+        return def;
+    }
+
+    private InterceptDefinition RegisterIntercept(InterceptDefinition def)
+    {
+        def.Parent = this;
+        var verb = def.Kind switch
+        {
+            InterceptKind.From => "InterceptFrom()",
+            InterceptKind.SendToEndpoint => "InterceptSendToEndpoint()",
+            _ => "Intercept()",
+        };
+        RootRoute(verb).Intercepts.Add(def);
+        return def;
+    }
+
+    /// <summary>The root <see cref="RouteDefinition"/> this scope belongs to; intercepts and completions are route-wide, so they live there.</summary>
+    private RouteDefinition RootRoute(string verb)
+    {
+        for (IProcessorDefinition? node = this; node is not null; node = node.Parent)
+            if (node is RouteDefinition root) return root;
+        throw new InvalidOperationException($"{verb} must be declared on a route (From(...)) or on the RouteBuilder for all its routes.");
+    }
+
+    // ── Header / property / body sugar ────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf SetHeaders(params (string Name, object? Value)[] headers)
+    {
+        AddOutput(new SetHeadersDefinition(headers));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf SetProperties(params (string Name, object? Value)[] properties)
+    {
+        AddOutput(new SetPropertiesDefinition(properties));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf RemoveHeaders(string pattern, params string[] except)
+    {
+        AddOutput(new RemoveByMaskDefinition(RemoveTarget.Headers, pattern, except ?? []));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf RemoveProperties(string pattern, params string[] except)
+    {
+        AddOutput(new RemoveByMaskDefinition(RemoveTarget.Properties, pattern, except ?? []));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Sort(string collectionExpression, string? keyExpression = null, bool descending = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(collectionExpression);
+        var collection = new StringExpression(collectionExpression);
+        var key = keyExpression is null ? null : new StringExpression(keyExpression);
+        AddOutput(new SortDefinition(
+            exchange => collection.Evaluate<object>(exchange) as System.Collections.IEnumerable,
+            key is null ? null : item => key.Evaluate<object>(Exchange.Create(new Message(item), null)),
+            comparer: null,
+            descending));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Sort<T>(Func<IExchange, IEnumerable<T>> source, Func<T, object?>? key = null, bool descending = false, IComparer<object?>? comparer = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        AddOutput(new SortDefinition(
+            exchange => source(exchange),
+            key is null ? null : item => key((T)item!),
+            comparer,
+            descending,
+            items => items.Cast<T>().ToList()));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf AutoStart(bool value = true) { _autoStart = value; return Self; }
+
+    /// <inheritdoc />
+    public bool GetAutoStart() => _autoStart;
+
+    /// <inheritdoc />
+    public TSelf ProcessingTimeout(TimeSpan timeout)
+    {
+        if (timeout <= TimeSpan.Zero && timeout != System.Threading.Timeout.InfiniteTimeSpan)
+            throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be positive or Infinite.");
+        _processingTimeout = timeout;
+        return Self;
+    }
+
+    /// <summary>Gets the per-route processing timeout, or null if not set.</summary>
+    public TimeSpan? GetProcessingTimeout() => _processingTimeout;
+
+    // ── Source ───────────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf From(string uri)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(uri);
+        _fromUri = uri;
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public string? GetFromUri() => _fromUri;
+
+    // ── Destination ──────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf To(string uri)
+    {
+        AddOutput(new ToDefinition(uri));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ToD(string uriTemplate)
+    {
+        AddOutput(new ToDynamicDefinition(uriTemplate));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ToD(IExpression uriExpression)
+    {
+        AddOutput(new ToDynamicDefinition(uriExpression));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ToD(Func<IExchange, string> uriFactory)
+    {
+        AddOutput(new ToDynamicDefinition(uriFactory));
+        return Self;
+    }
+
+    // ── Processing delegates ──────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf Process(Action<IExchange> action)
+    {
+        AddOutput(new ProcessActionDefinition(action));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Process(Func<IExchange, CancellationToken, Task> action)
+    {
+        AddOutput(new ProcessAsyncDefinition(action));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Process(IProcessor processor)
+    {
+        AddOutput(new ProcessInstanceDefinition(processor));
+        return Self;
+    }
+
+    // ── Transform / body ─────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf SetBody(object? value)
+    {
+        AddOutput(new SetBodyStaticDefinition(value));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf SetBody(Func<IExchange, object?> factory)
+    {
+        AddOutput(new SetBodyFactoryDefinition(factory));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf SetBody(IExpression expression)
+    {
+        AddOutput(new SetBodyExpressionDefinition(expression));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Transform(Func<IExchange, object?> transform)
+    {
+        AddOutput(new TransformDefinition(transform));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Transform(IExpression expression)
+    {
+        AddOutput(new TransformExpressionDefinition(expression));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf RemoveBody()
+    {
+        AddOutput(new RemoveBodyDefinition());
+        return Self;
+    }
+
+    // ── Headers ──────────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf SetHeader(string key, object? value)
+    {
+        AddOutput(new SetHeaderStaticDefinition(key, value));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf SetHeader(string key, Func<IExchange, object?> factory)
+    {
+        AddOutput(new SetHeaderFactoryDefinition(key, factory));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf SetHeader(string name, IExpression expression)
+    {
+        AddOutput(new SetHeaderExpressionDefinition(name, expression));
+        return Self;
+    }
+
+
+    /// <inheritdoc />
+    public TSelf RemoveHeader(string key)
+    {
+        AddOutput(new RemoveHeaderDefinition(key));
+        return Self;
+    }
+
+    // ── Attachments ──────────────────────────────────────────────────────────
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachment(string, IExpression, string?, string?)"/>
+    public TSelf AddAttachment(string name, IExpression content, string? fileName = null, string? contentType = null)
+    {
+        AddOutput(AddAttachmentDefinition.FromExpression(name, content, AddAttachmentDefinition.Literal(fileName), contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachment(string, IExpression, IExpression, string?)"/>
+    public TSelf AddAttachment(string name, IExpression content, IExpression fileName, string? contentType = null)
+    {
+        ArgumentNullException.ThrowIfNull(fileName);
+        AddOutput(AddAttachmentDefinition.FromExpression(name, content, fileName, contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachmentFromBody(string, string?, string?)"/>
+    public TSelf AddAttachmentFromBody(string name, string? fileName = null, string? contentType = null)
+    {
+        AddOutput(AddAttachmentDefinition.FromBody(name, AddAttachmentDefinition.Literal(fileName), contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachmentFromBody(string, IExpression, string?)"/>
+    public TSelf AddAttachmentFromBody(string name, IExpression fileName, string? contentType = null)
+    {
+        ArgumentNullException.ThrowIfNull(fileName);
+        AddOutput(AddAttachmentDefinition.FromBody(name, fileName, contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachmentFromFile(string, string?, string?)"/>
+    public TSelf AddAttachmentFromFile(string path, string? name = null, string? contentType = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        AddOutput(AddAttachmentDefinition.FromFile(AddAttachmentDefinition.Literal(path)!, name, contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.AddAttachmentFromFile(IExpression, string?, string?)"/>
+    public TSelf AddAttachmentFromFile(IExpression path, string? name = null, string? contentType = null)
+    {
+        AddOutput(AddAttachmentDefinition.FromFile(path, name, contentType));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.RemoveAttachment"/>
+    public TSelf RemoveAttachment(string name)
+    {
+        AddOutput(new RemoveAttachmentDefinition(name));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.RemoveAttachments"/>
+    public TSelf RemoveAttachments()
+    {
+        AddOutput(new RemoveAttachmentsDefinition());
+        return Self;
+    }
+
+    // ── Properties ───────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf SetProperty(string key, object? value)
+    {
+        AddOutput(new SetPropertyStaticDefinition(key, value));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf SetProperty(string key, Func<IExchange, object?> factory)
+    {
+        AddOutput(new SetPropertyFactoryDefinition(key, factory));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf SetProperty(string key, IExpression expression)
+    {
+        AddOutput(new SetPropertyExpressionDefinition(key, expression));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf RemoveProperty(string key)
+    {
+        AddOutput(new RemovePropertyDefinition(key));
+        return Self;
+    }
+
+    // ── Logging ──────────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf Log(string message, LogLevel level = LogLevel.Information)
+    {
+        AddOutput(new LogStaticDefinition(message, level));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Log(Func<IExchange, string> messageFactory, LogLevel level = LogLevel.Information)
+    {
+        AddOutput(new LogDynamicDefinition(messageFactory, level));
+        return Self;
+    }
+
+    // ── Stop / Throw ──────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf Stop()
+    {
+        AddOutput(new StopDefinition());
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ThrowException()
+    {
+        AddOutput(new RethrowExceptionDefinition());
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ThrowException(string message)
+    {
+        AddOutput(new ThrowMessageDefinition(message));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ThrowException(Exception exception)
+    {
+        AddOutput(new ThrowExceptionDefinition(exception));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ThrowException(Type exceptionType, string message)
+    {
+        AddOutput(new ThrowExceptionTypeDefinition(exceptionType, message));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ThrowException<TException>(string? message = null) where TException : Exception, new()
+    {
+        AddOutput(new ThrowExceptionTypeDefinition(typeof(TException), message));
+        return Self;
+    }
+
+    // ── Delay / Sampling ─────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf Delay(TimeSpan duration)
+    {
+        AddOutput(new DelayDefinition(duration));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Delay(Func<IExchange, TimeSpan> factory)
+    {
+        AddOutput(new DelayFactoryDefinition(factory));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Delay(string durationExpression)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(durationExpression);
+        var expression = new StringExpression(durationExpression);
+        return Delay(exchange => DelayExpressionDefinition.ConvertToTimeSpan(expression.Evaluate<object>(exchange)));
+    }
+
+    /// <inheritdoc />
+    public TSelf Sample(long messageFrequency)
+    {
+        AddOutput(new SampleCountDefinition(messageFrequency));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Sample(TimeSpan period)
+    {
+        AddOutput(new SamplePeriodDefinition(period));
+        return Self;
+    }
+
+    // ── Stream caching ───────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf StreamCaching(long? spoolThreshold = null)
+    {
+        AddOutput(new StreamCachingDefinition(spoolThreshold));
+        return Self;
+    }
+
+    // ── Validation ───────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf Validate(IMessageValidator validator, bool throwOnFailure = true)
+    {
+        AddOutput(new ValidateInstanceDefinition(validator, throwOnFailure));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Validate(Func<IExchange, bool> predicate, string errorMessage = "Validation failed", bool throwOnFailure = true)
+    {
+        AddOutput(new ValidatePredicateDefinition(predicate, errorMessage, throwOnFailure));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Validate(IPredicate predicate, string errorMessage = "Validation failed", bool throwOnFailure = true)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        AddOutput(new ValidatePredicateDefinition(predicate, errorMessage, throwOnFailure));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.Validate(IExpression, string, bool)" />
+    public TSelf Validate(IExpression condition, string errorMessage = "Validation failed", bool throwOnFailure = true)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        return Validate(Predicates.PredicateFactory.FromExpression(condition), errorMessage, throwOnFailure);
+    }
+
+    /// <inheritdoc />
+    public TSelf ValidateJsonSchema(string schemaJson, bool throwOnFailure = true)
+    {
+        AddOutput(new ValidateJsonSchemaStringDefinition(schemaJson, throwOnFailure));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ValidateJsonSchema(Json.Schema.JsonSchema schema, bool throwOnFailure = true)
+    {
+        AddOutput(new ValidateJsonSchemaObjectDefinition(schema, throwOnFailure));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ValidateXsd(string xsdContent, bool throwOnFailure = true)
+    {
+        AddOutput(new ValidateXsdStringDefinition(xsdContent, throwOnFailure));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ValidateXsd(string? targetNamespace, string xsdContent, bool throwOnFailure = true)
+    {
+        AddOutput(new ValidateXsdNamespaceDefinition(targetNamespace, xsdContent, throwOnFailure));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ValidateXsd(System.Xml.Schema.XmlSchemaSet schemaSet, bool throwOnFailure = true)
+    {
+        AddOutput(new ValidateXsdSchemaSetDefinition(schemaSet, throwOnFailure));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ValidateXsdFile(string schemaPath, string? targetNamespace = null, string? schemaRoot = null,
+        bool throwOnFailure = true)
+    {
+        AddOutput(new ValidateXsdFileDefinition(schemaPath, targetNamespace, schemaRoot, throwOnFailure));
+        return Self;
+    }
+
+    // ── XSLT ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Apache Camel <c>xslt:</c> parity: transform the exchange body through an XSLT stylesheet loaded
+    /// from a <b>file</b> (compiled once, reused; <c>xsl:import</c>/<c>xsl:include</c> resolve relative
+    /// to the file). BCL <c>XslCompiledTransform</c> engine (XSLT 1.0).
+    /// </summary>
+    public TSelf Xslt(string stylesheetPath, XsltOutput output = XsltOutput.String, bool failOnNullBody = true, bool allowTemplateFromHeader = false)
+    {
+        AddOutput(new XsltFileDefinition(stylesheetPath, output, failOnNullBody, allowTemplateFromHeader));
+        return Self;
+    }
+
+    /// <summary>
+    /// Transform the exchange body through an <b>inline</b> XSLT stylesheet document (self-contained;
+    /// no <c>xsl:import</c>/<c>xsl:include</c>).
+    /// </summary>
+    public TSelf XsltContent(string stylesheetXml, XsltOutput output = XsltOutput.String, bool failOnNullBody = true, bool allowTemplateFromHeader = false)
+    {
+        AddOutput(new XsltContentDefinition(stylesheetXml, output, failOnNullBody, allowTemplateFromHeader));
+        return Self;
+    }
+
+    // ── Control Bus ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Apache Camel <c>controlbus:</c> parity: manage a route at runtime by sending a control message.
+    /// Sugar over <c>.To("controlbus:route?routeId=...&amp;action=...")</c>. Use <c>routeId</c> <c>"current"</c>
+    /// to target the sending route. Stopping the current route uses async dispatch to avoid a self-deadlock.
+    /// </summary>
+    public TSelf ControlBus(redb.Route.ControlBus.ControlBusAction action, string routeId, bool async = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(routeId);
+        var uri = $"controlbus:route?routeId={System.Uri.EscapeDataString(routeId)}&action={action.ToString().ToLowerInvariant()}";
+        if (async) uri += "&async=true";
+        return To(uri);
+    }
+
+    // ── Serialization ────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf Marshal(Type serializerType)
+    {
+        AddOutput(new MarshalDefinition(serializerType));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Marshal<TSerializer>() where TSerializer : class
+    {
+        AddOutput(new MarshalDefinition(typeof(TSerializer)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Unmarshal(Type serializerType, Type targetType)
+    {
+        AddOutput(new UnmarshalDefinition(serializerType, targetType));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Unmarshal<TSerializer, TTarget>() where TSerializer : class
+    {
+        AddOutput(new UnmarshalDefinition(typeof(TSerializer), typeof(TTarget)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Marshal(string contentType)
+    {
+        AddOutput(new MarshalDefinition(contentType));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Marshal(IMessageSerializer serializer)
+    {
+        AddOutput(new MarshalDefinition(serializer));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Unmarshal<T>(string contentType)
+    {
+        AddOutput(new UnmarshalDefinition(contentType, typeof(T)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Unmarshal(string contentType, Type targetType)
+    {
+        AddOutput(new UnmarshalDefinition(contentType, targetType));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Unmarshal<T>(IMessageSerializer serializer)
+    {
+        AddOutput(new UnmarshalDefinition(serializer, typeof(T)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Unmarshal(IMessageSerializer serializer, Type targetType)
+    {
+        AddOutput(new UnmarshalDefinition(serializer, targetType));
+        return Self;
+    }
+
+    /// <summary>
+    /// Converts the body to <typeparamref name="T"/> via the registered type converters —
+    /// an alias of <see cref="ConvertBody{T}"/>. This does <b>not</b> decode by format/ContentType;
+    /// for JSON/XML/etc. decoding use <see cref="Unmarshal(IMessageSerializer, System.Type)"/> with
+    /// an explicit serializer.
+    /// </summary>
+    public TSelf Unmarshal<T>()
+    {
+        AddOutput(new ConvertBodyDefinition(typeof(T)));
+        return Self;
+    }
+
+    /// <summary>Apache Camel parity: convert the exchange body to <typeparamref name="T"/>.</summary>
+    public TSelf ConvertBody<T>()
+    {
+        AddOutput(new ConvertBodyDefinition(typeof(T)));
+        return Self;
+    }
+
+    /// <summary>Apache Camel parity: convert the exchange body to <paramref name="targetType"/>.</summary>
+    public TSelf ConvertBody(Type targetType)
+    {
+        AddOutput(new ConvertBodyDefinition(targetType));
+        return Self;
+    }
+
+    /// <summary>
+    /// Apache Camel parity: open a typed scope. Auto-converts the body to <typeparamref name="T"/>
+    /// and exposes typed <c>Process</c>/<c>Filter</c>/<c>Transform</c> overloads to its children.
+    /// </summary>
+    public OfTypeDefinition<T> OfType<T>()
+    {
+        var def = new OfTypeDefinition<T>();
+        AddOutput(def);
+        return def;
+    }
+
+    // ── Transactions ─────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf BeginTransaction()
+    {
+        AddOutput(new BeginTransactionDefinition());
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf BeginTransaction(Transactions.TransactionPolicy policy)
+    {
+        AddOutput(new BeginTransactionDefinition(policy));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf CommitTransaction()
+    {
+        AddOutput(new CommitTransactionDefinition());
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf RollbackTransaction()
+    {
+        AddOutput(new RollbackTransactionDefinition());
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TransactionDefinition Transaction(TransactionPolicy? policy = null)
+    {
+        var def = new TransactionDefinition(policy);
+        AddOutput(def);
+        return def;
+    }
+
+    // ── Replay checkpoints ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Opens a replay checkpoint (save-point). The steps that follow become the marker's <b>body</b>
+    /// (the tail re-run on replay). On each pass the exchange is snapshotted into
+    /// <c>route.checkpoint</c>. At the very start of a route no <see cref="ReplayableDefinition.End"/>
+    /// is needed (the body is the whole pipeline); in the middle or with several markers, close with
+    /// <see cref="ReplayableDefinition.EndReplayable"/> or use the lambda-body overload.
+    /// </summary>
+    /// <param name="name">Save-point name, unique within the route.</param>
+    /// <param name="exposed">
+    /// When <c>true</c>, the marker is also an addressable public entry (<c>.To(...)</c> / tests);
+    /// default <c>false</c> = internal replay only via <see cref="IRouteContext.ReplayAsync"/>.
+    /// </param>
+    public ReplayableDefinition Replayable(string name, bool exposed = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        var def = new ReplayableDefinition(name, exposed);
+        AddOutput(def);
+        return def;   // opener returns the child — subsequent steps fall into its body
+    }
+
+    /// <summary>
+    /// Lambda-body form of <see cref="Replayable(string, bool)"/> — unambiguous at any nesting level.
+    /// The <paramref name="body"/> configures the marker's tail; the chain stays on the current
+    /// definition (no explicit <c>End</c>).
+    /// </summary>
+    public TSelf Replayable(string name, Action<ReplayableDefinition> body, bool exposed = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(body);
+        var def = new ReplayableDefinition(name, exposed);
+        AddOutput(def);
+        body(def);
+        return Self;
+    }
+
+    // ── Telemetry ────────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TracedDefinition Traced(string operationName)
+    {
+        var def = new TracedDefinition(operationName);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public TSelf Traced(string operationName, Action<IExchange> action)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        AddOutput(new ProcessInstanceDefinition(
+            new Telemetry.InstrumentedProcessor(new Processors.DelegateProcessor(action), operationName)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Traced(string operationName, Func<IExchange, CancellationToken, Task> action)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        ArgumentNullException.ThrowIfNull(action);
+        AddOutput(new ProcessInstanceDefinition(
+            new Telemetry.InstrumentedProcessor(new Processors.DelegateProcessor(action), operationName)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Traced(string operationName, IProcessor processor)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        ArgumentNullException.ThrowIfNull(processor);
+        AddOutput(new ProcessInstanceDefinition(
+            new Telemetry.InstrumentedProcessor(processor, operationName)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public MeteredDefinition Metered(string stepName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+        if (stepName.Contains("${"))
+            throw new ArgumentException(
+                $"Metered() step name must be a constant to avoid metric cardinality explosion (got dynamic template '{stepName}'). " +
+                "Use tags on the activity instead of templating the name.",
+                nameof(stepName));
+        var def = new MeteredDefinition(stepName);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public TSelf Metered(string stepName, Action<IExchange> action)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+        ArgumentNullException.ThrowIfNull(action);
+        if (stepName.Contains("${"))
+            throw new ArgumentException(
+                $"Metered() step name must be a constant to avoid metric cardinality explosion (got dynamic template '{stepName}').",
+                nameof(stepName));
+        AddOutput(new ProcessInstanceDefinition(
+            new Telemetry.MeteredStepProcessor(new Processors.DelegateProcessor(action), stepName)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Metered(string stepName, Func<IExchange, CancellationToken, Task> action)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+        ArgumentNullException.ThrowIfNull(action);
+        AddOutput(new ProcessInstanceDefinition(
+            new Telemetry.MeteredStepProcessor(new Processors.DelegateProcessor(action), stepName)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Metered(string stepName, IProcessor processor)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stepName);
+        ArgumentNullException.ThrowIfNull(processor);
+        AddOutput(new ProcessInstanceDefinition(
+            new Telemetry.MeteredStepProcessor(processor, stepName)));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.SpanTag(string, string, Telemetry.SpanTarget)"/>
+    public TSelf SpanTag(string key, string value, Telemetry.SpanTarget target = Telemetry.SpanTarget.Enclosing)
+    {
+        // A constant tag that is never set is a mistake in the route, not a value to skip per message.
+        ArgumentException.ThrowIfNullOrEmpty(value);
+        return SpanTag(key, new Expressions.ConstantExpression(value), target);
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.SpanTag(string, IExpression, Telemetry.SpanTarget)"/>
+    public TSelf SpanTag(string key, IExpression value, Telemetry.SpanTarget target = Telemetry.SpanTarget.Enclosing)
+    {
+        AddOutput(new SpanTagDefinition(key, value, target));
+        return Self;
+    }
+
+    // ── Enrichment ───────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf WireTap(string uri)
+    {
+        AddOutput(new WireTapDefinition(uri));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf WireTap(string uri, Action<IExchange> onPrepare)
+    {
+        AddOutput(new WireTapDefinition(uri, onPrepare: onPrepare));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf WireTap(string uri, Func<IExchange, object?> newBodyFactory)
+    {
+        AddOutput(new WireTapDefinition(uri, newBodyFactory: newBodyFactory));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf WireTap(string uri, Action<IExchange> onPrepare, Func<IExchange, object?> newBodyFactory)
+    {
+        AddOutput(new WireTapDefinition(uri, onPrepare, newBodyFactory));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf WireTap(Func<IExchange, string> uriFactory)
+    {
+        AddOutput(new WireTapDynamicDefinition(uriFactory));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf WireTap(Func<IExchange, string> uriFactory, Action<IExchange> onPrepare)
+    {
+        AddOutput(new WireTapDynamicDefinition(uriFactory, onPrepare: onPrepare));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf WireTap(Func<IExchange, string> uriFactory, Func<IExchange, object?> newBodyFactory)
+    {
+        AddOutput(new WireTapDynamicDefinition(uriFactory, newBodyFactory: newBodyFactory));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf WireTap(Func<IExchange, string> uriFactory, Action<IExchange> onPrepare, Func<IExchange, object?> newBodyFactory)
+    {
+        AddOutput(new WireTapDynamicDefinition(uriFactory, onPrepare, newBodyFactory));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Enrich(string resourceUri, Func<IExchange, IExchange, IExchange> mergeStrategy)
+    {
+        AddOutput(new EnrichDefinition(resourceUri, mergeStrategy));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Enrich(Func<IExchange, string> uriFactory, Func<IExchange, IExchange, IExchange> mergeStrategy)
+    {
+        AddOutput(new EnrichDynamicDefinition(uriFactory, mergeStrategy));
+        return Self;
+    }
+
+    /// <summary>Apache Camel parity: poll an external endpoint and merge the polled result.</summary>
+    public TSelf PollEnrich(
+        string resourceUri,
+        Func<IExchange, IExchange?, IExchange> mergeStrategy,
+        TimeSpan? timeout = null)
+    {
+        AddOutput(new PollEnrichDefinition(resourceUri, mergeStrategy, timeout));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf PollEnrich(
+        Func<IExchange, string> uriFactory,
+        Func<IExchange, IExchange?, IExchange> mergeStrategy,
+        TimeSpan? timeout = null)
+    {
+        AddOutput(new PollEnrichDynamicDefinition(uriFactory, mergeStrategy, timeout));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Enrich(string resourceUri) => Enrich(resourceUri, Aggregation.AggregationStrategies.UseLatest());
+
+    /// <inheritdoc />
+    public TSelf Enrich(Func<IExchange, string> uriFactory) => Enrich(uriFactory, Aggregation.AggregationStrategies.UseLatest());
+
+    /// <inheritdoc />
+    public TSelf Enrich(IExpression uri, Func<IExchange, IExchange, IExchange> mergeStrategy)
+        => Enrich(Expressions.ExpressionValues.Required(uri, nameof(Enrich)), mergeStrategy);
+
+    /// <inheritdoc />
+    public TSelf Enrich(IExpression uri) => Enrich(uri, Aggregation.AggregationStrategies.UseLatest());
+
+    /// <inheritdoc />
+    public TSelf PollEnrich(string resourceUri, TimeSpan? timeout = null)
+        => PollEnrich(resourceUri, static (original, polled) => polled ?? original, timeout);
+
+    /// <inheritdoc />
+    public TSelf PollEnrich(Func<IExchange, string> uriFactory, TimeSpan? timeout = null)
+        => PollEnrich(uriFactory, static (original, polled) => polled ?? original, timeout);
+
+    /// <inheritdoc />
+    public TSelf PollEnrich(
+        IExpression uri,
+        Func<IExchange, IExchange?, IExchange> mergeStrategy,
+        TimeSpan? timeout = null)
+        => PollEnrich(Expressions.ExpressionValues.Required(uri, nameof(PollEnrich)), mergeStrategy, timeout);
+
+    /// <inheritdoc />
+    public TSelf PollEnrich(IExpression uri, TimeSpan? timeout = null)
+        => PollEnrich(uri, static (original, polled) => polled ?? original, timeout);
+
+    /// <summary>Apache Camel parity: route to a list of recipient URIs computed at runtime.</summary>
+    public TSelf RecipientList(
+        Func<IExchange, IEnumerable<string>> recipientListFactory,
+        bool parallelProcessing = false,
+        bool stopOnException = false,
+        Func<IExchange, IExchange, IExchange>? aggregationStrategy = null)
+    {
+        AddOutput(new RecipientListDefinition(
+            recipientListFactory, parallelProcessing, stopOnException, aggregationStrategy));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf RecipientList(
+        IExpression recipients,
+        bool parallelProcessing = false,
+        bool stopOnException = false,
+        Func<IExchange, IExchange, IExchange>? aggregationStrategy = null,
+        string uriDelimiter = ",")
+        => RecipientList(
+            Expressions.ExpressionValues.UriList(recipients, uriDelimiter),
+            parallelProcessing,
+            stopOnException,
+            aggregationStrategy);
+
+    /// <summary>Apache Camel parity: iteratively route to URIs returned by a routing function.</summary>
+    public TSelf DynamicRouter(Func<IExchange, string?> routingFunction)
+    {
+        AddOutput(new DynamicRouterDefinition(routingFunction));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf DynamicRouter(IExpression routingExpression)
+        => DynamicRouter(Expressions.ExpressionValues.Optional(routingExpression));
+
+    /// <summary>
+    /// Apache Camel parity: Routing Slip — pipe the exchange through a list of endpoints computed
+    /// <b>once</b> up front by <paramref name="slipFactory"/> (contrast Dynamic Router, which recomputes
+    /// per hop). The same exchange is threaded through the endpoints in sequence (Out→In between hops).
+    /// </summary>
+    public TSelf RoutingSlip(Func<IExchange, IEnumerable<string>> slipFactory, bool ignoreInvalidEndpoints = false)
+    {
+        AddOutput(new RoutingSlipDefinition(slipFactory, ignoreInvalidEndpoints));
+        return Self;
+    }
+
+    /// <summary>
+    /// Apache Camel parity: Routing Slip from an <see cref="IExpression"/> yielding a delimited URI
+    /// string (e.g. <c>.RoutingSlip(Header("mySlip"))</c>). Default delimiter is <c>,</c>.
+    /// </summary>
+    public TSelf RoutingSlip(IExpression slip, string uriDelimiter = ",", bool ignoreInvalidEndpoints = false)
+    {
+        AddOutput(new RoutingSlipDefinition(slip, uriDelimiter, ignoreInvalidEndpoints));
+        return Self;
+    }
+
+    /// <summary>
+    /// Apache Camel parity: Routing Slip from a <c>${...}</c> template (or a literal like
+    /// <c>"direct:a,direct:b"</c>) resolving to a delimited URI string. Default delimiter is <c>,</c>.
+    /// </summary>
+    public TSelf RoutingSlip(string slipTemplate, string uriDelimiter = ",", bool ignoreInvalidEndpoints = false)
+    {
+        AddOutput(new RoutingSlipDefinition(slipTemplate, uriDelimiter, ignoreInvalidEndpoints));
+        return Self;
+    }
+
+    /// <summary>
+    /// Apache Camel parity: open a Resequencer scope. The contained child outputs receive
+    /// exchanges in the order determined by <paramref name="keySelector"/>.
+    /// </summary>
+    public ResequenceDefinition Resequence(
+        Func<IExchange, long> keySelector,
+        int batchSize = 100,
+        TimeSpan? timeout = null)
+    {
+        var def = new ResequenceDefinition(keySelector, batchSize, timeout);
+        AddOutput(def);
+        return def;
+    }
+
+    // ── Scope openers ────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public FilterDefinition Filter(Func<IExchange, bool> predicate)
+    {
+        var def = new FilterDefinition(predicate);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public FilterDefinition Filter(IExpression expression)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        var def = new FilterDefinition(Predicates.PredicateFactory.FromExpression(expression))
+        {
+            SourceExpression = expression,
+        };
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public FilterDefinition Filter(IPredicate predicate)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        var def = new FilterDefinition(predicate)
+        {
+            SourcePredicate = predicate,
+        };
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public IdempotentConsumerDefinition IdempotentConsumer(
+        IIdempotentRepository repository,
+        Func<IExchange, string> keyExtractor,
+        bool skipDuplicate = true)
+    {
+        var def = new IdempotentConsumerDefinition(repository, keyExtractor, skipDuplicate);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <summary>
+    /// Apache Camel parity overload that looks up the repository by registered name from the
+    /// route context's <see cref="redb.Route.Components.IdempotentRepositoryRegistryExtensions.GetIdempotentRepositoryProvider"/>.
+    /// </summary>
+    public IdempotentConsumerDefinition IdempotentConsumer(
+        Func<IExchange, string> keyExtractor,
+        string repositoryName,
+        bool skipDuplicate = true)
+    {
+        var def = new IdempotentConsumerDefinition(repositoryName, keyExtractor, skipDuplicate);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public IdempotentConsumerDefinition IdempotentConsumer(
+        IIdempotentRepository repository,
+        IExpression messageId,
+        bool skipDuplicate = true)
+        => IdempotentConsumer(
+            repository,
+            Expressions.ExpressionValues.Required(messageId, nameof(IdempotentConsumer)),
+            skipDuplicate);
+
+    /// <inheritdoc cref="IdempotentConsumer(Func{IExchange, string}, string, bool)"/>
+    public IdempotentConsumerDefinition IdempotentConsumer(
+        IExpression messageId,
+        string repositoryName,
+        bool skipDuplicate = true)
+        => IdempotentConsumer(
+            Expressions.ExpressionValues.Required(messageId, nameof(IdempotentConsumer)),
+            repositoryName,
+            skipDuplicate);
+
+    /// <inheritdoc />
+    public TSelf ClaimCheck(
+        ClaimCheckOperation operation,
+        string? key = null,
+        TimeSpan? ttl = null,
+        string? repositoryName = null)
+    {
+        AddOutput(new ClaimCheckDefinition(operation, key, ttl, repositoryName));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ClaimCheck(
+        IClaimCheckRepository repository,
+        ClaimCheckOperation operation,
+        string? key = null,
+        TimeSpan? ttl = null)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        AddOutput(new ClaimCheckDefinition(repository, operation, key, ttl));
+        return Self;
+    }
+
+    IRouteDefinition IRouteDefinition.ClaimCheck(
+        ClaimCheckOperation operation, string? key, TimeSpan? ttl, string? repositoryName)
+        => ClaimCheck(operation, key, ttl, repositoryName);
+
+    IRouteDefinition IRouteDefinition.ClaimCheck(
+        IClaimCheckRepository repository, ClaimCheckOperation operation, string? key, TimeSpan? ttl)
+        => ClaimCheck(repository, operation, key, ttl);
+
+    /// <inheritdoc />
+    public ChoiceDefinition Choice()
+    {
+        var def = new ChoiceDefinition();
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public SplitDefinition Split(Func<IExchange, IEnumerable<object?>> splitter)
+    {
+        var def = new SplitDefinition(splitter);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public SplitDefinition Split(IExpression expression)
+    {
+        var def = new SplitDefinition(expression);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public SplitDefinition Split(Func<IExchange, IAsyncEnumerable<object?>> splitter)
+    {
+        var def = new SplitDefinition(splitter);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public MulticastDefinition Multicast()
+    {
+        var def = new MulticastDefinition();
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public ThreadsDefinition Threads(int poolSize)
+    {
+        var def = new ThreadsDefinition(poolSize);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public TryCatchDefinition TryCatch()
+    {
+        var def = new TryCatchDefinition();
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public AggregateDefinition Aggregate(
+        Func<IExchange, string> correlationKey,
+        Func<IExchange, IExchange, IExchange> aggregationStrategy,
+        Func<IExchange, bool> completionPredicate)
+    {
+        var def = new AggregateDefinition(correlationKey, aggregationStrategy, completionPredicate);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public AggregateDefinition Aggregate(
+        IExpression correlationKey,
+        Func<IExchange, IExchange, IExchange> aggregationStrategy,
+        Func<IExchange, bool> completionPredicate)
+        => Aggregate(
+            Expressions.ExpressionValues.Required(correlationKey, nameof(Aggregate)),
+            aggregationStrategy,
+            completionPredicate);
+
+    /// <inheritdoc />
+    public ThrottleDefinition Throttle(int maxPerPeriod)
+    {
+        var def = new ThrottleDefinition(maxPerPeriod);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public ThrottleDefinition Throttle(Func<IExchange, int> maxPerPeriodFactory)
+    {
+        var def = new ThrottleDefinition(maxPerPeriodFactory);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public ThrottleDefinition Throttle(string maxPerPeriodExpression, TimeSpan? period = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(maxPerPeriodExpression);
+        var expression = new StringExpression(maxPerPeriodExpression);
+        var def = Throttle(exchange => expression.Evaluate<int>(exchange));
+        return period is null ? def : def.Period(period.Value);
+    }
+
+    /// <inheritdoc />
+    public KeyedThrottleDefinition Throttle(
+        Func<IExchange, string> keyExtractor,
+        int maxPerPeriod,
+        TimeSpan? period = null)
+    {
+        var def = new KeyedThrottleDefinition(keyExtractor, maxPerPeriod, period);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public KeyedThrottleDefinition Throttle(
+        Func<IExchange, string> keyExtractor,
+        Func<IExchange, int> maxPerPeriodFactory,
+        TimeSpan? period = null)
+    {
+        var def = new KeyedThrottleDefinition(keyExtractor, maxPerPeriodFactory, period);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public KeyedThrottleDefinition Throttle(
+        string keyExpression,
+        string maxPerPeriodExpression,
+        TimeSpan? period = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyExpression);
+        ArgumentException.ThrowIfNullOrWhiteSpace(maxPerPeriodExpression);
+        var key = new StringExpression(keyExpression);
+        var limit = new StringExpression(maxPerPeriodExpression);
+        return Throttle(
+            e => key.Evaluate<object>(e)?.ToString() ?? string.Empty,
+            e => limit.Evaluate<int>(e),
+            period);
+    }
+
+    /// <inheritdoc />
+    public CircuitBreakerDefinition CircuitBreaker()
+    {
+        var def = new CircuitBreakerDefinition();
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public DebounceDefinition Debounce(Func<IExchange, string> keyExtractor, TimeSpan quietPeriod)
+    {
+        var def = new DebounceDefinition(keyExtractor, quietPeriod);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public LoopDefinition Loop(int count, bool copy = false, bool shareScope = true)
+    {
+        var def = new LoopDefinition(count, copy, shareScope);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public LoopDefinition Loop(Func<IExchange, bool> condition, bool copy = false, bool shareScope = true)
+    {
+        var def = new LoopDefinition(condition, copy, shareScope);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public LoopDefinition Loop(IPredicate condition, bool copy = false, bool shareScope = true)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        var def = new LoopDefinition(condition, copy, shareScope);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public LoopDefinition Loop(Func<IExchange, int> countFactory, bool copy = false, bool shareScope = true)
+    {
+        var def = new LoopDefinition(countFactory, copy, shareScope);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <inheritdoc />
+    public LoopDefinition Loop(string countExpression, bool copy = false, bool shareScope = true)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(countExpression);
+        var expression = new StringExpression(countExpression);
+        return Loop(exchange => expression.Evaluate<int>(exchange), copy, shareScope);
+    }
+
+    // ── Bean / Service Activator ──────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf Bean<TService>(Func<TService, IExchange, CancellationToken, Task> method)
+    {
+        ArgumentNullException.ThrowIfNull(method);
+        AddOutput(new BeanDefinition(
+            typeof(TService),
+            (svc, exchange, ct) => method((TService)svc, exchange, ct)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Bean<TService>(Func<TService, IExchange, Task> method)
+    {
+        ArgumentNullException.ThrowIfNull(method);
+        AddOutput(new BeanDefinition(
+            typeof(TService),
+            (svc, exchange, _) => method((TService)svc, exchange)));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf Bean<TService>(Action<TService, IExchange> method)
+    {
+        ArgumentNullException.ThrowIfNull(method);
+        AddOutput(new BeanDefinition(
+            typeof(TService),
+            (svc, exchange, _) => { method((TService)svc, exchange); return Task.CompletedTask; }));
+        return Self;
+    }
+
+    /// <inheritdoc cref="IRouteDefinition.Bean(string, string?)" />
+    public TSelf Bean(string reference, string? method = null)
+        => To(Components.Bean.BeanComponent.UriFor(reference, method));
+
+    // ── Scatter-Gather ────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf ScatterGather(
+        Func<IExchange, IExchange, IExchange> aggregationStrategy,
+        params string[] recipients)
+    {
+        ArgumentNullException.ThrowIfNull(aggregationStrategy);
+        if (recipients is null || recipients.Length == 0)
+            throw new ArgumentException("At least one recipient is required.", nameof(recipients));
+
+        var def = new ScatterGatherDefinition();
+        ((IScatterGatherDefinition)def).Recipients(recipients);
+        ((IScatterGatherDefinition)def).AggregationStrategy(aggregationStrategy);
+        AddOutput(def);
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf ScatterGather(Action<IScatterGatherDefinition> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        var def = new ScatterGatherDefinition();
+        configure(def);
+        if (def.AggregationStrategy is null)
+            throw new InvalidOperationException("AggregationStrategy is required for ScatterGather.");
+        if (def.StaticRecipients is null && def.DynamicRecipients is null)
+            throw new InvalidOperationException("Recipients are required for ScatterGather.");
+        AddOutput(def);
+        return Self;
+    }
+
+    // ── Saga ──────────────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf Saga(Action<ISagaDefinition> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        var def = new SagaDefinition();
+        configure(def);
+        if (def.Entries.Count == 0)
+            throw new InvalidOperationException("Saga must have at least one step.");
+        AddOutput(def);
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public SagaDefinition Saga()
+    {
+        var def = new SagaDefinition();
+        AddOutput(def);
+        return def;
+    }
+
+    // ── LoadBalance ───────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf LoadBalance(ILoadBalancerStrategy strategy, params string[] uris)
+    {
+        ArgumentNullException.ThrowIfNull(strategy);
+        if (uris is null || uris.Length == 0)
+            throw new ArgumentException("At least one endpoint URI is required.", nameof(uris));
+
+        var def = new LoadBalancerDefinition();
+        ((ILoadBalancerDefinition)def).Endpoints(uris);
+        ((ILoadBalancerDefinition)def).Strategy(strategy);
+        AddOutput(def);
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf LoadBalance(Action<ILoadBalancerDefinition> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        var def = new LoadBalancerDefinition();
+        configure(def);
+        if (def.Strategy is null)
+            throw new InvalidOperationException(
+                "Strategy is required for LoadBalance. Use UseRoundRobin(), UseFailover(), etc.");
+        if (def.Endpoints is null || def.Endpoints.Length == 0)
+            throw new InvalidOperationException("At least one endpoint is required for LoadBalance.");
+        AddOutput(def);
+        return Self;
+    }
+
+    // ── Normalizer ────────────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf Normalize(Action<INormalizerDefinition> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        var def = new NormalizerDefinition();
+        configure(def);
+        if (def.IsEmpty)
+            throw new InvalidOperationException("Normalizer requires at least one When clause.");
+        AddOutput(def);
+        return Self;
+    }
+
+    // ── Exception handling ────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf ExceptionHandled()
+    {
+        AddOutput(new ExceptionHandledDefinition());
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf RollbackAll()
+    {
+        AddOutput(new RollbackAllDefinition());
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public OnExceptionDefinition OnException<TException>() where TException : Exception
+        => OnException(typeof(TException));
+
+    /// <inheritdoc />
+    public OnExceptionDefinition OnException(params Type[] exceptionTypes)
+    {
+        if (exceptionTypes is null || exceptionTypes.Length == 0)
+            throw new ArgumentException("At least one exception type is required.", nameof(exceptionTypes));
+
+        foreach (var type in exceptionTypes)
+        {
+            if (!typeof(Exception).IsAssignableFrom(type))
+                throw new ArgumentException(
+                    $"{type.Name} is not an Exception type.", nameof(exceptionTypes));
+        }
+
+        var def = new OnExceptionDefinition(exceptionTypes);
+        AddOutput(def);
+        return def;
+    }
+
+    // ── Route-level policy ────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public TSelf Cluster(bool value = true)
+    {
+        _cluster = value;
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public bool GetCluster() => _cluster;
+
+    /// <inheritdoc />
+    public TSelf MessageHistory(bool value = true)
+    {
+        _messageHistory = value;
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public bool? GetMessageHistory() => _messageHistory;
+
+    /// <inheritdoc />
+    public TSelf Tracing(bool value = true)
+    {
+        _tracing = value;
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public bool? GetTracing() => _tracing;
+
+    /// <inheritdoc />
+    public TSelf RoutePolicy(IRoutePolicy policy)
+    {
+        _routePolicy = policy ?? throw new ArgumentNullException(nameof(policy));
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public TSelf RoutePolicy(string policyName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(policyName);
+        _routePolicyName = policyName.TrimStart('#');
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public IRoutePolicy? GetRoutePolicy() => _routePolicy;
+
+    /// <inheritdoc />
+    public string? GetRoutePolicyName() => _routePolicyName;
+
+    /// <inheritdoc />
+    public TSelf RouteConfigurationId(string ids)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ids);
+        _routeConfigurationId = ids;
+        return Self;
+    }
+
+    /// <inheritdoc />
+    public string? GetRouteConfigurationId() => _routeConfigurationId;
+
+    // ── Rich logging scope ────────────────────────────────────────────────────
+
+    /// <inheritdoc />
+    public RichLogScopeDefinition Log() => Log(LogLevel.Information);
+
+    /// <inheritdoc />
+    public RichLogScopeDefinition Log(LogLevel level)
+    {
+        var def = new RichLogScopeDefinition(level);
+        AddOutput(def);
+        return def;
+    }
+
+    /// <summary>
+    /// The DSL truthiness rule, shared with every string-condition path through
+    /// <see cref="Predicates.RouteTruthiness"/>.
+    /// </summary>
+    private protected static bool ConvertToBoolean(object? value)
+        => Predicates.RouteTruthiness.ToBoolean(value);
+}

@@ -1,0 +1,269 @@
+using redb.Route.Core;
+
+namespace redb.Route.GenericFile;
+
+/// <summary>
+/// Base endpoint options shared by all file-based transports (local file, SFTP, FTP).
+/// Provides consumer polling, post-processing, idempotency, done-file, and producer write options.
+/// </summary>
+public abstract class GenericFileEndpointOptions : EndpointOptions
+{
+    // ═══════════════════════════════════════════════════════════════════
+    //  CONSUMER: Polling
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>Polling delay in milliseconds between directory scans. (default: 500)</summary>
+    public int Delay { get; set; } = 500;
+
+    /// <summary>Initial delay before the first poll in milliseconds. (default: 0)</summary>
+    public int InitialDelay { get; set; }
+
+    /// <summary>Glob pattern to include files (e.g. "*.csv"). Multiple patterns: "*.csv,*.json". Empty = all files.</summary>
+    public string Include { get; set; } = "";
+
+    /// <summary>Glob pattern to exclude files (e.g. "*.tmp,.*"). Empty = exclude nothing.</summary>
+    public string Exclude { get; set; } = "";
+
+    /// <summary>
+    /// Ant-style patterns over the path relative to the polled directory, several separated by
+    /// commas: <c>TYPE_A/outbox/*.csv,TYPE_B/outbox/*.csv</c>. Unlike <see cref="Include"/>, which
+    /// only ever sees a file name, this is how a recursive poll names the directories it wants.
+    /// Empty = every path. Requires <see cref="Recursive"/> to reach anything below the top level.
+    /// </summary>
+    public string AntInclude { get; set; } = "";
+
+    /// <summary>
+    /// Ant-style patterns over the relative path that drop a file: <c>archive/**,**/*.tmp</c>.
+    /// Applied after <see cref="AntInclude"/>. Empty = drop nothing.
+    /// </summary>
+    public string AntExclude { get; set; } = "";
+
+    /// <summary>
+    /// Whether <see cref="AntInclude"/> and <see cref="AntExclude"/> respect case. (default: true,
+    /// as in Apache Camel — a remote path is case-sensitive even when the local file system is not)
+    /// </summary>
+    public bool AntFilterCaseSensitive { get; set; } = true;
+
+    /// <summary>
+    /// Condition deciding whether a subdirectory is walked into, evaluated against the directory's
+    /// own headers while the listing runs — a directory turned down here is never listed, which is
+    /// what makes a poll over a partner tree of two hundred directories affordable. Empty = walk
+    /// into every subdirectory. Only consulted when <see cref="Recursive"/> is on.
+    /// </summary>
+    public string FilterDirectory { get; set; } = "";
+
+    /// <summary>
+    /// Condition deciding whether a polled file is taken, evaluated against the file's headers
+    /// before anything reads or moves it (e.g. <c>header.redbFile.Length &gt; 1024</c>).
+    /// Empty = take every file the other filters left.
+    /// </summary>
+    public string FilterFile { get; set; } = "";
+
+    /// <summary>
+    /// Name of an <see cref="IGenericFileFilter"/> in the route registry (<c>filter=#myFilter</c>),
+    /// for a decision that needs code rather than a condition string. Resolved by the component.
+    /// </summary>
+    [RegistryReference(typeof(IGenericFileFilter))]
+    public string Filter { get; set; } = "";
+
+    /// <summary>
+    /// The filter bean itself, put here by the component once it resolved <see cref="Filter"/> from
+    /// the registry. Set it directly when the route is built in code and has no registry entry.
+    /// </summary>
+    public IGenericFileFilter? FilterInstance { get; set; }
+
+    /// <summary>Whether to recurse into subdirectories. (default: false)</summary>
+    public bool Recursive { get; set; }
+
+    /// <summary>Maximum recursion depth when Recursive=true. 0 = unlimited. (default: 0)</summary>
+    public int MaxDepth { get; set; }
+
+    /// <summary>Minimum recursion depth. Files at shallower levels are skipped. (default: 0)</summary>
+    public int MinDepth { get; set; }
+
+    /// <summary>Sort order for polled files. (default: None)</summary>
+    public GenericFileSortBy SortBy { get; set; } = GenericFileSortBy.None;
+
+    /// <summary>Maximum number of files to pick up per poll. 0 = unlimited. (default: 0)</summary>
+    public int MaxMessagesPerPoll { get; set; }
+
+    /// <summary>Minimum file age in milliseconds before the file is eligible for pickup. (default: 0)</summary>
+    public long MinAge { get; set; }
+
+    // ── Poll backoff (Apache Camel ScheduledPollConsumer parity) ──
+
+    /// <summary>
+    /// How many subsequent polls to skip once a backoff threshold is reached. 0 = backoff disabled (default).
+    /// Requires at least one of <see cref="BackoffIdleThreshold"/> / <see cref="BackoffErrorThreshold"/> to be set.
+    /// </summary>
+    public int BackoffMultiplier { get; set; }
+
+    /// <summary>
+    /// Number of consecutive idle polls (a poll that created no exchange) that arms the backoff skip.
+    /// 0 = idle backoff disabled (default).
+    /// </summary>
+    public int BackoffIdleThreshold { get; set; }
+
+    /// <summary>
+    /// Number of consecutive failed polls (the poll itself threw — e.g. the server is down) that arms the
+    /// backoff skip. 0 = error backoff disabled (default).
+    /// </summary>
+    public int BackoffErrorThreshold { get; set; }
+
+    /// <summary>
+    /// Extension beyond Camel parity (default false): count a poll that created at least one exchange whose
+    /// route all failed (unhandled) as an <c>Error</c> for <see cref="BackoffErrorThreshold"/>. Lets a route
+    /// back off polling when the downstream (e.g. the database) is down and every file fails, instead of
+    /// re-reading the same files every <see cref="Delay"/>. A poll with any successful exchange counts as
+    /// success. Needs <see cref="BackoffErrorThreshold"/> and <see cref="BackoffMultiplier"/> to have effect.
+    /// </summary>
+    public bool BackoffOnFailedExchanges { get; set; }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  CONSUMER: Post-processing
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>If true, the file is not moved or deleted after processing (read-only mode). (default: false)</summary>
+    public bool Noop { get; set; }
+
+    /// <summary>If true, delete the file after successful processing. (default: false)</summary>
+    public bool Delete { get; set; }
+
+    /// <summary>Directory to move files to after successful processing. Supports the file keys of <see cref="redb.Route.Expressions.FileLanguage.Keys"/> (<c>${file:name}</c>, <c>${file:ext}</c>).</summary>
+    public string MoveTo { get; set; } = "";
+
+    /// <summary>Strategy when the target file in MoveTo already exists. (default: Override)</summary>
+    public GenericFileExistStrategy MoveExisting { get; set; } = GenericFileExistStrategy.Override;
+
+    /// <summary>Directory to move files to BEFORE processing (pre-move for concurrency safety).</summary>
+    public string PreMove { get; set; } = "";
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  CONSUMER: Idempotency
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>If true, skip files that have already been processed (tracked by idempotent key). (default: false)</summary>
+    public bool Idempotent { get; set; }
+
+    /// <summary>Expression for the idempotent key. Default uses path + last modified + size.</summary>
+    public string IdempotentKey { get; set; } = "";
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  CONSUMER: Done file
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Pattern for a "done" marker file. If set, the consumer waits for this marker before processing.
+    /// Example: "${file:name}.done" — processes "order.csv" only when "order.csv.done" exists.
+    /// </summary>
+    public string DoneFileName { get; set; } = "";
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  CONSUMER: Body
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// If true, the consumer sets the exchange body to a Stream instead of reading
+    /// the entire file into a byte array. The stream is closed by Exchange.DisposeAsync(). (default: false)
+    /// </summary>
+    public bool StreamBody { get; set; }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  PRODUCER: Write
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>Dynamic file name for the producer. Supports ${header.xxx} expressions.</summary>
+    public DynamicValue<string>? FileName { get; set; }
+
+    /// <summary>Strategy when the target file already exists. (default: Override)</summary>
+    public GenericFileExistStrategy FileExist { get; set; } = GenericFileExistStrategy.Override;
+
+    /// <summary>Prefix for the temp file during write (e.g. ".redb_"). Empty = write directly.</summary>
+    public string TempPrefix { get; set; } = "";
+
+    /// <summary>
+    /// Full temp file name, in the target's directory. Overrides TempPrefix if set. The file keys read the target file
+    /// (<c>${file:name}.part</c>, <c>${file:name.noext}.tmp</c>), matching ignoring case as in the consumer options.
+    /// </summary>
+    public string TempFileName { get; set; } = "";
+
+    /// <summary>File encoding (default: "utf-8").</summary>
+    public string Charset { get; set; } = "utf-8";
+
+    /// <summary>If true, create the target directory if it doesn't exist. (default: true)</summary>
+    public bool AutoCreate { get; set; } = true;
+
+    /// <summary>If true, allow writing an empty file when body is null. (default: false)</summary>
+    public bool AllowNullBody { get; set; }
+
+    /// <summary>Characters to append after each Append write (e.g. "\n"). Empty = nothing.</summary>
+    public string AppendChars { get; set; } = "";
+
+    /// <summary>If true, delete the target file before writing when using Override strategy. (default: true)</summary>
+    public bool EagerDeleteTargetFile { get; set; } = true;
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  VALIDATION (base — subclasses should call base.ValidateCommon())
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Validates common file endpoint options. Subclasses should call this from their Validate() method.
+    /// </summary>
+    protected void ValidateCommon()
+    {
+        if (Delay < 0)
+            throw new ArgumentOutOfRangeException(nameof(Delay), Delay, "Delay cannot be negative.");
+
+        if (InitialDelay < 0)
+            throw new ArgumentOutOfRangeException(nameof(InitialDelay), InitialDelay, "InitialDelay cannot be negative.");
+
+        if (MaxDepth < 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxDepth), MaxDepth, "MaxDepth cannot be negative.");
+
+        if (MinDepth < 0)
+            throw new ArgumentOutOfRangeException(nameof(MinDepth), MinDepth, "MinDepth cannot be negative.");
+
+        if (MaxMessagesPerPoll < 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxMessagesPerPoll), MaxMessagesPerPoll,
+                "MaxMessagesPerPoll cannot be negative.");
+
+        if (MinAge < 0)
+            throw new ArgumentOutOfRangeException(nameof(MinAge), MinAge, "MinAge cannot be negative.");
+
+        if (Noop && Delete)
+            throw new InvalidOperationException("Cannot set both Noop=true and Delete=true.");
+
+        if (Noop && !string.IsNullOrEmpty(MoveTo))
+            throw new InvalidOperationException("Cannot set both Noop=true and MoveTo.");
+
+        if (Delete && !string.IsNullOrEmpty(MoveTo))
+            throw new InvalidOperationException("Cannot set both Delete=true and MoveTo. Choose one post-processing strategy.");
+
+        // The file keys of the consumer options, checked here so a wrong key fails when the endpoint is created.
+        GenericFileUtils.ValidateFileKeys("moveTo", MoveTo);
+        GenericFileUtils.ValidateFileKeys("preMove", PreMove);
+        GenericFileUtils.ValidateFileKeys("doneFileName", DoneFileName);
+        GenericFileUtils.ValidateFileKeys("idempotentKey", IdempotentKey);
+        GenericFileUtils.ValidateFileKeys("tempFileName", TempFileName);
+
+        if (BackoffMultiplier < 0)
+            throw new ArgumentOutOfRangeException(nameof(BackoffMultiplier), BackoffMultiplier,
+                "BackoffMultiplier cannot be negative.");
+        if (BackoffIdleThreshold < 0)
+            throw new ArgumentOutOfRangeException(nameof(BackoffIdleThreshold), BackoffIdleThreshold,
+                "BackoffIdleThreshold cannot be negative.");
+        if (BackoffErrorThreshold < 0)
+            throw new ArgumentOutOfRangeException(nameof(BackoffErrorThreshold), BackoffErrorThreshold,
+                "BackoffErrorThreshold cannot be negative.");
+
+        // Camel refuses backoffMultiplier without a threshold; we also refuse a threshold without a
+        // multiplier, since that configuration is ambiguous (a threshold that can never skip anything).
+        var hasThreshold = BackoffIdleThreshold > 0 || BackoffErrorThreshold > 0;
+        if (BackoffMultiplier > 0 && !hasThreshold)
+            throw new InvalidOperationException(
+                "BackoffMultiplier requires at least one of BackoffIdleThreshold / BackoffErrorThreshold to be set.");
+        if (BackoffMultiplier == 0 && hasThreshold)
+            throw new InvalidOperationException(
+                "BackoffIdleThreshold / BackoffErrorThreshold require BackoffMultiplier to be set (> 0).");
+    }
+}

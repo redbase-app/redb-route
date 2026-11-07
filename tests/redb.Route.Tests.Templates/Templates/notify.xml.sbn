@@ -1,0 +1,4 @@
+<notify channel="{{ args.channel }}">
+  <customer>{{ args.customer }}</customer>
+  <note>{{ headers.note }}</note>
+</notify>

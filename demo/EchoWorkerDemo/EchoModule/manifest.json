@@ -1,0 +1,6 @@
+{
+  "Name": "EchoModule",
+  "Version": "1.0.0",
+  "EntryPoints": ["EchoModule.dll"],
+  "Dependencies": []
+}

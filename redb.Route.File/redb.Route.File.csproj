@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.File</PackageId>
+    <Description>File system transport for redb.Route ESB framework. Provides polling consumer and atomic file producer with locking, idempotency, and glob filtering.</Description>
+    <PackageTags>esb;messaging;file;filesystem;polling;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.File" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.GenericFile\redb.Route.GenericFile.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

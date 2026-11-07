@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Http</PackageId>
+    <Description>HTTP transport for redb.Route ESB framework. Provides HttpClient producer and Kestrel-based consumer (webhook receiver) with CORS, auth, and streaming support.</Description>
+    <PackageTags>esb;messaging;http;https;webhook;kestrel;rest;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Http" />
+    <InternalsVisibleTo Include="redb.Route.Tests.Controllers" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.Xml\redb.Route.Xml.csproj" />
+    <!-- Shared Kestrel host (SharedHttpServerManager, HttpProtocol, RouteCorsOptions). -->
+    <ProjectReference Include="..\redb.Route.Http.Hosting\redb.Route.Http.Hosting.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

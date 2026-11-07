@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.As2\redb.Route.As2.csproj" />
+  </ItemGroup>
+  <!-- The AS2 consumer hosts Kestrel, so the test runner needs the ASP.NET runtime. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../Shared/TestPorts.cs" Link="Shared/TestPorts.cs" />
+    <!-- The span filter of the core telemetry tests: a test sees only the spans of its own endpoints. -->
+    <Compile Include="../redb.Route.Tests/Telemetry/RouteTelemetryProbe.cs" Link="Shared/RouteTelemetryProbe.cs" />
+  </ItemGroup>
+</Project>
+

@@ -1,0 +1,101 @@
+using Microsoft.Extensions.Logging;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Telemetry;
+
+namespace redb.Route.Processors;
+
+/// <summary>
+/// Wraps an inner processor and, on uncaught exception, sends the exchange to the configured
+/// dead-letter URI before re-throwing (when configured as transaction-aware so the outer
+/// transaction can still roll back) or swallowing the exception (best-effort handle mode).
+/// Apache Camel parity: <c>errorHandler(deadLetterChannel("..."))</c>.
+/// Producer is cached for the lifetime of the processor.
+/// </summary>
+public sealed class DeadLetterChannelProcessor : IProcessor
+{
+    private readonly IRouteContext _context;
+    private readonly IProcessor _inner;
+    private readonly string _deadLetterUri;
+    private readonly bool _rethrow;
+    private readonly ILogger? _logger;
+    private IProducer? _producer;
+    private IEndpoint? _endpoint;
+    private readonly SemaphoreSlim _producerLock = new(1, 1);
+
+    /// <summary>Creates a dead-letter channel processor.</summary>
+    /// <param name="context">Route context used to resolve the dead-letter endpoint.</param>
+    /// <param name="inner">Inner processor whose failures should be dead-lettered.</param>
+    /// <param name="deadLetterUri">URI of the dead-letter endpoint.</param>
+    /// <param name="rethrow">If true, the original exception is re-thrown after dead-lettering
+    /// (so an enclosing transactional scope can still roll back). Default true to match
+    /// Camel's transactional semantics.</param>
+    /// <param name="logger">Optional logger.</param>
+    public DeadLetterChannelProcessor(
+        IRouteContext context,
+        IProcessor inner,
+        string deadLetterUri,
+        bool rethrow = true,
+        ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(inner);
+        ArgumentException.ThrowIfNullOrWhiteSpace(deadLetterUri);
+        _context = context;
+        _inner = inner;
+        _deadLetterUri = deadLetterUri;
+        _rethrow = rethrow;
+        _logger = logger;
+    }
+
+    /// <inheritdoc />
+    public async Task Process(IExchange exchange, CancellationToken ct = default)
+    {
+        try
+        {
+            await _inner.Process(exchange, ct).ConfigureAwait(false);
+        }
+        // A downstream timeout is an OperationCanceledException whose token (ours) is still live — a failure
+        // to dead-letter, not a cancellation. Named a TimeoutException. A genuine cancellation passes.
+        catch (Exception ex) when (!RouteCancellation.IsCancellation(ex, ct))
+        {
+            var failure = RouteCancellation.Normalize(ex, ct);
+            exchange.Exception = failure;
+            _logger?.LogWarning(failure, "Dead-lettering exchange to {Uri}.", _deadLetterUri);
+            try
+            {
+                var (endpoint, producer) = await GetOrCreatePair(ct).ConfigureAwait(false);
+                await Core.CountedSend.Process(endpoint, producer, exchange, ct).ConfigureAwait(false);
+                ProcessorMetrics.DeadLetterSent.Add(1);
+            }
+            catch (Exception sendEx)
+            {
+                _logger?.LogError(sendEx, "Dead-letter delivery to {Uri} failed.", _deadLetterUri);
+            }
+
+            if (_rethrow) throw;
+            exchange.Exception = null;
+        }
+    }
+
+    private async Task<(IEndpoint, IProducer)> GetOrCreatePair(CancellationToken ct)
+    {
+        if (_producer is not null) return (_endpoint!, _producer);
+        await _producerLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_producer is not null) return (_endpoint!, _producer);
+            var endpoint = _context.GetEndpoint(_deadLetterUri);
+            var producer = endpoint.CreateProducerOnItsSide();
+            await producer.Start(ct).ConfigureAwait(false);
+            (_context as RouteContext)?.TrackProducer(producer);
+            _endpoint = endpoint;
+            _producer = producer;
+            return (endpoint, producer);
+        }
+        finally
+        {
+            _producerLock.Release();
+        }
+    }
+}

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.DataFormats.Mime</PackageId>
+    <Description>MIME multipart data format for redb.Route (MimeKit), as Camel's mimeMultipart: multipart/form-data fields into a FormBody and files into message attachments, multipart/mixed first part into the body and the rest into attachments, and back; limits on parts and sizes; registered as multipart/form-data.</Description>
+    <PackageTags>esb;messaging;mime;multipart;form-data;attachments;dataformat;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MimeKit" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

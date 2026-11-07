@@ -1,0 +1,113 @@
+using System;
+using System.Collections.Generic;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Definitions;
+
+namespace redb.Route.Validation;
+
+/// <summary>
+/// Validates a v2 <see cref="IRouteDefinition"/> tree before compilation. Walks
+/// <see cref="IProcessorDefinition.Outputs"/> recursively and applies two kinds of rule:
+/// <list type="bullet">
+/// <item>Per-node self-validation (e.g. ScatterGather requires recipients).</item>
+/// <item>Generic scope-nesting rules: any node implementing <see cref="IScopeNestingRule"/> is
+/// evaluated against each enclosing scope (a node implementing <see cref="IRouteScope"/>). A
+/// <see cref="NestingPolicy.Forbid"/> becomes a build error, a <see cref="NestingPolicy.Warn"/> a
+/// warning. This is declarative — new constraints ship on the definitions, not here.</item>
+/// </list>
+/// Catches structural errors early rather than producing cryptic runtime failures.
+/// </summary>
+internal static class RouteDefinitionValidator
+{
+    /// <summary>
+    /// Validates a route definition. Throws <see cref="RouteValidationException"/> if any errors are
+    /// found; returns the (possibly empty) list of non-fatal warnings for the caller to log.
+    /// </summary>
+    public static IReadOnlyList<string> Validate(IRouteDefinition definition)
+    {
+        var errors = new List<string>();
+        var warnings = new List<string>();
+        if (definition is IProcessorDefinition root)
+            ValidateTree(root, errors, warnings, new List<IProcessorDefinition>(),
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+        if (errors.Count > 0)
+            throw new RouteValidationException(definition.GetRouteId() ?? "<unnamed>", errors);
+
+        return warnings;
+    }
+
+    private static void ValidateTree(
+        IProcessorDefinition node,
+        List<string> errors,
+        List<string> warnings,
+        List<IProcessorDefinition> enclosingScopes,
+        HashSet<string> stepIds)
+    {
+        // 0. Step ids must be unique within the route: WeaveById resolves them case-insensitively,
+        //    and a message-history node id shared by two steps makes traces unattributable.
+        if (node is ProcessorDefinition { StepId: { } stepId } && !stepIds.Add(stepId))
+            errors.Add($"Duplicate step id '{stepId}': Id(\"...\") must be unique within a route.");
+
+        // 1. Per-node self-validation.
+        switch (node)
+        {
+            case ScatterGatherDefinition sg:
+                if ((sg.StaticRecipients is null || sg.StaticRecipients.Length == 0) && sg.DynamicRecipients is null)
+                    errors.Add("ScatterGather: at least one recipient (static or dynamic) is required.");
+                if (sg.AggregationStrategy is null)
+                    errors.Add("ScatterGather: AggregationStrategy is required.");
+                if (sg.MaxDegreeOfParallelism < 0)
+                    errors.Add("ScatterGather: MaxDegreeOfParallelism must be >= 0.");
+                break;
+
+            case TryCatchDefinition tryCatch:
+                foreach (var clause in tryCatch.Catches)
+                {
+                    if (CancellationHandlerWarning(clause.ExceptionType) is { } warning)
+                        warnings.Add(warning);
+                }
+                break;
+        }
+
+        // 2. Generic scope-nesting rules — the node declares its own policy against each enclosing scope.
+        if (node is IScopeNestingRule rule)
+        {
+            foreach (var ancestor in enclosingScopes)
+            {
+                var verdict = rule.CheckAncestor(ancestor);
+                switch (verdict.Policy)
+                {
+                    case NestingPolicy.Forbid: errors.Add(verdict.Message!); break;
+                    case NestingPolicy.Warn: warnings.Add(verdict.Message!); break;
+                }
+            }
+        }
+
+        // 3. Descend, tracking scope-openers as enclosing scopes for nested nodes. Recurse into
+        //    Outputs AND any branches a definition keeps outside Outputs (e.g. Choice When/Otherwise).
+        var isScope = node is IRouteScope;
+        if (isScope) enclosingScopes.Add(node);
+        foreach (var child in node.Outputs)
+            ValidateTree(child, errors, warnings, enclosingScopes, stepIds);
+        if (node is IBranchingDefinition branching)
+            foreach (var branch in branching.Branches)
+                ValidateTree(branch, errors, warnings, enclosingScopes, stepIds);
+        if (isScope) enclosingScopes.RemoveAt(enclosingScopes.Count - 1);
+    }
+
+    /// <summary>
+    /// The warning to log for an error handler registered on <paramref name="exceptionType"/> that can never
+    /// fire — a <see cref="System.OperationCanceledException"/> or a subtype (a genuine cancellation is never
+    /// handled, and a timeout arrives as <see cref="System.TimeoutException"/>) — or null when the type is
+    /// fine. Kept next to the validation rules so the fluent DSL, the Route-XML loader and the route-level
+    /// <c>OnException</c> all report the same thing.
+    /// </summary>
+    internal static string? CancellationHandlerWarning(Type exceptionType)
+        => RouteCancellation.IsCancellationType(exceptionType)
+            ? $"An error handler for {exceptionType.Name} can never fire: a genuine cancellation is never " +
+              "handled, and a timeout (an OperationCanceledException raised while the caller's token is still " +
+              "live) arrives as System.TimeoutException. Handle System.TimeoutException instead."
+            : null;
+}

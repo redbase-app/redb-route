@@ -1,0 +1,26 @@
+{
+  "//": "L4 (in-package): module identity and the settings the routes read as {{placeholders}}. Secrets arrive from the worker's Override layer, never from here.",
+  "ContextName": "serial-numbers-xml",
+  "AutoStart": true,
+  "Archive": {
+    "Directory": "data/serials-xml/archive"
+  },
+  "Sftp": {
+    "Host": "localhost",
+    "Port": 22,
+    "Username": "serials"
+  },
+  "As2": {
+    "Id": "SERIALS-HUB",
+    "ReceivePort": 4082,
+    "CertificateDirectory": "data/serials-xml/certs"
+  },
+  "Api": {
+    "Port": 8091
+  },
+  "Report": {
+    "Directory": "data/serials-xml/reports",
+    "Cron": "0 0 6 * * ?",
+    "TimeZone": "UTC"
+  }
+}

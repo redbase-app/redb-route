@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>redb.Route.Llm.Abstractions</RootNamespace>
+    <PackageId>redb.Route.Llm.Abstractions</PackageId>
+    <Description>Contracts for the redb.Route.Llm tool surface. Carries LlmToolCapability, LlmToolSafety, ILlmToolDescriptor, and the [ExposeAsLlmTool] attribute. Lightweight — depends on redb.Route abstractions only, no provider/HttpClient code.</Description>
+    <PackageTags>esb;messaging;llm;ai;tools;contracts;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

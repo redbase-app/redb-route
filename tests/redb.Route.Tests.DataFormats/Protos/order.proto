@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+option csharp_namespace = "redb.Route.Tests.DataFormats.Protos";
+
+message OrderMessage {
+  int32 id = 1;
+  string customer = 2;
+  repeated string skus = 3;
+}

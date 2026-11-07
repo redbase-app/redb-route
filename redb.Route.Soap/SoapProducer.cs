@@ -1,0 +1,260 @@
+using System.Diagnostics;
+using System.Net.Http.Headers;
+using redb.Route.Abstractions;
+using redb.Route.Extensions;
+using redb.Route.Core;
+using redb.Route.Telemetry;
+
+namespace redb.Route.Soap;
+
+/// <summary>
+/// SOAP producer (baseline, in-box): wraps the exchange body in a 1.1/1.2 envelope, POSTs it with
+/// <see cref="HttpClient"/>, and puts the response body on <see cref="IExchange.Out"/> (request-reply).
+/// A <c>soap:Fault</c> surfaces on <c>redbSoap.fault*</c> and throws <see cref="SoapFaultException"/>.
+/// Opens a <c>Client</c> telemetry span and records endpoint statistics, like every other connector.
+/// </summary>
+public sealed class SoapProducer : ConnectableProducer
+{
+    private readonly SoapEndpoint _endpoint;
+    private HttpClient? _http;
+
+    internal SoapProducer(SoapEndpoint endpoint)
+        => _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
+
+    /// <inheritdoc />
+    protected override IEndpoint ProducerEndpoint => _endpoint;
+
+    /// <inheritdoc />
+    protected override string ProducerName => $"soap:{EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey)}";
+
+    /// <inheritdoc />
+    protected override Task ConnectAsync(CancellationToken ct)
+    {
+        _http = new HttpClient();
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    protected override Task DisconnectAsync(CancellationToken ct)
+    {
+        _http?.Dispose();
+        _http = null;
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public override async Task Process(IExchange exchange, CancellationToken ct = default)
+    {
+        EnsureStarted();
+
+        var factory = ResolveFactory();
+        var version = factory?.SoapVersion ?? SoapVersion.Soap11;
+        var url = ResolveUrl(factory);
+        var dataFormat = factory?.DataFormat ?? SoapDataFormat.Payload;
+        var action = exchange.In.GetHeader<string>(SoapHeaders.Action)
+                     ?? _endpoint.SoapOptions.Action
+                     ?? _endpoint.SoapOptions.Operation
+                     ?? factory?.DefaultAction;
+
+        var httpContentType = SoapEnvelope.ContentType(version, action);
+        byte[] envelope;
+
+        if (dataFormat == SoapDataFormat.Message)
+        {
+            // MESSAGE dataFormat (camel-cxf parity): transparent proxy — the route supplies the whole
+            // envelope, so we neither wrap it nor inject headers/security; those are the route's own.
+            envelope = exchange.In.Body is byte[] raw
+                ? raw
+                : System.Text.Encoding.UTF8.GetBytes(exchange.In.Body?.ToString() ?? string.Empty);
+        }
+        else
+        {
+            // PAYLOAD / POJO dataFormat: build an envelope around the body fragment.
+            var bodyXml = dataFormat == SoapDataFormat.Pojo && exchange.In.Body is not null and not string
+                ? SoapPojo.Serialize(exchange.In.Body)                    // typed object ⇒ document/literal XML
+                : exchange.In.Body?.ToString() ?? string.Empty;
+
+            var headerXml = BuildHeaderBlock(exchange.In.Headers);       // envelope <soap:Header> plane
+            // WS-Security UsernameToken (Ф4a): prepend a <wsse:Security> header when the factory supplies creds.
+            if (!string.IsNullOrEmpty(factory?.Username))
+                headerXml = SoapSecurity.BuildUsernameTokenHeader(factory!.Username!, factory.Password) + (headerXml ?? string.Empty);
+            envelope = SoapEnvelope.Build(bodyXml, version, headerXml);
+
+            // WS-Security (Ф4b): sign with our cert, then encrypt to the partner's cert (sign-then-encrypt).
+            if (factory?.SigningCert is not null || factory?.EncryptCert is not null)
+            {
+                var doc = SafeXml.LoadDocument(envelope);
+                if (factory.SigningCert is { } signingCert) SoapSignature.SignBody(doc, signingCert, version);
+                if (factory.EncryptCert is { } encryptCert) SoapEncryption.EncryptBody(doc, encryptCert, version);
+                using var protectedMs = new MemoryStream();
+                doc.Save(protectedMs);
+                envelope = protectedMs.ToArray();
+            }
+        }
+
+        // MTOM/XOP (camel-cxf mtom-enabled parity): wrap envelope + attachments as multipart/related. For
+        // SOAP 1.2 the action rides on the multipart Content-Type (1.1 keeps its SOAPAction header below).
+        var attachments = exchange.In.Attachments;
+        if (factory?.Mtom == true && attachments.Count > 0)
+            (envelope, httpContentType) = SoapMultipart.Write(
+                envelope, SoapEnvelope.ContentType(version, action), attachments,
+                version == SoapVersion.Soap12 ? action : null);
+
+        // An RPC span: the operation is rpc.method; the URL and the SOAPAction are not messaging destinations.
+        using var span = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"soap {action ?? "call"}", ActivityKind.Client, "rpc.system", "soap",
+            _endpoint.Uri.NormalizedKey);
+        if (span is { IsAllDataRequested: true } && !string.IsNullOrEmpty(action))
+            span.SetTag("rpc.method", action);
+
+        // The envelope is what we SEND. It used to land in BytesIn because that was the only
+        // byte counter the statistics surface had.
+        _endpoint.RecordBytesOut(envelope.Length);
+
+        var content = new ByteArrayContent(envelope);
+        if (MediaTypeHeaderValue.TryParse(httpContentType, out var mt))
+            content.Headers.ContentType = mt;
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+        if (version == SoapVersion.Soap11 && !string.IsNullOrEmpty(action))
+            request.Headers.TryAddWithoutValidation("SOAPAction", $"\"{action}\"");
+
+        // The context of this call, written by the producer rather than left to HttpClient instrumentation the
+        // application may not have.
+        RouteTelemetryExtensions.InjectTraceContext(span, request, static (r, name, value) =>
+        {
+            r.Headers.Remove(name);
+            r.Headers.TryAddWithoutValidation(name, value);
+        });
+
+        HttpResponseMessage sent;
+        try
+        {
+            sent = await _http!.SendAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the call is a stop; an HttpClient timeout (a TaskCanceledException) failed.
+            span.RecordFailure(ex);
+            throw;
+        }
+        using var response = sent;
+        var respBytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+
+        // Inbound MTOM: unwrap multipart/related and surface the attachments on the reply.
+        IReadOnlyList<Attachment>? respAttachments = null;
+        if (SoapMultipart.IsMultipartRelated(response.Content.Headers.ContentType?.ToString()))
+        {
+            var (rootBytes, atts) = SoapMultipart.Parse(respBytes, response.Content.Headers.ContentType!.ToString());
+            respBytes = rootBytes;
+            respAttachments = atts;
+        }
+
+        // Symmetric to the consumer: decrypt an encrypted response when we hold the private key, so parse
+        // and signature-verify below see plaintext. Skipped in Message (transparent proxy) mode — there
+        // the route must receive the response bytes verbatim, exactly as the consumer skips inbound decrypt.
+        if (dataFormat != SoapDataFormat.Message && factory?.SigningCert is { HasPrivateKey: true } decKey)
+        {
+            try
+            {
+                var rdoc = SafeXml.LoadDocument(respBytes);
+                if (SoapEncryption.HasEncryptedData(rdoc))
+                {
+                    SoapEncryption.DecryptBody(rdoc, decKey);
+                    using var rms = new MemoryStream();
+                    rdoc.Save(rms);
+                    respBytes = rms.ToArray();
+                }
+            }
+            catch { /* leave as-is; parse below surfaces a fault if truly malformed */ }
+        }
+
+        var parsed = SoapEnvelope.Parse(respBytes, version);
+        if (parsed.IsFault)
+        {
+            exchange.In.Headers[SoapHeaders.FaultCode] = parsed.FaultCode;
+            exchange.In.Headers[SoapHeaders.FaultString] = parsed.FaultString;
+            exchange.In.Headers[SoapHeaders.IsFault] = true;
+            // A client span is an error for a fault either way: the call did not do what it asked.
+            span?.SetStatus(ActivityStatusCode.Error, parsed.FaultString);
+
+            // throwOnFault=false: the fault is an answer the service is designed to give, and the
+            // route branches on the headers instead of catching. Explicit, never guessed from the
+            // code inside the fault — the same rule the HTTP producer's throwOnError follows.
+            if (_endpoint.SoapOptions.ThrowOnFault)
+            {
+                // The throw carries the fault into the core, which records the error once.
+                throw new SoapFaultException(parsed.FaultCode, parsed.FaultString);
+            }
+        }
+
+        exchange.Out = dataFormat switch
+        {
+            // MESSAGE: hand back the whole envelope. POJO: deserialize into the response type. PAYLOAD: body XML.
+            SoapDataFormat.Message => new Message(System.Text.Encoding.UTF8.GetString(respBytes))
+                { ContentType = SoapEnvelope.ContentType(version, null) },
+            SoapDataFormat.Pojo when ResolveResponseType(exchange, factory) is { } rt
+                => new Message(SoapPojo.Deserialize(parsed.BodyXml, rt)) { ContentType = "text/xml" },
+            _ => new Message(parsed.BodyXml) { ContentType = "text/xml" },
+        };
+
+        // Verify a response signature (authenticated when the partner cert is configured), like the consumer.
+        // Not in Message mode: the route owns the verbatim envelope there.
+        if (dataFormat != SoapDataFormat.Message)
+        {
+            try
+            {
+                var rdoc = SafeXml.LoadDocument(respBytes);
+                if (SoapSignature.HasSignature(rdoc))
+                    exchange.Out!.Headers[SoapHeaders.SignatureValid] = SoapSignature.VerifyBody(rdoc, factory?.EncryptCert, version);
+            }
+            catch { /* malformed signature — leave the flag unset */ }
+        }
+
+        // The reply attachments replace the request ones when the pipeline moves Out to In; a reply without
+        // attachments leaves the request attachments on the message.
+        if (respAttachments is not null)
+        {
+            foreach (var attachment in respAttachments)
+                exchange.Out!.Attachments.Add(attachment);
+        }
+        // No catch/RecordError: exceptions fly into the core (ToProcessor / the template),
+        // which records them against this endpoint (ownership audit).
+    }
+
+    private static Type? ResolveResponseType(IExchange exchange, SoapConnectionFactory? factory)
+        => exchange.In.GetHeader<Type>(SoapHeaders.ResponseType) ?? factory?.ResponseType;
+
+    /// <summary>
+    /// Builds the <c>&lt;soap:Header&gt;</c> content from every <c>redbSoap.header.*</c> exchange header (the
+    /// envelope header plane). Other <c>redbSoap.*</c> metadata is deliberately NOT put on the wire.
+    /// </summary>
+    private static string? BuildHeaderBlock(IDictionary<string, object?> headers)
+    {
+        System.Text.StringBuilder? sb = null;
+        foreach (var (key, value) in headers)
+        {
+            if (value is null || !key.StartsWith(SoapHeaders.HeaderPrefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            (sb ??= new System.Text.StringBuilder()).Append(value);
+        }
+        return sb?.ToString();
+    }
+
+    private SoapConnectionFactory? ResolveFactory()
+    {
+        var name = _endpoint.SoapOptions.ConnectionFactory;
+        if (string.IsNullOrEmpty(name)) return null;
+        // A set-but-unknown name fails loud -- never a silent fallback (Ф11 Ж-1).
+        return ((_endpoint.Component as ComponentBase)?.Context).GetRequiredFromRegistry<SoapConnectionFactory>(name);
+    }
+
+    private string ResolveUrl(SoapConnectionFactory? factory)
+    {
+        if (!string.IsNullOrEmpty(factory?.EndpointUrl)) return factory!.EndpointUrl;
+        // Reconstruct from the producer URI: soaps://host/path ⇒ https://host/path.
+        var scheme = _endpoint.SoapOptions.UseTls ? "https" : "http";
+        return $"{scheme}://{_endpoint.SoapOptions.Path}";
+    }
+}

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Console application (exe), single file Program.cs -->
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>BuyersLdapDemo</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Using pre-built redb NuGet packages; sources are for reference only.
+      Versions match the project: redb.Route*, redb.Core and redb.SQLite.Pro = 4.3.0.
+    -->
+    <PackageReference Include="redb.Route" />
+    <PackageReference Include="redb.Route.Core" />
+    <PackageReference Include="redb.Route.Http" />
+    <PackageReference Include="redb.Route.Ldap" />
+    <PackageReference Include="redb.Core" />
+    <PackageReference Include="redb.SQLite.Pro" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+
+</Project>

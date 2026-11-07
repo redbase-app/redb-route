@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Context of the XML spelling: the objects the routes reference by name. What needs code
+     (AS2 certificates, the demo database) is registered by InitRoute.main before this file loads. -->
+<context xmlns="urn:redb:route:1.0">
+
+  <!-- The processors of the flow. Each method takes the exchange and hands it to the module's
+       service unchanged; the markup decides WHEN they run, the service decides WHAT happens. -->
+  <bean name="serial-requests" type="SerialNumbers.Xml.Beans.SerialRequestBeans, SerialNumbers.Xml"/>
+  <bean name="intake" type="SerialNumbers.Xml.Beans.IntakeBeans, SerialNumbers.Xml"/>
+
+  <!-- The redb bridge block, left commented ON PURPOSE.
+
+       It says what the module puts into redb, and this module does put exactly these five models
+       there. Today the C# module's InitRoute.main syncs them (SerialNumbers.Core/InitRoute.cs),
+       and this module reuses that bootstrap for the demo database, so declaring the same five
+       here would run the sync twice from two sources of truth.
+
+       Uncomment when the bootstrap is split and only the database creation stays in code: then
+       the file alone tells the reader which models this module owns. The same block also
+       declares named idempotent repositories; this demo needs none since a duplicate request
+       is caught by its unique key {partner}/{request id} inside the transaction.
+
+  <redb>
+    <syncScheme type="SerialNumbers.Domain.Entities.Partner, SerialNumbers.Domain"/>
+    <syncScheme type="SerialNumbers.Domain.Entities.Product, SerialNumbers.Domain"/>
+    <syncScheme type="SerialNumbers.Domain.Entities.InboundMessage, SerialNumbers.Domain"/>
+    <syncScheme type="SerialNumbers.Domain.Entities.SerialNumberRequest, SerialNumbers.Domain"/>
+    <syncScheme type="SerialNumbers.Domain.Entities.SerialNumberResponse, SerialNumbers.Domain"/>
+  </redb>
+  -->
+
+</context>

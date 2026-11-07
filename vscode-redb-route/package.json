@@ -1,0 +1,148 @@
+{
+  "name": "redb-route-xml",
+  "displayName": "redb Route XML",
+  "description": "Completion and validation for redb.Route XML routes, a route tree, bean reference hints and a graph editor over the XML text.",
+  "version": "0.2.27",
+  "publisher": "redb",
+  "license": "Apache-2.0",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#14121d",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/redbase-app/redb-route.git"
+  },
+  "homepage": "https://github.com/redbase-app/redb-route/tree/main/vscode-redb-route#readme",
+  "bugs": {
+    "url": "https://github.com/redbase-app/redb-route/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Visualization"
+  ],
+  "keywords": [
+    "redb",
+    "route",
+    "esb",
+    "eip",
+    "xml",
+    "integration",
+    "camel",
+    "graph"
+  ],
+  "extensionDependencies": [
+    "redhat.vscode-xml"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/*.route.xml",
+    "workspaceContains:**/*.redb-route.xml",
+    "onLanguage:xml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "redbRoute.graph",
+        "displayName": "redb Route Graph",
+        "selector": [
+          { "filenamePattern": "*.route.xml" },
+          { "filenamePattern": "*.redb-route.xml" }
+        ],
+        "priority": "option"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "redb",
+          "title": "redb",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "redb": [
+        {
+          "id": "redbRoutes",
+          "name": "Routes",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "redbRoutes",
+        "contents": "No redb route files in this workspace.\n[New Project](command:redbRoute.newProject)\nRoute files are *.route.xml documents whose root declares the urn:redb:route:1.0 namespace. [Read about the format](https://github.com/redbase-app/redb-route/blob/main/redb.Route.Xml/README.md).",
+        "when": "!redbRoute.hasRoutes"
+      }
+    ],
+    "commands": [
+      {
+        "command": "redbRoute.newProject",
+        "title": "redb: New Project",
+        "icon": "$(add)"
+      },
+      {
+        "command": "redbRoute.refreshTree",
+        "title": "redb Route: Refresh Route Tree",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "redbRoute.showMermaid",
+        "title": "redb Route: Show Mermaid Diagram"
+      },
+      {
+        "command": "redbRoute.openGraph",
+        "title": "redb Route: Open Route Graph",
+        "icon": "$(type-hierarchy-sub)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "redbRoute.newProject",
+          "when": "view == redbRoutes",
+          "group": "navigation@1"
+        },
+        {
+          "command": "redbRoute.refreshTree",
+          "when": "view == redbRoutes",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "redbRoute.openGraph",
+          "when": "resourceFilename =~ /\\.(redb-)?route\\.xml$/",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "redbRoute.showMermaid",
+          "when": "resourceExtname == .xml"
+        },
+        {
+          "command": "redbRoute.openGraph",
+          "when": "resourceExtname == .xml"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "node --test \"out/test/*.test.js\"",
+    "refresh-schema": "dotnet run --project ../redb.Route.Xml.CodeGen -f net10.0 -- xsd --out media"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

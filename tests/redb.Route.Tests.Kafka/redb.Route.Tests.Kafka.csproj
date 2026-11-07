@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- Transitive SSH.NET 2024.2.0 is flagged by GHSA-q939-rpr3-3284 (high). Pin the patched release. -->
+    <PackageReference Include="SSH.NET" />
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Kafka\redb.Route.Kafka.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Testcontainers.Kafka" />
+  </ItemGroup>
+
+</Project>
+

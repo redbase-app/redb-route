@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Mail\redb.Route.Mail.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Xml\redb.Route.Xml.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../redb.Route.Tests/Telemetry/RouteTelemetryProbe.cs" Link="Shared/RouteTelemetryProbe.cs" />
+  </ItemGroup>
+
+</Project>
+

@@ -1,0 +1,6 @@
+{
+  "Name": "SerialNumbers",
+  "Version": "1.1.0",
+  "EntryPoints": ["SerialNumbers.Core.dll"],
+  "Dependencies": []
+}

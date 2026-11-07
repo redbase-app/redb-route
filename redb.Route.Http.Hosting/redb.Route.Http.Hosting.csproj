@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Http.Hosting</PackageId>
+    <Description>Shared Kestrel HTTP hosting infrastructure for redb.Route: a multiplexing server manager used by HTTP-based transports (redb.Route.Http, redb.Route.As2, ...).</Description>
+    <PackageTags>esb;http;kestrel;hosting;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Http" />
+  </ItemGroup>
+  <!-- Kestrel host — needs the ASP.NET runtime. Deliberately does NOT reference the redb.Route core or any
+       connector: this is standalone hosting infrastructure that HTTP-based connectors build on. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

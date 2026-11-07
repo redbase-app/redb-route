@@ -1,0 +1,298 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Text;
+using Microsoft.Extensions.Logging;
+using MQTTnet;
+using MQTTnet.Formatter;
+using MQTTnet.Packets;
+using MQTTnet.Protocol;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.MqttNet.Connection;
+using redb.Route.Telemetry;
+
+namespace redb.Route.MqttNet;
+
+/// <summary>
+/// MQTT producer that publishes messages to a topic.
+/// The exchange body is serialized to UTF-8 bytes as the MQTT payload.
+/// </summary>
+internal sealed class MqttProducer : ConnectableProducer
+{
+    private readonly MqttEndpoint _endpoint;
+    private readonly MqttEndpointOptions _options;
+
+    private IMqttClient? _client;
+
+    internal MqttProducer(MqttEndpoint endpoint, MqttEndpointOptions options)
+    {
+        _endpoint = endpoint;
+        _options = options;
+    }
+
+    /// <inheritdoc />
+    protected override IEndpoint ProducerEndpoint => _endpoint;
+
+    /// <inheritdoc />
+    protected override string ProducerName => $"mqtt:{_options.Server}:{_options.Port}";
+
+    /// <inheritdoc/>
+    protected override async Task ConnectAsync(CancellationToken ct)
+    {
+        var brokerOptions = ResolveBrokerOptions();
+        var factory = _endpoint.MqttComponent.ClientFactory ?? new DefaultMqttClientFactory();
+
+        _client = await factory.CreateConnectedClientAsync(brokerOptions, _options.ClientId, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    protected override async Task DisconnectAsync(CancellationToken ct)
+    {
+        if (_client != null)
+        {
+            if (_client.IsConnected)
+            {
+                try
+                {
+                    await _client.DisconnectAsync(
+                        new MqttClientDisconnectOptionsBuilder()
+                            .WithReason(MqttClientDisconnectOptionsReason.NormalDisconnection)
+                            .Build(), ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) { Logger?.LogDebug(ex, "MQTT: error disconnecting during stop"); }
+            }
+
+            _client.Dispose();
+            _client = null;
+        }
+    }
+
+    /// <inheritdoc/>
+    public override async Task Process(IExchange exchange, CancellationToken ct = default)
+    {
+        if (_client == null || !_client.IsConnected)
+            throw new InvalidOperationException("MQTT producer is not connected. Call Start() first.");
+
+        var topic = ResolvePublishTopic(exchange);
+
+        using var activity = RouteTelemetryExtensions.StartTransportSpan(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{topic} publish", ActivityKind.Producer,
+            "messaging.system", "mqtt",
+            _endpoint.Uri.NormalizedKey,
+            destination: topic,
+            operation: "publish");
+
+        var payload = SerializeBody(exchange.In.Body);
+        var qos = ResolveQos(exchange);
+
+        var builder = new MqttApplicationMessageBuilder()
+            .WithTopic(topic)
+            .WithPayload(payload)
+            .WithQualityOfServiceLevel(qos)
+            .WithRetainFlag(ResolveRetain(exchange));
+
+        // MQTT 5.0 properties
+        var contentType = ResolveHeaderString(exchange, MqttHeaders.ContentType)
+                          ?? _options.ResolveOption(_options.ContentType, exchange);
+        if (contentType != null)
+            builder.WithContentType(contentType);
+
+        var responseTopic = ResolveHeaderString(exchange, MqttHeaders.ResponseTopic)
+                            ?? _options.ResolveOption(_options.ResponseTopic, exchange);
+        if (responseTopic != null)
+            builder.WithResponseTopic(responseTopic);
+
+        var correlationData = ResolveHeaderString(exchange, MqttHeaders.CorrelationData);
+        if (correlationData != null)
+            builder.WithCorrelationData(Encoding.UTF8.GetBytes(correlationData));
+
+        var expiryInterval = ResolveExpiryInterval(exchange);
+        if (expiryInterval > 0)
+            builder.WithMessageExpiryInterval((uint)expiryInterval);
+
+        // User properties from exchange headers. A copy: the trace context below is this send's, not the exchange's.
+        var userProps = exchange.In.Headers.TryGetValue(MqttHeaders.UserProperties, out var userPropsObj)
+                        && userPropsObj is Dictionary<string, string> headerProps
+            ? new Dictionary<string, string>(headerProps)
+            : null;
+
+        // The trace context travels in user properties, which exist only in MQTT 5: under 3.1.1 MQTTnet refuses
+        // them, so nothing is written. The write replaces a traceparent copied from an earlier hop.
+        if (_client.Options?.ProtocolVersion == MqttProtocolVersion.V500)
+        {
+            userProps ??= new Dictionary<string, string>();
+            RouteTelemetryExtensions.InjectTraceContext(activity, userProps,
+                static (props, name, value) => props[name] = value);
+        }
+
+        if (userProps is not null)
+        {
+            foreach (var (key, value) in userProps)
+                builder.WithUserProperty(key, new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes(value)));
+        }
+
+        var message = builder.Build();
+
+        try
+        {
+            await _client.PublishAsync(message, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            // Only our own token cancelling the publish is a stop; any other failure marks the span.
+            activity.RecordFailure(ex);
+            Logger?.LogError(ex, "MQTT publish failed: topic={Topic}, QoS={Qos}, server={Server}:{Port}, connected={IsConnected}",
+                topic, qos, _options.Server, _options.Port, _client?.IsConnected);
+            throw;
+        }
+
+        // Set result headers
+        exchange.In.Headers[MqttHeaders.Topic] = topic;
+        exchange.In.Headers[MqttHeaders.Qos] = (int)qos;
+        exchange.In.Headers[MqttHeaders.Retain] = ResolveRetain(exchange);
+
+        if (_options.Broker != null)
+            exchange.In.Headers[MqttHeaders.Broker] = _options.Broker;
+    }
+
+    private string ResolvePublishTopic(IExchange exchange)
+    {
+        // Only the route's own override: redbMqtt.topic is what the connector last received or sent, never a target.
+        if (exchange.In.Headers.TryGetValue(MqttHeaders.OverrideTopic, out var topicObj)
+            && topicObj is string topicStr && !string.IsNullOrEmpty(topicStr))
+            return topicStr;
+
+        return _options.ResolveOption(_endpoint.Topic, exchange) ?? _endpoint.Topic;
+    }
+
+    private MqttQualityOfServiceLevel ResolveQos(IExchange exchange)
+    {
+        // 1. The route's own override: redbMqtt.qos is what the connector last received or sent, never a setting.
+        //    An int from C#, or its text from markup (<setHeader value="1"/>); anything else is the route's mistake.
+        if (exchange.In.Headers.TryGetValue(MqttHeaders.OverrideQos, out var qosObj) && qosObj is not null)
+        {
+            var level = qosObj switch
+            {
+                int i => i,
+                string s when int.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) => parsed,
+                _ => -1
+            };
+            if (level is < 0 or > 2)
+                throw new InvalidOperationException(
+                    $"Header '{MqttHeaders.OverrideQos}' must be 0, 1 or 2 (an int or its text), got '{qosObj}' ({qosObj.GetType().Name}).");
+            return (MqttQualityOfServiceLevel)level;
+        }
+
+        // 2. Expression (e.g. "${body['qos']}")
+        if (!string.IsNullOrEmpty(_options.QosExpression))
+        {
+            var resolved = _options.ResolveOption(_options.QosExpression, exchange);
+            if (resolved != null && int.TryParse(resolved, out var exprQos))
+            {
+                return exprQos switch
+                {
+                    0 => MqttQualityOfServiceLevel.AtMostOnce,
+                    1 => MqttQualityOfServiceLevel.AtLeastOnce,
+                    2 => MqttQualityOfServiceLevel.ExactlyOnce,
+                    _ => MqttQualityOfServiceLevel.AtMostOnce
+                };
+            }
+        }
+
+        // 3. Static default
+        return _options.Qos switch
+        {
+            0 => MqttQualityOfServiceLevel.AtMostOnce,
+            1 => MqttQualityOfServiceLevel.AtLeastOnce,
+            2 => MqttQualityOfServiceLevel.ExactlyOnce,
+            _ => MqttQualityOfServiceLevel.AtMostOnce
+        };
+    }
+
+    private bool ResolveRetain(IExchange exchange)
+    {
+        // Only the route's own override: redbMqtt.retain is the flag of the last receive or publish.
+        // A bool from C#, or its text from markup (<setHeader value="true"/>).
+        if (exchange.In.Headers.TryGetValue(MqttHeaders.OverrideRetain, out var retainObj) && retainObj is not null)
+        {
+            return retainObj switch
+            {
+                bool b => b,
+                string s when bool.TryParse(s, out var parsed) => parsed,
+                _ => throw new InvalidOperationException(
+                    $"Header '{MqttHeaders.OverrideRetain}' must be true or false (a bool or its text), got '{retainObj}' ({retainObj.GetType().Name}).")
+            };
+        }
+
+        return _options.Retain;
+    }
+
+    private int ResolveExpiryInterval(IExchange exchange)
+    {
+        // 1. Header override
+        if (exchange.In.Headers.TryGetValue(MqttHeaders.MessageExpiryInterval, out var expiryObj) && expiryObj is int expiryInt)
+            return expiryInt;
+
+        // 2. Expression (e.g. "${body['ttl']}")
+        if (!string.IsNullOrEmpty(_options.MessageExpiryIntervalExpression))
+        {
+            var resolved = _options.ResolveOption(_options.MessageExpiryIntervalExpression, exchange);
+            if (resolved != null && int.TryParse(resolved, out var exprExpiry))
+                return exprExpiry;
+        }
+
+        // 3. Static default
+        return _options.MessageExpiryInterval;
+    }
+
+    private static string? ResolveHeaderString(IExchange exchange, string header)
+    {
+        if (exchange.In.Headers.TryGetValue(header, out var val) && val is string s && !string.IsNullOrEmpty(s))
+            return s;
+        return null;
+    }
+
+    private static byte[] SerializeBody(object? body)
+    {
+        return body switch
+        {
+            null => [],
+            byte[] bytes => bytes,
+            ReadOnlyMemory<byte> rom => rom.ToArray(),
+            ArraySegment<byte> seg => seg.ToArray(),
+            string str => Encoding.UTF8.GetBytes(str),
+            _ => Encoding.UTF8.GetBytes(body.ToString() ?? string.Empty)
+        };
+    }
+
+    private MqttBrokerOptions ResolveBrokerOptions()
+    {
+        if (_options.Broker != null)
+        {
+            var registry = _endpoint.MqttComponent.BrokerRegistry
+                ?? throw new InvalidOperationException(
+                    $"Broker '{_options.Broker}' is specified but no IMqttBrokerRegistry is registered.");
+
+            return registry.GetOptions(_options.Broker);
+        }
+
+        if (_options.Server != null)
+        {
+            return new MqttBrokerOptions
+            {
+                Server = _options.Server,
+                Port = _options.Port > 0 ? _options.Port : 1883,
+                Username = _options.Username,
+                Password = _options.Password,
+                ClientId = _options.ClientId,
+                UseTls = _options.UseTls,
+                KeepAlive = _options.KeepAlive,
+                CleanSession = _options.CleanSession
+            };
+        }
+
+        throw new InvalidOperationException("Either Broker or Server must be configured.");
+    }
+}

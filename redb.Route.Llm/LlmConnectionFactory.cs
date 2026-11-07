@@ -1,0 +1,173 @@
+using Microsoft.Extensions.Logging;
+using redb.Route.Llm.Providers;
+using redb.Route.Core;
+
+namespace redb.Route.Llm;
+
+/// <summary>
+/// Connection factory configuration for the LLM connector. Register in the route
+/// registry and reference by name in endpoint URIs (<c>connectionFactory=myFactory</c>
+/// or as the URI host: <c>llm://myFactory</c>).
+/// <para>
+/// Centralises model identity, version, credentials and per-provider tuning so
+/// they are kept out of the URI.
+/// </para>
+/// </summary>
+public sealed class LlmConnectionFactory
+{
+    /// <summary>
+    /// Logical name of this factory (the registry key, e.g. <c>"claude"</c>).
+    /// Set by <see cref="Extensions.LlmServiceCollectionExtensions"/> when the factory is registered.
+    /// Surfaced as the <c>llm.factory</c> tag on metrics and traces.
+    /// </summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Provider identifier: "anthropic", "openai", "azure-openai", "ollama", "stub".</summary>
+    public string Provider { get; set; } = "stub";
+
+    /// <summary>Model identifier passed to the provider (e.g. "claude-haiku-4.5", "gpt-4o-mini").</summary>
+    public string ModelId { get; set; } = "stub-model";
+
+
+    /// <summary>
+    /// Optional Anthropic contract-tier override (<c>legacy</c>/<c>transitional</c>/<c>modern</c>).
+    /// Escape-hatch for self-hosted ids, proxies, or model snapshots the built-in generation
+    /// table does not recognise. When unset, the tier is inferred from <see cref="ModelId"/>
+    /// (unknown ids default to <c>modern</c> — no removed sampling knobs are sent). Anthropic-only;
+    /// ignored by OpenAI-compatible providers. See <see cref="Providers.AnthropicModelProfile"/>.
+    /// </summary>
+    public string? ModelContractTier { get; set; }
+
+    /// <summary>API key. Prefer <see cref="ApiKeySecretRef"/> for production deployments.</summary>
+    [Sensitive]
+    public string? ApiKey { get; set; }
+
+    /// <summary>Reference to a secret store entry — resolved at <see cref="Build"/> time.</summary>
+    public string? ApiKeySecretRef { get; set; }
+
+    /// <summary>Optional base URL override (Azure OpenAI, OpenAI-compatible servers, local Ollama).</summary>
+    public Uri? BaseUrl { get; set; }
+
+    /// <summary>Default sampling temperature.</summary>
+    public double? Temperature { get; set; }
+
+    /// <summary>Default max output tokens.</summary>
+    public int? MaxTokens { get; set; }
+
+    /// <summary>
+    /// Effort level for models that think by default (Anthropic Claude 4.6+ / Sonnet 5 / Opus 5:
+    /// <c>low</c>, <c>medium</c>, <c>high</c>, <c>xhigh</c>, <c>max</c>; sent as
+    /// <c>output_config.effort</c>). <c>null</c> — the provider's default (<c>high</c> on
+    /// Anthropic). Thinking tokens count against <see cref="MaxTokens"/>: at the default effort
+    /// a hard question can spend the whole budget on thinking and return NO text (seen
+    /// 2026-09-07 with max_tokens 4096 on Sonnet 5) — <c>medium</c> or <c>low</c> keeps the
+    /// answer inside the budget. Models without the effort ladder (Haiku 4.5) reject the field
+    /// with 400, so set it per factory, not globally.
+    /// </summary>
+    public string? Effort { get; set; }
+
+    /// <summary>Default top-p sampling parameter.</summary>
+    public double? TopP { get; set; }
+
+    /// <summary>
+    /// Limit of one call to the model, in milliseconds (default: 600 000, ten minutes, like the official Anthropic
+    /// and OpenAI SDKs; at least 1 000). It covers the whole call, waiting for the answer and reading it, on every
+    /// provider and whatever client sends it; running out throws <see cref="Providers.LlmTimeoutException"/>. A
+    /// non-streaming answer from a thinking model is minutes of generation, so set it to the longest answer you
+    /// expect. A streamed call is limited the same way, from the send to the last piece; a stream's silence has a
+    /// limit of its own, <see cref="StreamIdleTimeoutMs"/>. A client passed in by the host keeps its own
+    /// <see cref="HttpClient.Timeout"/> as well.
+    /// </summary>
+    public int RequestTimeoutMs { get; set; } = 600_000;
+
+    /// <summary>
+    /// Longest silence of a streamed call, in milliseconds: how long the provider may send nothing at all — no text,
+    /// no thinking, not even a keep-alive comment or <c>ping</c> — before the call fails with
+    /// <see cref="Providers.LlmTimeoutException"/> (<see cref="Providers.LlmTimeoutKind.StreamIdle"/>). It counts only
+    /// the waits on the provider, not the time the reader spends between pieces. Off by default (<c>null</c>): the
+    /// whole call is still limited by <see cref="RequestTimeoutMs"/>, and some reasoning models stream nothing for
+    /// minutes before their first token. Must be positive when set.
+    /// </summary>
+    public int? StreamIdleTimeoutMs
+    {
+        get => _streamIdleTimeoutMs;
+        set
+        {
+            if (value is <= 0)
+                throw new ArgumentOutOfRangeException(nameof(value), value,
+                    "StreamIdleTimeoutMs must be positive; leave it unset (null) to turn the silence limit off.");
+            _streamIdleTimeoutMs = value;
+        }
+    }
+
+    private int? _streamIdleTimeoutMs;
+
+    // Retries was removed (Ф11 мелочи): it was never read, and the Llm engine's resilience
+    // policy is deliberately fallback-to-another-factory, not retry-the-same-provider.
+
+    /// <summary>
+    /// Optional pre-built provider instance. When set, <see cref="Build"/> returns it
+    /// without attempting to construct one — useful for tests and custom providers.
+    /// </summary>
+    public ILlmProvider? PrebuiltProvider { get; set; }
+
+    /// <summary>
+    /// Logger factory used by built providers for diagnostics (e.g. Anthropic sampling-knob
+    /// drops). Set automatically at registration by <c>AddLlmConnectionFactory</c> from DI;
+    /// null in bare test setups (providers then fall back to activity events only).
+    /// </summary>
+    public ILoggerFactory? LoggerFactory { get; set; }
+
+    /// <summary>
+    /// Builds an <see cref="ILlmProvider"/> from this configuration. Resolution order:
+    /// <list type="number">
+    ///   <item><see cref="PrebuiltProvider"/> if set;</item>
+    ///   <item>built-in provider matching <see cref="Provider"/>;</item>
+    ///   <item><see cref="NotSupportedException"/> for unknown providers.</item>
+    /// </list>
+    /// </summary>
+    public ILlmProvider Build()
+    {
+        if (PrebuiltProvider is not null) return PrebuiltProvider;
+        if (_cached is not null) return _cached;
+        // Cache the built provider so its HttpClient is reused, not minted (and leaked) per call. Providers are
+        // stateless per request and HttpClient is thread-safe, so one instance per factory is correct.
+        lock (_buildLock)
+            return _cached ??= BuildCore();
+    }
+
+    private ILlmProvider? _cached;
+    private readonly object _buildLock = new();
+
+    private ILlmProvider BuildCore()
+    {
+        return Provider?.ToLowerInvariant() switch
+        {
+            "stub" => new StubProvider(this),
+            "anthropic" => new AnthropicProvider(this),
+
+            // All providers below speak the OpenAI Chat Completions protocol.
+            // Default base URLs are resolved by OpenAiProvider.ResolveDefaultBaseUrl;
+            // override LlmConnectionFactory.BaseUrl for self-hosted/proxy setups.
+            "openai" or
+            "groq" or
+            "cerebras" or
+            "openrouter" or
+            "gemini" or "google" or
+            "github-models" or "github" or
+            "mistral" or
+            "together" or "togetherai" or
+            "huggingface" or "hf" or
+            "deepseek" or
+            "ollama" or
+            "lmstudio"
+                => OpenAiProvider.Create(this),
+
+            _ => throw new NotSupportedException(
+                $"Unknown LLM provider '{Provider}'. Built-in providers: stub, anthropic, " +
+                $"openai, groq, cerebras, openrouter, gemini, github-models, mistral, together, " +
+                $"huggingface, deepseek, ollama, lmstudio. " +
+                $"Use {nameof(PrebuiltProvider)} to plug a custom provider.")
+        };
+    }
+}

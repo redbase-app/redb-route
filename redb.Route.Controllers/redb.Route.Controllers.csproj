@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Controllers</PackageId>
+    <Description>Transport-agnostic controller dispatch for redb.Route ESB framework. Provides RedbController base class, attribute-based routing, parameter binding, and ControllerDispatcherProcessor.</Description>
+    <PackageTags>esb;messaging;controllers;dispatch;routing;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Controllers" />
+    <InternalsVisibleTo Include="redb.Route.Tests.Core" />
+    <InternalsVisibleTo Include="redb.Tsak.Tests" />
+    <InternalsVisibleTo Include="redb.Identity.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

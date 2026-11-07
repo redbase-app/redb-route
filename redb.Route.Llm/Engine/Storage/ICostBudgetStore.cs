@@ -1,0 +1,59 @@
+using System.Collections.Concurrent;
+using redb.Route.Abstractions;
+using redb.Route.Llm.Engine.Governance;
+
+namespace redb.Route.Llm.Engine.Storage;
+
+/// <summary>
+/// Persists running cost / token usage per conversation so that an
+/// <see cref="IBudgetEnforcer"/> implementation can enforce budgets across multiple agent runs
+/// (not just within one).
+/// <para>
+/// <see cref="StoreBudgetEnforcer"/> is that consumer: <c>AddRedbLlmStorage()</c> registers it in
+/// place of the shipped per-run defaults, and it reads this store before each run and adds to it after
+/// each iteration. Implementations must be safe for concurrent updates.
+/// </para>
+/// <para>
+/// The optional <c>exchange</c> parameter on every method carries the route
+/// pipeline's current exchange; REDB-backed implementations resolve a
+/// per-exchange <see cref="redb.Core.IRedbService"/> through
+/// <c>IRouteContext.GetRedbService(name, exchange)</c> using the named-redb
+/// hint stored in <see cref="LlmKeys.RedbName"/>. In-memory implementations
+/// ignore it.
+/// </para>
+/// </summary>
+public interface ICostBudgetStore
+{
+    /// <summary>Returns the running total for the conversation, or <see cref="AgentUsage.Zero"/> when unknown.</summary>
+    ValueTask<AgentUsage> GetUsageAsync(string conversationId, IExchange? exchange = null, CancellationToken ct = default);
+
+    /// <summary>Atomically adds the iteration usage to the running total and returns the updated total.</summary>
+    ValueTask<AgentUsage> AddAsync(string conversationId, AgentUsage delta, IExchange? exchange = null, CancellationToken ct = default);
+
+    /// <summary>Resets the running total — used after a billing period rollover or by tests.</summary>
+    ValueTask ResetAsync(string conversationId, IExchange? exchange = null, CancellationToken ct = default);
+}
+
+/// <summary>In-memory cost/token store. Replace with the redb-backed implementation in production.</summary>
+public sealed class InMemoryCostBudgetStore : ICostBudgetStore
+{
+    private readonly ConcurrentDictionary<string, AgentUsage> _totals = new(StringComparer.Ordinal);
+
+    /// <inheritdoc />
+    public ValueTask<AgentUsage> GetUsageAsync(string conversationId, IExchange? exchange = null, CancellationToken ct = default) =>
+        ValueTask.FromResult(_totals.TryGetValue(conversationId, out var u) ? u : AgentUsage.Zero);
+
+    /// <inheritdoc />
+    public ValueTask<AgentUsage> AddAsync(string conversationId, AgentUsage delta, IExchange? exchange = null, CancellationToken ct = default)
+    {
+        var updated = _totals.AddOrUpdate(conversationId, delta, (_, current) => current.Add(delta));
+        return ValueTask.FromResult(updated);
+    }
+
+    /// <inheritdoc />
+    public ValueTask ResetAsync(string conversationId, IExchange? exchange = null, CancellationToken ct = default)
+    {
+        _totals.TryRemove(conversationId, out _);
+        return ValueTask.CompletedTask;
+    }
+}

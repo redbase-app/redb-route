@@ -1,0 +1,19 @@
+# Build outputs
+bin/
+obj/
+
+# .tpkg packaging output
+output/
+
+# Keys and certificates of a test account never go into the repository
+*.pfx
+*.p12
+*.jks
+*.cer
+*.crt
+*.pem
+
+# The deployment's secrets and what it mounts: only .env.example is kept
+.env
+deploy/modules/
+deploy/keys/

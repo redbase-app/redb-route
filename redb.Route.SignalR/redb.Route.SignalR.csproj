@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.SignalR</PackageId>
+    <Description>SignalR transport for redb.Route ESB framework. Provides Kestrel-based SignalR Hub consumer (server) and HubConnection-based producer (client) with dynamic method dispatch, group management, and JSON/MessagePack support.</Description>
+    <PackageTags>esb;messaging;signalr;realtime;hub;websocket;rpc;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.SignalR" />
+    <InternalsVisibleTo Include="redb.Route.Tests.Controllers" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.Http.Hosting\redb.Route.Http.Hosting.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MessagePack" />
+  </ItemGroup>
+  <!-- Ф14 волна 4: messagePack=true used to add the JSON protocol, so the option never worked.
+       Both protocols are registered now, JSON staying the base so existing clients keep working.
+       These packages share Microsoft.AspNetCore.SignalR.Common with the shared framework the hub runs on,
+       so their major follows the target framework: a newer major puts its own Common next to the
+       framework's older hub, and on net9.0 that hub closed every connection.
+       The version of each line comes from the redb security baseline (Directory.Build.targets at the
+       repository root), which pins these packages per target framework. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

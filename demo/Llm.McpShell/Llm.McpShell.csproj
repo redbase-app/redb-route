@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>redb.Route.Demos.LlmMcpShell</RootNamespace>
+    <AssemblyName>redb.Route.Demos.LlmMcpShell</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="redb.Route" />
+    <PackageReference Include="redb.Route.Http" />
+    <PackageReference Include="redb.Route.Llm" />
+    <PackageReference Include="redb.Route.Llm.Abstractions" />
+    <PackageReference Include="redb.Route.Llm.Mcp" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+
+</Project>

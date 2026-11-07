@@ -1,0 +1,8 @@
+src/**
+out/test/**
+tsconfig.json
+node_modules/**
+.gitignore
+**/*.map
+.vscode/**
+media/icon.svg

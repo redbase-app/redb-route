@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.TestKit</PackageId>
+    <Description>Test kit for redb.Route: AdviceWith (ReplaceFrom, MockEndpoints, weaving), rich mock expectations, NotifyBuilder and send helpers. Test routes without brokers, with any test framework.</Description>
+    <PackageTags>esb;messaging;testing;mock;advicewith;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.TestKit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

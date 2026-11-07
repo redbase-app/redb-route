@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Sftp</PackageId>
+    <Description>SFTP transport for redb.Route ESB framework. Polling consumer and atomic producer with SSH.NET — key/password auth, proxy, idempotency, glob filtering, temp-file upload, chmod, recursive directories.</Description>
+    <PackageTags>esb;messaging;sftp;ssh;file-transfer;polling;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Sftp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\redb.Route.GenericFile\redb.Route.GenericFile.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 2025.1.0 is flagged by NU1903 / GHSA-q939-rpr3-3284 (high). 2026.0.0 is the patched release. -->
+    <PackageReference Include="SSH.NET" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

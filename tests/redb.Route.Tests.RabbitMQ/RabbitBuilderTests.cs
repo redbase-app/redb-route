@@ -1,0 +1,325 @@
+using redb.Route.Core;
+using redb.Route.RabbitMQ;
+using redb.Route.Expressions;
+
+namespace redb.Route.Tests.RabbitMQ;
+
+public class RabbitBuilderTests
+{
+    private static ConstantExpression C(string s) => new(s);
+    // ── Factory ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void Queue_StartsWithRabbitmqScheme()
+    {
+        var uri = Rabbit.Queue("orders").Build();
+        uri.Should().StartWith("rabbitmq:orders");
+    }
+
+    [Fact]
+    public void NullQueue_Throws()
+    {
+        var act = () => Rabbit.Queue(null!);
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void An_empty_queue_name_points_to_the_exchange_entry()
+    {
+        var act = () => Rabbit.Queue("");
+        act.Should().Throw<ArgumentException>().WithMessage("*Rabbit.Exchange(name, type)*");
+    }
+
+    [Fact]
+    public void Exchange_builds_the_uri_of_an_endpoint_without_a_queue_name()
+    {
+        string uri = Rabbit.Exchange("honest.ui", "fanout").ConnectionFactory("f").Declare();
+
+        uri.Should().StartWith("rabbitmq:?");
+        var endpoint = (RabbitMQEndpoint)new RabbitMQComponent().CreateEndpoint(EndpointUriParser.Parse(uri));
+        endpoint.QueueName.Should().BeEmpty();
+        endpoint.EndpointOptions.Exchange.Should().Be("honest.ui");
+        endpoint.EndpointOptions.ExchangeType.Should().Be("fanout");
+        endpoint.EndpointOptions.Declare.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Exchange_requires_a_name()
+    {
+        var act = () => Rabbit.Exchange(" ");
+        act.Should().Throw<ArgumentException>();
+    }
+
+    // ── Connection ──────────────────────────────────────────────────
+
+    [Fact]
+    public void Host_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").Host(C("rabbit1")).Build();
+        uri.Should().Contain("host=rabbit1");
+    }
+
+    [Fact]
+    public void PublisherConnection_SetsParam_and_is_off_unless_asked()
+    {
+        Rabbit.Queue("q").PublisherConnection().Build().Should().Contain("publisherConnection=true");
+        Rabbit.Queue("q").Build().Should().NotContain("publisherConnection");
+    }
+
+    [Fact]
+    public void Tls_and_login_settings_round_trip_through_the_uri()
+    {
+        var uri = Rabbit.Queue("q").Host(C("h")).Ssl(certPath: C("client.pfx"), certPassphrase: C("pw"))
+            .SslCaCertPath(C("ca.pem"))
+            .SslProtocols(System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13)
+            .RevocationMode(System.Security.Cryptography.X509Certificates.X509RevocationMode.Online, softFail: true)
+            .AuthMechanism(RabbitMQAuthMechanism.External)
+            .Build();
+
+        var options = ((RabbitMQEndpoint)new RabbitMQComponent().CreateEndpoint(EndpointUriParser.Parse(uri))).EndpointOptions;
+
+        options.SslCaCertPath.Should().Be("ca.pem");
+        options.SslProtocols.Should().Be(System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13);
+        options.RevocationMode.Should().Be(System.Security.Cryptography.X509Certificates.X509RevocationMode.Online);
+        options.RevocationSoftFail.Should().BeTrue();
+        options.AuthMechanism.Should().Be(RabbitMQAuthMechanism.External);
+    }
+
+    [Fact]
+    public void Port_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").Port(5673).Build();
+        uri.Should().Contain("port=5673");
+    }
+
+    [Fact]
+    public void Username_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").Username(C("admin")).Build();
+        uri.Should().Contain("username=admin");
+    }
+
+    [Fact]
+    public void VirtualHost_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").VirtualHost(C("/staging")).Build();
+        uri.Should().Contain("virtualHost=");
+    }
+
+    // ── Exchange ────────────────────────────────────────────────────
+
+    [Fact]
+    public void Exchange_SetsNameParam()
+    {
+        var uri = Rabbit.Queue("q").Exchange(C("events")).Build();
+        uri.Should().Contain("exchange=events");
+    }
+
+    [Fact]
+    public void Exchange_WithType_SetsBothParams()
+    {
+        var uri = Rabbit.Queue("q").Exchange(C("events"), "topic").Build();
+        uri.Should().Contain("exchange=events");
+        uri.Should().Contain("exchangeType=topic");
+    }
+
+    [Fact]
+    public void Declare_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").Declare().Build();
+        uri.Should().Contain("declare=true");
+    }
+
+    // ── Queue ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void RoutingKey_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").RoutingKey(C("order.*")).Build();
+        uri.Should().Contain("routingKey=order.%2A");
+    }
+
+    [Fact]
+    public void AutoDelete_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").AutoDelete().Build();
+        uri.Should().Contain("autoDelete=true");
+    }
+
+    [Fact]
+    public void Exclusive_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").Exclusive().Build();
+        uri.Should().Contain("exclusive=true");
+    }
+
+    // ── Consumer ────────────────────────────────────────────────────
+
+    [Fact]
+    public void ConcurrentConsumers_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").ConcurrentConsumers(4).Build();
+        uri.Should().Contain("concurrentConsumers=4");
+    }
+
+    [Fact]
+    public void PrefetchCount_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").PrefetchCount(50).Build();
+        uri.Should().Contain("prefetchCount=50");
+    }
+
+    [Fact]
+    public void Transacted_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").Transacted().Build();
+        uri.Should().Contain("transacted=true");
+    }
+
+    [Fact]
+    public void Transacted_false_is_written_out_to_send_at_once_inside_a_block()
+    {
+        var uri = Rabbit.Queue("q").Transacted(false).Build();
+        uri.Should().Contain("transacted=false");
+    }
+
+    [Fact]
+    public void Transacted_left_unset_is_not_written_so_the_producer_follows_the_block()
+    {
+        var uri = Rabbit.Queue("q").Build();
+        uri.Should().NotContain("transacted");
+    }
+
+    [Fact]
+    public void AckModeAuto_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").AckMode(AckMode.Auto).Build();
+        uri.Should().Contain("ackMode=auto");
+    }
+
+    [Fact]
+    public void AckMode_OmittedByDefault()
+    {
+        var uri = Rabbit.Queue("q").Build();
+        uri.Should().NotContain("ackMode");
+    }
+
+    // ── Queue limits ────────────────────────────────────────────────
+
+    [Fact]
+    public void DeadLetterExchange_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").DeadLetterExchange(C("dlx")).Build();
+        uri.Should().Contain("deadLetterExchange=dlx");
+    }
+
+    [Fact]
+    public void QueueType_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").QueueType("quorum").Build();
+        uri.Should().Contain("queueType=quorum");
+    }
+
+    // ── SSL ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Ssl_SetsParam()
+    {
+        var uri = Rabbit.Queue("q").Ssl().Build();
+        uri.Should().Contain("ssl=true");
+    }
+
+    [Fact]
+    public void SslWithCert_SetsParams()
+    {
+        var uri = Rabbit.Queue("q").Ssl(C("rabbit.example.com"), C("/certs/client.pfx"), C("pass")).Build();
+        uri.Should().Contain("ssl=true");
+        uri.Should().Contain("sslServerName=rabbit.example.com");
+        uri.Should().Contain("sslCertPath=");
+    }
+
+    // ── Conversion ──────────────────────────────────────────────────
+
+    [Fact]
+    public void ImplicitConversion_ReturnsUri()
+    {
+        string uri = Rabbit.Queue("orders").Host(C("rabbit1")).Declare();
+        uri.Should().StartWith("rabbitmq:orders?");
+    }
+
+    [Fact]
+    public void ToString_ReturnsSameAsBuild()
+    {
+        var builder = Rabbit.Queue("q").Host(C("rabbit1")).Exchange(C("ex"), "topic");
+        builder.ToString().Should().Be(builder.Build());
+    }
+
+    // ── Full chain ──────────────────────────────────────────────────
+
+    [Fact]
+    public void FullChain_BuildsCorrectUri()
+    {
+        var uri = Rabbit.Queue("orders")
+            .Host(C("rabbit1"))
+            .Port(5672)
+            .Username(C("admin"))
+            .Password(C("secret"))
+            .Exchange(C("events"), "topic")
+            .RoutingKey(C("order.*"))
+            .Declare()
+            .ConcurrentConsumers(4)
+            .PrefetchCount(20)
+            .Build();
+
+        uri.Should().StartWith("rabbitmq:orders?");
+        uri.Should().Contain("host=rabbit1");
+        uri.Should().Contain("exchange=events");
+        uri.Should().Contain("exchangeType=topic");
+        uri.Should().Contain("routingKey=order.%2A");
+        uri.Should().Contain("declare=true");
+        uri.Should().Contain("concurrentConsumers=4");
+    }
+
+    // ── Round-trip ──────────────────────────────────────────────────
+
+    [Fact]
+    public void RoundTrip_ParseAndReconstruct()
+    {
+        var original = Rabbit.Queue("q").Host(C("rabbit1")).Exchange(C("ex")).Build();
+        var parsed = EndpointUriParser.Parse(original);
+        parsed.Scheme.Should().Be("rabbitmq");
+        parsed.Path.Should().Be("q");
+        parsed.RawParameters["host"].Should().Be("rabbit1");
+        parsed.RawParameters["exchange"].Should().Be("ex");
+    }
+
+    // ── A string is a string ────────────────────────────────────────
+
+    /// <summary>
+    /// The string overloads store the string. They used to wrap it in a StringExpression and
+    /// unwrap it again, so the value went through the expression compiler for nothing: a
+    /// password such as "secret(123" — "secret(" reads as a function call — threw at build time.
+    /// </summary>
+    [Theory]
+    [InlineData("secret(123")]
+    [InlineData("p@ss>word")]
+    [InlineData("eu-west-1")]
+    [InlineData("a/b/c")]
+    [InlineData("dGVzdC1zZWNyZXQ==")]
+    public void StringOverloads_KeepAnyStringLiteral(string value)
+    {
+        var act = () => Rabbit.Queue("q").Password(value).RoutingKey(value).Host(value).Build();
+
+        act.Should().NotThrow();
+        Uri.UnescapeDataString(act()).Should().Contain("password=" + value);
+    }
+
+    [Fact]
+    public void StringOverload_WithPlaceholder_IsStillResolvedPerMessage()
+    {
+        // Build() escapes query values; the placeholder survives the round trip untouched and is
+        // resolved per message by the endpoint options, exactly as before.
+        var uri = Rabbit.Queue("q").RoutingKey("${header.region}-key").Build();
+        Uri.UnescapeDataString(uri).Should().Contain("routingKey=${header.region}-key");
+    }
+}

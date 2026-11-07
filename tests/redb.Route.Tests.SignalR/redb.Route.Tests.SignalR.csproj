@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.SignalR\redb.Route.SignalR.csproj" />
+    <ProjectReference Include="..\..\redb.Route.SignalR.StackExchangeRedis\redb.Route.SignalR.StackExchangeRedis.csproj" />
+    <!-- The shared listener scenarios put an HTTP context next to the hub context, as a Tsak worker does. -->
+    <ProjectReference Include="..\..\redb.Route.Http\redb.Route.Http.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <!-- The SignalR package majors follow the target framework, as in redb.Route.SignalR: the security baseline
+       (Directory.Build.targets) gives each target framework its version. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- One span capture for the smoke tests: the test root trace keeps parallel test classes out. -->
+    <Compile Include="../Shared/SpanCapture.cs" Link="Shared/SpanCapture.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/TestPorts.cs" Link="Shared/TestPorts.cs" />
+    <Compile Include="../redb.Route.Tests/Telemetry/RouteTelemetryProbe.cs" Link="Shared/RouteTelemetryProbe.cs" />
+  </ItemGroup>
+</Project>
+

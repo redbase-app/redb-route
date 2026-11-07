@@ -1,0 +1,21 @@
+* Objects and authorities redb.Route.Tests.IbmMq uses that the IBM MQ developer image (9.4.5.0) does not create.
+* The image runs every *.mqsc file in /etc/mqm when the queue manager starts; REPLACE keeps it repeatable.
+* The developer configuration already gives user app DEV.** queues and topics (BROWSE GET INQ PUT, PUB SUB),
+* DEV.APP.MODEL.QUEUE, and creates DEV.QUEUE.1-3 and DEV.BASE.TOPIC (topic string dev/).
+
+* IbmMqIntegrationTests (Rpc_RequestReply_ReturnsResponse, Producer_ForwardsCustomHeaders, ConcurrentConsumers_*),
+* IbmMqXmsListenerTests (Listener_ConcurrentConsumers_*, Listener_Transacted_*): DEV.QUEUE.4.
+DEFINE QLOCAL(DEV.QUEUE.4) REPLACE
+
+* IbmMqIntegrationTests (BinaryPayload_RoundTrip, Roundtrip_MultipleMessages), IbmMqTracePropagationTests: DEV.QUEUE.5.
+DEFINE QLOCAL(DEV.QUEUE.5) REPLACE
+
+* Request-reply with a temporary reply queue: the MQ-classes producer opens SYSTEM.DEFAULT.MODEL.QUEUE, and so does
+* XMS for a temporary queue (IbmMqIntegrationTests.Rpc_*, IbmMqHeaderFilterStrategyTests.OnARequestReplyProducer_*,
+* OnAReplyingConsumer_*, IbmMqXmsListenerTests.Listener_Rpc*). The creator of the dynamic queue owns it.
+SET AUTHREC PROFILE(SYSTEM.DEFAULT.MODEL.QUEUE) OBJTYPE(QUEUE) PRINCIPAL('app') AUTHADD(DSP,GET,PUT,INQ)
+
+* IbmMqIntegrationTests.Topic_PublishSubscribe publishes to DEV/TEST/EVENTS; DEV.BASE.TOPIC covers dev/ only.
+* A topic object for the node DEV (no trailing slash: 'DEV/' would be an empty level under it) falls under the
+* DEV.** topic authority of user app.
+DEFINE TOPIC(DEV.TEST.TOPIC) TOPICSTR('DEV') REPLACE

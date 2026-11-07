@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>redb.Route</PackageId>
+    <Description>Lightweight, async-first ESB framework inspired by Apache Camel. Define message routes with fluent C# DSL, connect Kafka, RabbitMQ, Redis and more.</Description>
+    <PackageTags>esb;messaging;routing;kafka;rabbitmq;camel;pipeline;async</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" Condition="Exists('README.md')" />
+    <InternalsVisibleTo Include="redb.Route.Tests" />
+    <InternalsVisibleTo Include="redb.Route.Tests.Core" />
+    <InternalsVisibleTo Include="redb.Route.TestKit" />
+    <InternalsVisibleTo Include="redb.Route.Tests.TestKit" />
+    <InternalsVisibleTo Include="redb.Route.Xml" />
+    <InternalsVisibleTo Include="redb.Route.Cache" />
+    <InternalsVisibleTo Include="redb.Route.S3" />
+    <InternalsVisibleTo Include="redb.Route.Tests.S3" />
+    <InternalsVisibleTo Include="redb.Route.Firebase" />
+    <InternalsVisibleTo Include="redb.Route.DataFormats.XmlJson" />
+    <InternalsVisibleTo Include="redb.Route.Tests.DataFormats" />
+    <InternalsVisibleTo Include="redb.Route.Tests.Firebase" />
+    <InternalsVisibleTo Include="redb.Route.Tests.Xml" />
+    <InternalsVisibleTo Include="redb.Route.Xml.CodeGen" />
+    <InternalsVisibleTo Include="redb.Route.XPath2" />
+    <InternalsVisibleTo Include="redb.Route.Tests.XPath2" />
+  </ItemGroup>
+
+  <!-- Microsoft.Extensions: one version for every target framework (Directory.Packages.props). -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" />
+  </ItemGroup>
+
+  <!-- Cross-framework dependencies -->
+  <ItemGroup>
+    <PackageReference Include="JsonPath.Net" />
+    <PackageReference Include="JsonSchema.Net" />
+  </ItemGroup>
+
+</Project>
+
+

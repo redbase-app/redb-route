@@ -1,0 +1,58 @@
+using System.Diagnostics;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.S3;
+using redb.Route.Telemetry;
+using redb.Route.Tests.Shared;
+using Xunit.Abstractions;
+
+namespace redb.Route.Tests.S3;
+
+/// <summary>
+/// Smoke test for the P1 transport span opened by <see cref="S3Producer"/>.
+/// Requires the S3 test store (docker-compose.tests.yml service s3) on localhost:9000.
+/// </summary>
+[Trait("Category", "Integration")]
+public sealed class S3TelemetrySmokeTests
+{
+    private readonly ITestOutputHelper _output;
+    public S3TelemetrySmokeTests(ITestOutputHelper output) => _output = output;
+
+    [Fact]
+    public async Task S3Producer_EmitsTransportSpanWithS3Tags()
+    {
+        const string Bucket = "integration-tests";
+        var qs = "serviceUrl=http://localhost:9000&accessKey=minioadmin&secretKey=minioadmin" +
+                 "&region=us-east-1&forcePathStyle=true";
+        var uri = EndpointUriParser.Parse($"s3://{Bucket}?{qs}");
+        var endpoint = (S3Endpoint)new S3Component().CreateEndpoint(uri);
+        var producer = endpoint.CreateProducer();
+        await producer.Start();
+
+        using var capture = new SpanCapture();   // this test's spans only
+
+        var ex = new Exchange(new Message("hello"));
+        ex.In.Headers[S3Headers.Key] = $"smoke-{Guid.NewGuid():N}.txt";
+        try
+        {
+            await producer.Process(ex);
+        }
+        catch (Exception ioex)
+        {
+            _output.WriteLine($"S3 Put failed (acceptable for smoke if bucket missing): {ioex.GetType().Name}: {ioex.Message}");
+        }
+        finally
+        {
+            await producer.Stop();
+        }
+
+        var activities = capture.Spans;
+        activities.Should().NotBeEmpty("S3Producer.Process must open a transport span even on failure");
+        var activity = activities.First();
+        activity.Source.Name.Should().Be(RouteActivitySource.SourceName);
+        activity.Kind.Should().Be(ActivityKind.Client);
+        activity.GetTagItem("redb.system").Should().Be("s3");
+        activity.GetTagItem("messaging.destination.name").Should().Be(Bucket);
+        activity.GetTagItem("redb.route.endpoint").Should().NotBeNull();
+    }
+}

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.GenericFile</PackageId>
+    <Description>Shared base classes for file-based transports in redb.Route ESB (local file, SFTP, FTP). Provides GenericFileConsumer, GenericFileProducer, IFileOperations, and RemoteFile base classes following the template-method pattern.</Description>
+    <PackageTags>esb;messaging;file;sftp;ftp;base;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.GenericFile" />
+    <InternalsVisibleTo Include="redb.Route.File" />
+    <InternalsVisibleTo Include="redb.Route.Sftp" />
+    <InternalsVisibleTo Include="redb.Route.Ftp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

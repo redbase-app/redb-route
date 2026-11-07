@@ -1,0 +1,208 @@
+using System.Xml;
+using System.Xml.Linq;
+using System.Xml.Schema;
+using System.Xml.Serialization;
+using redb.Route.Abstractions;
+
+namespace redb.Route.Validation;
+
+/// <summary>
+/// Validates XML message bodies against an XSD (XML Schema Definition).
+/// Uses the built-in <see cref="XmlSchemaSet"/> and <see cref="XmlReader"/> validation —
+/// no external NuGet packages required.
+/// <para>
+/// The validator accepts body as <see cref="XDocument"/>, <see cref="XElement"/>,
+/// <see cref="string"/> (raw XML), or a POCO (auto-serialized via <see cref="XmlSerializer"/>).
+/// </para>
+/// </summary>
+public sealed class XsdValidator : IMessageValidator
+{
+    private readonly XmlSchemaSet _schemaSet;
+    private readonly XmlReaderSettings _readerSettings;
+
+    /// <summary>Creates a validator from a pre-built <see cref="XmlSchemaSet"/>.</summary>
+    /// <param name="schemaSet">A compiled XML Schema set to validate against.</param>
+    public XsdValidator(XmlSchemaSet schemaSet)
+    {
+        _schemaSet = schemaSet ?? throw new ArgumentNullException(nameof(schemaSet));
+        if (!_schemaSet.IsCompiled)
+            _schemaSet.Compile();
+
+        _readerSettings = new XmlReaderSettings
+        {
+            ValidationType = ValidationType.Schema,
+            Schemas = _schemaSet
+        };
+    }
+
+    /// <summary>Creates a validator from an XSD string (target namespace auto-detected).</summary>
+    /// <param name="xsdContent">XSD schema as a string.</param>
+    public XsdValidator(string xsdContent)
+        : this(BuildSchemaSet(xsdContent ?? throw new ArgumentNullException(nameof(xsdContent))))
+    {
+    }
+
+    /// <summary>Creates a validator from an XSD string with an explicit target namespace.</summary>
+    /// <param name="targetNamespace">
+    /// Target namespace URI; <c>null</c> takes the schema's own target namespace, as the one-argument form does, and an
+    /// empty string demands a schema without one.
+    /// </param>
+    /// <param name="xsdContent">XSD schema as a string.</param>
+    public XsdValidator(string? targetNamespace, string xsdContent)
+        : this(BuildSchemaSet(targetNamespace, xsdContent ?? throw new ArgumentNullException(nameof(xsdContent))))
+    {
+    }
+
+    /// <summary>
+    /// Creates a validator from an XSD file, with its <c>xs:import</c> and <c>xs:include</c> read relative to the
+    /// file. Imports and includes are read only from under <paramref name="schemaRoot"/>: one that is not found, lies
+    /// outside it or points to the network (<c>http://...</c>) is an error naming it, as is any problem the schema
+    /// compiler reports. A DOCTYPE in the schema or an imported file is skipped, never fetched.
+    /// </summary>
+    /// <param name="path">The XSD file.</param>
+    /// <param name="targetNamespace">
+    /// Target namespace URI; <c>null</c> takes the schema's own, and an empty string demands a schema without one.
+    /// </param>
+    /// <param name="schemaRoot">
+    /// The directory imports and includes stay under, relative to the schema's directory (<c>..</c> for UBL's
+    /// <c>maindoc/</c> next to <c>common/</c>); <c>null</c> is the schema's directory itself.
+    /// </param>
+    /// <exception cref="XmlSchemaException">The schema or one of its imports does not load or compile.</exception>
+    public static XsdValidator FromFile(string path, string? targetNamespace = null, string? schemaRoot = null)
+        => FromFile("validateXsd", path, targetNamespace, schemaRoot);
+
+    internal static XsdValidator FromFile(string caller, string path, string? targetNamespace, string? schemaRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return new XsdValidator(SchemaResolver.Load(caller, path, schemaRoot, targetNamespace));
+    }
+
+    /// <inheritdoc />
+    public ValidationResult Validate(IExchange exchange)
+    {
+        ArgumentNullException.ThrowIfNull(exchange, nameof(exchange));
+
+        var body = exchange.In.Body;
+        if (body is null)
+            return ValidationResult.Failure("Message body is null");
+
+        string xml;
+
+        if (body is XDocument xdoc)
+        {
+            xml = xdoc.ToString(SaveOptions.DisableFormatting);
+        }
+        else if (body is XElement xel)
+        {
+            xml = xel.ToString(SaveOptions.DisableFormatting);
+        }
+        else if (body is string str)
+        {
+            xml = str;
+        }
+        else
+        {
+            // POCO → serialize to XML string
+            try
+            {
+                var serializer = new XmlSerializer(body.GetType());
+                using var sw = new StringWriter();
+                using var xw = XmlWriter.Create(sw, new XmlWriterSettings
+                {
+                    OmitXmlDeclaration = true,
+                    Indent = false
+                });
+                serializer.Serialize(xw, body);
+                xml = sw.ToString();
+            }
+            catch (Exception ex)
+            {
+                return ValidationResult.Failure($"Cannot serialize body to XML: {ex.Message}");
+            }
+        }
+
+        return ValidateXml(xml);
+    }
+
+    private ValidationResult ValidateXml(string xml)
+    {
+        // The document's root must be a global element of the schema. The .NET schema processor
+        // reports an element it has no declaration for as a *warning* ("Could not find schema
+        // information for the element 'x'") and skips its subtree; warnings are not delivered to the
+        // handler unless ReportValidationWarnings is set, so an unknown-namespace, foreign-namespace
+        // or no-namespace root passed validation and only failed later, when the body was parsed.
+        // Apache Camel rejects it (its JAXP/Xerces parser raises cvc-elt.1.a), and so does this check.
+        // Enabling ReportValidationWarnings instead was rejected: it would also turn legitimate
+        // warnings (an xs:any processContents="lax" element with no schema for it) fatal.
+        XDocument document;
+        try
+        {
+            document = XDocument.Parse(xml);
+        }
+        catch (XmlException ex)
+        {
+            return ValidationResult.Failure($"XML parsing error: {ex.Message}");
+        }
+
+        var root = document.Root;
+        if (root is null)
+            return ValidationResult.Failure("XML document has no root element");
+
+        var rootName = new XmlQualifiedName(root.Name.LocalName, root.Name.NamespaceName);
+        if (!_schemaSet.GlobalElements.Contains(rootName))
+        {
+            var shown = string.IsNullOrEmpty(root.Name.NamespaceName)
+                ? root.Name.LocalName
+                : $"{{{root.Name.NamespaceName}}}{root.Name.LocalName}";
+            return ValidationResult.Failure(
+                $"Root element '{shown}' is not declared in the schema (cvc-elt.1.a)");
+        }
+
+        var errors = new List<string>();
+
+        var settings = _readerSettings.Clone();
+        settings.ValidationEventHandler += (_, e) =>
+        {
+            var location = e.Exception != null
+                ? $"Line {e.Exception.LineNumber}, Position {e.Exception.LinePosition}"
+                : "Unknown location";
+            errors.Add($"{location}: {e.Message}");
+        };
+
+        try
+        {
+            using var stringReader = new StringReader(xml);
+            using var reader = XmlReader.Create(stringReader, settings);
+            while (reader.Read()) { } // Force full read to trigger all validation events
+        }
+        catch (XmlSchemaValidationException ex)
+        {
+            errors.Add($"Line {ex.LineNumber}, Position {ex.LinePosition}: {ex.Message}");
+        }
+        catch (XmlException ex)
+        {
+            errors.Add($"XML parsing error: {ex.Message}");
+        }
+
+        return errors.Count == 0
+            ? ValidationResult.Success()
+            : ValidationResult.Failure(errors);
+    }
+
+    private static XmlSchemaSet BuildSchemaSet(string xsdContent)
+    {
+        return BuildSchemaSet(null, xsdContent);
+    }
+
+    private static XmlSchemaSet BuildSchemaSet(string? targetNamespace, string xsdContent)
+    {
+        var schemaSet = new XmlSchemaSet();
+        using var reader = new StringReader(xsdContent);
+        // A schema's own DOCTYPE is skipped (W3C's xmldsig schema starts with one): nothing in it is expanded or
+        // fetched, so an entity reference in the schema's content fails as undeclared. The message is read strictly.
+        // No namespace given: null makes XmlSchemaSet take the schema's own targetNamespace ("" would demand none).
+        schemaSet.Add(targetNamespace, XmlReader.Create(reader, new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore }));
+        schemaSet.Compile();
+        return schemaSet;
+    }
+}

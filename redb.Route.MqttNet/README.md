@@ -1,0 +1,153 @@
+# redb.Route.MqttNet
+
+MQTT 5.0 transport for redb.Route via MQTTnet. Subscribe consumer, publish producer, shared subscriptions, QoS levels, retained messages, and TLS.
+
+[![NuGet](https://img.shields.io/nuget/v/redb.Route.MqttNet?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.MqttNet)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
+
+## Installation
+
+```bash
+dotnet add package redb.Route.MqttNet
+```
+
+## Usage
+
+### Fluent DSL
+
+```csharp
+using redb.Route.MqttNet.Fluent;
+
+// Subscribe to topic
+From(Mqtt.Subscribe("sensors/temperature/#")
+        .Server("mqtt.example.com").Port(1883)
+        .ClientId("route-consumer")
+        .Qos(MqttQualityOfServiceLevel.AtLeastOnce))
+    .Log("Temperature: ${body}")
+    .To("direct://process");
+
+// Publish to topic
+From("direct://alerts")
+    .To(Mqtt.Publish("alerts/critical")
+        .Server("mqtt.example.com")
+        .Username("svc").Password("secret")
+        .Qos(MqttQualityOfServiceLevel.ExactlyOnce)
+        .Retain());
+
+// Shared subscription (load balancing across consumers)
+From(Mqtt.Subscribe("orders/new")
+        .Server("broker.local")
+        .SharedSubscription("order-processors")
+        .UseTls())
+    .To("direct://handle-order");
+
+// Broker configuration (shared across routes)
+From(Mqtt.Subscribe("events/#")
+        .Broker("main")
+        .Qos(MqttQualityOfServiceLevel.AtLeastOnce))
+    .To("seda://events");
+```
+
+## Fluent Builder API
+
+| Category | Methods |
+|----------|---------|
+| **Connection** | `.Broker(name)`, `.Server()`, `.Port()`, `.Username()`, `.Password()`, `.ClientId()`, `.UseTls()`, `.KeepAlive()`, `.CleanSession()` |
+| **QoS** | `.Qos(level)` — AtMostOnce, AtLeastOnce, ExactlyOnce |
+| **Subscribe** | `Mqtt.Subscribe(topic)`, `.SharedSubscription(group)`, `.ConcurrentConsumers(n)` |
+| **Publish** | `Mqtt.Publish(topic)`, `.Retain()`, `.MessageExpiryInterval()`, `.ContentType()`, `.ResponseTopic()` |
+
+> Most builder methods accept both constant values and `IExpression` for runtime resolution via the expression engine.
+
+## Headers
+
+| Header | Written by | Read by the publish |
+|--------|------------|---------------------|
+| `redbMqtt.topic` | the consumer (received topic), the producer (topic it published to) | no |
+| `redbMqtt.overrideTopic` | the route only | yes: the topic instead of the endpoint's |
+| `redbMqtt.qos`, `redbMqtt.retain` | the consumer (received message), the producer (its publish) | no |
+| `redbMqtt.overrideQos` (0, 1 or 2), `redbMqtt.overrideRetain` (true or false), typed or as text | the route only | yes: QoS and retain flag instead of the endpoint's |
+| `redbMqtt.contentType`, `redbMqtt.responseTopic`, `redbMqtt.correlationData`, `redbMqtt.messageExpiryInterval` | the consumer | yes, passed through: the MQTT 5 properties of the publish |
+| `redbMqtt.userProperties` | the consumer | yes, passed through: MQTT 5 user properties |
+| `redbMqtt.broker`, `redbMqtt.clientId` | the consumer, the producer | no |
+
+The topic a publish goes to is the endpoint's (an expression such as `sensors/${header.room}` included), or
+`redbMqtt.overrideTopic` when the route set it. `redbMqtt.topic` only tells where the last message came from or went,
+so two publishes in one route each reach their own endpoint, and a received message republished to a fixed topic goes
+there, not back to the topic it came from.
+
+QoS and the retain flag work the same way: the endpoint's (`qos`, `qosExpression`, `retain`), or
+`redbMqtt.overrideQos` / `redbMqtt.overrideRetain` when the route set them. A retained message received and
+republished is not retained again, and goes out with the endpoint's QoS, not the QoS it arrived with.
+
+The MQTT 5 properties are the exception: a message received and republished keeps its content type, response topic,
+correlation data, expiry interval and user properties, so request/response and metadata survive a hop. A route that
+does not want them on the publish removes those headers first.
+
+### Concurrent processing
+
+`.ConcurrentConsumers(n)` (default `1` = serial) processes up to `n` received messages in parallel on a
+worker pool. Each message is acknowledged **only after** its worker finishes (manual ack), so at-least-once
+is preserved for QoS 1/2 — a failed message is not acked and the broker redelivers. Ordering is not
+preserved when `n > 1`.
+
+```csharp
+From(Mqtt.Subscribe("telemetry/#").Broker("main").Qos(1).ConcurrentConsumers(5))
+    .Process(IngestReading);
+```
+
+See the framework-wide **Concurrency & Parallelism** guide (`CONCURRENCY.md` in the
+[redb.Route repository](https://github.com/redbase-app/redb)) for how this compares to the `.Threads(N)`
+processing EIP.
+
+## Part of
+
+[redb.Route](../README.md) — ESB & EIP Framework for .NET
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup — a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new MqttConnectionFactory
+{
+    Server = "mqtt.internal",
+    Username = "svc",
+    Password = secrets.MqttPassword,
+});
+// mqtt://sensors/+?connectionFactory=prod
+```
+
+## Concurrency
+
+The default is **1** concurrent consumer — the industry norm (Camel, Spring, the Azure SDK all
+ship 1): a single consumer preserves ordering and your handlers need no thread safety.
+Parallelism is an explicit opt-in:
+
+```
+concurrentConsumers=4       # a fixed worker count
+concurrentConsumers=auto    # max(CPU count, 2) — the NServiceBus formula
+```
+
+Anything else — `0`, a negative, a typo — fails at endpoint creation naming the option (the old
+int-typed option silently fell back to 1). Raising the value trades ordering for throughput:
+messages from the same queue are processed out of order, and your processors must be safe to
+run in parallel.
+
+## Tracing
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`), with `messaging.system` = `mqtt` and
+`redb.route.endpoint`:
+
+- **Context.** The W3C context (`traceparent`, `tracestate`, `baggage`) travels in MQTT 5 user properties, and only when
+  the connection speaks v5 (the MQTTnet default). Under 3.1.1 nothing is written — MQTTnet refuses user properties
+  there — and nothing is read.
+- **Producer.** One `Producer` span per publish, `{topic} publish`, whose context is written to the message. The write
+  replaces a `traceparent` already in `redbMqtt.userProperties` (copied from an earlier hop); the exchange's header is
+  left as it was. An error when the publish fails, unless our own token cancelled it.
+- **Consumer.** One `Consumer` span per routed message, `{topic} receive`, a child of the sender's context when the
+  message carries one; otherwise a root, never a child of the activity the client's receive loop holds. Nothing
+  arriving opens none. A failed route marks it an error; our own stop does not.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span; a context the route received is still passed on.

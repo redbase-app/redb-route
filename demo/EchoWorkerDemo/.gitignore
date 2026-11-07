@@ -1,0 +1,11 @@
+# Build outputs
+bin/
+obj/
+
+# .tpkg packaging output
+output/
+
+# Local SQLite debug database
+*.db
+*.db-shm
+*.db-wal

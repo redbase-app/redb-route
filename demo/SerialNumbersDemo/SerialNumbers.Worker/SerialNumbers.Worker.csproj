@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The debug host. It does what the Tsak worker does, in the smallest possible way: builds the
+       context configuration from the module's config file and its own appsettings.json, brings redb
+       up on SQL Server, seeds the demo partners and products, and calls
+       SerialNumbers.Core.InitRoute.main(ctx). Next to the hub it runs two simulated partners, one
+       on SFTP and one on AS2, so the whole exchange works on one machine. Run or F5 this project. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SerialNumbers.Worker</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SerialNumbers.Core\SerialNumbers.Core.csproj" />
+    <!-- Pro, the tier the module runs on under Tsak (Tsak:Redb:UsePro is true by default). It is free
+         through redb 4.x and needs no license key; ChangeTracking saves are a Pro feature. -->
+    <PackageReference Include="redb.MSSql.Pro" Version="$(RedbVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
+    <ProjectReference Include="..\..\redb.Route.TestKit\redb.Route.TestKit.csproj" />
+    <ProjectReference Include="..\..\redb.Route.DataFormats.Csv\redb.Route.DataFormats.Csv.csproj" />
+    <ProjectReference Include="..\..\redb.Route.DataFormats.Protobuf\redb.Route.DataFormats.Protobuf.csproj" />
+    <ProjectReference Include="..\..\redb.Route.DataFormats.Avro\redb.Route.DataFormats.Avro.csproj" />
+    <ProjectReference Include="..\..\redb.Route.DataFormats.Yaml\redb.Route.DataFormats.Yaml.csproj" />
+    <ProjectReference Include="..\..\redb.Route.DataFormats.Mime\redb.Route.DataFormats.Mime.csproj" />
+    <ProjectReference Include="..\..\redb.Route.DataFormats.XmlJson\redb.Route.DataFormats.XmlJson.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Grpc.Tools" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Protos\order.proto" GrpcServices="None" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
+

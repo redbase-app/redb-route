@@ -1,0 +1,316 @@
+# redb.Route.IbmMq
+
+IBM MQ (WebSphere MQ) transport for **redb.Route** ESB framework.
+Native MQI access via `IBMXMSDotnetClient` (IBM.WMQ + IBM.XMS) — queues, topics, transactions, RPC, message groups, SSL/TLS, and W3C telemetry. Consumers can poll (default) or receive **event-driven** via an XMS `MessageListener` (`receiveMode=listener`, sub-50&#160;ms latency).
+
+[![NuGet](https://img.shields.io/nuget/v/redb.Route.IbmMq?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.IbmMq)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](../../LICENSE)
+
+## Installation
+
+```bash
+dotnet add package redb.Route.IbmMq
+```
+
+## Quick Start
+
+```csharp
+services.AddRedbRoute(route =>
+{
+    route.Services.AddRedbRouteIbmMq();
+    route.AddRouteBuilder<MyRoutes>();
+});
+```
+
+```csharp
+public class MyRoutes : RouteBuilder
+{
+    public override void Configure()
+    {
+        From("wmq:DEV.QUEUE.1?host=mq-host&queueManager=QM1&channel=DEV.APP.SVRCONN")
+            .Log("Received: ${body}")
+            .To("wmq:ORDERS.OUT?host=mq-host&queueManager=QM1&channel=DEV.APP.SVRCONN");
+    }
+}
+```
+
+## URI Format
+
+```
+wmq:{destination}?{options}
+```
+
+`{destination}` — queue or topic name (e.g. `DEV.QUEUE.1`, `EVENTS/ORDER`).
+
+## Fluent DSL
+
+```csharp
+// Queue (point-to-point)
+From(Wmq.Queue("DEV.QUEUE.1")
+    .Host("mq-host")
+    .QueueManager("QM1")
+    .Channel("DEV.APP.SVRCONN")
+    .User("app")
+    .Password("passw0rd"))
+
+// Topic (pub/sub)
+From(Wmq.Topic("EVENTS/ORDER")
+    .Host("mq-host")
+    .QueueManager("QM1")
+    .ConcurrentConsumers(4))
+
+// Persistent send with JMS interop
+To(Wmq.Queue("ORDERS.OUT")
+    .Host("mq-host")
+    .Persistent()
+    .TargetClient(IbmMqTargetClient.Jms))
+
+// Transacted
+From(Wmq.Queue("TXN.QUEUE")
+    .Host("mq-host")
+    .Transacted())
+
+// RPC (request/reply)
+To(Wmq.Queue("RPC.SERVICE")
+    .Host("mq-host")
+    .ReplyTo()
+    .Timeout(10))
+
+// SSL/TLS
+From(Wmq.Queue("SECURE.QUEUE")
+    .Host("mq-host")
+    .SslCipherSpec("TLS_RSA_WITH_AES_256_CBC_SHA256")
+    .SslKeyRepository("/var/mqm/ssl/key"))
+```
+
+## Event-Driven Receive (XMS Listener)
+
+By default the consumer **polls** with a blocking `MQGET`-`WAIT`. The IBM.WMQ managed .NET client carries
+an internal ~500 ms tick, so on an idle/low-traffic queue messages arrive ~250–500 ms after they were put.
+Setting `receiveMode=listener` switches to an **event-driven** receive built on **XMS .NET** (`IBM.XMS`),
+where the broker pushes messages into a `MessageListener` the instant they arrive — dropping delivery
+latency to **single-digit milliseconds**. (IBM.WMQ exposes no public async-consume API, so XMS is the only
+supported event-driven path on the managed .NET client.)
+
+```csharp
+// URI
+From("wmq:ORDERS?host=mq-host&queueManager=QM1&channel=DEV.APP.SVRCONN&receiveMode=listener")
+
+// Fluent
+From(Wmq.Queue("ORDERS").Host("mq-host").QueueManager("QM1").Listener())
+```
+
+It is **opt-in** — `Poll` remains the default, so existing routes are unchanged. The listener path honours
+the same consumer semantics as the poll path:
+
+- **Transacted** (`transacted=true`) — a `SESSION_TRANSACTED` session; commit on success, rollback (redeliver)
+  on error, on the delivering session. A route-level `.Transaction()` block settles it as part of the route
+  unit-of-work; without one the engine settles it directly.
+- **`concurrentConsumers=N`** — N XMS sessions on the shared connection (competing consumers, one in-flight
+  per session for back-pressure). A topic clamps to a single subscriber.
+- **RPC reply**, **backout threshold**, and **W3C trace-context propagation** all work as on the poll path.
+- **Headers** — the same `redbIbmMq.*` MQMD metadata and application (user) headers as the poll path.
+  User headers travel in the JMS `usr` folder, so they interoperate across IBM.WMQ, IBM.XMS and any JMS client.
+- **RPC client leg** — a producer doing request-reply (`replyTo=true`) with `receiveMode=listener` also
+  receives the response event-driven (XMS listener on the reply queue), so the whole round-trip is fast
+  (~16 ms warm vs the ~250–500 ms poll floor). The request is still sent over IBM.WMQ; only reply
+  reception moves to XMS. A dynamic reply queue uses an XMS temporary queue.
+
+A dynamic reply queue (`replyTo=true` without `replyToQueue`, on the poll path and the listener path alike) is
+created from `SYSTEM.DEFAULT.MODEL.QUEUE`, so the connecting user needs `+dsp +get +put +inq` on it
+(`SET AUTHREC PROFILE(SYSTEM.DEFAULT.MODEL.QUEUE) OBJTYPE(QUEUE) PRINCIPAL('app') AUTHADD(DSP,GET,PUT,INQ)`); the
+IBM MQ 9.4 developer image does not grant it to `app`.
+
+> The listener runs each route synchronously on the XMS dispatch thread (one in-flight message per session),
+> which is what provides natural back-pressure. Reverting to the poll path is a matter of flipping the option
+> back to `Poll` (or omitting it).
+
+## Options Reference
+
+### Connection
+
+| Option | Default | Description |
+|---|---|---|
+| `host` | `localhost` | Queue manager host |
+| `port` | `1414` | MQ listener port |
+| `channel` | `DEV.APP.SVRCONN` | Server-connection channel |
+| `queueManager` | `QM1` | Queue manager name |
+| `user` | — | Auth username |
+| `password` | — | Auth password |
+| `clientId` | — | Client identifier |
+| `connectionFactory` | — | Name of an `IbmMqConnectionFactory` in the context registry; takes priority over the inline connection options |
+
+### Destination
+
+| Option | Default | Description |
+|---|---|---|
+| `destinationType` | `Queue` | `Queue` or `Topic` |
+
+### Consumer
+
+| Option | Default | Description |
+|---|---|---|
+| `receiveMode` | `Poll` | `Poll` (MQGET-WAIT) or `Listener` (event-driven XMS, <50 ms) |
+| `concurrentConsumers` | `1` | Parallel consumers |
+| `waitInterval` | `5000` | MQGET wait (ms), poll mode only |
+| `batchSize` | `0` | Batch size (0 = single) |
+| `backoutThreshold` | `0` | Poison message threshold |
+| `backoutQueue` | — | Backout queue name |
+| `selector` | — | Message selector |
+| `convert` | `true` | Apply MQGMO_CONVERT |
+
+### Producer
+
+| Option | Default | Description |
+|---|---|---|
+| `persistence` | `AsQDef` | `Persistent`, `NonPersistent`, `AsQDef` |
+| `priority` | `-1` | Priority (0–9, -1 = queue default) |
+| `expiry` | `-1` | Expiry (tenths/sec, -1 = unlimited) |
+| `targetClient` | `Jms` | `Jms` (with MQRFH2) or `Mq` (raw MQMD) |
+| `messageType` | `Datagram` | `Datagram`, `Request`, `Reply`, `Report` |
+
+### Transactions
+
+| Option | Default | Description |
+|---|---|---|
+| `transacted` | unset | Consumer: `true` gets under syncpoint (MQCMIT/MQBACK). Producer: unset follows an enclosing `.Transacted()` block (the put waits for the database commit), `false` puts at once, `true` requires a block. A request-reply producer always puts at once and refuses `true` |
+
+The deferred puts of one producer in a block are committed in one unit of work: every put under syncpoint, then one
+MQCMIT, so they arrive together, in order, or not at all (a failed put backs them all out). The producer's batches take
+turns on its connection, because a unit of work belongs to the connection.
+
+### RPC
+
+| Option | Default | Description |
+|---|---|---|
+| `replyTo` | `false` | Enable request/reply |
+| `replyToQueue` | — | Reply queue (or dynamic temp) |
+| `replyToQueueManager` | — | Reply QM |
+| `timeout` | `30` | RPC timeout (seconds) |
+| `correlationPattern` | `MsgId` | `MsgId` or `CorrelId` |
+
+### SSL/TLS
+
+| Option | Default | Description |
+|---|---|---|
+| `sslCipherSpec` | — | CipherSpec name |
+| `sslCertLabel` | — | Certificate label |
+| `sslPeerName` | — | Peer DN pattern |
+| `sslKeyRepository` | — | Key repo path (.kdb) |
+| `sslKeyResetCount` | `0` | Key renegotiation (bytes) |
+
+### Advanced
+
+| Option | Default | Description |
+|---|---|---|
+| `cCSID` | `1208` | Coded Character Set ID |
+| `mqmdWriteEnabled` | `false` | Write MQMD from headers |
+| `mqmdReadEnabled` | `true` | Read MQMD into headers |
+
+## Headers
+
+All IBM MQ metadata headers are prefixed with `redbIbmMq.`:
+
+- `redbIbmMq.MsgId` — message ID (hex)
+- `redbIbmMq.CorrelId` — correlation ID (hex)
+- `redbIbmMq.Format` — MQMD format
+- `redbIbmMq.Persistence` — persistence flag
+- `redbIbmMq.Priority` — priority
+- `redbIbmMq.Expiry` — expiry
+- `redbIbmMq.ReplyToQueue` — reply-to queue
+- `redbIbmMq.MsgType` — message type
+- `redbIbmMq.BackoutCount` — backout count
+- ... and more (see `IbmMqHeaders` class)
+
+### Header filter strategy
+
+The other exchange headers travel in one JSON-encoded message property (MQ property names forbid hyphens), as text;
+the consumer unpacks them on the poll and the XMS path alike, and a request-reply carries them both ways.
+`headerFilterStrategy=#name` names an `IHeaderFilterStrategy` in the registry that decides which headers cross, as
+in Apache Camel: outgoing for a request and a consumer's reply, incoming for a delivery and the reply a
+request-reply producer receives. It replaces the default, `IbmMqHeaderFilterStrategy` (keeps `redbIbmMq.*` back),
+entirely; derive from that class to add to it. MQMD fields, `targetClient=Mq` (no properties at all) and the trace
+context are not the strategy's.
+
+```csharp
+ctx.AddToRegistry("correlationOnly", new DefaultHeaderFilterStrategy
+{
+    OutFilter = ["Correlation-ID"],
+    FilterOnMatch = false,   // a whitelist: only the listed headers go out
+});
+// wmq:ORDERS.Q?queueManager=QM1&headerFilterStrategy=#correlationOnly
+```
+
+## Telemetry
+
+On the `redb.Route` activity source (`AddSource("redb.Route")`). The W3C context travels in the MQRFH2 user properties
+`traceparent`, `tracestate` and `baggage` (not with `targetClient=Mq`, which sends no properties).
+
+- **Consumer**, poll and listener alike. One `Consumer` span per message, `{destination} receive`, over the whole unit
+  of work. Its parent is the sender's `traceparent`; without one — a message with no properties included — it is a
+  root, never a child of the activity the receive loop inherited from whoever started the routes. The sender's baggage
+  is back on it, the route's spans are its children, and a failed route marks it an error.
+- **Producer.** One `Producer` span per send, `{destination} publish`; an error when the send fails. The message
+  carries the context of this span.
+- `RouteEngineOptions.EnableTelemetry = false` opens neither span. A context that came in still goes out.
+
+Tags: `messaging.system` = `wmq`, `messaging.operation` = `receive` / `publish`, `messaging.destination.name`,
+`messaging.ibmmq.queue_manager`, `messaging.message.id` (MQMD MsgId, poll path), `redb.route.endpoint`.
+
+## Docker (Dev/Test)
+
+```bash
+docker compose -f docker-compose.tests.yml up -d ibmmq
+```
+
+Default dev credentials:
+- **Host**: `localhost:1414`
+- **Queue Manager**: `QM1`
+- **Channel**: `DEV.APP.SVRCONN`
+- **User**: `app` / `passw0rd`
+- **Web Console**: `https://localhost:9443/ibmmq/console` (`admin` / `passw0rd`)
+
+Pre-created queues: `DEV.QUEUE.1` … `DEV.QUEUE.5`, `DEV.DEAD.LETTER.QUEUE`.
+
+## Named connection factory
+
+Keep credentials out of the route URI: register a factory in the context registry and
+reference it by name. A set-but-unknown name fails loud at startup, when the endpoint is created: a typo can never
+silently fall back to inline URI parameters.
+
+```csharp
+context.AddToRegistry("prod", new IbmMqConnectionFactory
+{
+    Host = "mq.internal",
+    QueueManager = "QM1",
+    Channel = "DEV.APP.SVRCONN",
+    User = "app",
+    Password = secrets.MqPassword,
+});
+// wmq://DEV.QUEUE.1?connectionFactory=prod
+```
+
+The factory describes the whole connection: host, port, channel, queue manager, user and password, client name,
+transport, TLS settings and CCSID all come from it, for the MQ-classes connections and the XMS listener alike.
+Connection options written on the same URI are not used. Endpoints naming the same factory share one pooled
+connection; without `connectionFactory` the inline options describe the connection.
+
+## Concurrency
+
+The default is **1** concurrent consumer — the industry norm (Camel, Spring, the Azure SDK all
+ship 1): a single consumer preserves ordering and your handlers need no thread safety.
+Parallelism is an explicit opt-in:
+
+```
+concurrentConsumers=4       # a fixed worker count
+concurrentConsumers=auto    # max(CPU count, 2) — the NServiceBus formula
+```
+
+Anything else — `0`, a negative, a typo — fails at endpoint creation naming the option (the old
+int-typed option silently fell back to 1). Raising the value trades ordering for throughput:
+messages from the same queue are processed out of order, and your processors must be safe to
+run in parallel.
+
+IBM MQ specifics: `concurrentConsumers` on a TOPIC clamps to 1 — parallel non-durable
+subscriptions would each receive a full copy of every message (duplicate delivery), not share
+the load. Use a QUEUE destination for competing consumers.

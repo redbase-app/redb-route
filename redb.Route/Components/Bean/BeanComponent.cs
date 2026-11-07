@@ -1,0 +1,624 @@
+using System.Collections.Concurrent;
+using System.Linq.Expressions;
+using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+
+namespace redb.Route.Components.Bean;
+
+/// <summary>
+/// The <c>bean:</c> component (Route-XML Ф1.2, decision Р8): a reference to user code as an
+/// ordinary endpoint, so declarative routes never carry <c>class=</c>/<c>ref=</c> attributes.
+/// Two URI forms:
+/// <code>
+/// bean:#orderEnricher?method=Enrich                          — object from the context registry
+/// bean:Acme.Orders.EnrichProcessor, Acme.Orders?timeoutMs=5  — instance created per endpoint
+/// </code>
+/// The instance lives as long as the endpoint (endpoints are cached by normalized URI, so equal
+/// URIs share one instance and different parameter sets get their own). Unrecognised query
+/// parameters bind to the instance's public settable properties through the same converter the
+/// endpoint options use; <c>[Sensitive]</c>-marked properties join the URI redaction set. The
+/// target method is picked once and compiled into a delegate — reflection never runs per message
+/// (Route-XML Ф2 §3.5).
+/// </summary>
+[EndpointRole(EndpointRole.Producer, Hint = "Use bean: as a To() destination.")]
+public sealed class BeanComponent : ComponentBase
+{
+    private readonly ConcurrentDictionary<string, BeanEndpoint> _endpoints = new(StringComparer.Ordinal);
+
+    /// <inheritdoc />
+    public override string Scheme => "bean";
+
+    /// <summary>
+    /// The URI of <see cref="IRouteDefinition.Bean(string, string?)"/>: <c>bean:reference?method=spec</c>. The
+    /// method travels raw, like a hand-written URI, except '%' and '&amp;', which the URI parse would unescape or split.
+    /// </summary>
+    internal static string UriFor(string reference, string? method)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reference);
+        if (reference.Contains('?'))
+            throw new ArgumentException(
+                $"bean reference '{reference}' contains '?'; pass the method as the second argument, not in the reference.",
+                nameof(reference));
+        return string.IsNullOrWhiteSpace(method)
+            ? "bean:" + reference
+            : "bean:" + reference + "?method=" + method.Replace("%", "%25").Replace("&", "%26");
+    }
+
+    /// <inheritdoc />
+    public override IEndpoint CreateEndpoint(EndpointUri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+        return _endpoints.GetOrAdd(uri.NormalizedKey, _ => BuildEndpoint(uri));
+    }
+
+    private BeanEndpoint BuildEndpoint(EndpointUri uri)
+    {
+        var reference = uri.Path?.Trim();
+        if (string.IsNullOrEmpty(reference))
+            throw new ArgumentException(
+                "bean: needs a target — 'bean:#registryName' or 'bean:Namespace.Type, AssemblyName'.");
+
+        var options = new BeanEndpointOptions();
+        options.BindFromUri(uri.RawParameters);
+        options.Validate();
+
+        var instance = reference.StartsWith('#')
+            ? ResolveFromRegistry(reference)
+            : CreateFromTypeName(reference, options.UnmappedParameters);
+
+        var invoker = BeanInvoker.For(instance.GetType(), options.Method, reference);
+        return new BeanEndpoint(uri, this, options, instance, invoker);
+    }
+
+    private object ResolveFromRegistry(string reference)
+    {
+        var context = Context ?? throw new InvalidOperationException(
+            "bean: component has no context; register it via AddComponent.");
+        return context.GetFromRegistry<object>(reference)
+            ?? throw new InvalidOperationException(
+                $"bean: object '{reference}' is not in the context registry. " +
+                "Register it with AddToRegistry (or a <bean> declaration) before Start().");
+    }
+
+    private object CreateFromTypeName(string typeName, IReadOnlyDictionary<string, string> properties)
+    {
+        if (typeName.Contains("Version=", StringComparison.OrdinalIgnoreCase) ||
+            typeName.Contains("PublicKeyToken=", StringComparison.OrdinalIgnoreCase) ||
+            typeName.Contains("Culture=", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException(
+                $"bean: type name '{typeName}' pins an assembly version/key. Use 'Namespace.Type, AssemblyName' " +
+                "only — a pinned version silently breaks the route on every assembly bump.");
+
+        var resolver = Context?.GetService<IBeanTypeResolver>() ?? DefaultBeanTypeResolver.Instance;
+        var type = resolver.Resolve(typeName)
+            ?? throw new InvalidOperationException(
+                $"bean: type '{typeName}' was not found in the loaded assemblies. " +
+                "Check the 'Namespace.Type, AssemblyName' spelling and that the assembly is loaded.");
+
+        if (!(type.IsPublic || type.IsNestedPublic))
+            throw new InvalidOperationException(
+                $"bean: type '{type.FullName}' was found but is not public. Module discovery and bean: " +
+                "work through exported types only — make the class public.");
+
+        var provider = Context?.GetServiceProvider() ?? EmptyServiceProvider.Instance;
+        var instance = ActivatorUtilities.CreateInstance(CollectibleTypeServiceProvider.For(provider), type);
+
+        BindProperties(instance, type, properties);
+        return instance;
+    }
+
+    private static void BindProperties(object instance, Type type, IReadOnlyDictionary<string, string> properties)
+    {
+        if (properties.Count == 0)
+            return;
+
+        EndpointOptions.RegisterSensitiveKeysFor(type);
+        var props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+        foreach (var (key, rawValue) in properties)
+        {
+            var prop = Array.Find(props, p => p.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
+            if (prop is null || !prop.CanWrite)
+                throw new ArgumentException(
+                    $"bean: type '{type.FullName}' has no writable public property '{key}'. " +
+                    $"Writable properties: {string.Join(", ", props.Where(p => p.CanWrite).Select(p => p.Name))}.");
+
+            var converted = OptionValueConverter.Convert(rawValue, prop.PropertyType)
+                ?? throw new ArgumentException(
+                    $"bean: value '{rawValue}' is not convertible to {prop.PropertyType.Name} " +
+                    $"for property '{type.FullName}.{prop.Name}'.");
+            prop.SetValue(instance, converted);
+        }
+    }
+
+    private sealed class EmptyServiceProvider : IServiceProvider
+    {
+        public static readonly EmptyServiceProvider Instance = new();
+        public object? GetService(Type serviceType) => null;
+    }
+}
+
+/// <summary>Options for <c>bean:</c> endpoints. Everything unmapped binds to the bean instance.</summary>
+[LenientProperties]
+public sealed class BeanEndpointOptions : EndpointOptions
+{
+    /// <summary>
+    /// Target method name. Optional when the type has exactly one suitable public method; with
+    /// several, the error lists the candidates.
+    /// </summary>
+    public string? Method { get; set; }
+
+    /// <inheritdoc />
+    public override void Validate() { }
+}
+
+/// <summary>Endpoint holding the bean instance and its compiled invoker.</summary>
+public sealed class BeanEndpoint : EndpointBase<BeanEndpointOptions>
+{
+    internal object Instance { get; }
+    internal BeanInvoker Invoker { get; }
+
+    internal BeanEndpoint(EndpointUri uri, BeanComponent component, BeanEndpointOptions options,
+        object instance, BeanInvoker invoker)
+        : base(uri, component, options)
+    {
+        Instance = instance;
+        Invoker = invoker;
+    }
+
+    /// <inheritdoc />
+    public override IProducer CreateProducer() => new BeanProducer(this);
+
+    /// <inheritdoc />
+    public override IConsumer CreateConsumer(IProcessor processor)
+        => throw new NotSupportedException("bean: endpoints are producers only — use them as To() destinations.");
+}
+
+/// <summary>Producer invoking the bean's compiled delegate per exchange.</summary>
+public sealed class BeanProducer : IProducer
+{
+    private readonly BeanEndpoint _endpoint;
+
+    /// <summary>Creates the producer for a bean endpoint.</summary>
+    public BeanProducer(BeanEndpoint endpoint)
+        => _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
+
+    /// <inheritdoc />
+    public Task Start(CancellationToken ct = default) => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task Stop(CancellationToken ct = default) => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public async Task Process(IExchange exchange, CancellationToken ct = default)
+    {
+        var invoker = _endpoint.Invoker;
+        var raw = invoker.Invoke(_endpoint.Instance, exchange, ct);
+
+        if (raw is Task task)
+        {
+            await task.ConfigureAwait(false);
+            if (invoker.TaskResult is { } getResult && getResult(task) is { } asyncResult)
+                exchange.In.Body = asyncResult;
+            return;
+        }
+
+        // Camel bean: semantics — a non-null return value (other than Task) becomes the body.
+        if (invoker.ReturnsValue && raw is not null)
+            exchange.In.Body = raw;
+    }
+}
+
+/// <summary>
+/// The bean's target method, selected once and compiled into a delegate at endpoint creation:
+/// reflection never runs on the message path (Route-XML Ф2 §3.5).
+/// </summary>
+public sealed partial class BeanInvoker
+{
+    /// <summary>Raw invocation: returns the method's result (a Task for async methods, null for void).</summary>
+    internal Func<object, IExchange, CancellationToken, object?> Invoke { get; }
+
+    /// <summary>True when the method returns a plain (non-Task) value that should become the body.</summary>
+    internal bool ReturnsValue { get; }
+
+    /// <summary>For <c>Task&lt;T&gt;</c> methods: reads the completed task's result. Null otherwise.</summary>
+    internal Func<Task, object?>? TaskResult { get; }
+
+    private BeanInvoker(Func<object, IExchange, CancellationToken, object?> invoke, bool returnsValue,
+        Func<Task, object?>? taskResult)
+    {
+        Invoke = invoke;
+        ReturnsValue = returnsValue;
+        TaskResult = taskResult;
+    }
+
+    /// <summary>
+    /// Selects the target method — by <paramref name="methodName"/> when given, otherwise the
+    /// single suitable public method — and compiles the invoker. A suitable method takes
+    /// <c>(IExchange)</c> or <c>(IExchange, CancellationToken)</c>; the two-parameter form wins
+    /// when both names match. A <c>method=name(arg, …)</c> specification switches to Camel-style
+    /// parameter binding (Route-XML Ф1.6): each argument is a route-language expression and the
+    /// method's parameters carry ordinary types.
+    /// </summary>
+    internal static BeanInvoker For(Type type, string? methodName, string reference)
+    {
+        if (methodName is not null && methodName.Contains('('))
+            return ForBound(type, methodName, reference);
+
+        var suitable = type
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Where(IsSuitable)
+            .OrderByDescending(m => m.GetParameters().Length) // (IExchange, ct) preferred
+            .ToList();
+
+        if (suitable.Count == 0)
+            throw new InvalidOperationException(
+                $"bean: '{reference}' ({type.FullName}) has no suitable public method. Expected a public " +
+                "instance method taking (IExchange) or (IExchange, CancellationToken).");
+
+        MethodInfo method;
+        if (methodName is not null)
+        {
+            method = suitable.FirstOrDefault(m => m.Name.Equals(methodName, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException(
+                    $"bean: '{reference}' has no suitable method '{methodName}'. " +
+                    $"Suitable methods: {Describe(suitable)}.");
+        }
+        else
+        {
+            var distinctNames = suitable.Select(m => m.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (distinctNames.Count > 1)
+                throw new InvalidOperationException(
+                    $"bean: '{reference}' has several suitable methods — name one with ?method=. " +
+                    $"Candidates: {Describe(suitable)}.");
+            method = suitable[0];
+        }
+
+        return Compile(type, method);
+    }
+
+    private static bool IsSuitable(MethodInfo m)
+    {
+        if (m.IsSpecialName || m.DeclaringType == typeof(object))
+            return false;
+        var p = m.GetParameters();
+        return p.Length switch
+        {
+            1 => p[0].ParameterType == typeof(IExchange),
+            2 => p[0].ParameterType == typeof(IExchange) && p[1].ParameterType == typeof(CancellationToken),
+            _ => false,
+        };
+    }
+
+    private static string Describe(IEnumerable<MethodInfo> methods)
+        => string.Join(", ", methods.Select(m =>
+            $"{m.Name}({string.Join(", ", m.GetParameters().Select(p => p.ParameterType.Name))})"));
+
+    private static BeanInvoker Compile(Type type, MethodInfo method)
+    {
+        var instance = Expression.Parameter(typeof(object), "instance");
+        var exchange = Expression.Parameter(typeof(IExchange), "exchange");
+        var ct = Expression.Parameter(typeof(CancellationToken), "ct");
+
+        var args = method.GetParameters().Length == 2
+            ? new Expression[] { exchange, ct }
+            : [exchange];
+        Expression call = Expression.Call(Expression.Convert(instance, type), method, args);
+
+        Expression body = method.ReturnType == typeof(void)
+            ? Expression.Block(call, Expression.Constant(null, typeof(object)))
+            : Expression.Convert(call, typeof(object));
+
+        var invoke = Expression
+            .Lambda<Func<object, IExchange, CancellationToken, object?>>(body, instance, exchange, ct)
+            .Compile();
+
+        var (returnsValue, taskResult, toTask) = ClassifyReturn(method.ReturnType);
+        return new BeanInvoker(AwaitableAsTask(invoke, toTask), returnsValue, taskResult);
+    }
+}
+
+// ── Camel-style parameter binding (Route-XML Ф1.6) ───────────────────────────
+
+public sealed partial class BeanInvoker
+{
+    // (partial: the base selection/compilation half lives above in this file)
+
+    /// <summary>
+    /// Builds the invoker for a <c>method=name(arg, …)</c> specification. Each argument is a
+    /// route-language expression compiled at endpoint creation (a malformed one fails the build);
+    /// the overload is picked by the number of bindable parameters. A parameter of type
+    /// <see cref="IExchange"/> is the exchange itself, one of type <see cref="IMessage"/> its In
+    /// message: both are supplied by the binding, like a Camel bean's <c>Exchange</c>/<c>Message</c>,
+    /// and neither counts among the arguments. A <see cref="CancellationToken"/> is filled in
+    /// wherever it stands, counted the same way. So <c>method=Require('incident.view')</c> binds
+    /// <c>Require(IExchange exchange, string permission)</c>. Argument values convert to the
+    /// parameter types through the shared option converter; a value already of the parameter
+    /// type passes as-is. Boundary: an argument must not contain a bare <c>&amp;</c> — the URI
+    /// query splits on it; write the word form <c>AND</c>.
+    /// </summary>
+    private static BeanInvoker ForBound(Type type, string methodSpec, string reference)
+    {
+        var (name, argTexts) = ParseMethodSpec(methodSpec, reference);
+        var expressions = argTexts.Select(t => new redb.Route.Expressions.StringExpression(t)).ToArray();
+        var bound = BindMethod(type, name, argTexts.Count, reference);
+
+        object? Invoke(object instance, IExchange exchange, CancellationToken ct)
+        {
+            var values = new object?[expressions.Length];
+            for (var i = 0; i < expressions.Length; i++)
+                values[i] = expressions[i].Evaluate<object>(exchange);
+            return bound.Call(instance, values, exchange, ct);
+        }
+
+        var (returnsValue, taskResult, toTask) = ClassifyReturn(bound.Method.ReturnType);
+        return new BeanInvoker(AwaitableAsTask(Invoke, toTask), returnsValue, taskResult);
+    }
+
+    /// <summary>
+    /// A method specification in the <c>bean:</c> URI spelling: <c>Name</c> (no arguments) or <c>Name(arg, ...)</c>,
+    /// each argument a route-language expression. Shared by the URI form and <c>Method()</c>.
+    /// </summary>
+    internal static (string Name, IReadOnlyList<string> Arguments) ParseMethodSpec(string methodSpec, string reference)
+    {
+        var open = methodSpec.IndexOf('(');
+        if (open < 0)
+            return (methodSpec.Trim(), []);
+        var name = methodSpec[..open].Trim();
+        var closing = methodSpec.LastIndexOf(')');
+        if (name.Length == 0 || closing < open)
+            throw new ArgumentException(
+                $"bean: malformed method specification '{methodSpec}' for '{reference}'. Expected name(arg, ...).");
+        return (name, SplitArguments(methodSpec[(open + 1)..closing]));
+    }
+
+    /// <summary>
+    /// A bean method bound to argument values: the method picked by name and bindable count, and the call that
+    /// converts each value to its parameter type and supplies the ambient parameters. The one selection and conversion
+    /// path behind the <c>method=name(args)</c> URI form, the <c>bean:</c> expression function and <c>Method()</c>.
+    /// </summary>
+    internal sealed record BoundMethod(MethodInfo Method, Func<object, object?[], IExchange, CancellationToken, object?> Call);
+
+    /// <summary>
+    /// Binds <paramref name="methodName"/> of <paramref name="type"/> for <paramref name="argumentCount"/> values that
+    /// the caller evaluates itself (the third entry point, beside the URI's two). Rules as for
+    /// <c>method=name(args)</c>: by name, case-insensitive, and bindable count; an <see cref="IExchange"/>,
+    /// <see cref="IMessage"/> or <see cref="CancellationToken"/> parameter is supplied by the binding.
+    /// </summary>
+    internal static BoundMethod ForValues(Type type, string methodName, int argumentCount, string reference)
+        => BindMethod(type, methodName, argumentCount, reference);
+
+    private static BoundMethod BindMethod(Type type, string name, int argumentCount, string reference)
+    {
+        var candidates = type
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Where(m => !m.IsSpecialName && m.DeclaringType != typeof(object)
+                        && m.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            .Where(m => BindableCount(m.GetParameters()) == argumentCount)
+            .OrderByDescending(m => m.GetParameters().Length) // the ambient-taking overload wins
+            .ToList();
+
+        if (candidates.Count == 0)
+            throw new InvalidOperationException(
+                $"bean: '{reference}' has no public method '{name}' taking {argumentCount} argument(s) " +
+                "(IExchange, IMessage and CancellationToken parameters are supplied by the binding and do not count).");
+        if (candidates.Count > 1 && candidates[0].GetParameters().Length == candidates[1].GetParameters().Length)
+            throw new InvalidOperationException(
+                $"bean: '{reference}' has several '{name}' overloads with {argumentCount} argument(s) — " +
+                $"parameter binding picks by count only. Candidates: {Describe(candidates)}.");
+
+        var method = candidates[0];
+        var converters = new Func<object?, object?>[argumentCount];
+        var argIndex = 0;
+        foreach (var parameter in method.GetParameters())
+        {
+            if (IsAmbient(parameter.ParameterType))
+                continue;
+            var target = parameter.ParameterType;
+            var where = $"parameter '{parameter.Name}' of {type.Name}.{method.Name}";
+            converters[argIndex++] = value => ConvertArgument(value, target, where);
+        }
+
+        var call = CompileBoundCall(type, method);
+        return new BoundMethod(method, (instance, values, exchange, ct) =>
+        {
+            var args = new object?[values.Length];
+            for (var i = 0; i < values.Length; i++)
+                args[i] = converters[i](values[i]);
+            return call(instance, args, exchange, ct);
+        });
+    }
+
+    /// <summary>Whether <paramref name="returnType"/> is an awaitable the invoker awaits (Task, ValueTask and their generic forms).</summary>
+    internal static bool IsAwaitable(Type returnType)
+        => returnType == typeof(Task) || returnType == typeof(ValueTask)
+           || (returnType.IsGenericType && (returnType.GetGenericTypeDefinition() == typeof(Task<>)
+                                            || returnType.GetGenericTypeDefinition() == typeof(ValueTask<>)));
+
+    /// <summary>A parameter the binding supplies itself: the exchange, its In message, or the token.</summary>
+    private static bool IsAmbient(Type parameterType)
+        => parameterType == typeof(IExchange)
+           || parameterType == typeof(IMessage)
+           || parameterType == typeof(CancellationToken);
+
+    /// <summary>Counts the parameters an argument list binds, that is, every parameter but the ambient ones.</summary>
+    private static int BindableCount(ParameterInfo[] parameters)
+    {
+        var count = 0;
+        foreach (var parameter in parameters)
+            if (!IsAmbient(parameter.ParameterType))
+                count++;
+        return count;
+    }
+
+    /// <summary>Splits top-level commas, respecting quotes (with backslash escapes) and nesting.</summary>
+    private static List<string> SplitArguments(string text)
+    {
+        var args = new List<string>();
+        if (string.IsNullOrWhiteSpace(text))
+            return args;
+
+        var depth = 0;
+        char? quote = null;
+        var start = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (quote is { } q)
+            {
+                if (c == '\\') i++;
+                else if (c == q) quote = null;
+                continue;
+            }
+            switch (c)
+            {
+                case '\'' or '"': quote = c; break;
+                case '(' or '[' or '{': depth++; break;
+                case ')' or ']' or '}': depth--; break;
+                case ',' when depth == 0:
+                    args.Add(text[start..i].Trim());
+                    start = i + 1;
+                    break;
+            }
+        }
+        args.Add(text[start..].Trim());
+        return args;
+    }
+
+    private static object? ConvertArgument(object? value, Type target, string where)
+    {
+        if (value is null)
+        {
+            if (!target.IsValueType || Nullable.GetUnderlyingType(target) is not null)
+                return null;
+            throw new InvalidOperationException(
+                $"bean: the argument for {where} evaluated to null, but {target.Name} is a value type.");
+        }
+        if (target.IsInstanceOfType(value))
+            return value;
+        if (value is string text)
+            return OptionValueConverter.Convert(text, target)
+                ?? throw new InvalidOperationException(
+                    $"bean: the argument value '{text}' is not convertible to {target.Name} for {where}.");
+        try
+        {
+            return System.Convert.ChangeType(value, Nullable.GetUnderlyingType(target) ?? target,
+                System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)
+        {
+            throw new InvalidOperationException(
+                $"bean: the argument value '{value}' ({value.GetType().Name}) is not convertible to " +
+                $"{target.Name} for {where}.", ex);
+        }
+    }
+
+    private static Func<object, object?[], IExchange, CancellationToken, object?> CompileBoundCall(
+        Type type, MethodInfo method)
+    {
+        var instance = Expression.Parameter(typeof(object), "instance");
+        var args = Expression.Parameter(typeof(object?[]), "args");
+        var exchange = Expression.Parameter(typeof(IExchange), "exchange");
+        var ct = Expression.Parameter(typeof(CancellationToken), "ct");
+
+        var parameters = method.GetParameters();
+        var callArgs = new List<Expression>(parameters.Length);
+        var argIndex = 0;
+        foreach (var parameter in parameters)
+        {
+            var target = parameter.ParameterType;
+            if (target == typeof(IExchange))
+                callArgs.Add(exchange);
+            else if (target == typeof(IMessage))
+                callArgs.Add(Expression.Convert(Expression.Property(exchange, nameof(IExchange.In)), target));
+            else if (target == typeof(CancellationToken))
+                callArgs.Add(ct);
+            else
+                callArgs.Add(Expression.Convert(
+                    Expression.ArrayIndex(args, Expression.Constant(argIndex++)), target));
+        }
+
+        Expression call = Expression.Call(Expression.Convert(instance, type), method, callArgs);
+        Expression body = method.ReturnType == typeof(void)
+            ? Expression.Block(call, Expression.Constant(null, typeof(object)))
+            : Expression.Convert(call, typeof(object));
+
+        return Expression
+            .Lambda<Func<object, object?[], IExchange, CancellationToken, object?>>(body, instance, args, exchange, ct)
+            .Compile();
+    }
+
+    /// <summary>Shared return-shape classification for both invoker forms.</summary>
+    // A ValueTask or ValueTask<T> is awaited like Task and Task<T>: the method's return value is turned into a Task
+    // once, where the invoker is built, so the producer awaits one shape. It used to be taken for a plain value — the
+    // struct became the body and an async method was not awaited.
+    internal static (bool ReturnsValue, Func<Task, object?>? TaskResult, Func<object?, object?>? ToTask) ClassifyReturn(Type returnType)
+    {
+        if (returnType == typeof(void) || returnType == typeof(Task))
+            return (false, null, null);
+        if (returnType == typeof(ValueTask))
+            return (false, null, static raw => ((ValueTask)raw!).AsTask());
+        if (returnType.IsGenericType && returnType.GetGenericTypeDefinition() == typeof(ValueTask<>))
+        {
+            var raw = Expression.Parameter(typeof(object), "raw");
+            var asTask = Expression.Call(Expression.Convert(raw, returnType), returnType.GetMethod(nameof(ValueTask.AsTask))!);
+            var toTask = Expression
+                .Lambda<Func<object?, object?>>(Expression.Convert(asTask, typeof(object)), raw)
+                .Compile();
+            var (_, getter, _) = ClassifyReturn(typeof(Task<>).MakeGenericType(returnType.GetGenericArguments()));
+            return (false, getter, toTask);
+        }
+        if (returnType.IsGenericType && returnType.GetGenericTypeDefinition() == typeof(Task<>))
+        {
+            var task = Expression.Parameter(typeof(Task), "task");
+            var result = Expression.Property(Expression.Convert(task, returnType), "Result");
+            var getter = Expression
+                .Lambda<Func<Task, object?>>(Expression.Convert(result, typeof(object)), task)
+                .Compile();
+            return (false, getter, null);
+        }
+        return (true, null, null);
+    }
+
+    private static Func<object, IExchange, CancellationToken, object?> AwaitableAsTask(
+        Func<object, IExchange, CancellationToken, object?> invoke, Func<object?, object?>? toTask)
+        => toTask is null ? invoke : (instance, exchange, ct) => toTask(invoke(instance, exchange, ct));
+}
+
+/// <summary>
+/// Default <see cref="IBeanTypeResolver"/>: <c>Type.GetType</c> first (the default load context),
+/// then every loaded assembly — which includes collectible load contexts, so a type inside an
+/// already-loaded plugin is found even without a host-specific resolver.
+/// </summary>
+public sealed class DefaultBeanTypeResolver : IBeanTypeResolver
+{
+    /// <summary>The shared instance used when no resolver is registered on the context.</summary>
+    public static DefaultBeanTypeResolver Instance { get; } = new();
+
+    /// <inheritdoc />
+    public Type? Resolve(string typeName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(typeName);
+
+        var direct = Type.GetType(typeName, throwOnError: false);
+        if (direct is not null)
+            return direct;
+
+        var comma = typeName.IndexOf(',');
+        var fullName = (comma >= 0 ? typeName[..comma] : typeName).Trim();
+        var assemblyName = comma >= 0 ? typeName[(comma + 1)..].Trim() : null;
+
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (assemblyName is not null &&
+                !string.Equals(assembly.GetName().Name, assemblyName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var type = assembly.GetType(fullName, throwOnError: false);
+            if (type is not null)
+                return type;
+        }
+
+        return null;
+    }
+}

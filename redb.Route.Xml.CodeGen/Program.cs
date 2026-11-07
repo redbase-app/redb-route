@@ -1,0 +1,466 @@
+using System.Xml.Linq;
+using redb.Route.Xml;
+
+// redb-route-xml — the Ф6 developer tool (docs/Route-XML/08-PHASE6-CODEGEN.md §7).
+// Not part of the runtime package: it serves the developer, not the running service.
+//
+//   redb-route-xml csharp  <file.route.xml> --namespace My.Routes [--class Name] [--style readable|machine] [--out dir]
+//   redb-route-xml mermaid <file.route.xml> [--bin buildOutputDir] [--direction TD|LR] [--out dir]
+//   redb-route-xml xsd     [--out dir]
+//
+// csharp:  prints (or writes) the fluent C# the file parses into.
+// mermaid: prints (or writes) the flowchart for the file's routes (loaded with lax scheme
+//          checking off — the tool has no components; use it on documents whose schemes you know).
+// xsd:     prints (or writes) the generated schema for the core element set.
+
+if (args.Length == 0)
+{
+    Console.Error.WriteLine("usage: redb-route-xml new|pack|check|csharp|mermaid|xsd … " +
+                            "(new <Name> [--context name] [--dir parent]; " +
+                            "pack <projectDir> --version 1.0.0 [--name n] [--out dir] [--entry dll] [--depends package]; " +
+                            "check <projectDir> [--name n] [--depends package])");
+    return 2;
+}
+
+string? Option(string name)
+{
+    var index = Array.IndexOf(args, name);
+    return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+}
+
+var command = args[0];
+var outDir = Option("--out");
+
+try
+{
+    switch (command)
+    {
+        case "csharp":
+        {
+            var file = args.ElementAtOrDefault(1)
+                ?? throw new ArgumentException("csharp needs the .route.xml file path.");
+            var ns = Option("--namespace")
+                ?? throw new ArgumentException("csharp needs --namespace <My.Routes>.");
+            var className = Option("--class") ?? DefaultClassName(file);
+            var style = Option("--style") == "machine" ? CodeGenStyle.Machine : CodeGenStyle.Readable;
+            var document = XDocument.Load(file, LoadOptions.SetLineInfo);
+            var code = XmlCodeGenerator.Generate(document, className, ns, style, Path.GetFullPath(file));
+            Emit(code, outDir, className + ".cs");
+            return 0;
+        }
+        case "mermaid":
+        {
+            var file = args.ElementAtOrDefault(1)
+                ?? throw new ArgumentException("mermaid needs the .route.xml file path.");
+            // The tool builds the definition tree in a scratch context. A diagram needs neither
+            // live beans nor real predicates, so the document copy loses its <bean> sections,
+            // registry predicates get stand-ins, and unknown schemes get stub components —
+            // the drawn structure is exactly the parsed structure.
+            var diagramDoc = XDocument.Load(Path.GetFullPath(file), LoadOptions.SetLineInfo);
+            using var context = new redb.Route.Core.RouteContext();
+            foreach (var bean in diagramDoc.Root!.Elements().Where(e => e.Name.LocalName == "bean").ToList())
+                bean.Remove();
+            foreach (var predicate in diagramDoc.Descendants().Attributes("predicate").Select(a => a.Value).Distinct())
+                context.AddToRegistry(predicate.TrimStart('#'), new PredicateStub());
+            foreach (var scheme in CollectSchemes(file))
+                if (context.GetComponent<redb.Route.Abstractions.IComponent>(scheme) is null)
+                    context.AddComponent(new SchemeStub(scheme));
+            // file= references resolve by the rule check holds the project to (resources/, then the
+            // project root); with --bin the project's own types and the package elements of its
+            // build output are visible too, which a diagram of a real project needs.
+            context.AddService(typeof(redb.Route.Abstractions.IRouteResourceResolver),
+                new redb.Route.Xml.Packaging.RouteProjectResourceResolver(file));
+            XmlRouteLoaderOptions? diagramOptions = null;
+            if (Option("--bin") is { } diagramBin)
+            {
+                var binPath = Path.GetFullPath(diagramBin);
+                context.AddService(typeof(redb.Route.Abstractions.IBeanTypeResolver),
+                    new BinTypeResolver(redb.Route.Xml.Packaging.PackageTypeResolver.Create(binPath, Console.Error.WriteLine)));
+                diagramOptions = new XmlRouteLoaderOptions { Extensions = LoadContributions(binPath) };
+            }
+            try
+            {
+                context.AddXmlRoutesFromContent(diagramDoc.ToString(), Path.GetFullPath(file), diagramOptions);
+            }
+            catch (XmlRouteException ex) when (diagramOptions is null)
+            {
+                Console.Error.WriteLine(ex.Message);
+                Console.Error.WriteLine("hint: a route that names the project's own types or package elements " +
+                                        "needs its build output: --bin <path to bin/Debug/netX.Y>.");
+                return 1;
+            }
+            var definitions = new List<redb.Route.Abstractions.IProcessorDefinition>();
+            foreach (var builder in context.RouteBuilders)
+            {
+                if (!builder.IsBuilt)
+                    builder.InternalBuild(context);
+                definitions.AddRange(builder.ExceptionDefinitions);
+                definitions.AddRange(builder.Intercepts);
+                definitions.AddRange(builder.OnCompletions);
+                definitions.AddRange(builder.Definitions);
+            }
+            var diagram = redb.Route.Diagnostics.MermaidRenderer.Render(
+                definitions, Option("--direction") ?? "TD");
+            Emit(diagram, outDir, Path.GetFileNameWithoutExtension(file) + ".mmd");
+            return 0;
+        }
+        case "xsd":
+        {
+            // xsd [binDir...] [--out dir] — package contributions ride in the same way
+            // `elements` takes them, so a project's local schema knows its <redbSave>/<cache>
+            // exactly like the pack gate does (otherwise the IDE flags every package element).
+            var xsdBinDirs = args.Skip(1).TakeWhile(a => !a.StartsWith("--", StringComparison.Ordinal)).ToList();
+            var xsdContributions = xsdBinDirs
+                .SelectMany(d => LoadContributions(Path.GetFullPath(d)))
+                .DistinctBy(c => c.Name)
+                .ToList();
+            var schema = XmlRouteSchema.Generate(
+                ElementRegistry.CreateDefault(xsdContributions.Count > 0 ? xsdContributions : null)).ToString();
+            Emit(schema, outDir, "redb-route-1.0.xsd");
+            return 0;
+        }
+        case "elements":
+        {
+            // elements [binDir...] [--out dir] [--docs dir...] — every element spec of the registry as JSON:
+            // the machine-readable list 09-UX §6 asks for at the start of Ф8 (palette,
+            // categories, property panels). --bins add package contributions the same way
+            // the worker's discovery sees them.
+            var binDirs = args.Skip(1).TakeWhile(a => !a.StartsWith("--", StringComparison.Ordinal)).ToList();
+            var contributions = binDirs
+                .SelectMany(d => LoadContributions(Path.GetFullPath(d)))
+                .DistinctBy(c => c.Name)
+                .ToList();
+            var elementRegistry = ElementRegistry.CreateDefault(contributions.Count > 0 ? contributions : null);
+            object Describe(redb.Route.Xml.ElementSpec spec) => new
+            {
+                name = spec.Name,
+                kind = spec.Kind.ToString(),
+                attributes = spec.Attributes.Select(a => new
+                {
+                    name = a.Name,
+                    type = a.Type.ToString(),
+                    required = a.Required,
+                    enumValues = a.EnumValues,
+                }),
+                children = spec.Children.Select(Describe),
+                allowsSteps = spec.AllowsSteps,
+                allowsText = spec.AllowsTextContent,
+                takesEndpoint = spec.TakesEndpoint,
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(
+                elementRegistry.Contributions.Select(c => c.Spec).OrderBy(s => s.Name, StringComparer.Ordinal).Select(Describe),
+                new System.Text.Json.JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+                });
+            Emit(json, outDir, "redb-route-elements.json");
+
+            // The data formats of the same bins, a second file so the elements file keeps its shape: what the editor
+            // completes in format=, on <dataFormat> and on the per-step <marshal|unmarshal type="..."> form.
+            // --docs dir (repeatable): where to find the XML doc files a bin does not carry (a worker's shared layer).
+            var docDirs = args.Select((a, i) => (a, i)).Where(p => p.a == "--docs" && p.i + 1 < args.Length)
+                .Select(p => Path.GetFullPath(args[p.i + 1])).ToList();
+            var formats = redb.Route.Xml.CodeGen.DataFormatCatalog.Load(binDirs.Select(Path.GetFullPath), CarriedAssembly, docDirs);
+            var formatsJson = System.Text.Json.JsonSerializer.Serialize(
+                formats.Select(f => new
+                {
+                    name = f.Name,
+                    type = f.Type,
+                    contentType = f.ContentType,
+                    mediaTypes = f.MediaTypes,
+                    attributes = f.Attributes.Select(a => new
+                    {
+                        name = a.Name,
+                        kind = a.Kind,
+                        enumValues = a.EnumValues,
+                        @default = a.Default,
+                        description = a.Description,
+                    }),
+                    unmarshalTargets = f.UnmarshalTargets,
+                }),
+                new System.Text.Json.JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+                });
+            Emit(formatsJson, outDir, "redb-route-dataformats.json");
+            return 0;
+        }
+        case "new":
+        {
+            var name = args.ElementAtOrDefault(1)
+                ?? throw new ArgumentException("new needs the project name.");
+            var dir = redb.Route.Xml.Packaging.RouteProjectScaffold.Create(
+                Option("--dir") ?? Directory.GetCurrentDirectory(), name, Option("--context"),
+                Option("--runtime-ref"));
+            Console.Out.WriteLine(dir);
+            return 0;
+        }
+        case "check":
+        case "pack":
+        {
+            var projectDir = Path.GetFullPath(args.ElementAtOrDefault(1)
+                ?? throw new ArgumentException($"{command} needs the project directory."));
+            var name = Option("--name") ?? InferPackageName(projectDir);
+            var version = Option("--version") ?? "0.0.0";
+            // --depends <package> (repeatable): the manifest Dependencies, the packages the worker opens before this one.
+            var dependencies = args.Where((a, i) => i > 0 && args[i - 1] == "--depends").ToList();
+            // --bin <dir>: the built output — turns the bean checks deep (types, properties,
+            // method= targets are verified against the real assemblies) and brings the Р21
+            // markup contributions those assemblies carry (<cache>, <redbQuery>, …) into the
+            // XSD gate, the way the worker's own discovery will see them at load.
+            var resolver = Option("--bin") is { } binDir ? redb.Route.Xml.Packaging.PackageTypeResolver.Create(Path.GetFullPath(binDir), Console.Error.WriteLine) : null;
+            // The same output's package checks (IPackageCheck) run beside the gate's own: the xmljson
+            // format compiles and walks its schema with its own code.
+            var loaded = Option("--bin") is { } contribDir
+                ? LoadContributionsAndChecks(Path.GetFullPath(contribDir))
+                : default;
+            var extensions = loaded.Contributions;
+            var checks = loaded.Checks;
+            if (extensions is not null)
+                Console.Error.WriteLine($"--bin contributions: {extensions.Count} ({string.Join(", ", extensions.Select(e => e.Name))})");
+            if (checks is not null)
+                Console.Error.WriteLine($"--bin package checks: {checks.Count} ({string.Join(", ", checks.Select(c => c.GetType().Name))})");
+            // The connectors of the same output: every endpoint's parameters are held against
+            // them, so a name a strict connector refuses at start is a gate error instead.
+            var catalog = Option("--bin") is { } catalogDir
+                ? redb.Route.Xml.ComponentCatalog.Build(LoadComponents(Path.GetFullPath(catalogDir)))
+                : null;
+            if (catalog is not null)
+                Console.Error.WriteLine($"--bin connectors: {catalog.Count} ({string.Join(", ", catalog.Select(c => c.Scheme + (c.Lenient ? "" : "*")))}; * strict)");
+            var result = command == "check"
+                ? redb.Route.Xml.Packaging.RoutePackage.Check(projectDir, name, version, resolver, extensions, catalog, dependencies, checks)
+                : redb.Route.Xml.Packaging.RoutePackage.Build(projectDir, name, version,
+                    outDir ?? Path.Combine(projectDir, "pkg"),
+                    args.Where((a, i) => i > 0 && args[i - 1] == "--entry").ToList(), resolver, extensions, catalog, dependencies, checks);
+            foreach (var finding in result.Findings)
+                (finding.IsError ? Console.Error : Console.Out).WriteLine(finding.ToString());
+            if (result.Errors.Any())
+                return 1;
+            Console.Out.WriteLine($"{name} {version}: {result.Manifest.Artifacts.Count} artifact(s), " +
+                $"{result.Manifest.RequiredConfigKeys.Count} required config key(s)" +
+                (command == "pack" ? $" → {(outDir ?? Path.Combine(projectDir, "pkg"))}" : " — ok"));
+            return 0;
+        }
+        case "catalog":
+        {
+            // catalog <binDir>... [--out dir] — reflects over BUILT connector outputs (no
+            // project builds from here: point it at bin/ directories that already exist) and
+            // writes the component catalog plus the catalog-aware XSD.
+            var dirs = args.Skip(1).TakeWhile(a => !a.StartsWith("--", StringComparison.Ordinal)).ToList();
+            if (dirs.Count == 0)
+                throw new ArgumentException("catalog needs at least one bin directory with built connector assemblies.");
+            // Every listed directory serves as a dependency probe for every other one: a Tsak
+            // worker keeps the connectors in Libs/shared but their dependencies (Quartz, SDKs)
+            // in the host bin, so `catalog Libs/shared bin/Debug/net10.0` must resolve across.
+            var probeDirs = dirs.Select(Path.GetFullPath).ToArray();
+            var components = new List<redb.Route.Abstractions.IComponent>();
+            foreach (var dir in probeDirs)
+                components.AddRange(LoadComponents(dir, probeDirs));
+            var catalog = redb.Route.Xml.ComponentCatalog.Build(components);
+            // The same bins carry the markup contributions (<redbSave>, <cache>, …) the worker's
+            // discovery loads — the catalog XSD must know them too, or every package element
+            // shows as invalid in the editor (owner finding on the XmlDemo, 2026-09-09).
+            var catalogContributions = probeDirs
+                .SelectMany(d => LoadContributions(d))
+                .DistinctBy(c => c.Name)
+                .ToList();
+            Emit(redb.Route.Xml.ComponentCatalog.ToJson(catalog), outDir, "redb-route-catalog.json");
+            if (outDir is not null)
+                Emit(XmlRouteSchema.Generate(
+                        ElementRegistry.CreateDefault(catalogContributions.Count > 0 ? catalogContributions : null),
+                        catalog).ToString(),
+                    outDir, "redb-route-1.0.catalog.xsd");
+            Console.Error.WriteLine($"{catalog.Count} scheme(s): {string.Join(", ", catalog.Select(c => c.Scheme))}");
+            return 0;
+        }
+        default:
+            Console.Error.WriteLine($"unknown command '{command}' (new, pack, check, catalog, csharp, mermaid, xsd).");
+            return 2;
+    }
+}
+catch (Exception ex) when (ex is ArgumentException or FileNotFoundException or XmlRouteException or InvalidOperationException or NotSupportedException)
+{
+    Console.Error.WriteLine(ex.Message);
+    return 1;
+}
+
+/// <summary>
+/// The tool casts what a bin carries to ITS OWN redb.Route.Xml / redb.Route types. A bin built
+/// against another version of those assemblies yields types the cast silently rejects: zero
+/// contributions, zero components, then a baffling «unknown element» from the XSD gate (owner
+/// finding: a 3.7.3 tool over 4.0.0 bins, 2026-09-16). Refuse the skew out loud instead.
+/// </summary>
+static void RequireSameRuntime(string binDir, System.Reflection.Assembly own)
+{
+    var name = own.GetName();
+    var candidate = Path.Combine(binDir, name.Name + ".dll");
+    if (!File.Exists(candidate))
+        return;
+    var binVersion = System.Reflection.AssemblyName.GetAssemblyName(candidate).Version;
+    if (binVersion is null || name.Version is null || binVersion == name.Version)
+        return;
+    Console.Error.WriteLine(
+        $"error: {name.Name} {binVersion} in '{binDir}' is not the {name.Name} {name.Version} this redb-route-xml was built with — " +
+        "contributions and components of another runtime version cannot be read. Update the tool to the runtime's version " +
+        "(dotnet tool update -g redb.Route.Xml.CodeGen --add-source <feed>) or point --bin at a matching build.");
+    Environment.Exit(1);
+}
+
+static List<redb.Route.Xml.IXmlElementContribution> LoadContributions(string binDir)
+{
+    RequireSameRuntime(binDir, typeof(redb.Route.Xml.IXmlElementContribution).Assembly);
+    return redb.Route.Xml.CodeGen.ContributionLoader.Load(binDir, CarriedAssembly);
+}
+
+static (List<redb.Route.Xml.IXmlElementContribution> Contributions, List<redb.Route.Xml.Packaging.IPackageCheck> Checks)
+    LoadContributionsAndChecks(string binDir)
+{
+    RequireSameRuntime(binDir, typeof(redb.Route.Xml.IXmlElementContribution).Assembly);
+    return redb.Route.Xml.CodeGen.ContributionLoader.LoadAll(binDir, CarriedAssembly);
+}
+
+/// <summary>The assembly of this name the tool itself already runs on, if it is one of them.</summary>
+static System.Reflection.Assembly? CarriedAssembly(string? simpleName)
+    => simpleName is null
+        ? null
+        : System.Runtime.Loader.AssemblyLoadContext.Default.Assemblies
+            .FirstOrDefault(a => string.Equals(a.GetName().Name, simpleName, StringComparison.Ordinal));
+
+/// <summary>Whether the tool already runs on an assembly of this name.</summary>
+static bool Carried(string? simpleName) => CarriedAssembly(simpleName) is not null;
+
+static IEnumerable<redb.Route.Abstractions.IComponent> LoadComponents(string binDir, string[]? probeDirs = null)
+{
+    RequireSameRuntime(binDir, typeof(redb.Route.Abstractions.IComponent).Assembly);
+    var probes = probeDirs is { Length: > 0 } ? probeDirs : [binDir];
+    var context = new System.Runtime.Loader.AssemblyLoadContext($"catalog:{binDir}", isCollectible: false);
+    context.Resolving += (loadContext, assemblyName) =>
+    {
+        // What the tool itself carries (redb.Route, redb.Route.Xml) stays the Default copy:
+        // loaded a second time here, its IComponent would be a DIFFERENT type and every
+        // connector's cast would silently fail. Returning null hands the load to Default.
+        if (Carried(assemblyName.Name)) return null;
+        foreach (var probe in probes)
+        {
+            var candidate = Path.Combine(probe, assemblyName.Name + ".dll");
+            if (File.Exists(candidate))
+                return loadContext.LoadFromAssemblyPath(candidate);
+        }
+        return null;
+    };
+    // «redb.Route*.dll», not «redb.Route.*.dll»: the engine's own components (timer, direct,
+    // seda, vm, log, mock, direct-vm) live in redb.Route.dll, which the dotted mask does not
+    // match — the catalog was missing the very schemes most routes start from (owner question
+    // before 4.1.0, 2026-09-20).
+    foreach (var dll in Directory.GetFiles(binDir, "redb.Route*.dll"))
+    {
+        System.Reflection.Assembly assembly;
+        try
+        {
+            // The Resolving hook may have already pulled this simple name from another probe
+            // dir while satisfying a dependency; loading the local copy on top would throw
+            // «assembly with same name is already loaded» — first copy wins, like the worker.
+            // An assembly the tool carries is read from the Default context for the same
+            // reason the hook refuses it: one identity for one name, engine included.
+            var simpleName = System.Reflection.AssemblyName.GetAssemblyName(dll).Name;
+            assembly = CarriedAssembly(simpleName)
+                ?? context.Assemblies.FirstOrDefault(a => a.GetName().Name == simpleName)
+                ?? context.LoadFromAssemblyPath(dll);
+        }
+        catch (BadImageFormatException)
+        {
+            continue;
+        }
+        // Mirror the engine's RouteContextExtensions.AddComponents: ALL types (a connector may
+        // keep its components internal behind a registration extension — Firebase does), the
+        // loadable subset when some types need assemblies this host does not carry, and a skip
+        // for anything that will not instantiate. The catalog must describe what a route in a
+        // worker can actually reach, so the tool must not be stricter than the engine.
+        Type[] types;
+        try
+        {
+            types = assembly.GetTypes();
+        }
+        catch (System.Reflection.ReflectionTypeLoadException ex)
+        {
+            Console.Error.WriteLine($"warning: {Path.GetFileName(dll)}: some types did not load ({ex.LoaderExceptions.FirstOrDefault()?.Message}); using the rest.");
+            types = [.. ex.Types.Where(t => t is not null)!];
+        }
+        // A constructor the engine can call without arguments: none at all, or only optional ones
+        // (HttpComponent(string scheme = "http") — requiring a strictly parameterless one left
+        // http: out of the catalog and made every structured <http> an error in the editor). A
+        // component without one is named on stderr: mcp dropped out of the catalog in silence.
+        foreach (var component in redb.Route.Xml.CodeGen.ComponentConstruction.Create(types, Console.Error))
+            yield return component;
+    }
+}
+
+static string InferPackageName(string projectDir)
+{
+    // The csproj's RoutePackageName property, else the single csproj name, else the directory.
+    foreach (var csproj in Directory.GetFiles(projectDir, "*.csproj"))
+    {
+        var doc = XDocument.Load(csproj);
+        if (doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "RoutePackageName")?.Value is { Length: > 0 } fromProp)
+            return fromProp;
+        return Path.GetFileNameWithoutExtension(csproj);
+    }
+    return Path.GetFileName(projectDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+}
+
+static string DefaultClassName(string file)
+{
+    var stem = Path.GetFileName(file).Replace(".route.xml", "", StringComparison.Ordinal);
+    var parts = stem.Split(['-', '.', '_'], StringSplitOptions.RemoveEmptyEntries);
+    return string.Concat(parts.Select(p => char.ToUpperInvariant(p[0]) + p[1..])) + "Routes";
+}
+
+static void Emit(string content, string? outDir, string fileName)
+{
+    if (outDir is null)
+    {
+        Console.Out.Write(content);
+        return;
+    }
+    Directory.CreateDirectory(outDir);
+    var path = Path.Combine(outDir, fileName);
+    File.WriteAllText(path, content);
+    Console.Out.WriteLine(path);
+}
+
+static IEnumerable<string> CollectSchemes(string file)
+{
+    var document = XDocument.Load(file);
+    var schemes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var attribute in document.Descendants().Attributes("uri"))
+    {
+        var uri = attribute.Value;
+        var colon = uri.IndexOf(':');
+        if (colon > 0 && !uri.StartsWith("{{", StringComparison.Ordinal) && !uri.StartsWith("${", StringComparison.Ordinal))
+            schemes.Add(uri[..colon]);
+    }
+    foreach (var address in document.Descendants().Where(e => e.Name.LocalName is "to" or "toD" or "from" or "wireTap" or "enrich" or "pollEnrich"))
+        foreach (var child in address.Elements())
+            schemes.Add(child.Name.LocalName);
+    return schemes;
+}
+
+/// <summary>The build output's types, handed to the loader the way a worker's own resolver would.</summary>
+file sealed class BinTypeResolver(Func<string, Type?> resolve) : redb.Route.Abstractions.IBeanTypeResolver
+{
+    public Type? Resolve(string typeName) => resolve(typeName);
+}
+
+file sealed class SchemeStub(string scheme) : redb.Route.Core.ComponentBase
+{
+    public override string Scheme { get; } = scheme;
+    public override redb.Route.Abstractions.IEndpoint CreateEndpoint(redb.Route.Abstractions.EndpointUri uri)
+        => throw new NotSupportedException("diagram-only stub");
+}
+
+file sealed class PredicateStub : redb.Route.Abstractions.IPredicate
+{
+    public bool Matches(redb.Route.Abstractions.IExchange exchange) => false;
+}

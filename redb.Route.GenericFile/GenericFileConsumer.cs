@@ -1,0 +1,745 @@
+using System.Diagnostics;
+using System.Reflection;
+using System.Text;
+using Microsoft.Extensions.Logging;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Expressions;
+using redb.Route.Telemetry;
+
+namespace redb.Route.GenericFile;
+
+/// <summary>
+/// Template-method base class for all file-based consumers (local file, SFTP, FTP).
+/// Owns the complete poll loop: enumerate → filter → sort → limit → per-file processing
+/// (min-age, done-file, idempotency, read-lock, pre-move, create exchange, post-process).
+/// Subclasses provide protocol-specific hooks via virtual/abstract methods.
+/// </summary>
+/// <typeparam name="TOptions">Concrete options type inheriting <see cref="GenericFileEndpointOptions"/>.</typeparam>
+public abstract class GenericFileConsumer<TOptions> : DrainableConsumer
+    where TOptions : GenericFileEndpointOptions
+{
+    private readonly IEndpoint _endpoint;
+    private readonly InMemoryGenericFileIdempotentRepository? _idempotentRepo;
+    private long _processedCount;
+
+    /// <inheritdoc />
+    protected override IEndpoint ConsumerEndpoint => _endpoint;
+
+    /// <summary>Endpoint options.</summary>
+    protected TOptions Options { get; }
+
+    /// <summary>File operations (protocol-specific adapter).</summary>
+    protected IFileOperations Operations { get; }
+
+    /// <summary>Total number of files successfully processed.</summary>
+    public long ProcessedCount => Interlocked.Read(ref _processedCount);
+
+    /// <summary>The idempotent repository (null if idempotency is disabled).</summary>
+    internal InMemoryGenericFileIdempotentRepository? IdempotentRepository => _idempotentRepo;
+
+    /// <summary>Base path for file operations (directory for local, remote path for SFTP/FTP).</summary>
+    protected abstract string BasePath { get; }
+
+    /// <summary>Creates a generic file consumer.</summary>
+    protected GenericFileConsumer(IEndpoint endpoint, IProcessor processor, TOptions options, IFileOperations operations)
+        : base(processor)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(operations);
+        _endpoint = endpoint;
+        Options = options;
+        Operations = operations;
+        _idempotentRepo = options.Idempotent ? new InMemoryGenericFileIdempotentRepository() : null;
+        _postProcessPathForm = CallsPathForm(GetType(), nameof(PostProcessAsync));
+        _failedPathForm = CallsPathForm(GetType(), nameof(OnProcessingFailedAsync));
+    }
+
+    // A subclass written before 4.7.0 overrides the (filePath, fileName, basePath) form of a hook. When that form is
+    // overridden below the type that overrides the (GenericFileInfo, workPath) form, the consumer calls it, as it
+    // always did; otherwise it calls the file form, which knows the size and the time of the file.
+    private readonly bool _postProcessPathForm;
+    private readonly bool _failedPathForm;
+
+    private static bool CallsPathForm(Type type, string hook)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var pathForm = type.GetMethod(hook, flags, null, [typeof(string), typeof(string), typeof(string), typeof(CancellationToken)], null)!;
+        var fileForm = type.GetMethod(hook, flags, null, [typeof(GenericFileInfo), typeof(string), typeof(CancellationToken)], null)!;
+        return pathForm.DeclaringType!.IsSubclassOf(fileForm.DeclaringType!);
+    }
+
+    private Task PostProcessFileAsync(GenericFileInfo file, string workPath, CancellationToken ct)
+        => _postProcessPathForm
+            ? PostProcessAsync(workPath, file.Name, file.BasePath, ct)
+            : PostProcessAsync(file, workPath, ct);
+
+    private Task ProcessingFailedAsync(GenericFileInfo file, string workPath, CancellationToken ct)
+        => _failedPathForm
+            ? OnProcessingFailedAsync(workPath, file.Name, file.BasePath, ct)
+            : OnProcessingFailedAsync(file, workPath, ct);
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  POLL LOOP (RunAsync + PollDirectory)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <inheritdoc />
+    protected override async Task RunAsync(CancellationToken pollCt, CancellationToken processingCt)
+    {
+        if (Options.InitialDelay > 0)
+        {
+            await Task.Delay(Options.InitialDelay, pollCt).ConfigureAwait(false);
+        }
+
+        var delay = TimeSpan.FromMilliseconds(Options.Delay);
+        var backoff = new PollBackoff(
+            Options.BackoffMultiplier, Options.BackoffIdleThreshold, Options.BackoffErrorThreshold);
+        var wasSkipping = false;
+
+        while (!pollCt.IsCancellationRequested)
+        {
+            // Backoff skip: wait one Delay WITHOUT polling — no BeforePollAsync, so a down server is not
+            // reconnected on a skipped cycle. Stopping during a skip still resolves within Delay.
+            if (backoff.ShouldSkip())
+            {
+                wasSkipping = true;
+                try { await Task.Delay(delay, pollCt).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+                continue;
+            }
+
+            if (wasSkipping)
+            {
+                Logger?.LogInformation("{Consumer}: resuming polling after backoff.", ConsumerName);
+                wasSkipping = false;
+            }
+
+            PollOutcome outcome;
+            try
+            {
+                var tally = await PollDirectory(processingCt).ConfigureAwait(false);
+                outcome = PollBackoff.Classify(tally, Options.BackoffOnFailedExchanges);
+            }
+            catch (OperationCanceledException) when (pollCt.IsCancellationRequested || processingCt.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Logger?.LogError(ex, "{Consumer} poll failed", ConsumerName);
+                OnPollError(ex);
+                outcome = PollOutcome.Error;
+            }
+
+            if (backoff.Record(outcome) is { } trigger)
+            {
+                Logger?.LogWarning(
+                    "{Consumer}: backing off after the {Reason} threshold — skipping the next {Skips} poll(s).",
+                    ConsumerName, trigger.ByError ? "error" : "idle", trigger.Skips);
+            }
+
+            try
+            {
+                await Task.Delay(delay, pollCt).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { break; }
+        }
+    }
+
+    /// <summary>
+    /// Polls the base directory for files, applies filters, and processes each file.
+    /// This is the core template method — do not override.
+    /// </summary>
+    internal async Task<PollTally> PollDirectory(CancellationToken ct)
+    {
+        await BeforePollAsync(ct).ConfigureAwait(false);
+
+        if (!await Operations.DirectoryExistsAsync(BasePath, ct).ConfigureAwait(false))
+        {
+            await AfterPollAsync([], ct).ConfigureAwait(false);
+            return default;
+        }
+
+        var files = await Operations.ListFilesAsync(
+            BasePath, Options.Recursive, Options.MaxDepth, Options.MinDepth,
+            DirectoryFilter(), ct).ConfigureAwait(false);
+
+        var filtered = ApplyFilters(files);
+        var sorted = ApplySort(filtered);
+        var limited = ApplyMaxMessages(sorted);
+        var fileList = limited.ToList();
+
+        if (fileList.Count == 0)
+        {
+            await OnNoFilesFoundAsync(ct).ConfigureAwait(false);
+            await AfterPollAsync(fileList, ct).ConfigureAwait(false);
+            return default;
+        }
+
+        // Tally created exchanges (files filtered by age / done-file / read-lock / idempotency contribute
+        // nothing, so a poll that picks up only already-seen files still reads as idle) and how many of
+        // those failed unhandled — the latter only matters when BackoffOnFailedExchanges is on.
+        var created = 0;
+        var failed = 0;
+        foreach (var file in fileList)
+        {
+            ct.ThrowIfCancellationRequested();
+            var result = await ProcessFileAsync(file, ct).ConfigureAwait(false);
+            if (result != FileProcessResult.Skipped) created++;
+            if (result == FileProcessResult.Failed) failed++;
+        }
+
+        await AfterPollAsync(fileList, ct).ConfigureAwait(false);
+        return new PollTally(created, failed);
+    }
+
+    // ── Per-file processing ─────────────────────────────────────────
+
+    /// <summary>
+    /// Processes one polled file. Returns <see cref="FileProcessResult.Processed"/> once the file has been
+    /// read and dispatched and the route left no unhandled failure, <see cref="FileProcessResult.Failed"/>
+    /// when it was dispatched but the route failed unhandled, and <see cref="FileProcessResult.Skipped"/>
+    /// when no exchange was created (min/max age, missing done-file, lost read-lock, idempotent duplicate,
+    /// or an unreadable file). The poll aggregates these into a <see cref="PollTally"/> for backoff.
+    /// </summary>
+    private async Task<FileProcessResult> ProcessFileAsync(GenericFileInfo file, CancellationToken ct)
+    {
+        // Check minimum age
+        if (Options.MinAge > 0)
+        {
+            var ageMs = (DateTimeOffset.UtcNow - file.LastModified).TotalMilliseconds;
+            if (ageMs < Options.MinAge)
+                return FileProcessResult.Skipped;
+        }
+
+        // Check maximum age (virtual — remote connectors override)
+        if (!CheckMaxAge(file))
+            return FileProcessResult.Skipped;
+
+        // Check done file
+        if (!string.IsNullOrEmpty(Options.DoneFileName))
+        {
+            var doneFilePath = GenericFileUtils.ResolveDoneFileName(file, Options.DoneFileName, Operations);
+            if (!await Operations.ExistsAsync(doneFilePath, ct).ConfigureAwait(false))
+                return FileProcessResult.Skipped;
+        }
+
+        // Acquire read lock (virtual — local file only).
+        // This runs BEFORE the idempotency claim: a consumer that loses the lock race must not
+        // burn the idempotent key, otherwise the file is never picked up again by anyone.
+        if (!await AcquireReadLockAsync(file, ct).ConfigureAwait(false))
+            return FileProcessResult.Skipped;
+
+        var idempotentKey = "";
+
+        try
+        {
+            // Check idempotency
+            if (_idempotentRepo != null)
+            {
+                idempotentKey = string.IsNullOrEmpty(Options.IdempotentKey)
+                    ? InMemoryGenericFileIdempotentRepository.DefaultKey(file)
+                    : GenericFileUtils.SubstituteFileTokens(new GenericFileFacts(file, ResolveWorkPath(file), Operations), Options.IdempotentKey);
+
+                if (!await _idempotentRepo.Add(idempotentKey, ct).ConfigureAwait(false))
+                    return FileProcessResult.Skipped; // Already processed
+            }
+
+            // PreMove
+            var workPath = ResolveWorkPath(file);
+            if (!string.IsNullOrEmpty(Options.PreMove))
+            {
+                workPath = await PreMoveFileAsync(file, ct).ConfigureAwait(false);
+            }
+
+            // Create exchange with body and protocol-specific headers.
+            // A file that cannot be read is a failure, not an empty message: releasing the
+            // idempotent key and leaving the file in place lets the next poll retry it.
+            Exchange exchange;
+            try
+            {
+                exchange = await CreateExchangeAsync(file, workPath, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger?.LogError(ex, "{Consumer}: cannot read {Path}, leaving the file in place", ConsumerName, workPath);
+
+                if (_idempotentRepo != null)
+                    await _idempotentRepo.Remove(idempotentKey, ct).ConfigureAwait(false);
+
+                await ProcessingFailedAsync(file, workPath, ct).ConfigureAwait(false);
+                return FileProcessResult.Skipped; // no exchange created — a read failure counts as idle, not a poll error
+            }
+
+            exchange.Pattern = ExchangePattern.InOnly;
+
+            // A file carries no trace context: its span is a root, never a child of the activity the poll runs under.
+            using var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+                (_endpoint.Component as ComponentBase)?.Context,
+                $"file read {_endpoint.Component.Scheme}", ActivityKind.Consumer,
+                "redb.system", _endpoint.Component.Scheme, _endpoint.Uri.NormalizedKey,
+                null, static (_, _) => null, operation: "read");
+            IncrementInflight();
+            try
+            {
+                await Processor.Process(exchange, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // our own stop — abort the poll, do not treat as a per-file failure
+            }
+            catch (Exception ex)
+            {
+                // An exception escaped the route (no matching OnException, or a handler that rethrew).
+                // Record it on the exchange so the failure path below runs (idempotent-key release +
+                // MoveFailed) and the poll loop continues to the next file — a single poison file must
+                // not abort the whole batch and leave the files after it in the listing unprocessed.
+                exchange.Exception ??= ex;
+            }
+            finally
+            {
+                DecrementInflight();
+                await exchange.DisposeAsync().ConfigureAwait(false);
+            }
+
+            // A failed route marks the span; a rolled-back one (no exception) does not.
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled)
+                span.Activity.RecordFailure(failure);
+
+            // A rollback-only exchange (.RollbackAll()) counts as failed too: its work was rolled back.
+            if (exchange.EndedInFailure())
+            {
+                // Processing failed — remove idempotent key so it can be retried
+                if (_idempotentRepo != null)
+                    await _idempotentRepo.Remove(idempotentKey, ct).ConfigureAwait(false);
+
+                // Move to failed directory (virtual hook — remote connectors)
+                await ProcessingFailedAsync(file, workPath, ct).ConfigureAwait(false);
+                return FileProcessResult.Failed; // exchange created but the route left an unhandled failure
+            }
+
+            // Post-processing
+            await PostProcessFileAsync(file, workPath, ct).ConfigureAwait(false);
+
+            // Confirm idempotent key
+            if (_idempotentRepo != null)
+                await _idempotentRepo.Confirm(idempotentKey, ct).ConfigureAwait(false);
+
+            // Delete done file if present
+            if (!string.IsNullOrEmpty(Options.DoneFileName))
+            {
+                var donePath = GenericFileUtils.ResolveDoneFileName(file, Options.DoneFileName, Operations);
+                try
+                {
+                    await Operations.DeleteAsync(donePath, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Logger?.LogWarning(ex, "{Consumer}: failed to delete done file {Path}", ConsumerName, donePath);
+                }
+            }
+
+            Interlocked.Increment(ref _processedCount);
+            return FileProcessResult.Processed;
+        }
+        catch when (_idempotentRepo != null && !string.IsNullOrEmpty(idempotentKey))
+        {
+            await _idempotentRepo.Remove(idempotentKey, ct).ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            await ReleaseReadLockAsync(file, ct).ConfigureAwait(false);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  SHARED LOGIC (non-virtual)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Applies Include/Exclude glob filters and excludes internal temp files.
+    /// Override to add protocol-specific exclusions (e.g. lock files).
+    /// </summary>
+    protected virtual IEnumerable<GenericFileInfo> ApplyFilters(IEnumerable<GenericFileInfo> files)
+    {
+        // Exclude internal temp files
+        files = files.Where(f => !f.Name.StartsWith(".redb_", StringComparison.OrdinalIgnoreCase));
+
+        // Exclude TempPrefix-prefixed files
+        if (!string.IsNullOrEmpty(Options.TempPrefix))
+        {
+            files = files.Where(f => !f.Name.StartsWith(Options.TempPrefix, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // Include filter (glob)
+        if (!string.IsNullOrEmpty(Options.Include))
+        {
+            files = files.Where(f => GenericFileUtils.GlobMatch(f.Name, Options.Include));
+        }
+
+        // Exclude filter (glob)
+        if (!string.IsNullOrEmpty(Options.Exclude))
+        {
+            files = files.Where(f => !GenericFileUtils.GlobMatch(f.Name, Options.Exclude));
+        }
+
+        // Path filters (Ant patterns over the path relative to the polled directory) — the name
+        // globs above cannot see a directory, so this is what selects one out of a recursive poll.
+        if (!string.IsNullOrEmpty(Options.AntInclude))
+        {
+            files = files.Where(f => GenericFileUtils.AntMatch(
+                RelativePathOf(f), Options.AntInclude, Options.AntFilterCaseSensitive));
+        }
+
+        if (!string.IsNullOrEmpty(Options.AntExclude))
+        {
+            files = files.Where(f => !GenericFileUtils.AntMatch(
+                RelativePathOf(f), Options.AntExclude, Options.AntFilterCaseSensitive));
+        }
+
+        // Condition over the file's own headers, and then the registry bean. Both run before the
+        // file is read, moved or deleted: a file turned down here is left exactly as it was found.
+        if (!string.IsNullOrEmpty(Options.FilterFile))
+        {
+            var predicate = _fileFilter ??= Predicates.PredicateFactory.FromString(Options.FilterFile);
+            files = files.Where(f => predicate.Matches(Probe(f, f.FullPath)));
+        }
+
+        if (Options.FilterInstance is { } bean)
+        {
+            files = files.Where(bean.Accept);
+        }
+
+        return files;
+    }
+
+    /// <summary>Path of a polled file relative to the directory it was enumerated from.</summary>
+    private string RelativePathOf(GenericFileInfo file) => Operations.GetRelativePath(file.BasePath, file.FullPath);
+
+    /// <summary>
+    /// A headers-only exchange standing for a file or a directory, used to evaluate
+    /// <c>filterFile</c> / <c>filterDirectory</c>. Nothing is read: the conditions see exactly the
+    /// headers the route would see, which is why they are written the same way as any other
+    /// condition in the DSL.
+    /// </summary>
+    private IExchange Probe(GenericFileInfo file, string path)
+    {
+        var message = new Message();
+        SetExchangeHeaders(message, file, path);
+        return new Exchange(message);
+    }
+
+    /// <summary>
+    /// Builds the directory predicate handed to the listing: the <c>filterDirectory</c> condition
+    /// and the filter bean, or null when neither is configured and every subdirectory is walked.
+    /// </summary>
+    private Func<string, string, bool>? DirectoryFilter()
+    {
+        var condition = string.IsNullOrEmpty(Options.FilterDirectory)
+            ? null
+            : _directoryFilter ??= Predicates.PredicateFactory.FromString(Options.FilterDirectory);
+        var bean = Options.FilterInstance;
+
+        if (condition is null && bean is null)
+            return null;
+
+        return (fullPath, relativePath) =>
+        {
+            if (bean is not null && !bean.AcceptDirectory(fullPath, relativePath))
+                return false;
+
+            if (condition is null)
+                return true;
+
+            // The directory stands in for a file: name, path and parent are what a condition can
+            // ask about; size and timestamp are not a directory's business and stay at zero.
+            var asFile = new GenericFileInfo
+            {
+                Name = Operations.GetFileName(fullPath),
+                FullPath = fullPath,
+                BasePath = BasePath,
+                Length = 0,
+                LastModified = default
+            };
+            return condition.Matches(Probe(asFile, fullPath));
+        };
+    }
+
+    private IPredicate? _fileFilter;
+    private IPredicate? _directoryFilter;
+
+    private IEnumerable<GenericFileInfo> ApplySort(IEnumerable<GenericFileInfo> files) => Options.SortBy switch
+    {
+        GenericFileSortBy.Name => files.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase),
+        GenericFileSortBy.NameDesc => files.OrderByDescending(f => f.Name, StringComparer.OrdinalIgnoreCase),
+        GenericFileSortBy.Modified => files.OrderBy(f => f.LastModified),
+        GenericFileSortBy.ModifiedDesc => files.OrderByDescending(f => f.LastModified),
+        GenericFileSortBy.Size => files.OrderBy(f => f.Length),
+        GenericFileSortBy.SizeDesc => files.OrderByDescending(f => f.Length),
+        _ => files
+    };
+
+    private IEnumerable<GenericFileInfo> ApplyMaxMessages(IEnumerable<GenericFileInfo> files)
+    {
+        if (Options.MaxMessagesPerPoll > 0)
+            return files.Take(Options.MaxMessagesPerPoll);
+        return files;
+    }
+
+    // ── Pre/Post processing ─────────────────────────────────────────
+
+    /// <summary>
+    /// Moves a file to the PreMove directory before processing.
+    /// Returns the new path of the file. Override for protocol-specific behavior.
+    /// </summary>
+    protected virtual async Task<string> PreMoveFileAsync(GenericFileInfo file, CancellationToken ct)
+    {
+        var preMoveDir = ResolveDirectory(
+            GenericFileUtils.SubstituteFileTokens(new GenericFileFacts(file, ResolveWorkPath(file), Operations), Options.PreMove), file.BasePath);
+        await Operations.CreateDirectoryAsync(preMoveDir, ct).ConfigureAwait(false);
+
+        var sourcePath = ResolveWorkPath(file);
+        var targetPath = Operations.CombinePath(preMoveDir, file.Name);
+
+        // Delete existing file at target if present
+        if (await Operations.ExistsAsync(targetPath, ct).ConfigureAwait(false))
+        {
+            try
+            {
+                await Operations.DeleteAsync(targetPath, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger?.LogWarning(ex, "{Consumer}: failed to delete existing file before pre-move {Path}", ConsumerName, targetPath);
+            }
+        }
+
+        await Operations.MoveAsync(sourcePath, targetPath, true, ct).ConfigureAwait(false);
+        return targetPath;
+    }
+
+    /// <summary>
+    /// Applies the configured post-processing strategy (noop/delete/moveTo) to a processed file. The file keys in
+    /// <c>moveTo</c> read <paramref name="file"/> at <paramref name="workPath"/>, all of
+    /// <see cref="redb.Route.Expressions.FileLanguage.Keys"/> included.
+    /// </summary>
+    /// <param name="file">The polled file.</param>
+    /// <param name="workPath">Where the file is now (after a pre-move or a read lock).</param>
+    /// <param name="ct">Cancellation token.</param>
+    protected virtual Task PostProcessAsync(GenericFileInfo file, string workPath, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        return PostProcessCoreAsync(new GenericFileFacts(file, workPath, Operations), workPath, file.Name, file.BasePath, ct);
+    }
+
+    /// <summary>
+    /// The compatibility form of <see cref="PostProcessAsync(GenericFileInfo, string, CancellationToken)"/>. A subclass
+    /// that overrides it keeps working: the consumer calls this form for it. Here the size and the time of the file
+    /// are not known, so <c>${file:length}</c> and <c>${file:modified}</c> in <c>moveTo</c> write nothing; override
+    /// the file form to have them.
+    /// </summary>
+    protected virtual Task PostProcessAsync(string filePath, string fileName, string basePath, CancellationToken ct)
+        => PostProcessCoreAsync(new GenericFileFacts(fileName, filePath, basePath, Operations), filePath, fileName, basePath, ct);
+
+    private async Task PostProcessCoreAsync(IFileFacts facts, string filePath, string fileName, string basePath, CancellationToken ct)
+    {
+        if (Options.Noop)
+            return;
+
+        if (Options.Delete)
+        {
+            try
+            {
+                await Operations.DeleteAsync(filePath, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger?.LogWarning(ex, "{Consumer}: failed to delete processed file {Path}", ConsumerName, filePath);
+            }
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(Options.MoveTo))
+        {
+            var moveDir = ResolveDirectory(
+                GenericFileUtils.SubstituteFileTokens(facts, Options.MoveTo), basePath);
+            await Operations.CreateDirectoryAsync(moveDir, ct).ConfigureAwait(false);
+
+            var targetPath = Operations.CombinePath(moveDir, fileName);
+
+            // Handle existing file at target
+            if (await Operations.ExistsAsync(targetPath, ct).ConfigureAwait(false))
+            {
+                switch (Options.MoveExisting)
+                {
+                    case GenericFileExistStrategy.Override:
+                        try
+                        {
+                            await Operations.DeleteAsync(targetPath, ct).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger?.LogWarning(ex, "{Consumer}: failed to delete target before move (Override) {Path}", ConsumerName, targetPath);
+                        }
+                        break;
+
+                    case GenericFileExistStrategy.Fail:
+                        throw new IOException($"Target file already exists: {targetPath}");
+
+                    case GenericFileExistStrategy.Ignore:
+                        return;
+
+                    default:
+                        try
+                        {
+                            await Operations.DeleteAsync(targetPath, ct).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger?.LogWarning(ex, "{Consumer}: failed to delete target before move (default) {Path}", ConsumerName, targetPath);
+                        }
+                        break;
+                }
+            }
+
+            await Operations.MoveAsync(filePath, targetPath, false, ct).ConfigureAwait(false);
+        }
+    }
+
+    // ── Exchange creation ───────────────────────────────────────────
+
+    /// <summary>
+    /// Creates an exchange with the file body and protocol-specific headers.
+    /// </summary>
+    /// <param name="file">Original file info (for metadata).</param>
+    /// <param name="workPath">Current file path (may differ from file.FullPath after pre-move).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <remarks>
+    /// Read failures propagate. A file that cannot be read must not be delivered as an empty
+    /// message: the caller treats the exception as a processing failure and leaves the file
+    /// in place for the next poll.
+    /// </remarks>
+    protected virtual async Task<Exchange> CreateExchangeAsync(GenericFileInfo file, string workPath, CancellationToken ct)
+    {
+        object body = Options.StreamBody
+            ? await Operations.OpenReadAsync(workPath, ct).ConfigureAwait(false)
+            : await Operations.ReadAllBytesAsync(workPath, ct).ConfigureAwait(false);
+
+        var message = new Message { Body = body };
+        SetExchangeHeaders(message, file, workPath);
+
+        return Exchange.Create(message, _endpoint.ScopeFactory);
+    }
+
+    /// <summary>
+    /// Sets protocol-specific headers on the exchange message.
+    /// Each connector sets headers with its own prefix (redbFile.*, redbSftp.*, redbFtp.*).
+    /// </summary>
+    /// <param name="message">Message to set headers on.</param>
+    /// <param name="file">Original file metadata (name, extension, base path, etc.).</param>
+    /// <param name="workPath">Current file location — may differ from file.FullPath after pre-move.</param>
+    protected abstract void SetExchangeHeaders(IMessage message, GenericFileInfo file, string workPath);
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  VIRTUAL HOOKS (overridden by subclasses)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Called before each poll cycle. Override to connect to remote server,
+    /// validate directory existence, etc.
+    /// </summary>
+    protected virtual Task BeforePollAsync(CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>
+    /// Called after each poll cycle with the list of files that were polled.
+    /// Override to disconnect if configured, etc.
+    /// </summary>
+    protected virtual Task AfterPollAsync(List<GenericFileInfo> files, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>
+    /// Called when a poll cycle finds no files. Override to send heartbeat exchanges.
+    /// </summary>
+    protected virtual Task OnNoFilesFoundAsync(CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>
+    /// Called when PollDirectory catches a non-cancellation exception.
+    /// Override to disconnect from remote server after errors.
+    /// </summary>
+    protected virtual void OnPollError(Exception ex) { }
+
+    /// <summary>
+    /// Checks maximum file age. Returns true if the file should be processed.
+    /// Override in remote connectors to implement MaxAge filtering.
+    /// </summary>
+    protected virtual bool CheckMaxAge(GenericFileInfo file) => true;
+
+    /// <summary>
+    /// Acquires a read lock on the file before processing. Returns true if lock was acquired.
+    /// Override in local file consumer for read-lock strategies.
+    /// </summary>
+    protected virtual Task<bool> AcquireReadLockAsync(GenericFileInfo file, CancellationToken ct)
+        => Task.FromResult(true);
+
+    /// <summary>
+    /// Path the file occupies once the read lock is held. Called after
+    /// <see cref="AcquireReadLockAsync"/> and before pre-move.
+    /// Override where a read-lock strategy relocates the file (local file, rename strategy).
+    /// </summary>
+    protected virtual string ResolveWorkPath(GenericFileInfo file) => file.FullPath;
+
+    /// <summary>
+    /// Releases the read lock after processing. Override in local file consumer.
+    /// </summary>
+    protected virtual Task ReleaseReadLockAsync(GenericFileInfo file, CancellationToken ct)
+        => Task.CompletedTask;
+
+    /// <summary>
+    /// Called when processing fails (exchange.Exception is set and not handled). Override in a connector to move the
+    /// file to a failure directory; the file keys of that option read <paramref name="file"/> at
+    /// <paramref name="workPath"/>.
+    /// </summary>
+    /// <param name="file">The polled file.</param>
+    /// <param name="workPath">Where the file is now (after a pre-move or a read lock).</param>
+    /// <param name="ct">Cancellation token.</param>
+    protected virtual Task OnProcessingFailedAsync(GenericFileInfo file, string workPath, CancellationToken ct)
+        => Task.CompletedTask;
+
+    /// <summary>
+    /// The compatibility form of <see cref="OnProcessingFailedAsync(GenericFileInfo, string, CancellationToken)"/>. A
+    /// subclass that overrides it keeps working: the consumer calls this form for it. Here the size and the time of
+    /// the file are not known; override the file form to have them.
+    /// </summary>
+    protected virtual Task OnProcessingFailedAsync(string filePath, string fileName, string basePath, CancellationToken ct)
+        => Task.CompletedTask;
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  HELPERS
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Resolves a directory path: if absolute, returns as-is; if relative, combines with basePath.
+    /// </summary>
+    protected string ResolveDirectory(string dir, string basePath)
+    {
+        if (Operations.IsAbsolutePath(dir))
+            return dir;
+        return Operations.CombinePath(basePath, dir);
+    }
+
+    /// <summary>
+    /// Resolves encoding from the <see cref="GenericFileEndpointOptions.Charset"/> option with UTF-8 fallback.
+    /// </summary>
+    protected Encoding ResolveEncoding()
+    {
+        try
+        {
+            return Encoding.GetEncoding(Options.Charset);
+        }
+        catch
+        {
+            return Encoding.UTF8;
+        }
+    }
+}

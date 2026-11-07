@@ -1,0 +1,366 @@
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+using MailKit.Net.Pop3;
+using Microsoft.Extensions.Logging;
+using MimeKit;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Telemetry;
+
+namespace redb.Route.Mail;
+
+/// <summary>
+/// POP3 component. Scheme: "pop3".
+/// Provides email consumption via POP3 using MailKit.
+/// URI: pop3://mail.example.com:995?username=inbox@ex.com&amp;password=xxx
+/// </summary>
+[EndpointRole(EndpointRole.Consumer, Hint = "Use smtp: to send mail.")]
+public class Pop3Component : ComponentBase
+{
+    /// <inheritdoc />
+    public override string Scheme => "pop3";
+
+    /// <inheritdoc />
+    public override IEndpoint CreateEndpoint(EndpointUri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+
+        var options = new MailEndpointOptions();
+        if (!string.IsNullOrEmpty(uri.Path) && uri.Path != "/")
+            options.Host = uri.Path.TrimStart('/');
+        options.BindFromUri(uri.RawParameters);
+        MailEndpointOptions.RefuseOtherSide(uri, Scheme, EndpointRole.Consumer);
+        MailConnectionFactory.TryApply(Context, options, uri, Logger, "POP3");
+        options.Validate(EndpointRole.Consumer);
+
+        return new Pop3Endpoint(uri, this, options);
+    }
+}
+
+/// <summary>
+/// POP3 endpoint. Creates a Pop3Consumer for receiving email.
+/// </summary>
+public class Pop3Endpoint : EndpointBase<MailEndpointOptions>
+{
+    /// <summary>Creates a POP3 endpoint.</summary>
+    public Pop3Endpoint(EndpointUri uri, Pop3Component component, MailEndpointOptions options)
+        : base(uri, component, options)
+    {
+    }
+
+    /// <summary>The mail server host.</summary>
+    public string Host => Options.Host;
+
+    /// <summary>The resolved port number.</summary>
+    public int Port => Options.ResolvePort("pop3");
+
+    /// <summary>Endpoint options.</summary>
+    internal MailEndpointOptions EndpointOptions => Options;
+
+    /// <inheritdoc />
+    public override IProducer CreateProducer()
+        => throw new NotSupportedException("POP3 does not support producing. Use smtp: scheme instead.");
+
+    /// <inheritdoc />
+    public override IConsumer CreateConsumer(IProcessor processor)
+    {
+        ArgumentNullException.ThrowIfNull(processor);
+        return new Pop3Consumer(this, processor, Options);
+    }
+}
+
+/// <summary>
+/// POP3 consumer — fetches email messages via MailKit Pop3Client.
+/// POP3 is a simple polling protocol: connect, list messages, download, optionally delete.
+/// Does not support IDLE mode or folders.
+/// </summary>
+public class Pop3Consumer : DrainableConsumer
+{
+    private readonly Pop3Endpoint _endpoint;
+    private readonly MailEndpointOptions _options;
+    private MailIdempotency? _idempotency;
+    // POP3 UIDL is optional (RFC 1939); a message without a Message-ID then has no key, said once.
+    private bool _warnedNoKey;
+    private readonly Regex? _subjectRegex;
+    private readonly HashSet<string>? _fromFilter;
+    private long _processedCount;
+    // POP3 TOP is optional (RFC 1939); once a server refuses it, stop asking every message.
+    private bool _serverLacksTop;
+
+    /// <inheritdoc />
+    protected override IEndpoint ConsumerEndpoint => _endpoint;
+
+    /// <inheritdoc />
+    protected override string ConsumerName => "pop3";
+
+    /// <summary>Creates a POP3 consumer.</summary>
+    public Pop3Consumer(Pop3Endpoint endpoint, IProcessor processor, MailEndpointOptions options)
+        : base(processor)
+    {
+        _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+
+        if (!string.IsNullOrWhiteSpace(options.SubjectFilter))
+            _subjectRegex = new Regex(options.SubjectFilter, RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        if (!string.IsNullOrWhiteSpace(options.FromFilter))
+            _fromFilter = new HashSet<string>(
+                options.FromFilter.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Number of messages successfully processed.</summary>
+    public long ProcessedCount => Interlocked.Read(ref _processedCount);
+
+    /// <inheritdoc />
+    protected override Task OnStarting(CancellationToken ct)
+    {
+        // The repository is looked up when the consumer starts, so a name nothing is registered under stops the route.
+        _idempotency = MailIdempotency.Create(_options, _endpoint);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>The Message-ID, else the UIDL; <c>null</c> when the message has neither (the server lacks UIDL).</summary>
+    private async Task<string?> IdempotentKeyAsync(Pop3Client client, MimeMessage mime, int index, CancellationToken ct)
+    {
+        if (!string.IsNullOrEmpty(mime.MessageId))
+            return mime.MessageId;
+        if (client.Capabilities.HasFlag(Pop3Capabilities.UIDL))
+            return await client.GetMessageUidAsync(index, ct).ConfigureAwait(false);
+
+        if (!_warnedNoKey)
+        {
+            _warnedNoKey = true;
+            Logger?.LogWarning("POP3 server does not support UIDL; a message without a Message-ID is routed without " +
+                               "an idempotency key");
+        }
+        return null;
+    }
+
+    /// <inheritdoc />
+    protected override async Task RunAsync(CancellationToken pollCt, CancellationToken processingCt)
+    {
+        if (_options.InitialDelay > 0)
+            await Task.Delay(_options.InitialDelay, pollCt).ConfigureAwait(false);
+
+        var delay = TimeSpan.FromMilliseconds(_options.Delay);
+
+        while (!pollCt.IsCancellationRequested)
+        {
+            try
+            {
+                using var client = await ConnectAsync(processingCt).ConfigureAwait(false);
+
+                var count = client.Count;
+                var toFetch = _options.MaxMessages > 0 ? Math.Min(count, _options.MaxMessages) : count;
+
+                for (var i = 0; i < toFetch; i++)
+                {
+                    if (processingCt.IsCancellationRequested) break;
+
+                    MimeMessage mime;
+                    if (!_options.FetchBody && !_serverLacksTop)
+                    {
+                        // fetchBody=false: envelope scanning - headers only (часть B of the sweep).
+                        try
+                        {
+                            var headerList = await client.GetMessageHeadersAsync(i, processingCt).ConfigureAwait(false);
+                            mime = MailMessageHelper.FromHeadersOnly(headerList);
+                        }
+                        catch (NotSupportedException ex)
+                        {
+                            // Headers-only needs the POP3 TOP command, which RFC 1939 makes
+                            // OPTIONAL. Without this fallback the poll died with a generic
+                            // transient warning every cycle, indistinguishable from a network
+                            // blip (ревью дуги, M16). Fall back to full fetch, say why, once.
+                            _serverLacksTop = true;
+                            Logger?.LogWarning(ex,
+                                "POP3 server does not support the TOP command; fetchBody=false " +
+                                "cannot do headers-only on this server - falling back to full fetch");
+                            mime = await client.GetMessageAsync(i, processingCt).ConfigureAwait(false);
+                        }
+                    }
+                    else
+                    {
+                        mime = await client.GetMessageAsync(i, processingCt).ConfigureAwait(false);
+                    }
+
+                    // Client-side filters
+                    if (!PassesFilters(mime)) continue;
+                    if (!PassesAgeFilter(mime)) continue;
+
+                    // Idempotency, after the filters: a message they hold back is not taken. The key is the
+                    // Message-ID, else the UIDL; the position in the mailbox names another message next session.
+                    var key = _idempotency is null
+                        ? null
+                        : await IdempotentKeyAsync(client, mime, i, processingCt).ConfigureAwait(false);
+                    if (key is not null && !await _idempotency!.TryAdd(key, processingCt).ConfigureAwait(false))
+                        continue;
+
+                    var exchange = MailMessageHelper.CreateExchange(mime, "pop3", index: i, scopeFactory: _endpoint.ScopeFactory, options: _options);
+
+                    if (_options.KeepRawMessage)
+                        exchange.Properties["RawMimeMessage"] = mime;
+
+                    using var span = StartConsumerSpan(mime);
+
+                    IncrementInflight();
+                    try
+                    {
+                        try
+                        {
+                            await Processor.Process(exchange, processingCt).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (processingCt.IsCancellationRequested)
+                        {
+                            throw; // our own stop: end the poll, the message is not a failure
+                        }
+                        catch (Exception ex)
+                        {
+                            // A failure that escaped the route is one failed message: it is left on the server and the
+                            // poll goes on to QUIT, so the deletes made before it in this session commit.
+                            span.Activity.RecordFailure(ex);
+                            Logger?.LogError(ex, "POP3: the route failed for message {Index}; the message is left on the server", i);
+                            if (key is not null)
+                                await _idempotency!.Rollback(key, processingCt).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        if (exchange.Exception is { } failure && !exchange.ExceptionHandled
+                            && (failure is not OperationCanceledException || !processingCt.IsCancellationRequested))
+                            span.Activity.RecordFailure(failure);
+
+                        // Apache Camel's rollback: a failed exchange (an unhandled exception, or rollback-only) leaves
+                        // the message on the server; only a successful one is committed.
+                        if (exchange.EndedInFailure())
+                        {
+                            Logger?.LogWarning(exchange.ExceptionHandled ? null : exchange.Exception,
+                                "POP3: the exchange for message {Index} failed; the message is left on the server", i);
+                            if (key is not null)
+                                await _idempotency!.Rollback(key, processingCt).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        Interlocked.Increment(ref _processedCount);
+
+                        // POP3 post-processing: only delete or none. redbMail.Delete on the message the route ended with
+                        // overrides the endpoint (Apache Camel's CamelMailDelete); POP3 has no folders to move or copy to.
+                        var result = exchange.HasOut ? exchange.Out! : exchange.In;
+                        var delete = result.Headers.ContainsKey(MailHeaders.Delete)
+                            ? result.GetHeader<bool>(MailHeaders.Delete)
+                            : _options.Delete || _options.PostProcess == PostProcessAction.Delete;
+                        if (delete)
+                            await client.DeleteMessageAsync(i, processingCt).ConfigureAwait(false);
+                        if (key is not null)
+                            await _idempotency!.Commit(key, processingCt).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        DecrementInflight();
+                        await exchange.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
+
+                await client.DisconnectAsync(quit: true, processingCt).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (pollCt.IsCancellationRequested || processingCt.IsCancellationRequested) { break; }
+            catch (Exception ex) { Logger?.LogWarning(ex, "POP3 poll failed, retrying on next cycle"); }
+
+            try { await Task.Delay(delay, pollCt).ConfigureAwait(false); }
+            catch (OperationCanceledException) { break; }
+        }
+    }
+
+    // ── Client-side filters ───────────────────────────────────────────
+
+    private bool PassesFilters(MimeMessage mime)
+    {
+        if (_subjectRegex is not null && !_subjectRegex.IsMatch(mime.Subject ?? ""))
+            return false;
+
+        if (_fromFilter is not null && mime.From.Mailboxes.All(mb => !_fromFilter.Contains(mb.Address)))
+            return false;
+
+        return true;
+    }
+
+    private bool PassesAgeFilter(MimeMessage mime)
+    {
+        if (_options.MinAge <= 0 && _options.MaxAge <= 0) return true;
+
+        var messageDate = mime.Date.UtcDateTime;
+        if (messageDate == default) return true;
+
+        var age = DateTimeOffset.UtcNow - messageDate;
+
+        if (_options.MinAge > 0 && age.TotalMilliseconds < _options.MinAge)
+            return false;
+
+        if (_options.MaxAge > 0 && age.TotalMilliseconds > _options.MaxAge)
+            return false;
+
+        return true;
+    }
+
+    // ── Connection ────────────────────────────────────────────────────
+
+    private async Task<Pop3Client> ConnectAsync(CancellationToken ct)
+    {
+        var client = new Pop3Client();
+        client.Timeout = _options.Timeout;
+
+        if (_options.TrustAllCertificates)
+            client.ServerCertificateValidationCallback = (_, _, _, _) => true;
+
+        await client.ConnectAsync(
+            _endpoint.Host,
+            _endpoint.Port,
+            _options.ResolveSecurityOptions(),
+            ct).ConfigureAwait(false);
+
+        await AuthenticateAsync(client, ct).ConfigureAwait(false);
+
+        return client;
+    }
+
+    private async Task AuthenticateAsync(Pop3Client client, CancellationToken ct)
+    {
+        if (!string.IsNullOrEmpty(_options.AccessToken))
+        {
+            var mechanism = _options.AuthMechanism switch
+            {
+                MailAuthMechanism.OAuthBearer =>
+                    new MailKit.Security.SaslMechanismOAuthBearer(_options.Username, _options.AccessToken),
+                _ => (MailKit.Security.SaslMechanism)
+                    new MailKit.Security.SaslMechanismOAuth2(_options.Username, _options.AccessToken)
+            };
+            await client.AuthenticateAsync(mechanism, ct).ConfigureAwait(false);
+        }
+        else if (!string.IsNullOrEmpty(_options.Username))
+        {
+            await client.AuthenticateAsync(_options.Username, _options.Password, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The span of one message. A mailbox message carries no trace context the connector reads, so the span is a root,
+    /// never a child of the activity the poll loop holds.
+    /// </summary>
+    private TransportSpan StartConsumerSpan(MimeMessage mime)
+    {
+        var span = RouteTelemetryExtensions.StartConsumerSpan<object?>(
+            (_endpoint.Component as ComponentBase)?.Context,
+            $"{_endpoint.Host} receive", ActivityKind.Consumer, "messaging.system", "pop3", _endpoint.Uri.NormalizedKey,
+            null, static (_, _) => null, destination: _endpoint.Host, operation: "receive");
+
+        if (span.Activity is { IsAllDataRequested: true } activity)
+        {
+            if (!string.IsNullOrEmpty(mime.MessageId))
+                activity.SetTag("messaging.message.id", mime.MessageId);
+            if (!string.IsNullOrEmpty(mime.Subject))
+                activity.SetTag("messaging.pop3.subject", mime.Subject);
+        }
+
+        return span;
+    }
+}

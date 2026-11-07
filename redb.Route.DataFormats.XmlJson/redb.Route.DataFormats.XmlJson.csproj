@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.DataFormats.XmlJson</PackageId>
+    <Description>XML to JSON and back without a class for redb.Route: the Json.NET notation (@attribute, #text), arrays known from an XSD or an explicit list of element paths, namespaces kept or dropped.</Description>
+    <PackageTags>esb;messaging;xml;json;xsd;dataformat;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+    <!-- The package check (IPackageCheck) the redb-route-xml gate runs with the build output. -->
+    <ProjectReference Include="..\redb.Route.Xml\redb.Route.Xml.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.DataFormats" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

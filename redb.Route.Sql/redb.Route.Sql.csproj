@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>redb.Route.Sql</PackageId>
+    <Description>SQL database transport for redb.Route ESB framework. Pure ADO.NET polling consumer, query/batch producer, stored procedure support. Provider-agnostic via System.Data.Common.</Description>
+    <PackageTags>esb;messaging;sql;database;adonet;polling;redb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- Version comes from redb.Route/Directory.Build.props — the whole ecosystem ships one number. -->
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="redb.Route.Tests.Sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\redb.Route\redb.Route.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

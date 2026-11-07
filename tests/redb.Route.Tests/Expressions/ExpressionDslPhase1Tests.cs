@@ -1,0 +1,273 @@
+using AwesomeAssertions;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+using static redb.Route.Core.RouteBuilder;
+using redb.Route.Expressions;
+using redb.Route.Definitions;
+
+namespace redb.Route.Tests.Expressions;
+
+/// <summary>
+/// Tests for the expression DSL: string forms of Loop / Delay / Throttle and the Expr(...) forms of
+/// SetProperty / SetBody / SetHeader / Transform.
+/// </summary>
+public class ExpressionDslPhase1Tests : IAsyncLifetime
+{
+    private readonly RouteContext _context = new();
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
+    {
+        await _context.DisposeAsync();
+        GC.SuppressFinalize(this);
+    }
+
+    // ─── SetProperty(Expr(...)) ───
+
+    [Fact]
+    public async Task SetPropertyExpr_ResolvesFromHeader()
+    {
+        object? captured = null;
+        _context.AddRoutes(r =>
+        {
+            r.From("direct://set-prop-expr")
+                .SetProperty("greeting", Expr("${header.name}"))
+                .Process(e => captured = e.Properties["greeting"]);
+        });
+
+        await _context.Start();
+        var exchange = new Exchange(new Message { Body = "test" });
+        exchange.In.Headers["name"] = "Alice";
+
+        var producer = _context.GetEndpoint("direct://set-prop-expr").CreateProducer();
+        await producer.Start();
+        await producer.Process(exchange);
+
+        captured.Should().Be("Alice");
+    }
+
+    [Fact]
+    public async Task SetPropertyExpr_ResolvesTemplate()
+    {
+        object? captured = null;
+        _context.AddRoutes(r =>
+        {
+            r.From("direct://set-prop-tmpl")
+                .SetProperty("msg", Expr("Hello ${header.name}!"))
+                .Process(e => captured = e.Properties["msg"]);
+        });
+
+        await _context.Start();
+        var exchange = new Exchange(new Message { Body = "test" });
+        exchange.In.Headers["name"] = "Bob";
+
+        var producer = _context.GetEndpoint("direct://set-prop-tmpl").CreateProducer();
+        await producer.Start();
+        await producer.Process(exchange);
+
+        captured.Should().Be("Hello Bob!");
+    }
+
+    // ─── LoopExpression ───
+
+    [Fact]
+    public async Task LoopExpression_CountFromHeader()
+    {
+        int counter = 0;
+        _context.AddRoutes(r =>
+        {
+            r.From("direct://loop-expr")
+                .LoopExpression(new StringExpression("${header.count}"), sub =>
+                {
+                    sub.Process(_ => Interlocked.Increment(ref counter));
+                });
+        });
+
+        await _context.Start();
+        var exchange = new Exchange(new Message { Body = "test" });
+        exchange.In.Headers["count"] = 5;
+
+        var producer = _context.GetEndpoint("direct://loop-expr").CreateProducer();
+        await producer.Start();
+        await producer.Process(exchange);
+
+        counter.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task LoopExpression_CountFromStringHeader()
+    {
+        int counter = 0;
+        _context.AddRoutes(r =>
+        {
+            r.From("direct://loop-expr-str")
+                .LoopExpression(new StringExpression("${header.count}"), sub =>
+                {
+                    sub.Process(_ => Interlocked.Increment(ref counter));
+                });
+        });
+
+        await _context.Start();
+        var exchange = new Exchange(new Message { Body = "test" });
+        exchange.In.Headers["count"] = "3";
+
+        var producer = _context.GetEndpoint("direct://loop-expr-str").CreateProducer();
+        await producer.Start();
+        await producer.Process(exchange);
+
+        counter.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task LoopExpression_WithCopy_BodyPreserved()
+    {
+        string? lastBody = null;
+        _context.AddRoutes(r =>
+        {
+            r.From("direct://loop-expr-copy")
+                .LoopExpression(new StringExpression("${header.count}"), sub =>
+                {
+                    sub.Process(e =>
+                    {
+                        lastBody = e.In.Body?.ToString();
+                        e.In.Body = "modified";
+                    });
+                }, copy: true);
+        });
+
+        await _context.Start();
+        var exchange = new Exchange(new Message { Body = "original" });
+        exchange.In.Headers["count"] = 3;
+
+        var producer = _context.GetEndpoint("direct://loop-expr-copy").CreateProducer();
+        await producer.Start();
+        await producer.Process(exchange);
+
+        // With copy, each iteration starts from the original
+        lastBody.Should().Be("original");
+    }
+
+    // ─── DelayExpression ───
+
+    [Fact]
+    public async Task DelayExpression_DelaysFromHeader()
+    {
+        object? captured = null;
+        _context.AddRoutes(r =>
+        {
+            r.From("direct://delay-expr")
+                .Delay("${header.delayMs}")
+                .Process(e => captured = e.In.Body);
+        });
+
+        await _context.Start();
+        var exchange = new Exchange(new Message { Body = "delayed" });
+        exchange.In.Headers["delayMs"] = 50;
+
+        var producer = _context.GetEndpoint("direct://delay-expr").CreateProducer();
+        await producer.Start();
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await producer.Process(exchange);
+        sw.Stop();
+
+        captured.Should().Be("delayed");
+        sw.ElapsedMilliseconds.Should().BeGreaterThanOrEqualTo(30); // ~50ms with some tolerance
+    }
+
+    // ─── ThrottleExpression ───
+
+    [Fact]
+    public async Task ThrottleExpression_ResolvesFromHeader()
+    {
+        int count = 0;
+        _context.AddRoutes(r =>
+        {
+            r.From("direct://throttle-expr")
+                .Throttle("${header.rate}", TimeSpan.FromSeconds(1))
+                .Process(_ => Interlocked.Increment(ref count));
+        });
+
+        await _context.Start();
+        var producer = _context.GetEndpoint("direct://throttle-expr").CreateProducer();
+        await producer.Start();
+
+        var exchange = new Exchange(new Message { Body = "test" });
+        exchange.In.Headers["rate"] = 100;
+        await producer.Process(exchange);
+
+        count.Should().Be(1);
+    }
+
+    // ─── SetBody(Expr(...)) ───
+
+    [Fact]
+    public async Task SetBodyExpr_ResolvesTemplate()
+    {
+        object? captured = null;
+        _context.AddRoutes(r =>
+        {
+            r.From("direct://setbody-expr")
+                .SetBody(Expr("${header.greeting} ${header.name}"))
+                .Process(e => captured = e.In.Body);
+        });
+
+        await _context.Start();
+        var exchange = new Exchange(new Message { Body = "original" });
+        exchange.In.Headers["greeting"] = "Hello";
+        exchange.In.Headers["name"] = "World";
+
+        var producer = _context.GetEndpoint("direct://setbody-expr").CreateProducer();
+        await producer.Start();
+        await producer.Process(exchange);
+
+        captured.Should().Be("Hello World");
+    }
+
+    // ─── Transform(Expr(...)) ───
+
+    [Fact]
+    public async Task TransformExpr_ResolvesTemplate()
+    {
+        object? captured = null;
+        _context.AddRoutes(r =>
+        {
+            r.From("direct://transform-expr")
+                .Transform(Expr("Processed: ${body}"))
+                .Process(e => captured = e.In.Body);
+        });
+
+        await _context.Start();
+        var exchange = new Exchange(new Message { Body = "data" });
+
+        var producer = _context.GetEndpoint("direct://transform-expr").CreateProducer();
+        await producer.Start();
+        await producer.Process(exchange);
+
+        captured.Should().Be("Processed: data");
+    }
+
+    // ─── SetHeader(Expr(...)) ───
+
+    [Fact]
+    public async Task SetHeaderExpr_ResolvesFromBody()
+    {
+        object? captured = null;
+        _context.AddRoutes(r =>
+        {
+            r.From("direct://sethdr-expr")
+                .SetHeader("bodyRef", Expr("${body}"))
+                .Process(e => captured = e.In.Headers["bodyRef"]);
+        });
+
+        await _context.Start();
+        var exchange = new Exchange(new Message { Body = "my-data" });
+
+        var producer = _context.GetEndpoint("direct://sethdr-expr").CreateProducer();
+        await producer.Start();
+        await producer.Process(exchange);
+
+        captured.Should().Be("my-data");
+    }
+}

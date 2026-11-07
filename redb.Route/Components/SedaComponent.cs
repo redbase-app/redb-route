@@ -1,0 +1,287 @@
+using System.Collections.Concurrent;
+using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Transactions;
+
+namespace redb.Route.Components;
+
+/// <summary>
+/// SEDA (Staged Event-Driven Architecture) component. Scheme: "seda".
+/// Provides asynchronous in-memory queuing between route segments.
+/// Producer enqueues the exchange and returns immediately; a background consumer
+/// loop dequeues and processes exchanges asynchronously.
+/// URI: seda://name?concurrentConsumers=1&amp;size=0
+/// </summary>
+public class SedaComponent : ComponentBase
+{
+    private readonly ConcurrentDictionary<string, SedaEndpoint> _endpoints = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <inheritdoc />
+    public override string Scheme => "seda";
+
+    /// <inheritdoc />
+    public override IEndpoint CreateEndpoint(EndpointUri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+        var options = new SedaEndpointOptions();
+        options.BindFromUri(uri.RawParameters);
+        options.Validate();
+        return _endpoints.GetOrAdd(uri.BaseKey, _ => new SedaEndpoint(uri, this, options));
+    }
+}
+
+/// <summary>
+/// Options for SEDA endpoints.
+/// </summary>
+public class SedaEndpointOptions : EndpointOptions
+{
+    /// <summary>Concurrent consumer workers: a number or "auto" (= max(CPU, 2)). Default 1.</summary>
+    // A string so "auto" binds verbatim instead of silently degrading to the int default (В-7).
+    public string? ConcurrentConsumers { get; set; }
+
+    /// <summary>Resolved worker count (see <see cref="ConcurrencyOption"/>).</summary>
+    public int ResolvedConcurrentConsumers => ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers");
+
+    /// <summary>
+    /// Maximum queue size (default: 1000, as Camel). A full queue makes the sender wait up to <c>timeout</c>. 0 = unbounded,
+    /// an explicit choice: a consumer slower than its senders then grows the queue without limit.
+    /// </summary>
+    public int Size { get; set; } = 1000;
+
+    /// <summary>Timeout in milliseconds for enqueue when queue is bounded. 0 = wait forever (default: 30000).</summary>
+    public int Timeout { get; set; } = 30000;
+
+    /// <inheritdoc />
+    public override void Validate()
+    {
+        _ = ConcurrencyOption.Resolve(ConcurrentConsumers, "concurrentConsumers"); // loud on garbage
+        if (Size < 0)
+            throw new ArgumentOutOfRangeException(nameof(Size), Size, "Size cannot be negative.");
+    }
+}
+
+/// <summary>
+/// SEDA endpoint. Uses <see cref="Channel{T}"/> as the in-memory async queue.
+/// </summary>
+public class SedaEndpoint : EndpointBase<SedaEndpointOptions>
+{
+    private readonly object _queueGate = new();
+    private Channel<IExchange> _queue;
+    private bool _closed;
+
+    /// <summary>
+    /// The queue of the endpoint. A stopping consumer closes it (<see cref="Close"/>) and the next start of a consumer
+    /// opens a new one (<see cref="Reopen"/>): the endpoint is cached by its component and outlives a
+    /// <c>Stop()</c> and <c>Start()</c> of the route context, while a closed channel cannot take writes again.
+    /// </summary>
+    internal Channel<IExchange> Queue => Volatile.Read(ref _queue);
+
+    /// <summary>Creates a SEDA endpoint.</summary>
+    public SedaEndpoint(EndpointUri uri, SedaComponent component, SedaEndpointOptions options)
+        : base(uri, component, options)
+    {
+        _queue = CreateQueue(options);
+    }
+
+    private static Channel<IExchange> CreateQueue(SedaEndpointOptions options) => options.Size > 0
+        ? Channel.CreateBounded<IExchange>(new BoundedChannelOptions(options.Size)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = options.ResolvedConcurrentConsumers == 1,
+            SingleWriter = false
+        })
+        : Channel.CreateUnbounded<IExchange>(new UnboundedChannelOptions
+        {
+            SingleReader = options.ResolvedConcurrentConsumers == 1,
+            SingleWriter = false
+        });
+
+    /// <summary>
+    /// Stops the queue taking new exchanges: a send fails with <see cref="ChannelClosedException"/>, and the consumer
+    /// finishes what is already queued.
+    /// </summary>
+    internal void Close()
+    {
+        lock (_queueGate)
+        {
+            _closed = true;
+            _queue.Writer.TryComplete();
+        }
+    }
+
+    /// <summary>
+    /// Opens a new queue in place of a closed one, for a consumer that starts again. Exchanges the stopping consumer
+    /// did not get to (its drain timed out) cannot be read from the closed queue by anyone: they are returned to be
+    /// released, and never handed over silently to the new one.
+    /// </summary>
+    internal IReadOnlyList<IExchange> Reopen()
+    {
+        lock (_queueGate)
+        {
+            if (!_closed)
+                return [];
+
+            var left = new List<IExchange>();
+            while (_queue.Reader.TryRead(out var exchange))
+                left.Add(exchange);
+            Volatile.Write(ref _queue, CreateQueue(Options));
+            _closed = false;
+            return left;
+        }
+    }
+
+    /// <summary>Gets the current approximate queue size.</summary>
+    public int CurrentQueueSize => Queue.Reader.CanCount ? Queue.Reader.Count : -1;
+
+    /// <inheritdoc />
+    public override IProducer CreateProducer() => new SedaProducer(this);
+
+    /// <inheritdoc />
+    public override IConsumer CreateConsumer(IProcessor processor)
+    {
+        ArgumentNullException.ThrowIfNull(processor);
+        return new SedaConsumer(this, processor, Options);
+    }
+}
+
+/// <summary>
+/// SEDA producer. Enqueues the exchange into the channel and returns immediately.
+/// The exchange is processed asynchronously by the consumer.
+/// </summary>
+public class SedaProducer : IProducer
+{
+    private readonly SedaEndpoint _endpoint;
+    private ILogger? _logger;
+
+    /// <summary>Creates a SEDA producer.</summary>
+    public SedaProducer(SedaEndpoint endpoint)
+    {
+        _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
+        _logger = (endpoint.Component as ComponentBase)?.Logger;
+    }
+
+    /// <inheritdoc />
+    public async Task Process(IExchange exchange, CancellationToken ct = default)
+    {
+        // Clone to ensure thread-safety: the pipeline thread and the SEDA worker
+        // must not share a mutable exchange. Clone also creates a new DI scope.
+        var copy = exchange.Clone();
+        // The copy runs later on the SEDA worker, a unit of work of its own: it must not see the sending
+        // .Transacted() block as its own.
+        TransactedActions.DetachFromBlock(copy);
+        try
+        {
+            await _endpoint.Queue.Writer.WriteAsync(copy, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The clone was NOT enqueued (cancellation, or the queue was completed on shutdown), so
+            // the consumer will never dispose it — release its per-exchange DI scope / DB connection
+            // here, then rethrow so the caller still observes the failure.
+            await copy.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public Task Start(CancellationToken ct = default)
+    {
+        _logger?.LogInformation("SEDA producer started: {Name}", EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey));
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task Stop(CancellationToken ct = default)
+    {
+        _logger?.LogInformation("SEDA producer stopped: {Name}", EndpointUri.Sanitize(_endpoint.Uri.NormalizedKey));
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// SEDA consumer. Runs N concurrent workers that dequeue and process exchanges.
+/// </summary>
+public class SedaConsumer : DrainableConsumer
+{
+    private readonly SedaEndpoint _endpoint;
+    private readonly SedaEndpointOptions _options;
+    private Task[]? _workers;
+    private long _processedCount;
+
+    /// <inheritdoc />
+    protected override IEndpoint ConsumerEndpoint => _endpoint;
+
+    /// <inheritdoc />
+    protected override string ConsumerName => _endpoint.Uri.NormalizedKey;
+
+    /// <summary>Total number of exchanges processed across all workers.</summary>
+    public long ProcessedCount => Interlocked.Read(ref _processedCount);
+
+    /// <summary>Creates a SEDA consumer.</summary>
+    public SedaConsumer(SedaEndpoint endpoint, IProcessor processor, SedaEndpointOptions options)
+        : base(processor)
+    {
+        _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+    }
+
+    /// <inheritdoc />
+    protected override Task RunAsync(CancellationToken pollCt, CancellationToken processingCt)
+    {
+        _workers = new Task[_options.ResolvedConcurrentConsumers];
+        for (var i = 0; i < _options.ResolvedConcurrentConsumers; i++)
+            _workers[i] = WorkerLoop(pollCt, processingCt);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    protected override async Task OnStarting(CancellationToken ct)
+    {
+        // A consumer that starts again after a stop (a Stop() and Start() of the route context, a restart of the route)
+        // gets a new queue: the stop closed the old one for good.
+        var left = _endpoint.Reopen();
+        if (left.Count == 0)
+            return;
+
+        Logger?.LogWarning(
+            "{Consumer}: {Count} exchange(s) were still queued when the consumer last stopped and are dropped.",
+            ConsumerName, left.Count);
+        foreach (var exchange in left)
+            await exchange.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    protected override Task OnStopAccepting()
+    {
+        // Sends fail from here on, and the workers finish what is already queued (ReadAllAsync reads buffered
+        // exchanges without looking at the poll token).
+        _endpoint.Close();
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    protected override async Task AwaitRunTask()
+    {
+        if (_workers != null)
+        {
+            try { await Task.WhenAll(_workers).ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    private async Task WorkerLoop(CancellationToken pollCt, CancellationToken processingCt)
+    {
+        try
+        {
+            await foreach (var exchange in _endpoint.Queue.Reader.ReadAllAsync(pollCt).ConfigureAwait(false))
+            {
+                await ProcessWithTracking(exchange, processingCt).ConfigureAwait(false);
+                Interlocked.Increment(ref _processedCount);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (ChannelClosedException) { }
+    }
+}

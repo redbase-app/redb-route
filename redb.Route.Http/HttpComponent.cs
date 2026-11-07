@@ -1,0 +1,350 @@
+using Microsoft.Extensions.Logging;
+using redb.Route.Abstractions;
+using redb.Route.Extensions;
+using redb.Route.Core;
+
+namespace redb.Route.Http;
+
+/// <summary>
+/// HTTP/HTTPS component. Schemes: "http", "https".
+/// <para>Producer: HttpClient-based HTTP caller (GET/POST/PUT/DELETE/PATCH).</para>
+/// <para>Consumer: Kestrel-based embedded HTTP server (webhook receiver).</para>
+/// <para>URI format: http:host:port/path?method=POST&amp;timeout=30000</para>
+/// <para>URI format: https:api.example.com/orders?method=POST&amp;throwOnError=true</para>
+/// <para>URI shorthand: http:GET:/path (method prefix before the path, consumer only)</para>
+/// </summary>
+public class HttpComponent : ComponentBase
+{
+    private readonly string _scheme;
+
+    /// <summary>
+    /// Creates the <c>http</c> component. A parameterless constructor of its own: the assembly scan
+    /// (<c>context.AddComponents</c>, the Tsak worker's module contexts) creates components through it and skips a type
+    /// whose only constructor has optional parameters.
+    /// </summary>
+    public HttpComponent() : this("http")
+    {
+    }
+
+    /// <summary>Creates an HTTP component with the specified scheme.</summary>
+    public HttpComponent(string scheme)
+    {
+        _scheme = scheme;
+    }
+
+    /// <inheritdoc />
+    public override string Scheme => _scheme;
+
+    /// <summary>
+    /// Global CORS defaults applied to all HTTP consumers.
+    /// Endpoint-level URI parameters (cors, corsOrigins, corsCredentials) override these.
+    /// </summary>
+    public HttpCorsOptions DefaultCors { get; } = new();
+
+    /// <summary>
+    /// Shared HTTP server manager for pooling Kestrel instances by (host, port).
+    /// Assigned by <c>AddRedbRouteHttp()</c>; a module host that adds components by scanning leaves
+    /// it null and keeps the manager in the container instead — see <see cref="Server"/>.
+    /// </summary>
+    public SharedHttpServerManager? ServerManager { get; set; }
+
+    /// <summary>
+    /// The manager a consumer binds on. Resolution order: explicitly assigned → the context's DI
+    /// singleton → refusal. There is no private fallback on purpose: an <c>http:</c> consumer binds a
+    /// port, and which port it binds is the host's decision, so a missing manager stays loud (gRPC,
+    /// AS2, SignalR, WebSocket and SOAP resolve in the same order and end with their own server).
+    /// </summary>
+    internal SharedHttpServerManager Server =>
+        ServerManager
+        ?? Context.Resolve<SharedHttpServerManager>()
+        ?? throw new InvalidOperationException(
+            "SharedHttpServerManager is not configured. Register HTTP via AddRedbRouteHttp() in DI, " +
+            "assign HttpComponent.ServerManager, or give the route context a service provider that holds one.");
+
+    /// <inheritdoc />
+    public override IEndpoint CreateEndpoint(EndpointUri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+
+        var options = new HttpEndpointOptions();
+        options.BindFromUri(uri.RawParameters);
+
+        // Resolve the named ConnectionFactory right after binding — before the path is parsed, so
+        // host/port taken from the URI path always win — and before Validate(), which requires
+        // Username/Password when AuthScheme=Basic.
+        if (!string.IsNullOrEmpty(options.ConnectionFactory))
+        {
+            // A set-but-unknown name fails loud -- never a silent fallback to URI params (Ф11 Ж-1).
+            var factory = Context.GetRequiredFromRegistry<HttpConnectionFactory>(options.ConnectionFactory);
+            factory.ApplyTo(options, uri);
+        }
+
+        // Support shorthand: http:GET:/path or http:POST:host:port/path
+        var path = ExtractMethodPrefix(uri.Path, options, uri.RawParameters, out var hasMethodPrefix);
+
+        // Extract host[:port] from URI path (e.g. "0.0.0.0:5088/api/demo")
+        // Only override if not explicitly set via query parameters.
+        ParseHostPort(path, options, uri.RawParameters);
+
+        // Merge global CORS defaults for fields not explicitly set in URI
+        ApplyCorsDefaults(options, uri.RawParameters);
+
+        options.Validate();
+
+        return new HttpEndpoint(uri, this, options, path, hasMethodPrefix);
+    }
+
+    /// <summary>
+    /// Detects an HTTP method prefix in the URI path (e.g. "GET:/connect/token")
+    /// and strips it, applying the method to options. Query params always take priority.
+    /// Returns the cleaned path (without the method prefix).
+    /// </summary>
+    internal static string ExtractMethodPrefix(
+        string path, HttpEndpointOptions options,
+        IReadOnlyDictionary<string, string> rawParams,
+        out bool hasMethodPrefix)
+    {
+        hasMethodPrefix = false;
+        var colonIdx = path.IndexOf(':');
+        if (colonIdx <= 0)
+            return path;
+
+        var candidate = path[..colonIdx];
+        if (!Enum.TryParse<HttpMethod>(candidate, ignoreCase: true, out var method))
+            return path;
+
+        // Method prefix found — strip it from path
+        hasMethodPrefix = true;
+        var cleanPath = path[(colonIdx + 1)..];
+
+        // URI query params always take priority
+        if (!rawParams.ContainsKey("method"))
+            options.Method = method;
+        if (!rawParams.ContainsKey("methods"))
+            options.Methods = candidate.ToUpperInvariant();
+
+        return cleanPath;
+    }
+
+    /// <summary>
+    /// Extracts host and port from the URI path segment (host[:port][/path]).
+    /// Only overrides options if not already set via query parameters.
+    /// </summary>
+    private static void ParseHostPort(string path, HttpEndpointOptions options, IReadOnlyDictionary<string, string> rawParams)
+    {
+        // Path format: "host:port/path" or "host/path" or "host:port" or "host"
+        var segment = path.TrimStart('/');
+        var slashIdx = segment.IndexOf('/');
+        var hostPort = slashIdx >= 0 ? segment[..slashIdx] : segment;
+
+        var colonIdx = hostPort.LastIndexOf(':');
+        if (colonIdx > 0)
+        {
+            var hostPart = hostPort[..colonIdx];
+            var portPart = hostPort[(colonIdx + 1)..];
+
+            if (!rawParams.ContainsKey("host") && !string.IsNullOrEmpty(hostPart))
+                options.Host = hostPart;
+
+            if (!rawParams.ContainsKey("port") && int.TryParse(portPart, out var port))
+                options.Port = port;
+        }
+        else if (!rawParams.ContainsKey("host") && !string.IsNullOrEmpty(hostPort))
+        {
+            options.Host = hostPort;
+        }
+    }
+
+    /// <summary>
+    /// Applies global CORS defaults to options where the URI did not explicitly set them.
+    /// Endpoint-level parameters always win over component-level defaults.
+    /// </summary>
+    private void ApplyCorsDefaults(HttpEndpointOptions options, IReadOnlyDictionary<string, string> rawParams)
+    {
+        if (!rawParams.ContainsKey("cors"))
+            options.Cors = DefaultCors.Enabled;
+
+        if (!rawParams.ContainsKey("corsOrigins") && DefaultCors.Origins is not null)
+            options.CorsOrigins ??= DefaultCors.Origins;
+
+        if (!rawParams.ContainsKey("corsCredentials"))
+            options.CorsCredentials = options.CorsCredentials || DefaultCors.Credentials;
+
+        // Resolver delegate cannot ride in URI parameters (it is a Func, not a string),
+        // so we propagate the global default unless the endpoint already set its own.
+        // BUT: when the URI declared its own static whitelist (corsOrigins=...), the caller
+        // is making an explicit "this exact origin policy" statement -- injecting a
+        // component-wide resolver on top would override that intent silently. So we only
+        // inject the global resolver when the endpoint did not pin its own origins.
+        if (!rawParams.ContainsKey("corsOrigins"))
+            options.CorsOriginsResolver ??= DefaultCors.OriginsResolver;
+    }
+}
+
+/// <summary>
+/// HTTPS component. Behaves identically to HTTP but uses the "https" scheme.
+/// </summary>
+public class HttpsComponent : HttpComponent
+{
+    /// <summary>Creates an HTTPS component.</summary>
+    public HttpsComponent() : base("https") { }
+}
+
+/// <summary>
+/// HTTP endpoint. Creates either a producer (HTTP client) or consumer (Kestrel server).
+/// <para>The path part of the URI is: host[:port]/path</para>
+/// <para>For producer: resolves to target URL.</para>
+/// <para>For consumer: path is the route to listen on.</para>
+/// </summary>
+public class HttpEndpoint : EndpointBase<HttpEndpointOptions>
+{
+    private readonly string _cleanPath;
+    private readonly bool _hasMethodPrefix;
+
+    /// <summary>Creates an HTTP endpoint.</summary>
+    /// <param name="uri">Original parsed URI.</param>
+    /// <param name="component">Parent HTTP component.</param>
+    /// <param name="options">Parsed endpoint options.</param>
+    /// <param name="cleanPath">Path with method prefix stripped (if any). Falls back to uri.Path.</param>
+    /// <param name="hasMethodPrefix">Whether a method prefix was stripped from the path.</param>
+    public HttpEndpoint(EndpointUri uri, HttpComponent component, HttpEndpointOptions options,
+        string? cleanPath = null, bool hasMethodPrefix = false)
+        : base(uri, component, options)
+    {
+        _cleanPath = cleanPath ?? uri.Path;
+        _hasMethodPrefix = hasMethodPrefix;
+    }
+
+    private redb.Route.Core.EndpointHeaderFilter? _headerFilter;
+
+    /// <summary>
+    /// The header filter strategy of this endpoint on the given side: the one <c>headerFilterStrategy=#name</c> names,
+    /// or the component's default for that side (<see cref="HttpHeaderFilterStrategy"/>). A name the registry does
+    /// not hold fails here, when the producer or consumer is built.
+    /// </summary>
+    internal redb.Route.Abstractions.IHeaderFilterStrategy HeaderFilterStrategy(EndpointRole role)
+        => LazyInitializer.EnsureInitialized(ref _headerFilter,
+                () => new redb.Route.Core.EndpointHeaderFilter(this, EndpointOptions.HeaderFilterStrategy))
+            .Or(role == EndpointRole.Producer ? HttpHeaderFilterStrategy.Producer : HttpHeaderFilterStrategy.Consumer);
+
+    /// <summary>Whether this endpoint uses HTTPS.</summary>
+    public bool IsHttps => Uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The scheme prefix for building URLs (http:// or https://).</summary>
+    public string SchemePrefix => IsHttps ? "https://" : "http://";
+
+    /// <summary>The endpoint options for external access.</summary>
+    internal HttpEndpointOptions EndpointOptions => Options;
+
+    /// <summary>
+    /// Build the full target URL for the producer.
+    /// URI path is "host:port/path" or "host/path" — we prepend scheme.
+    /// </summary>
+    public string BuildProducerUrl()
+    {
+        var path = _cleanPath.TrimStart('/');
+        return $"{SchemePrefix}{path}";
+    }
+
+    /// <summary>
+    /// The consumer listen path (the route portion after host:port).
+    /// For "http:0.0.0.0:9090/webhook", returns "/webhook".
+    /// For "http:0.0.0.0:9090", returns "/".
+    /// For "http:GET:/webhook", returns "/webhook".
+    /// </summary>
+    public string ConsumerPath
+    {
+        get
+        {
+            var path = _cleanPath;
+
+            // When method prefix was used and path starts with '/',
+            // it IS the route directly (e.g. "GET:/connect/token" → "/connect/token").
+            // If it doesn't start with '/', host:port is still present (e.g. "POST:0.0.0.0:8080/api").
+            if (_hasMethodPrefix && path.StartsWith('/'))
+                return path;
+
+            if (path.StartsWith('/'))
+            {
+                // Leading-slash form. Its first segment is an embedded host only in the nonstandard
+                // "/host:port/route" shape — recognisable because a host[:port] segment contains a ':'
+                // (route segments never do). Then the route is everything after that segment.
+                // Otherwise the whole path is the route — which is what the fluent DSL emits:
+                // Http.Listen("/api/x").Host(..).Port(..) builds "http:/api/x?host=..&port=..", so the
+                // leading-slash "/api/x" must stay "/api/x", NOT be truncated to "/x".
+                var rest = path[1..];
+                var firstSlash = rest.IndexOf('/');
+                var firstSegment = firstSlash >= 0 ? rest[..firstSlash] : rest;
+
+                if (!firstSegment.Contains(':'))
+                    return path;
+
+                return firstSlash >= 0 ? rest[firstSlash..] : "/";
+            }
+
+            // Host-first form "host[:port]/route" (or bare "host") — the route starts at the first slash.
+            var idx = path.IndexOf('/');
+            return idx >= 0 ? path[idx..] : "/";
+        }
+    }
+
+    /// <inheritdoc />
+    public override IProducer CreateProducer()
+    {
+        RefuseInboundOptionsOnProducer();
+        return new HttpProducer(this, Options);
+    }
+
+    /// <inheritdoc />
+    public override IConsumer CreateConsumer(IProcessor processor)
+    {
+        ArgumentNullException.ThrowIfNull(processor);
+
+        RefuseIgnoredInboundCredentials();
+
+        var component = (HttpComponent)Component;
+        return new HttpConsumer(this, processor, Options, component.Server)
+        {
+            Authenticator = HttpInboundAuthenticator.Create(Options, component.Context),
+        };
+    }
+
+    /// <summary>
+    /// <c>inboundAuth</c> and its companions say what a CONSUMER requires of its callers; a producer sends a request
+    /// and checks nobody. Written on a <c>to(...)</c> they would look like protection and do nothing. The message names
+    /// the parameters, never their values.
+    /// </summary>
+    private void RefuseInboundOptionsOnProducer()
+    {
+        var written = redb.Route.Core.EndpointOptions.WrittenForOtherRole(Options.GetType(), Uri, EndpointRole.Producer);
+        if (written.Count == 0)
+            return;
+
+        throw new InvalidOperationException(
+            $"http producer '{EndpointUri.Sanitize(Uri.NormalizedKey)}' sets {string.Join(", ", written)}: these options " +
+            "tell a consumer which callers to accept, and a producer checks nobody. For the credentials a producer sends, " +
+            "use authScheme with username/password or authToken.");
+    }
+
+    /// <summary>
+    /// <c>authScheme</c>, <c>username</c> and <c>password</c> are what a PRODUCER sends. They share the
+    /// options class with the consumer, so on a <c>from(...)</c> they used to bind and validate and then
+    /// check nothing: the endpoint looked closed and was open, with the password sitting in the route
+    /// key. Refused until the consumer has an inbound check of its own. Only what this URI wrote counts
+    /// — a named connection factory may carry producer credentials beside the TLS material a consumer
+    /// reuses it for, and that is not a statement about inbound access. The message names the
+    /// parameters and never their values. The consumer's own check is <c>inboundAuth</c>.
+    /// </summary>
+    private void RefuseIgnoredInboundCredentials()
+    {
+        var written = redb.Route.Core.EndpointOptions.WrittenForOtherRole(Options.GetType(), Uri, EndpointRole.Consumer);
+        if (written.Count == 0)
+            return;
+
+        throw new InvalidOperationException(
+            $"http consumer '{EndpointUri.Sanitize(Uri.NormalizedKey)}' sets {string.Join(", ", written)}, but an " +
+            "http: consumer does not check callers with them — these options are what a producer sends. As written the endpoint " +
+            "would accept every caller while looking protected. To check callers, use inboundAuth=basic with " +
+            "inboundUsername/inboundPassword, or inboundAuth=bearer with tokenValidator=#name.");
+    }
+}

@@ -1,0 +1,25 @@
+<Project>
+
+  <!-- Shared settings for every project of the demo. Having this file here also stops MSBuild
+       from importing the framework repository's own Directory.Build.props, so the folder can be
+       copied out and used as a template as it is. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!-- One place for the redb package version. -->
+    <RedbVersion>4.3.0</RedbVersion>
+
+    <!-- Versions live in these files: the demo is copied out as it is, where no central
+         Directory.Packages.props applies (the one of redb.Route, found walking up in this tree, is not used). -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+
+    <!-- EF Core for the part of the model that stays in an EF Core DbContext. Its SQL Server provider
+         must accept the Microsoft.Data.SqlClient version redb.MSSql and the Tsak worker ship (7.1.1):
+         EF Core 10.0.13 needs 6.1.6 or later. -->
+    <EfCoreVersion>10.0.13</EfCoreVersion>
+  </PropertyGroup>
+
+</Project>

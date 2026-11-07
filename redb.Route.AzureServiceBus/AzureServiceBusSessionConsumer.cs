@@ -1,0 +1,260 @@
+using System.Collections.Concurrent;
+using Azure.Messaging.ServiceBus;
+using Microsoft.Extensions.Logging;
+using redb.Route.Abstractions;
+using redb.Route.Core;
+using redb.Route.Telemetry;
+
+namespace redb.Route.AzureServiceBus;
+
+/// <summary>
+/// Session-aware consumer using <see cref="ServiceBusSessionProcessor"/>.
+/// Sessions guarantee FIFO ordering per session ID and enable session state.
+/// </summary>
+internal sealed class AzureServiceBusSessionConsumer : IConsumer
+{
+    private readonly AzureServiceBusEndpoint _endpoint;
+    private readonly IProcessor _pipeline;
+    private readonly AzureServiceBusEndpointOptions _options;
+    private readonly IHeaderFilterStrategy _headerFilter;
+    private readonly InflightDrainGuard _drain = new();
+
+    private ServiceBusSessionProcessor? _processor;
+    private ILogger? _logger;
+
+    public IEndpoint? Endpoint => _endpoint;
+
+    internal AzureServiceBusSessionConsumer(AzureServiceBusEndpoint endpoint, IProcessor pipeline,
+        AzureServiceBusEndpointOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(pipeline);
+        ArgumentNullException.ThrowIfNull(options);
+
+        _endpoint = endpoint;
+        _pipeline = pipeline;
+        _options = options;
+        _headerFilter = endpoint.HeaderFilterStrategy;
+    }
+
+    public async Task Start(CancellationToken ct = default)
+    {
+        _logger ??= (_endpoint.Component as ComponentBase)?.Logger;
+
+        var client = await _endpoint.GetOrCreateClientAsync(ct).ConfigureAwait(false);
+
+        var processorOptions = new ServiceBusSessionProcessorOptions
+        {
+            ReceiveMode = _options.ParsedReceiveMode,
+            MaxConcurrentSessions = _options.MaxConcurrentSessions,
+            MaxConcurrentCallsPerSession = _options.ResolvedMaxConcurrentCalls,
+            PrefetchCount = _options.PrefetchCount,
+            MaxAutoLockRenewalDuration = TimeSpan.FromSeconds(_options.MaxAutoLockRenewalDuration),
+            AutoCompleteMessages = false
+        };
+
+        if (_options.SessionIdleTimeout > 0)
+            processorOptions.SessionIdleTimeout = TimeSpan.FromSeconds(_options.SessionIdleTimeout);
+
+        if (!string.IsNullOrEmpty(_options.SessionId))
+            processorOptions.SessionIds.Add(_options.SessionId);
+
+        _processor = _endpoint.IsTopic
+            ? client.CreateSessionProcessor(_endpoint.EntityName, _options.SubscriptionName, processorOptions)
+            : client.CreateSessionProcessor(_endpoint.EntityName, processorOptions);
+
+        _processor.ProcessMessageAsync += OnSessionMessageAsync;
+        _processor.ProcessErrorAsync += OnErrorAsync;
+
+        _drain.Start(ct);
+        await _processor.StartProcessingAsync(ct).ConfigureAwait(false);
+
+        _logger?.LogInformation(
+            "ASB session consumer started: entity={Entity}, sessions={MaxSessions}, callsPerSession={Calls}",
+            _endpoint.EntityName, _options.MaxConcurrentSessions, _options.ResolvedMaxConcurrentCalls);
+    }
+
+    public async Task Stop(CancellationToken ct = default)
+    {
+        if (_processor is not null)
+        {
+            await _processor.StopProcessingAsync(ct).ConfigureAwait(false);
+        }
+
+        await _drain.DrainAsync(ct, _logger, $"asb-session:{_endpoint.EntityName}").ConfigureAwait(false);
+        _drain.Dispose();
+
+        if (_processor is not null)
+        {
+            await _processor.DisposeAsync().ConfigureAwait(false);
+            _processor = null;
+        }
+
+        _logger?.LogInformation("ASB session consumer stopped: entity={Entity}", _endpoint.EntityName);
+    }
+
+    // ── Session message handling ──
+
+    private async Task OnSessionMessageAsync(ProcessSessionMessageEventArgs args)
+    {
+        _drain.Increment();
+        // The receive span covers the whole unit of work, settlement included; the route's spans sit under it.
+        using var span = AzureServiceBusTrace.StartReceiveSpan(_endpoint, args.Message);
+        Exchange? exchange = null;
+        var pipelineFailed = false;
+        try
+        {
+            exchange = CreateExchange(args.Message, args);
+
+            // The lock is settled by this consumer below, after the whole unit of work ended well; the route
+            // transaction owns the database and the outgoing sends.
+
+            // No RecordMessageIn: the core's StatisticsProcessor around From() owns it (ownership audit).
+            try
+            {
+                await _pipeline.Process(exchange, args.CancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                pipelineFailed = true;
+                throw;
+            }
+
+            if (exchange.Exception is { } failure && !exchange.ExceptionHandled)
+                AzureServiceBusTrace.RecordFailure(span.Activity, failure, args.CancellationToken);
+
+            if (_options.ParsedReceiveMode == ServiceBusReceiveMode.PeekLock)
+            {
+                await AcknowledgeAsync(args, exchange).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            AzureServiceBusTrace.RecordFailure(span.Activity, ex, args.CancellationToken);
+            if (_options.ParsedReceiveMode == ServiceBusReceiveMode.PeekLock)
+            {
+                try
+                {
+                    await args.AbandonMessageAsync(args.Message, cancellationToken: args.CancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception abandonEx)
+                {
+                    _logger?.LogWarning(abandonEx, "Failed to abandon ASB session message");
+                }
+            }
+
+            // A pipeline failure is already counted by the core; only what the core cannot see
+            // (exchange building, settlement) is the transport's to record (ownership audit).
+            if (!pipelineFailed)
+                _endpoint.RecordError(ex);
+            throw;
+        }
+        finally
+        {
+            if (exchange is not null)
+                await exchange.DisposeAsync().ConfigureAwait(false);
+            _drain.Decrement();
+        }
+    }
+
+    private async Task AcknowledgeAsync(ProcessSessionMessageEventArgs args, Exchange exchange)
+    {
+        if (exchange.Exception is not null && !exchange.ExceptionHandled)
+        {
+            if (_options.AutoDeadLetter)
+            {
+                await args.DeadLetterMessageAsync(args.Message,
+                    _options.DeadLetterReason ?? "ProcessingError",
+                    exchange.Exception.Message,
+                    cancellationToken: args.CancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await args.AbandonMessageAsync(args.Message, cancellationToken: args.CancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        else if (exchange.IsRollbackOnly())
+        {
+            // The route rolled the unit of work back (.RollbackAll()): not an error, the message is delivered again.
+            await args.AbandonMessageAsync(args.Message, cancellationToken: args.CancellationToken)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            await args.CompleteMessageAsync(args.Message, cancellationToken: args.CancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private Task OnErrorAsync(ProcessErrorEventArgs args)
+    {
+        _endpoint.RecordError(args.Exception);
+        _logger?.LogError(args.Exception, "ASB session error on {EntityPath}: {Source}",
+            args.EntityPath, args.ErrorSource);
+        return Task.CompletedTask;
+    }
+
+    // ── Exchange creation ──
+
+    private Exchange CreateExchange(ServiceBusReceivedMessage msg, ProcessSessionMessageEventArgs args)
+    {
+        var message = new Message(msg.Body.ToArray());
+
+        // Identity
+        SetIfNotEmpty(message, AzureServiceBusHeaders.MessageId, msg.MessageId);
+        SetIfNotEmpty(message, AzureServiceBusHeaders.CorrelationId, msg.CorrelationId);
+        SetIfNotEmpty(message, AzureServiceBusHeaders.PartitionKey, msg.PartitionKey);
+        SetIfNotEmpty(message, AzureServiceBusHeaders.ReplyToSessionId, msg.ReplyToSessionId);
+
+        // Session — always present for session consumer
+        message.Headers[AzureServiceBusHeaders.SessionId] = args.SessionId;
+
+        // Metadata
+        SetIfNotEmpty(message, AzureServiceBusHeaders.Subject, msg.Subject);
+        SetIfNotEmpty(message, AzureServiceBusHeaders.ContentType, msg.ContentType);
+        SetIfNotEmpty(message, AzureServiceBusHeaders.ReplyTo, msg.ReplyTo);
+        SetIfNotEmpty(message, AzureServiceBusHeaders.To, msg.To);
+
+        if (msg.ContentType is not null)
+            message.ContentType = msg.ContentType;
+
+        message.Headers[AzureServiceBusHeaders.TimeToLive] = msg.TimeToLive;
+
+        // Scheduling
+        message.Headers[AzureServiceBusHeaders.ScheduledEnqueueTime] = msg.ScheduledEnqueueTime;
+        message.Headers[AzureServiceBusHeaders.SequenceNumber] = msg.SequenceNumber;
+
+        // Consumer metadata
+        message.Headers[AzureServiceBusHeaders.DeliveryCount] = msg.DeliveryCount;
+        message.Headers[AzureServiceBusHeaders.EnqueuedTime] = msg.EnqueuedTime;
+        message.Headers[AzureServiceBusHeaders.ExpiresAt] = msg.ExpiresAt;
+
+        if (_options.ParsedReceiveMode == ServiceBusReceiveMode.PeekLock)
+            message.Headers[AzureServiceBusHeaders.LockedUntil] = msg.LockedUntil;
+
+        // Dead-letter metadata
+        SetIfNotEmpty(message, AzureServiceBusHeaders.DeadLetterSource, msg.DeadLetterSource);
+        SetIfNotEmpty(message, AzureServiceBusHeaders.DeadLetterReason, msg.DeadLetterReason);
+        SetIfNotEmpty(message, AzureServiceBusHeaders.DeadLetterErrorDescription, msg.DeadLetterErrorDescription);
+
+        // Application properties → exchange headers, as the endpoint's strategy lets them in
+        var exchange = Exchange.Create(message, _endpoint.ScopeFactory);
+        foreach (var kv in msg.ApplicationProperties)
+        {
+            if (kv.Value is null) continue;
+            if (_headerFilter.FilterIncoming(kv.Key, kv.Value, exchange)) continue;
+            message.Headers[kv.Key] = kv.Value;
+        }
+
+        return exchange;
+    }
+
+    private static void SetIfNotEmpty(IMessage message, string key, string? value)
+    {
+        if (!string.IsNullOrEmpty(value))
+            message.Headers[key] = value;
+    }
+
+}

@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Ask a question (Q&A)
+    url: https://github.com/redbase-app/redb-route/discussions/categories/q-a
+    about: Anyone can ask. No permissions or prior contributions needed.
+  - name: Ideas and feedback
+    url: https://github.com/redbase-app/redb-route/discussions/categories/ideas
+    about: Propose a direction before it becomes a feature request.
+  - name: Report a security vulnerability (private)
+    url: https://github.com/redbase-app/redb-route/security/advisories/new
+    about: Please do not open a public issue for security problems.
