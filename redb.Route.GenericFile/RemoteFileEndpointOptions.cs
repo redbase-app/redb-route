@@ -22,9 +22,10 @@ public abstract class RemoteFileEndpointOptions : GenericFileEndpointOptions
     /// <summary>
     /// Named <see cref="RemoteFileConnectionFactory"/> from the route registry. Lets server
     /// credentials live in the registry instead of the endpoint URI, so they never reach logs
-    /// or dashboards.
+    /// or dashboards. Typed as the common base, which every remote-file connector's factory derives from: the
+    /// check gate refuses a bean of any other class; the connector itself asks for its own factory type.
     /// </summary>
-    [RegistryReference]
+    [RegistryReference(typeof(RemoteFileConnectionFactory))]
     public string? ConnectionFactory { get; set; }
 
     /// <summary>Username for authentication.</summary>

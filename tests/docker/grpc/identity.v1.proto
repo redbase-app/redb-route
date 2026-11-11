@@ -1,0 +1,158 @@
+// redb.Identity — service-to-service gRPC contract.
+//
+// Scope: the non-browser subset of OpenID Connect / OAuth 2.0. Browser flows (authorize, login, consent,
+// MFA pages, device verification) are not here and never will be — they need a browser, redirects and a
+// cookie session. DPoP (RFC 9449) is likewise absent: its proof is bound to an HTTP method and URL.
+//
+// This file is the published contract. It lives in redb.Identity.Contracts so consumers can take it
+// without referencing any server-side package, and it is deliberately NOT compiled into that assembly —
+// Contracts stays a dependency-free DTO package. Generate your own stubs from this file; the facade
+// compiles it privately for its own message types.
+//
+// Shape rule: every request carries the parameters RFC 6749 / 7009 / 7662 / OIDC Core define as named
+// fields, plus a string map for extensions. The wire form of these endpoints has always been
+// form-encoded key/value, so a map is not a shortcut — it is the protocol. Responses type the fields the
+// RFCs fix and carry everything else in a Struct, because userinfo claims and introspection extensions
+// are open by design.
+
+syntax = "proto3";
+
+package identity.v1;
+
+option csharp_namespace = "redb.Identity.Grpc.V1";
+
+import "google/protobuf/struct.proto";
+
+service Identity {
+  // RFC 6749 §3.2 — token endpoint. Client authentication is client_id/client_secret, either as fields
+  // here or as `authorization: Basic` metadata.
+  rpc Token (TokenRequest) returns (TokenResponse);
+
+  // RFC 7662 — token introspection.
+  rpc Introspect (IntrospectRequest) returns (IntrospectResponse);
+
+  // RFC 7009 — token revocation. A successful revocation carries no payload, per the RFC.
+  rpc Revoke (RevokeRequest) returns (RevokeResponse);
+
+  // OIDC Core §5.3 — userinfo. Bearer token in `authorization` metadata or in the field below.
+  rpc UserInfo (UserInfoRequest) returns (UserInfoResponse);
+
+  // OIDC Discovery 1.0. The document advertises the server's HTTP addresses — those are the real ones,
+  // and this facade does not rewrite them.
+  rpc Discovery (DiscoveryRequest) returns (DiscoveryResponse);
+
+  // The JSON Web Key Set backing token signatures.
+  rpc Jwks (JwksRequest) returns (JwksResponse);
+}
+
+// ── token ────────────────────────────────────────────────
+
+message TokenRequest {
+  string grant_type = 1;
+  string client_id = 2;
+  string client_secret = 3;
+  string scope = 4;
+
+  // authorization_code
+  string code = 5;
+  string redirect_uri = 6;
+  string code_verifier = 7;
+
+  // refresh_token
+  string refresh_token = 8;
+
+  // password (ROPC)
+  string username = 9;
+  string password = 10;
+
+  // urn:ietf:params:oauth:grant-type:device_code
+  string device_code = 11;
+
+  // Any parameter this contract does not name — extension grants, vendor parameters, future RFCs.
+  map<string, string> additional = 20;
+}
+
+message TokenResponse {
+  string access_token = 1;
+  string token_type = 2;
+  int64 expires_in = 3;
+  string refresh_token = 4;
+  string id_token = 5;
+  string scope = 6;
+
+  // Anything the server returned beyond the fields above.
+  google.protobuf.Struct extra = 20;
+}
+
+// ── introspection ────────────────────────────────────────
+
+message IntrospectRequest {
+  string token = 1;
+  string token_type_hint = 2;
+  string client_id = 3;
+  string client_secret = 4;
+  map<string, string> additional = 20;
+}
+
+message IntrospectResponse {
+  bool active = 1;
+  string scope = 2;
+  string client_id = 3;
+  string username = 4;
+  string token_type = 5;
+  int64 exp = 6;
+  int64 iat = 7;
+  int64 nbf = 8;
+  string sub = 9;
+  repeated string aud = 10;
+  string iss = 11;
+  string jti = 12;
+
+  // RFC 7662 §2.2 explicitly allows additional members.
+  google.protobuf.Struct extra = 20;
+}
+
+// ── revocation ───────────────────────────────────────────
+
+message RevokeRequest {
+  string token = 1;
+  string token_type_hint = 2;
+  string client_id = 3;
+  string client_secret = 4;
+  map<string, string> additional = 20;
+}
+
+// RFC 7009 §2.2: a successful revocation returns no content. Kept as a message because gRPC has no void.
+message RevokeResponse {}
+
+// ── userinfo ─────────────────────────────────────────────
+
+message UserInfoRequest {
+  // Optional: the token normally travels as `authorization: Bearer <token>` metadata. This field exists
+  // for callers that prefer to carry it in the message, mirroring RFC 6750 §2.2.
+  string access_token = 1;
+}
+
+message UserInfoResponse {
+  string sub = 1;
+
+  // Every other claim. Which ones appear depends on the granted scopes and the server's claim mappers,
+  // so typing them here would be a lie.
+  google.protobuf.Struct claims = 20;
+}
+
+// ── discovery / jwks ─────────────────────────────────────
+
+message DiscoveryRequest {}
+
+message DiscoveryResponse {
+  // The discovery document verbatim, including the HTTP endpoint URLs it advertises.
+  google.protobuf.Struct document = 1;
+}
+
+message JwksRequest {}
+
+message JwksResponse {
+  // The JWKS document verbatim: { "keys": [ … ] }.
+  google.protobuf.Struct document = 1;
+}

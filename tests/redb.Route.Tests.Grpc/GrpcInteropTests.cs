@@ -29,7 +29,9 @@ public class GrpcInteropTests
 {
     private const string Host = "127.0.0.1";
     private const int ServerPort = 18100;                  // @grpc/grpc-js echo server (compose mapping)
-    private const string CertDir = @"C:\Work\yaml\grpc\certs";
+    // The mTLS material from redb.Route/tests/docker/gen-certs.sh (.generated/grpc).
+    private static string CertDir =>
+        Environment.GetEnvironmentVariable("REDB_GRPC_CERTS") ?? @"C:\Work\yaml\grpc\certs";
 
     // Our consumers; the container reaches them via host-gateway. Offset by runtime major so the parallel
     // multi-TFM test hosts (net8/net9/net10) never contend for the same port.

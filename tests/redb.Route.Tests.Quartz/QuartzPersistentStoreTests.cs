@@ -188,7 +188,8 @@ public sealed class QuartzPersistentStoreTests : IClassFixture<PostgresQuartzSto
 /// </summary>
 public sealed class PostgresQuartzStore : IAsyncLifetime
 {
-    private const string Server = "Host=localhost;Port=5432;Username=postgres;Password=1;Database=postgres";
+    private static readonly string Server =
+        global::redb.Route.Tests.Shared.TestDatabases.Postgres("Host=localhost;Port=5432;Username=postgres;Password=1;Database=postgres");
     private readonly string _schema = "qrtz_" + Guid.NewGuid().ToString("N")[..12];
 
     private string ConnectionString => $"{Server};Search Path={_schema}";

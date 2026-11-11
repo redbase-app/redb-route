@@ -587,7 +587,17 @@ public sealed class SharedHttpServerManager : IAsyncDisposable
         app.MapMethods("/", ["PATCH", "HEAD", "OPTIONS"], (HttpContext ctx) => HandleCatchAll(entry, ctx)).WithOrder(int.MaxValue);
 
         entry.App = app;
-        await app.StartAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await app.StartAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // A port still taken: the listener that did not start is let go, and the next start builds a new one.
+            entry.App = null;
+            await app.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
         entry.IsStarted = true;
     }
 

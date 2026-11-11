@@ -23,7 +23,7 @@ public sealed class PostgresFixture : IAsyncLifetime
             .AddJsonFile("appsettings.json")
             .Build();
 
-        var connectionString = config.GetConnectionString("Postgres")!;
+        var connectionString = global::redb.Route.Tests.Shared.TestDatabases.Postgres(config.GetConnectionString("Postgres")!);
         var license = config["Redb:License"];
 
         var services = new ServiceCollection();

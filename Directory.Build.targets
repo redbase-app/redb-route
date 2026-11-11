@@ -55,9 +55,9 @@
       ASP.NET Core packages follow the line of the framework they talk to (the SignalR client must match the hub's
       framework line): each .NET line gets its own patch.
     -->
-    <RedbSecAspNetCoreVersion Condition="'$(_RedbNetMajor)' == '8'">8.0.32</RedbSecAspNetCoreVersion>
-    <RedbSecAspNetCoreVersion Condition="'$(_RedbNetMajor)' == '9'">9.0.21</RedbSecAspNetCoreVersion>
-    <RedbSecAspNetCoreVersion Condition="'$(_RedbNetMajor)' == '10'">10.0.13</RedbSecAspNetCoreVersion>
+    <RedbSecAspNetCoreVersion Condition="'$(_RedbNetMajor)' == '8'">8.0.34</RedbSecAspNetCoreVersion>
+    <RedbSecAspNetCoreVersion Condition="'$(_RedbNetMajor)' == '9'">9.0.23</RedbSecAspNetCoreVersion>
+    <RedbSecAspNetCoreVersion Condition="'$(_RedbNetMajor)' == '10'">10.0.15</RedbSecAspNetCoreVersion>
 
     <!--
       The same line for the packages that only run on top of the ASP.NET Core shared framework of the target and are
@@ -71,6 +71,12 @@
       Microsoft.AspNetCore.DataProtection 9.x (redb.Identity) accepts 10.0 too.
     -->
     <RedbSecCryptoVersion>10.0.13</RedbSecCryptoVersion>
+
+    <!--
+      System.Formats.Cbor: transitive (the WebAuthn library of redb.Identity asks for 9.0.0 or later on every line), so
+      one 9.0.x version for every line; an 8.0.x pin would be a downgrade on net8.0 (NU1109).
+    -->
+    <RedbSecCborVersion>9.0.24</RedbSecCborVersion>
   </PropertyGroup>
 
   <!-- ============ Central package management: the guarded versions live here ============ -->
@@ -95,6 +101,7 @@
   <ItemGroup Condition="'$(_RedbCentral)' == 'true' and '$(_RedbNetMajor)' != ''">
     <PackageVersion Include="System.Security.Cryptography.Xml" Version="$(RedbSecCryptoVersion)" />
     <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="$(RedbSecCryptoVersion)" />
+    <PackageVersion Include="System.Formats.Cbor" Version="$(RedbSecCborVersion)" />
   </ItemGroup>
 
   <!-- ============ No central management: raise the direct references, reference Pkcs ============ -->
@@ -115,6 +122,7 @@
   <ItemGroup Condition="'$(_RedbNetMajor)' != '' and '$(_RedbCentral)' != 'true'">
     <PackageReference Update="System.Security.Cryptography.Xml" Version="$(RedbSecCryptoVersion)" />
     <PackageReference Update="System.Security.Cryptography.Pkcs" Version="$(RedbSecCryptoVersion)" />
+    <PackageReference Update="System.Formats.Cbor" Version="$(RedbSecCborVersion)" />
   </ItemGroup>
 
   <!--

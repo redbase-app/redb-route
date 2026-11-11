@@ -93,7 +93,7 @@ spoke up. It stays silent on an incremental build, which is how all of this reac
   message, so an `IAsyncEnumerable` reply there cannot be delivered; the route now gets an error naming the
   address instead of the enumerable's type name going out as the payload.
 - **`redb.Route.Grpc` — live interop tests against an independent gRPC stack.** Since the wire protocol is
-  ours now, correctness is verified against Node.js `@grpc/grpc-js` in a container (`C:\Work\yaml\grpc`),
+  ours now, correctness is verified against Node.js `@grpc/grpc-js` in a container,
   both directions and cross-process: a foreign server parses our frames, a foreign client accepts our
   replies, trailers, `PERMISSION_DENIED` status, server stream, gzipped request and a real mTLS handshake
   with a pinned client certificate. The contract is a typed `.proto`, so the same tests prove a generated
@@ -425,7 +425,7 @@ spoke up. It stays silent on an incremental build, which is how all of this reac
   contract on `GET ?wsdl` with the `soap:address` rewritten to the caller's URL. Baseline is in-box (HttpClient
   + shared Kestrel + `System.Security.Cryptography.Xml`, no CoreWCF). Verified against an independent SOAP
   stack (Node.js `soap`) in both directions — plain SOAP and MTOM (their `forceMTOM` client ↔ our consumer) —
-  as gated `Category=Interop` tests (harness in `C:\Work\yaml\soap`). See `docs/SOAP_CONNECTOR_PLAN.md`.
+  as gated `Category=Interop` tests.
 
 ## [3.6.0] — 2026-08-13
 

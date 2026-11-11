@@ -23,7 +23,7 @@ public sealed class MsSqlFixture : IAsyncLifetime
             .AddJsonFile("appsettings.json")
             .Build();
 
-        var connectionString = config.GetConnectionString("MSSql")!;
+        var connectionString = global::redb.Route.Tests.Shared.TestDatabases.MsSql(config.GetConnectionString("MSSql")!);
         var license = config["Redb:License"];
 
         var services = new ServiceCollection();

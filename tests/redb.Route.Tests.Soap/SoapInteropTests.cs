@@ -14,7 +14,7 @@ namespace redb.Route.Tests.Soap;
 /// loopback e2e cannot: that a foreign SOAP implementation accepts our on-the-wire envelope, and that we
 /// accept its. CoreWCF was rejected as the reference stack because every version carries an unpatched
 /// crypto CVE; a JVM/CXF image is heavier but equivalent — Node was chosen only because its base image was
-/// already cached. GATED: each test no-ops unless the container answers on 127.0.0.1:18080, so the normal
+/// already cached. GATED: each test no-ops unless the container answers on 127.0.0.1:18060, so the normal
 /// suite stays green without it. Run with <c>--filter Category=Interop</c> after
 /// <c>docker compose up -d</c> in <c>C:\Work\yaml\soap</c>.
 /// </summary>
@@ -22,10 +22,11 @@ namespace redb.Route.Tests.Soap;
 public class SoapInteropTests
 {
     private const string Host = "127.0.0.1";
-    private const int ServerPort = 18080;                 // Node SOAP echo server (compose port mapping)
+    private const int ServerPort = 18060;                 // Node SOAP echo server (compose port mapping)
     // Our consumer; the container reaches it via host-gateway. Offset by runtime major so the parallel
     // multi-TFM test hosts (net8/net9/net10) never contend for the same port.
-    private static readonly int ConsumerPort = 18090 + Environment.Version.Major;
+    // 18160+: clear of the gRPC interop ports (18100 and 18110-18159).
+    private static readonly int ConsumerPort = 18160 + Environment.Version.Major;
     private static string ServerUrl => $"http://{Host}:{ServerPort}/echo";
 
     /// <summary>Direction A: our producer → the independent Node SOAP server. Proves a foreign stack accepts our wire.</summary>

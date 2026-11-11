@@ -366,8 +366,8 @@ Both builders implicitly convert to the endpoint URI (shown in the comments), so
 
 ## Interop & boundaries
 
-**Validated** against independent stacks (zero shared code), gated `Category=Interop`; harness in
-`C:\Work\yaml\soap`:
+**Validated** against independent stacks (zero shared code), gated `Category=Interop`; the harness is profile
+`soap` of the test stand `docker-compose.tests.yml`:
 
 - **Node.js `soap`** in both directions — our producer → their server, their client → our consumer — plain
   SOAP and MTOM (`SoapInteropTests`, `SoapMtomInteropTests`).

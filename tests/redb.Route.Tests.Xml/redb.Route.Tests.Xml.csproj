@@ -11,6 +11,9 @@
     <ProjectReference Include="..\..\redb.Route.Core\redb.Route.Core.csproj" />
     <ProjectReference Include="..\..\redb.Route.DataFormats.Mime\redb.Route.DataFormats.Mime.csproj" />
     <ProjectReference Include="..\..\redb.Route.DataFormats.XmlJson\redb.Route.DataFormats.XmlJson.csproj" />
+    <!-- Row 57: the typed connectionFactory of the remote-file connectors, held by the gate. -->
+    <ProjectReference Include="..\..\redb.Route.Ftp\redb.Route.Ftp.csproj" />
+    <ProjectReference Include="..\..\redb.Route.Sftp\redb.Route.Sftp.csproj" />
   </ItemGroup>
 
   <ItemGroup>

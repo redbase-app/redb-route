@@ -157,14 +157,16 @@ ctx.AddToRegistry("correlationOnly", new DefaultHeaderFilterStrategy
 ## Interop
 
 Because the wire protocol is ours, the connector is verified against an independent stack: a Node.js
-`@grpc/grpc-js` server and client in a container (`C:\Work\yaml\grpc`), both directions, cross-process,
+`@grpc/grpc-js` server and client in a container (profile `grpc` of the test stand), both directions, cross-process,
 covering statuses, server streaming, gzip and a real mTLS handshake with a client certificate. The
 contract there is a typed `.proto`, so it also proves a generated client can call a redb route with no
 server stubs on our side.
 
 ```bash
-cd C:\Work\yaml\grpc && docker compose up -d
+bash tests/docker/gen-certs.sh        # once: the test certificates
+docker compose -f docker-compose.tests.yml --profile grpc up -d --wait
 dotnet test tests/redb.Route.Tests.Grpc --filter Category=Interop
+docker compose -f docker-compose.tests.yml --profile grpc down -v
 ```
 
 The tests are gated on the container being reachable, so the normal suite stays green without Docker.

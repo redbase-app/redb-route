@@ -1466,6 +1466,12 @@ public class RouteContext : IRouteContext, IAsyncDisposable
                     {
                         route.Status = RouteStatus.Errored;
                         logger?.LogError(ex, "RoutePolicy.OnStart failed for route '{RouteId}'", route.RouteId);
+                        // The consumer started above; a route reported Errored must not go on taking messages.
+                        try { await route.Consumer.Stop(ct).ConfigureAwait(false); }
+                        catch (Exception stopEx)
+                        {
+                            logger?.LogWarning(stopEx, "Stopping the consumer of route '{RouteId}' failed", route.RouteId);
+                        }
                         await NotifyRouteErrored(route.RouteId, ex, ct).ConfigureAwait(false);
                         continue;
                     }

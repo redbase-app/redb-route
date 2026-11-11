@@ -1,0 +1,12 @@
+// Interop contract for redb.Route.Grpc. Deliberately a *typed* service, not the generic RedbService:
+// that is what proves a foreign, generated client can talk to a redb route directly.
+syntax = "proto3";
+package interop;
+
+service Echo {
+  rpc Say (EchoRequest) returns (EchoReply);
+  rpc SayMany (EchoRequest) returns (stream EchoReply);
+}
+
+message EchoRequest { string msg = 1; }
+message EchoReply   { string result = 1; }

@@ -42,7 +42,7 @@ It is already in `docker ps` as `redb-localstack`; start it if needed:
 ```bash
 docker start redb-localstack
 # or:
-docker compose -f C:\Work\yaml\Amazon\docker-compose.yml up -d
+docker compose -f docker-compose.tests.yml --profile sqs up -d --wait   # from the redb.Route folder
 ```
 
 ## Run

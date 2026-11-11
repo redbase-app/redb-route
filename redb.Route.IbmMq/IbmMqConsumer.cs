@@ -73,7 +73,18 @@ public sealed class IbmMqConsumer : IConsumer
             _xmsEngine = new IbmMqXmsConsumerEngine(
                 _endpoint, _processor, _options, _logger,
                 () => Interlocked.Increment(ref _processedCount));
-            await _xmsEngine.StartAsync(ct).ConfigureAwait(false);
+            try
+            {
+                await _xmsEngine.StartAsync(ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Partial start (connection up, a session or consumer refused): close what came up, so a later
+                // Start opens one connection, not a second beside a half-open one.
+                await _xmsEngine.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                _xmsEngine = null;
+                throw;
+            }
             return;
         }
 

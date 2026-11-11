@@ -94,7 +94,17 @@ public class HttpConsumer : IConsumer
                 _options.RejectStatusCode, _options.RetryAfterSeconds,
                 onRejected: _endpoint.RecordRejected));
 
-        await _serverManager.EnsureStarted(host, port, ct).ConfigureAwait(false);
+        try
+        {
+            await _serverManager.EnsureStarted(host, port, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The listener did not come up (a port still taken): the route leaves it, so a later Start registers
+            // once and does not find a stale registration of its own.
+            await Stop(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
 
         BaseUrl = _serverManager.GetBaseUrl(host, port);
 

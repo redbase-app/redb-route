@@ -67,7 +67,18 @@ internal sealed class AzureServiceBusSessionConsumer : IConsumer
         _processor.ProcessErrorAsync += OnErrorAsync;
 
         _drain.Start(ct);
-        await _processor.StartProcessingAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await _processor.StartProcessingAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The processor that did not start is let go, so a later Start creates one processor, not a second.
+            await _processor.DisposeAsync().ConfigureAwait(false);
+            _processor = null;
+            _drain.Dispose();
+            throw;
+        }
 
         _logger?.LogInformation(
             "ASB session consumer started: entity={Entity}, sessions={MaxSessions}, callsPerSession={Calls}",

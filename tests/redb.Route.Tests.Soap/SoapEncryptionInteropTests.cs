@@ -12,13 +12,14 @@ namespace redb.Route.Tests.Soap;
 /// EncryptedData, joined by a ReferenceList) is decryptable by an INDEPENDENT crypto stack — Node.js built-in
 /// <c>crypto</c> (OpenSSL), with zero shared code and no XML-Encryption library. It RSA-OAEP-unwraps the
 /// session key and AES-256-CBC-decrypts the body straight from our envelope. GATED (<c>Category=Interop</c>):
-/// no-ops unless the Node container answers on 127.0.0.1:18080. Harness in <c>C:\Work\yaml\soap</c>.
+/// no-ops unless the Node container answers on 127.0.0.1:18060. The envelope and key go through the folder
+/// SOAP_INTEROP_DIR, which the soap-echo container of redb.Route/docker-compose.tests.yml mounts as /work.
 /// </summary>
 [Trait("Category", "Interop")]
 public class SoapEncryptionInteropTests
 {
     private const string Host = "127.0.0.1";
-    private const int ServerPort = 18080;
+    private const int ServerPort = 18060;
     private static string StandDir =>
         Environment.GetEnvironmentVariable("SOAP_INTEROP_DIR") ?? @"C:\Work\yaml\soap";
 
@@ -45,7 +46,7 @@ public class SoapEncryptionInteropTests
         File.WriteAllText(Path.Combine(StandDir, $"enc-key-{tag}.pem"), rsa.ExportPkcs8PrivateKeyPem());
 
         var (stdout, stderr, exit) = RunNode(
-            $"ENC_XML=/app/enc-envelope-{tag}.xml ENC_PEM=/app/enc-key-{tag}.pem node /app/xmlenc-verify.js");
+            $"ENC_XML=/work/enc-envelope-{tag}.xml ENC_PEM=/work/enc-key-{tag}.pem node /app/xmlenc-verify.js");
 
         exit.Should().Be(0, $"independent Node crypto should decrypt our WSS envelope; stderr='{stderr}'");
         stdout.Should().Contain("PLAIN:").And.Contain("Secret").And.Contain("4242");

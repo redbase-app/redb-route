@@ -1,0 +1,2 @@
+# Output of gen-certs.sh: test keys and the folders the interop tests share with the containers.
+.generated/

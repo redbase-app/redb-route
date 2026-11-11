@@ -364,11 +364,20 @@ public class As4HarmonyLiveTests
             return Json(body).GetString()!;
         }
 
+        /// <summary>
+        /// The message's status in Domibus' message log, or null when it has no row. Domibus may answer with the receipt
+        /// before the row is visible to its REST API, so an absent row is polled for up to five seconds.
+        /// </summary>
         public async Task<string?> StatusAsync(string messageId)
         {
-            var body = await _http.GetStringAsync($"rest/messagelog?messageId={Uri.EscapeDataString(messageId)}&page=0&pageSize=10&fields=messageId&fields=messageStatus");
-            var messages = Json(body).GetProperty("messageLogEntries");
-            return messages.GetArrayLength() == 0 ? null : messages[0].GetProperty("messageStatus").GetString();
+            for (var attempt = 0; ; attempt++)
+            {
+                var body = await _http.GetStringAsync($"rest/messagelog?messageId={Uri.EscapeDataString(messageId)}&page=0&pageSize=10&fields=messageId&fields=messageStatus");
+                var messages = Json(body).GetProperty("messageLogEntries");
+                if (messages.GetArrayLength() > 0) return messages[0].GetProperty("messageStatus").GetString();
+                if (attempt == 20) return null;
+                await Task.Delay(TimeSpan.FromMilliseconds(250));
+            }
         }
 
         private async Task<HttpResponseMessage> PostJsonAsync(string path, object body)

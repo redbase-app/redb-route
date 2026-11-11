@@ -1,256 +1,312 @@
-# Test infrastructure for redb.Route integration tests.
+# Services for the redb.Route integration and interop tests.
 #
-# Service definitions mirror the canonical per-service compose files under
-# C:\Work\yaml (container names, images, ports, credentials, volumes) so the
-# same containers back both the standalone stacks and this bundle.
-# Self-contained: services share the default compose network (no external network needed).
+# Every service has a profile, so a plain `docker compose up` starts nothing. Before a suite, start its profile;
+# after it, remove everything with the containers' data (no service keeps data between runs):
 #
-# Usage:
-#   docker compose -f docker-compose.tests.yml up -d
-#   dotnet test --filter "Category=Integration"
-#   docker compose -f docker-compose.tests.yml down -v
+#   bash tests/docker/gen-certs.sh                                   # once: test keys into tests/docker/.generated
+#   docker compose -f docker-compose.tests.yml --profile kafka up -d --wait
+#   dotnet test tests/redb.Route.Tests.Kafka
+#   docker compose -f docker-compose.tests.yml --profile all --profile pgdb --profile msdb down -v --remove-orphans
 #
-# Deviations from C:\Work\yaml (documented inline):
-#   - kafka EXTERNAL listener advertises localhost (host-run tests), not kafka-kN.
-#   - msdb uses the stock mcr.microsoft.com/mssql/server image (the C:\Work\yaml\mssql
-#     custom Dockerfile is not part of this repo).
-#   - pgdb-data is a local (non-external) volume so this bundle is self-contained.
+# The tests run on the Docker host and reach every service on localhost:<host port>. Suites, profiles, ports and
+# the variables the tests read are listed in tests/docker/README.md. Host names the tests use besides localhost:
+#   127.0.0.1 kafka-k1 kafka-k2 kafka-k3   (Kafka TLS listeners: the broker certificate names only these)
+#   127.0.0.1 pgdb msdb                    (Route.Tests.Sql and Quartz connection strings)
+# Tests that call back into the test process (AS2 MDN, SOAP and gRPC clients) reach the host as
+# host.docker.internal.
+#
+# Profiles: one per suite (see the README) plus "all" for every service except pgdb and msdb, which have their own
+# profiles so that a host with its own Postgres and SQL Server on 5432 and 1433 never starts them.
+
+name: redb-route-tests
+
+x-kafka-broker: &kafka-broker
+  image: apache/kafka:3.7.0
+  profiles: [kafka, all]
+  volumes:
+    - ./tests/docker/.generated/kafka:/etc/kafka/secrets:ro
+  tmpfs:
+    - /var/lib/kafka/data:mode=1777
+  healthcheck:
+    test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server $$(hostname):19092 >/dev/null 2>&1 || /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server $$(hostname):19094 >/dev/null 2>&1 || /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server $$(hostname):19096 >/dev/null 2>&1"]
+    interval: 10s
+    timeout: 20s
+    retries: 12
+    start_period: 20s
+
+x-kafka-env: &kafka-env
+  KAFKA_PROCESS_ROLES: controller,broker
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-k1:9093,2@kafka-k2:9093,3@kafka-k3:9093
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT,SECURE:SASL_SSL,MTLS:SSL
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+  # SECURE: SASL_SSL + SCRAM-SHA-512 (user redb, created by kafka-scram-init); MTLS: SSL, client certificate required.
+  KAFKA_SSL_KEYSTORE_TYPE: PEM
+  KAFKA_SSL_KEYSTORE_LOCATION: /etc/kafka/secrets/broker.pem
+  KAFKA_SSL_TRUSTSTORE_TYPE: PEM
+  KAFKA_SSL_TRUSTSTORE_LOCATION: /etc/kafka/secrets/ca.pem
+  KAFKA_LISTENER_NAME_SECURE_SASL_ENABLED_MECHANISMS: SCRAM-SHA-512
+  KAFKA_LISTENER_NAME_SECURE_SCRAM___SHA___512_SASL_JAAS_CONFIG: org.apache.kafka.common.security.scram.ScramLoginModule required;
+  KAFKA_LISTENER_NAME_MTLS_SSL_CLIENT_AUTH: required
+  KAFKA_LOG_DIRS: /var/lib/kafka/data
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+  KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+  KAFKA_NUM_PARTITIONS: 3
+  KAFKA_MIN_INSYNC_REPLICAS: 2
+  KAFKA_CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
 
 services:
 
-  # ── RabbitMQ (AMQP 0-9-1) ──────────────────────────────────────────────────
-  # Used by: redb.Route.Tests.RabbitMQ → localhost:5672, admin/admin
+  # ── RabbitMQ (AMQP 0-9-1) ─────────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.RabbitMQ: localhost:5672, admin/admin.
   rabbitmq:
     image: rabbitmq:4.3-management-alpine
     container_name: route-rabbitmq
     hostname: rabbitmq
+    profiles: [rabbitmq, all]
     ports:
       - "5672:5672"     # AMQP 0-9-1
-      - "15672:15672"   # Management UI
+      - "15672:15672"   # management
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: admin
+    tmpfs:
+      - /var/lib/rabbitmq:mode=1777
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  # ── ActiveMQ Artemis (AMQP 1.0 + MQTT + STOMP + OpenWire) ──────────────────
-  # Used by: redb.Route.Tests.Amqp → localhost:5673 (AMQP), admin/admin
+  # ── RabbitMQ with TLS, client-certificate (EXTERNAL) and OAuth2 logins ─────────────────────────────────────────────
+  # Route.Tests.RabbitMQ RabbitMQTlsBrokerTests: AMQPS localhost:5671, AMQP 5674, management 15674,
+  # REDB_RABBIT_TLS_CERTS=<repo>/redb.Route/tests/docker/.generated/rabbit-tls.
+  rabbitmq-tls:
+    image: rabbitmq:4.3-management-alpine
+    container_name: route-rabbitmq-tls
+    hostname: rabbitmq-tls
+    profiles: [rabbitmq-tls, all]
+    depends_on:
+      rabbitmq-oauth2:
+        condition: service_healthy
+    ports:
+      - "5671:5671"     # AMQPS
+      - "5674:5672"     # AMQP (5672 is the plain broker's)
+      - "15674:15672"   # management
+    volumes:
+      - ./tests/docker/.generated/rabbit-tls:/certs:ro
+      - ./tests/docker/rabbit-tls/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./tests/docker/rabbit-tls/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./tests/docker/rabbit-tls/definitions.json:/etc/rabbitmq/definitions.json:ro
+    tmpfs:
+      - /var/lib/rabbitmq:mode=1777
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Token endpoint of the TLS broker's OAuth2 login: http://localhost:9299/default/token.
+  rabbitmq-oauth2:
+    image: ghcr.io/navikt/mock-oauth2-server:2.1.10
+    container_name: route-rabbitmq-oauth2
+    hostname: oauth2
+    profiles: [rabbitmq-tls, all]
+    depends_on:
+      healthprobe-init:
+        condition: service_completed_successfully
+    ports:
+      - "9299:8080"
+    environment:
+      SERVER_PORT: 8080
+      JSON_CONFIG_PATH: /config/oauth2-config.json
+    volumes:
+      - ./tests/docker/.generated/rabbit-tls/oauth2-config.json:/config/oauth2-config.json:ro
+    volumes_from:
+      - healthprobe-init:ro
+    healthcheck:
+      test: ["CMD", "/probe/busybox", "wget", "-qO-", "http://127.0.0.1:8080/default/.well-known/openid-configuration"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── ActiveMQ Artemis (AMQP 1.0) ───────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.Amqp: localhost:5673, admin/admin.
   activemq:
     image: apache/activemq-artemis:latest-alpine
     container_name: activemq
     user: root
-    restart: unless-stopped
+    profiles: [amqp, all]
     environment:
       ARTEMIS_USER: admin
       ARTEMIS_PASSWORD: admin
       ARTEMIS_MIN_MEMORY: 512M
       ARTEMIS_MAX_MEMORY: 1024M
-    # Publish only the low host ports the tests actually use. OpenWire (61616) and STOMP (61613)
-    # fall inside the Windows dynamic/reserved TCP range (49152-65535) that WinNAT grabs on restart,
-    # which makes Docker fail to bind them ("forbidden by access permissions") and the whole container
-    # ends up publishing nothing. The Amqp tests need only 5673; console/MQTT are low ports and safe.
+    # Only low host ports: OpenWire (61616) and STOMP (61613) fall in the Windows reserved range.
     ports:
-      - "5673:5672"     # AMQP 1.0 (5672 taken by RabbitMQ) — the only port the Amqp tests use
-      - "8161:8161"     # Web console (optional, low port)
-      - "1883:1883"     # MQTT (optional, low port)
-    volumes:
-      - activemq-data:/var/lib/artemis-instance/data
-      - activemq-tmp:/var/lib/artemis-instance/tmp
+      - "5673:5672"     # AMQP 1.0 (5672 is RabbitMQ's)
+      - "8161:8161"     # console
+      - "1883:1883"     # MQTT
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 5672"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
-  # ── Kafka (KRaft, 3 brokers) ────────────────────────────────────────────────
-  # Used by: redb.Route.Tests.Kafka → localhost:29092,29094,29096
-  # EXTERNAL listener advertises localhost so host-run tests can reach brokers;
-  # PLAINTEXT (inter-broker + redpanda-console) advertises kafka-kN inside the compose network.
+  # ── Kafka (KRaft, 3 brokers) ──────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.Kafka: plain localhost:29092,29094,29096; KafkaTlsTests: SASL_SSL kafka-k1:29192/k2:29194/k3:29196,
+  # mTLS kafka-k1:29292/k2:29294/k3:29296, REDB_KAFKA_TLS_DIR=<repo>/redb.Route/tests/docker/.generated/kafka.
+  # EXTERNAL advertises localhost for host-run tests; the TLS listeners advertise kafka-kN, the names the broker
+  # certificate carries; PLAINTEXT is the inter-broker listener inside the compose network.
   kafka-k1:
-    image: apache/kafka:3.7.0
+    <<: *kafka-broker
     container_name: kafka-k1
-    ports:
-      - "29092:29092"
-      - "19093:9093"
+    hostname: kafka-k1
+    ports: ["29092:29092", "29192:29192", "29292:29292"]
     environment:
-      - KAFKA_NODE_ID=1
-      - KAFKA_PROCESS_ROLES=controller,broker
-      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka-k1:9093,2@kafka-k2:9093,3@kafka-k3:9093
-      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:19092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
-      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-k1:19092,EXTERNAL://localhost:29092
-      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
-      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
-      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3
-      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3
-      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2
-      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
-      - KAFKA_DEFAULT_REPLICATION_FACTOR=3
-      - KAFKA_NUM_PARTITIONS=3
-      - KAFKA_MIN_INSYNC_REPLICAS=2
-      - KAFKA_LOG_RETENTION_HOURS=168
-      - KAFKA_CLUSTER_ID=4L6g3nShT-eMCtK--X86sw
+      <<: *kafka-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:19092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092,SECURE://0.0.0.0:29192,MTLS://0.0.0.0:29292
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-k1:19092,EXTERNAL://localhost:29092,SECURE://kafka-k1:29192,MTLS://kafka-k1:29292
 
   kafka-k2:
-    image: apache/kafka:3.7.0
+    <<: *kafka-broker
     container_name: kafka-k2
-    ports:
-      - "29094:29094"
-      - "19095:9093"
+    hostname: kafka-k2
+    ports: ["29094:29094", "29194:29194", "29294:29294"]
     environment:
-      - KAFKA_NODE_ID=2
-      - KAFKA_PROCESS_ROLES=controller,broker
-      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka-k1:9093,2@kafka-k2:9093,3@kafka-k3:9093
-      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:19094,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29094
-      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-k2:19094,EXTERNAL://localhost:29094
-      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
-      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
-      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3
-      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3
-      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2
-      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
-      - KAFKA_DEFAULT_REPLICATION_FACTOR=3
-      - KAFKA_NUM_PARTITIONS=3
-      - KAFKA_MIN_INSYNC_REPLICAS=2
-      - KAFKA_LOG_RETENTION_HOURS=168
-      - KAFKA_CLUSTER_ID=4L6g3nShT-eMCtK--X86sw
+      <<: *kafka-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:19094,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29094,SECURE://0.0.0.0:29194,MTLS://0.0.0.0:29294
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-k2:19094,EXTERNAL://localhost:29094,SECURE://kafka-k2:29194,MTLS://kafka-k2:29294
 
   kafka-k3:
-    image: apache/kafka:3.7.0
+    <<: *kafka-broker
     container_name: kafka-k3
-    ports:
-      - "29096:29096"
-      - "19097:9093"
+    hostname: kafka-k3
+    ports: ["29096:29096", "29196:29196", "29296:29296"]
     environment:
-      - KAFKA_NODE_ID=3
-      - KAFKA_PROCESS_ROLES=controller,broker
-      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka-k1:9093,2@kafka-k2:9093,3@kafka-k3:9093
-      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:19096,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29096
-      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-k3:19096,EXTERNAL://localhost:29096
-      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
-      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
-      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=3
-      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=3
-      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=2
-      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
-      - KAFKA_DEFAULT_REPLICATION_FACTOR=3
-      - KAFKA_NUM_PARTITIONS=3
-      - KAFKA_MIN_INSYNC_REPLICAS=2
-      - KAFKA_LOG_RETENTION_HOURS=168
-      - KAFKA_CLUSTER_ID=4L6g3nShT-eMCtK--X86sw
+      <<: *kafka-env
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:19096,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29096,SECURE://0.0.0.0:29196,MTLS://0.0.0.0:29296
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-k3:19096,EXTERNAL://localhost:29096,SECURE://kafka-k3:29196,MTLS://kafka-k3:29296
 
-  # Kafka web console (optional; not required by tests).
-  redpanda-console:
-    image: redpandadata/console:latest
-    container_name: redpanda-console
-    ports:
-      - "8888:8080"
-    environment:
-      - KAFKA_BROKERS=kafka-k1:19092,kafka-k2:19094,kafka-k3:19096
+  # The SCRAM user of the SECURE listeners (redb / redb-secret, the test password KafkaTlsTests use). It stays up
+  # after creating the user and reports healthy then, so `up --wait` returns only when the user exists.
+  kafka-scram-init:
+    image: apache/kafka:3.7.0
+    container_name: kafka-scram-init
+    profiles: [kafka, all]
     depends_on:
-      - kafka-k1
-      - kafka-k2
-      - kafka-k3
+      kafka-k1: { condition: service_healthy }
+      kafka-k2: { condition: service_healthy }
+      kafka-k3: { condition: service_healthy }
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        for i in $$(seq 1 60); do
+          if /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka-k1:19092 --alter --entity-type users \
+               --entity-name redb --add-config 'SCRAM-SHA-512=[iterations=8192,password=redb-secret]'; then
+            touch /tmp/done; exec sleep infinity
+          fi
+          sleep 2
+        done
+        exit 1
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/done"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
 
-  # ── Redis ───────────────────────────────────────────────────────────────────
-  # Used by: redb.Route.Tests.Redis → localhost:6379
+  # ── Redis ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.Redis, Cache, SignalR: localhost:6379, no password.
   redis:
-    image: bitnami/redis:latest
+    image: redis:8-alpine
     container_name: redis
+    profiles: [redis, all]
     ports:
       - "6379:6379"
-    environment:
-      - ALLOW_EMPTY_PASSWORD=yes
-    volumes:
-      - redis_data:/bitnami/redis/data
-    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--protected-mode", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-  # Redis web console (optional; not required by tests).
-  redisinsight:
-    image: redis/redisinsight:latest
-    container_name: redisinsight
-    ports:
-      - "5540:5540"
-    depends_on:
-      - redis
-    restart: unless-stopped
-
-  # ── GreenMail (SMTP + IMAP + POP3) ─────────────────────────────────────────
-  # Used by: redb.Route.Tests.Mail — user admin/admin pre-provisioned.
-  #   SMTP → 3025, POP3 → 3110, IMAP → 3143, SMTPS → 3465, IMAPS → 3993, POP3S → 3995, HTTP API → 8080
+  # ── GreenMail (SMTP, IMAP, POP3) ──────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.Mail and the Identity SMTP tests: user admin/admin; SMTP 3025, POP3 3110, IMAP 3143, SMTPS 3465,
+  # IMAPS 3993, POP3S 3995, HTTP API 8080 (the tests purge the mailboxes through it).
   greenmail:
     image: greenmail/standalone:2.1.2
     container_name: route-greenmail
-    restart: always
+    profiles: [mail, all]
     ports:
-      - "3025:3025"     # SMTP
-      - "3110:3110"     # POP3
-      - "3143:3143"     # IMAP
-      - "3465:3465"     # SMTPS
-      - "3993:3993"     # IMAPS
-      - "3995:3995"     # POP3S
-      - "8080:8080"     # HTTP API: the tests purge the mailboxes through it
+      - "3025:3025"
+      - "3110:3110"
+      - "3143:3143"
+      - "3465:3465"
+      - "3993:3993"
+      - "3995:3995"
+      - "8080:8080"
     environment:
-      # setup.test.all binds to 127.0.0.1 inside the container: reachable through Docker Desktop, not from another
-      # container or a Linux host's port mapping. hostname=0.0.0.0 binds every server to all interfaces.
-      # Each server has 2 s to start by default; on a loaded 2-CPU host SMTPS missed it, the main thread died and the
-      # HTTP API, started last, never came up.
+      # hostname=0.0.0.0 binds every server to all interfaces (setup.test.all alone binds 127.0.0.1 in the container).
+      # Each server has 2 s to start by default; on a loaded host SMTPS missed it and the HTTP API never came up.
       GREENMAIL_OPTS: "-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.startup.timeout=30000 -Dgreenmail.users=admin:admin@localhost"
     healthcheck:
-      # The image has no nc, curl or wget; bash opens the ports itself. The HTTP API starts after every mail server.
+      # The image has no nc, curl or wget; bash opens the ports. The HTTP API starts after every mail server.
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3025 && exec 4<>/dev/tcp/127.0.0.1/3143 && exec 5<>/dev/tcp/127.0.0.1/8080"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 60s
 
-  # ── SFTP (OpenSSH) ─────────────────────────────────────────────────────────
-  # Used by: redb.Route.Tests.Sftp → localhost:2222, testuser/secret, dir upload/
+  # ── SFTP ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.Sftp: localhost:2222, testuser/secret, folder upload/.
   sftp:
     image: atmoz/sftp:latest
     container_name: route-sftp
+    profiles: [sftp, all]
     ports:
       - "2222:22"
     command: testuser:secret:::upload
     healthcheck:
-      test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/22"]   # the image has bash, not nc
+      test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/22"]
       interval: 10s
       timeout: 3s
       retries: 5
 
-  # ── Mosquitto (MQTT 5.0) ────────────────────────────────────────────────────
-  # Used by: redb.Route.Tests.MqttNet → localhost:11883 (anonymous)
+  # ── Mosquitto (MQTT 5.0) ──────────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.MqttNet: localhost:11883, anonymous.
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: route-mosquitto
+    profiles: [mqtt, all]
     ports:
-      - "11883:1883"     # MQTT
-    volumes:
-      - mosquitto-data:/mosquitto/data
-      - mosquitto-log:/mosquitto/log
-    command: ["sh", "-c", "printf 'listener 1883\nallow_anonymous true\n' > /mosquitto/config/mosquitto.conf && /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf"]
+      - "11883:1883"
+    command: ["sh", "-c", "printf 'listener 1883\nallow_anonymous true\npersistence false\n' > /mosquitto/config/mosquitto.conf && /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf"]
     healthcheck:
       test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/broker/uptime' -C 1 -W 3"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ── IBM MQ Developer Edition ────────────────────────────────────────────────
-  # Used by: redb.Route.Tests.IbmMq → localhost:1414
-  #   Queue Manager QM1, channel DEV.APP.SVRCONN (app/admin), admin/admin
-  #   Web console: https://localhost:9443/ibmmq/console
-  #   tests/docker/ibmmq/redb-tests.mqsc adds what the tests use beyond the image's developer objects
-  #   (DEV.QUEUE.4/5, the temporary reply queue model, the DEV/ topic). The tag is pinned: a new image is a
-  #   deliberate bump, checked against that script.
+  # ── IBM MQ Developer Edition ──────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.IbmMq: localhost:1414, queue manager QM1, channel DEV.APP.SVRCONN (app/admin), admin/admin;
+  # console https://localhost:9443/ibmmq/console. tests/docker/ibmmq/redb-tests.mqsc adds what the tests use beyond
+  # the image's developer objects (DEV.QUEUE.4/5, the temporary reply queue model, the DEV/ topic). The tag is pinned:
+  # a new image is a deliberate bump, checked against that script. The image needs an x86-64-v3 CPU (AVX2).
   ibmmq:
     image: icr.io/ibm-messaging/mq:9.4.5.0-r2
     container_name: ibmmq
     hostname: ibmmq
-    restart: unless-stopped
+    profiles: [ibmmq, all]
     ports:
-      - "1414:1414"     # MQ listener
-      - "9443:9443"     # Web console (HTTPS)
-      - "9157:9157"     # Prometheus metrics (optional)
+      - "1414:1414"     # listener
+      - "9443:9443"     # console
     environment:
       LICENSE: accept
       MQ_QMGR_NAME: QM1
@@ -258,28 +314,28 @@ services:
       MQ_ADMIN_PASSWORD: admin
       MQ_DEV: "true"
     volumes:
-      - ibmmq-data:/mnt/mqm
       - ./tests/docker/ibmmq/redb-tests.mqsc:/etc/mqm/90-redb-tests.mqsc:ro
     healthcheck:
       test: ["CMD-SHELL", "chkmqhealthy"]
-      interval: 15s
+      interval: 10s
       timeout: 10s
-      retries: 10
+      retries: 18
       start_period: 30s
 
-  # ── LocalStack (AWS SQS + SNS emulator) ─────────────────────────────────────
-  # Used by: redb.Route.Tests.Sqs → http://localhost:4566 (test/test, us-east-1)
+  # ── LocalStack (SQS + SNS) ────────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.Sqs: http://localhost:4566, test/test, us-east-1.
   localstack:
-    image: localstack/localstack:3        # community — SQS/SNS free, no auth token
+    image: localstack/localstack:3        # community: SQS/SNS free, no auth token
     container_name: redb-localstack
+    profiles: [sqs, all]
     ports:
-      - "4566:4566"            # single edge port for all AWS services
+      - "4566:4566"
     environment:
-      - ACTIVATE_PRO=0
-      - SERVICES=sqs,sns
-      - DEBUG=0
-      - AWS_DEFAULT_REGION=us-east-1
-      - EAGER_SERVICE_LOADING=1
+      ACTIVATE_PRO: "0"
+      SERVICES: sqs,sns
+      DEBUG: "0"
+      AWS_DEFAULT_REGION: us-east-1
+      EAGER_SERVICE_LOADING: "1"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
       interval: 10s
@@ -287,18 +343,16 @@ services:
       retries: 6
       start_period: 15s
 
-  # ── S3-compatible store: RustFS ─────────────────────────────────────────────
-  # Used by: redb.Route.Tests.S3 → localhost:9000 (minioadmin/minioadmin)
-  # No C:\Work\yaml canonical — S3 test infra lives only here.
-  # RustFS, the image the redb-route-s3 template uses: Docker Hub no longer serves MinIO community images
-  # (minio/mc is refused), so a fresh host could not start the old stand. The suites create their own buckets.
+  # ── S3-compatible store (RustFS) ──────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.S3: localhost:9000, minioadmin/minioadmin; the suites create their own buckets.
   s3:
     image: rustfs/rustfs:1.0.3
     container_name: route-s3
     hostname: s3
+    profiles: [s3, all]
     ports:
       - "9000:9000"     # S3 API
-      - "9001:9001"     # Web console
+      - "9001:9001"     # console
     environment:
       RUSTFS_ACCESS_KEY: minioadmin
       RUSTFS_SECRET_KEY: minioadmin
@@ -308,26 +362,24 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    volumes:
-      - s3-data:/data
 
-  # ── FTP/FTPS ────────────────────────────────────────────────────────────────
-  # Used by: redb.Route.Tests.Ftp → localhost:21, testuser/secret
-  # No C:\Work\yaml canonical — FTP test infra lives only here.
+  # ── FTP / FTPS ────────────────────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.Ftp: localhost:21, testuser/secret, passive ports 21000-21010.
   ftp:
     image: delfer/alpine-ftp-server:latest
     container_name: route-ftp
+    profiles: [ftp, all]
     ports:
-      - "21:21"         # FTP control
-      - "21000-21010:21000-21010"   # Passive data
+      - "21:21"
+      - "21000-21010:21000-21010"
     environment:
       USERS: "testuser|secret|/home/testuser|10000"
       ADDRESS: localhost
       MIN_PORT: 21000
       MAX_PORT: 21010
-    # vsftpd refuses a config file root does not own, and one with CRLF lines, and with background=YES says nothing.
-    # A bind mount keeps the owner of the checkout (uid 1000 on a Linux host) and a Windows checkout has CRLF, so the
-    # file is mounted aside and written by root without the CRs.
+    # vsftpd refuses a config file root does not own, or one with CRLF lines, and with background=YES says nothing:
+    # the file is mounted aside and written by root without the CRs. The image's script creates the users and then
+    # runs the command it is given: vsftpd in the foreground (its own background start lost the daemon's pid).
     volumes:
       - ./tests/docker/ftp/vsftpd.conf:/config/vsftpd.conf:ro
     entrypoint:
@@ -335,7 +387,10 @@ services:
       - --
       - sh
       - -c
-      - tr -d '\r' < /config/vsftpd.conf > /etc/vsftpd/vsftpd.conf && chmod 0644 /etc/vsftpd/vsftpd.conf && exec /bin/start_vsftpd.sh
+      - >-
+        tr -d '\r' < /config/vsftpd.conf | sed 's/^background=.*/background=NO/' > /etc/vsftpd/vsftpd.conf
+        && chmod 0644 /etc/vsftpd/vsftpd.conf
+        && exec /bin/start_vsftpd.sh vsftpd -opasv_min_port=21000 -opasv_max_port=21010 -opasv_address=localhost /etc/vsftpd/vsftpd.conf
     healthcheck:
       # 127.0.0.1: vsftpd listens on IPv4 only, and localhost resolves to ::1 in this image.
       test: ["CMD-SHELL", "nc -z 127.0.0.1 21"]
@@ -343,40 +398,34 @@ services:
       timeout: 3s
       retries: 5
 
-  # ── Elasticsearch ───────────────────────────────────────────────────────────
-  # Used by: redb.Route.Tests.Elasticsearch → localhost:9200 (security disabled)
-  # No C:\Work\yaml canonical — ES test infra lives only here.
+  # ── Elasticsearch ─────────────────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.Elasticsearch: localhost:9200, security off.
   elasticsearch:
     image: elasticsearch:8.17.0
     container_name: route-elasticsearch
+    profiles: [elasticsearch, all]
     ports:
-      - "9200:9200"     # HTTP API
-      - "9300:9300"     # Transport
+      - "9200:9200"
     environment:
       discovery.type: single-node
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: "-Xms512m -Xmx512m"
-    volumes:
-      - elastic-data:/usr/share/elasticsearch/data
+    tmpfs:
+      - /usr/share/elasticsearch/data:mode=1777
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
-      # Elasticsearch needs more than two minutes to start on a 2-CPU host; checks failing within start_period do not
-      # count, a passing one ends it at once.
+      # More than two minutes on a 2-CPU host; checks failing within start_period do not count.
       start_period: 180s
 
-  # ── Azure Service Bus Emulator (+ Azurite + SQL Edge) ───────────────────────
-  # Used by: redb.Route.Tests.AzureServiceBus → localhost:5300 (AMQP)
-  # No C:\Work\yaml canonical — ASB test infra lives only here.
+  # ── Azure Service Bus emulator (+ Azurite + SQL Edge) ─────────────────────────────────────────────────────────────
+  # Route.Tests.AzureServiceBus: AMQP localhost:5300.
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest
     container_name: route-azurite
-    ports:
-      - "10000:10000"   # Blob
-      - "10001:10001"   # Queue
-      - "10002:10002"   # Table
+    profiles: [servicebus, all]
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:10000', r => process.exit(r.statusCode === 400 ? 0 : 1)).on('error', () => process.exit(1))\""]
       interval: 10s
@@ -386,30 +435,15 @@ services:
   sqledge:
     image: mcr.microsoft.com/azure-sql-edge:latest
     container_name: route-sqledge
+    profiles: [servicebus, all]
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "StrongP@ss1"
-    healthcheck:
-      test: ["CMD-SHELL", "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P 'StrongP@ss1' -Q 'SELECT 1' || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-      start_period: 30s
-
-  # ── Health probe for distroless images ──────────────────────────────────────
-  # The Service Bus emulator and mock-oauth2-server images have no shell, nc or wget, so a CMD-SHELL health check
-  # can never run there and the containers show "unhealthy" while working. A static busybox, copied once into a
-  # named volume, is the probe they mount read-only.
-  healthprobe-init:
-    image: busybox:musl
-    container_name: route-healthprobe-init
-    command: ["cp", "/bin/busybox", "/probe/busybox"]
-    volumes:
-      - healthprobe:/probe
 
   servicebus:
     image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
     container_name: route-servicebus
+    profiles: [servicebus, all]
     depends_on:
       azurite:
         condition: service_healthy
@@ -418,31 +452,42 @@ services:
       healthprobe-init:
         condition: service_completed_successfully
     ports:
-      - "5300:5672"     # AMQP (remapped to avoid conflict with RabbitMQ on 5672)
+      - "5300:5672"     # AMQP (5672 is RabbitMQ's)
     environment:
       SQL_SERVER: sqledge
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "StrongP@ss1"
-    volumes:
-      - healthprobe:/probe:ro
+    volumes_from:
+      - healthprobe-init:ro
     healthcheck:
-      test: ["CMD", "/probe/busybox", "nc", "-z", "127.0.0.1", "5672"]   # distroless: the probe from healthprobe-init
+      test: ["CMD", "/probe/busybox", "nc", "-z", "127.0.0.1", "5672"]
       interval: 15s
       timeout: 5s
       retries: 10
       start_period: 60s
 
-  # ── OpenLDAP ─────────────────────────────────────────────────────────────────
-  # Used by: redb.Route.Tests.Ldap → localhost:389
-  #   Admin DN cn=admin,dc=redb,dc=test / admin, Base DN dc=redb,dc=test
+  # ── Health probe for distroless images ────────────────────────────────────────────────────────────────────────────
+  # The Service Bus emulator and mock-oauth2-server images have no shell, nc or wget, so a CMD-SHELL check can never
+  # run there. A static busybox, copied into this container's anonymous volume, is the probe they mount read-only;
+  # the volume goes with `down -v`.
+  healthprobe-init:
+    image: busybox:musl
+    container_name: route-healthprobe-init
+    profiles: [servicebus, oauth2, rabbitmq-tls, all]
+    command: ["cp", "/bin/busybox", "/probe/busybox"]
+    volumes:
+      - /probe
+
+  # ── OpenLDAP ──────────────────────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.Ldap: localhost:389 (LDAPS 636), admin DN cn=admin,dc=redb,dc=test / admin, base dc=redb,dc=test.
   openldap:
     image: osixia/openldap:1.5.0
     container_name: route-openldap
     hostname: openldap
-    restart: unless-stopped
+    profiles: [ldap, all]
     ports:
-      - "389:389"       # LDAP
-      - "636:636"       # LDAPS
+      - "389:389"
+      - "636:636"
     environment:
       LDAP_ORGANISATION: redb
       LDAP_DOMAIN: redb.test
@@ -450,8 +495,6 @@ services:
       LDAP_READONLY_USER: "false"
       LDAP_TLS_VERIFY_CLIENT: never
     volumes:
-      - openldap-data:/var/lib/ldap
-      - openldap-config:/etc/ldap/slapd.d
       - ./tests/docker/ldap/seed.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/seed.ldif:ro
     command: --copy-service
     healthcheck:
@@ -461,185 +504,292 @@ services:
       retries: 10
       start_period: 15s
 
-  # phpLDAPadmin web UI (optional; not required by tests). http://localhost:8389
-  ldapadmin:
-    image: osixia/phpldapadmin:latest
-    container_name: route-ldapadmin
-    restart: unless-stopped
-    ports:
-      - "8389:80"
-    environment:
-      PHPLDAPADMIN_LDAP_HOSTS: openldap
-      PHPLDAPADMIN_LDAP_CLIENT_TLS: "false"
-      PHPLDAPADMIN_HTTPS: "false"
-    depends_on:
-      openldap:
-        condition: service_healthy
-
-  # ── Firebase Emulators (Firestore + Auth) ───────────────────────────────────
-  # Used by: redb.Route.Tests.Firebase.Integration
-  #   Firestore localhost:8086, Auth localhost:9099, UI http://localhost:4000
+  # ── Firebase emulators (Firestore + Auth), Storage (fake GCS) and the FCM echo ────────────────────────────────────
+  # Route.Tests.Firebase: Firestore localhost:8086, Auth 9099, UI 4000, Storage 4443, FCM 18200. The tests set
+  # FIRESTORE_EMULATOR_HOST and STORAGE_EMULATOR_HOST themselves.
   firebase-emulators:
-    image: node:22-slim
+    build: ./tests/docker/firebase
+    image: redb-route-tests/firebase-emulators:15.35.0
     container_name: firebase-emulators
     hostname: firebase-emulators
-    restart: unless-stopped
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    # Host blocks outbound UDP (VPN) but allows TCP — force DNS-over-TCP.
-    dns_opt:
-      - use-vc
+    profiles: [firebase, all]
     ports:
-      - "8086:8086"     # Firestore
-      - "9099:9099"     # Auth
-      - "4000:4000"     # Emulator UI
-    environment:
-      FIRESTORE_EMULATOR_HOST: "0.0.0.0:8086"
-      FIREBASE_AUTH_EMULATOR_HOST: "0.0.0.0:9099"
-    entrypoint: >
-      /bin/sh -c "
-        apt-get update &&
-        apt-get install -y --no-install-recommends ca-certificates wget &&
-        rm -rf /var/lib/apt/lists/* &&
-        wget -qO /tmp/jre.tar.gz 'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.7%2B6/OpenJDK21U-jre_x64_linux_hotspot_21.0.7_6.tar.gz' &&
-        mkdir -p /opt/java && tar xzf /tmp/jre.tar.gz -C /opt/java --strip-components=1 && rm /tmp/jre.tar.gz &&
-        export JAVA_HOME=/opt/java && export PATH=/opt/java/bin:$$PATH &&
-        npm install -g firebase-tools &&
-        mkdir -p /app && cd /app &&
-        echo '{\"emulators\":{\"firestore\":{\"host\":\"0.0.0.0\",\"port\":8086},\"auth\":{\"host\":\"0.0.0.0\",\"port\":9099},\"ui\":{\"enabled\":true,\"host\":\"0.0.0.0\",\"port\":4000}}}' > firebase.json &&
-        firebase emulators:start --project demo-redb --only firestore,auth
-      "
+      - "8086:8086"
+      - "9099:9099"
+      - "4000:4000"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8086/ || exit 1"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8086/', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 15
-      start_period: 90s
+      start_period: 30s
 
-  # ── Fake GCS Server (Firebase Storage) ──────────────────────────────────────
-  # Used by: redb.Route.Tests.Firebase.Integration → http://localhost:4443
   fake-gcs:
     image: fsouza/fake-gcs-server:latest
     container_name: firebase-gcs
     hostname: firebase-gcs
-    restart: unless-stopped
+    profiles: [firebase, all]
     ports:
       - "4443:4443"
-    command:
-      - "-scheme"
-      - "http"
-      - "-host"
-      - "0.0.0.0"
-      - "-port"
-      - "4443"
-      - "-backend"
-      - "memory"
-      - "-public-host"
-      - "localhost:4443"
+    command: ["-scheme", "http", "-host", "0.0.0.0", "-port", "4443", "-backend", "memory", "-public-host", "localhost:4443"]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:4443/storage/v1/b || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ── FCM HTTP v1 API mock ────────────────────────────────────────────────────
-  # Google ships no FCM emulator; this echo records messages:send calls.
-  # Used by: redb.Route.Tests.Firebase FCM e2e (AppOptions.HttpClientFactory redirect).
-  # Source of the server script: C:\Work\yaml\firebase\fcm-echo\server.js (host infra dir).
-  #   POST /v1/projects/*/messages:send | POST/DELETE /v1/projects/*/registrations/*/topicSubscriptions[/*]
-  #   GET/DELETE /messages | GET /healthz
+  # Google ships no FCM emulator: this echo records messages:send calls (GET/DELETE /messages, GET /healthz).
   fcm-echo:
-    image: node:22-slim
+    build: ./tests/docker/fcm-echo
+    image: redb-route-tests/fcm-echo:1
     container_name: fcm-echo
     hostname: fcm-echo
-    working_dir: /app
-    volumes: ["./tests/docker/fcm-echo:/app"]
-    command: node server.js
-    ports: ["18200:18200"]
-    restart: unless-stopped
+    profiles: [firebase, all]
+    ports:
+      - "18200:18200"
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:18200/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:18200/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ── Mock OAuth2 Server (OIDC) ────────────────────────────────────────────────
-  # Used by: redb.Identity federation tests → http://localhost:9199/default
+  # ── Mock OAuth2 server (OIDC) ─────────────────────────────────────────────────────────────────────────────────────
+  # redb.Identity federation tests: http://localhost:9199/default.
   mock-oauth2:
     image: ghcr.io/navikt/mock-oauth2-server:2.1.10
     container_name: route-mock-oauth2
     hostname: mock-oauth2
-    restart: unless-stopped
+    profiles: [oauth2, all]
+    depends_on:
+      healthprobe-init:
+        condition: service_completed_successfully
     ports:
       - "9199:8080"
     environment:
       SERVER_PORT: 8080
-      JSON_CONFIG: >
-        {
-          "interactiveLogin": true,
-          "httpServer": "NettyWrapper",
-          "tokenCallbacks": []
-        }
-    depends_on:
-      healthprobe-init:
-        condition: service_completed_successfully
-    volumes:
-      - healthprobe:/probe:ro
+      JSON_CONFIG: '{"interactiveLogin": true, "httpServer": "NettyWrapper", "tokenCallbacks": []}'
+    volumes_from:
+      - healthprobe-init:ro
     healthcheck:
-      test: ["CMD", "/probe/busybox", "wget", "-qO-", "http://127.0.0.1:8080/default/.well-known/openid-configuration"]   # distroless: the probe from healthprobe-init
+      test: ["CMD", "/probe/busybox", "wget", "-qO-", "http://127.0.0.1:8080/default/.well-known/openid-configuration"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
 
-  # ── PostgreSQL ───────────────────────────────────────────────────────────────
-  # Used by: redb.Route.Tests.Core (redb.Postgres[.Pro]) → localhost:5432
+  # ── Second-tier SQL providers ─────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.Sql E2E Tier2. Connection strings are fixed in the tests (E2E/Infrastructure/*E2EProvider.cs).
+  # Firebird: 127.0.0.1:3050, SYSDBA/1, database /var/lib/firebird/data/route_sql.fdb.
+  firebird:
+    image: firebirdsql/firebird:5
+    container_name: route-firebird
+    profiles: [firebird, sql-tier2, all]
+    ports:
+      - "3050:3050"
+    environment:
+      FIREBIRD_ROOT_PASSWORD: "1"
+      FIREBIRD_DATABASE: route_sql.fdb
+      FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
+    healthcheck:
+      test: ["CMD", "bash", "-c", "test -f /var/lib/firebird/data/route_sql.fdb && exec 3<>/dev/tcp/127.0.0.1/3050"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # MySQL: 127.0.0.1:3306, root/1, database route_sql.
+  mysql:
+    image: mysql:8.4
+    container_name: route-mysql
+    profiles: [mysql, sql-tier2, all]
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "1"
+      MYSQL_DATABASE: route_sql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -p1 --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # MariaDB: 127.0.0.1:3307, root/1, database route_sql.
+  mariadb:
+    image: mariadb:11
+    container_name: route-mariadb
+    profiles: [mariadb, sql-tier2, all]
+    ports:
+      - "3307:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: "1"
+      MARIADB_DATABASE: route_sql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Oracle Free: 127.0.0.1:1521/FREEPDB1, user rsql/Rsql2026 (test password).
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    container_name: route-oracle
+    profiles: [oracle, sql-tier2, all]
+    ports:
+      - "1521:1521"
+    environment:
+      ORACLE_PASSWORD: "Rsql2026"
+      APP_USER: rsql
+      APP_USER_PASSWORD: "Rsql2026"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  # ── AS2 interop: OpenAS2 ──────────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.As2 As2InteropTests: AS2 receive 127.0.0.1:14080, async MDN receive 14081; the tests' own receivers
+  # listen on the host (15081, 15082). AS2_INTEROP_CERTS=<repo>/redb.Route/tests/docker/.generated/as2/certs;
+  # the message folders (.generated/as2/data) are shared with the tests.
+  openas2:
+    build: ./tests/docker/as2
+    image: redb-route-tests/openas2:1
+    container_name: as2-openas2
+    profiles: [as2, all]
+    ports:
+      - "14080:10080"   # AS2 receive
+      - "14081:10081"   # async MDN receive
+    volumes:
+      - ./tests/docker/.generated/as2/keystore/as2_certs.p12:/opt/openas2/config/as2_certs.p12:ro
+      - ./tests/docker/.generated/as2/keystore/ssl_certs.jks:/opt/openas2/config/ssl_certs.jks:ro
+      - ./tests/docker/.generated/as2/data:/opt/openas2/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/10080"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ── gRPC interop: grpc-js echo server and clients ─────────────────────────────────────────────────────────────────
+  # Route.Tests.Grpc GrpcInteropTests: 127.0.0.1:18100; the tests run the container's clients with
+  # `docker exec grpc-echo`, which call back to host.docker.internal.
+  # REDB_GRPC_CERTS=<repo>/redb.Route/tests/docker/.generated/grpc.
+  grpc-echo:
+    build: ./tests/docker/grpc
+    image: redb-route-tests/grpc-echo:1
+    container_name: grpc-echo
+    profiles: [grpc, all]
+    ports:
+      - "18100:18100"
+    volumes:
+      - ./tests/docker/.generated/grpc:/app/certs:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(18100, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # ── SOAP interop: node-soap echo server and clients ───────────────────────────────────────────────────────────────
+  # Route.Tests.Soap *InteropTests: 127.0.0.1:18060; the tests run the container's clients with `docker exec soap-echo`,
+  # which call back to host.docker.internal. The encryption test hands its envelope and key over through /work:
+  # SOAP_INTEROP_DIR=<repo>/redb.Route/tests/docker/.generated/soap.
+  soap-echo:
+    build: ./tests/docker/soap
+    image: redb-route-tests/soap-echo:1
+    container_name: soap-echo
+    profiles: [soap, all]
+    ports:
+      - "18060:18060"
+    volumes:
+      - ./tests/docker/.generated/soap:/work:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:18060/echo?wsdl', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # ── Web consoles (optional, no test needs them) ───────────────────────────────────────────────────────────────────
+  redpanda-console:
+    image: redpandadata/console:latest
+    container_name: redpanda-console
+    profiles: [ui, all]
+    ports:
+      - "8888:8080"
+    environment:
+      KAFKA_BROKERS: kafka-k1:19092,kafka-k2:19094,kafka-k3:19096
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: redisinsight
+    profiles: [ui, all]
+    ports:
+      - "5540:5540"
+
+  ldapadmin:
+    image: osixia/phpldapadmin:latest
+    container_name: route-ldapadmin
+    profiles: [ui, all]
+    ports:
+      - "8389:80"
+    environment:
+      PHPLDAPADMIN_LDAP_HOSTS: openldap
+      PHPLDAPADMIN_LDAP_CLIENT_TLS: "false"
+      PHPLDAPADMIN_HTTPS: "false"
+
+  # ── PostgreSQL and SQL Server ─────────────────────────────────────────────────────────────────────────────────────
+  # Route.Tests.Core, Llm, Quartz, Sql: Postgres localhost:5432 (postgres, trust), SQL Server localhost:1433 (sa/1).
+  # Own profiles, not in "all": a host that already serves 5432 and 1433 leaves them out.
   pgdb:
     image: postgres:18
-    container_name: pgdb
-    user: root
-    restart: always
+    profiles: [pgdb]
     ports:
       - "5432:5432"
     environment:
       POSTGRES_HOST_AUTH_METHOD: trust
-      POSTGRES_PASSWORD: 1
-    volumes:
-      - pgdb-data:/var/lib/postgresql
-    stop_grace_period: 30s
+      POSTGRES_PASSWORD: "1"
+      POSTGRES_DB: redb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
-  # ── SQL Server ─────────────────────────────────────────────────────────────
-  # Used by: redb.Route.Tests.Core (redb.MSSql[.Pro]) → localhost:1433, sa/!@rrQWER123
-  # Stock image (C:\Work\yaml\mssql builds a custom Dockerfile not present here).
+  # The stock image accepts only a strong sa password at setup; msdb-init lowers it to the tests' "1" and creates
+  # the redb database, and reports healthy when done. The msdb health check accepts either password.
   msdb:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    container_name: msdb
-    user: root
-    restart: always
+    image: mcr.microsoft.com/mssql/server:2025-latest
+    profiles: [msdb]
     ports:
       - "1433:1433"
     environment:
-      MSSQL_SA_PASSWORD: "!@rrQWER123"
       ACCEPT_EULA: "Y"
-    volumes:
-      - mssql-data:/var/opt/mssql/data
-      - mssql-log:/var/opt/mssql/log
-      - mssql-secrets:/var/opt/mssql/secrets
+      MSSQL_SA_PASSWORD: "Setup-Only-1"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 1 -Q 'SELECT 1' -b -o /dev/null || /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 20s
 
-volumes:
-  activemq-data:
-  activemq-tmp:
-  redis_data:
-  mosquitto-data:
-  mosquitto-log:
-  ibmmq-data:
-  s3-data:
-  elastic-data:
-  openldap-data:
-  openldap-config:
-  pgdb-data:
-  mssql-data:
-  mssql-log:
-  mssql-secrets:
-  healthprobe:
+  msdb-init:
+    image: mcr.microsoft.com/mssql/server:2025-latest
+    profiles: [msdb]
+    depends_on:
+      msdb: { condition: service_healthy }
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        q() { /opt/mssql-tools18/bin/sqlcmd -C -S msdb -U sa -b "$$@"; }
+        q -P 'Setup-Only-1' -Q "ALTER LOGIN sa WITH PASSWORD = '1', CHECK_POLICY = OFF, CHECK_EXPIRATION = OFF" 2>/dev/null || true
+        q -P 1 -Q "IF DB_ID('redb') IS NULL CREATE DATABASE redb" && touch /tmp/done && exec sleep infinity
+        exit 1
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/done"]
+      interval: 3s
+      timeout: 3s
+      retries: 40

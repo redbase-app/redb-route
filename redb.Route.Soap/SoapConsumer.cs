@@ -89,7 +89,16 @@ public sealed class SoapConsumer : IConsumer
                 o.RejectStatusCode, o.RetryAfterSeconds,
                 onRejected: _endpoint.RecordRejected));
 
-        await _server.EnsureStarted(o.Host, o.Port, ct).ConfigureAwait(false);
+        try
+        {
+            await _server.EnsureStarted(o.Host, o.Port, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The listener did not come up: the route leaves it, so a later Start registers once.
+            await Stop(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
     }
 
     private static Microsoft.AspNetCore.Server.Kestrel.Https.ClientCertificateMode? MapClientCertificateMode(

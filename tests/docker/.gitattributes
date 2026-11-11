@@ -1,0 +1,2 @@
+# Files mounted into or built for Linux containers, and shell scripts: LF on every checkout.
+* text=auto eol=lf

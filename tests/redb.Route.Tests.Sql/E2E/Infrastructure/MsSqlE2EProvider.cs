@@ -26,7 +26,7 @@ public sealed class MsSqlE2EProvider : SqlE2EProvider
     {
         get
         {
-            var raw = Environment.GetEnvironmentVariable(EnvironmentVariable)?.Trim() is { Length: > 0 } cs ? cs : DefaultConnectionString;
+            var raw = Environment.GetEnvironmentVariable(EnvironmentVariable)?.Trim() is { Length: > 0 } cs ? cs : global::redb.Route.Tests.Shared.TestDatabases.MsSql(DefaultConnectionString);
             return new SqlConnectionStringBuilder(raw) { ApplicationName = "rsql-e2e-" + Name }.ConnectionString;
         }
     }

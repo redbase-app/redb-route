@@ -17,7 +17,7 @@ public sealed class PostgresE2EProvider : SqlE2EProvider
     // Npgsql 10 leaves PostgresException.BatchCommand null unless the connection opts in, and the suite
     // checks the exact failed item of a batch: the option is set here, also on an overriding string.
     public override string ConnectionString => new NpgsqlConnectionStringBuilder(
-        Environment.GetEnvironmentVariable(EnvironmentVariable)?.Trim() is { Length: > 0 } cs ? cs : DefaultConnectionString)
+        Environment.GetEnvironmentVariable(EnvironmentVariable)?.Trim() is { Length: > 0 } cs ? cs : global::redb.Route.Tests.Shared.TestDatabases.Postgres(DefaultConnectionString))
     {
         IncludeFailedBatchedCommand = true,
     }.ConnectionString;

@@ -1,0 +1,50 @@
+<partnerships>
+    <partner name="openas2" as2_id="openas2" x509_alias="openas2" email="openas2@example.com"/>
+    <partner name="redb"    as2_id="redb"    x509_alias="redb"    email="redb@example.com"/>
+    <partner name="redb-async" as2_id="redb-async" x509_alias="redb" email="redb@example.com"/>
+
+    <partnership name="redb-to-openas2">
+        <sender name="redb"/>
+        <receiver name="openas2"/>
+        <attribute name="protocol" value="as2"/>
+        <attribute name="content_transfer_encoding" value="binary"/>
+        <attribute name="encrypt" value="AES128"/>
+        <attribute name="sign" value="SHA-256"/>
+        <attribute name="as2_url" value="http://localhost:10080"/>
+        <attribute name="as2_mdn_options" value="signed-receipt-protocol=optional, pkcs7-signature; signed-receipt-micalg=optional, sha-256"/>
+        <attribute name="prevent_canonicalization_for_mic" value="false"/>
+    </partnership>
+
+    <partnership name="openas2-to-redb">
+        <sender name="openas2"/>
+        <receiver name="redb"/>
+        <pollerConfig enabled="true"/>
+        <attribute name="subject" value="AS2 message openas2 to redb"/>
+        <attribute name="protocol" value="as2"/>
+        <attribute name="content_transfer_encoding" value="binary"/>
+        <attribute name="encrypt" value="AES128"/>
+        <attribute name="sign" value="SHA-256"/>
+        <attribute name="as2_url" value="http://host.docker.internal:15081/inbound"/>
+        <attribute name="as2_mdn_options" value="signed-receipt-protocol=optional, pkcs7-signature; signed-receipt-micalg=optional, sha-256"/>
+        <attribute name="prevent_canonicalization_for_mic" value="false"/>
+    </partnership>
+
+
+    <!-- Async MDN interop (redb.Route As2InteropTests.OpenAs2_To_Redb_AsyncMdn): OpenAS2 asks for an asynchronous
+         receipt; our receiver posts it from the host to OpenAS2's MDN receiver, mapped on 127.0.0.1:14081. -->
+    <partnership name="openas2-to-redb-async">
+        <sender name="openas2"/>
+        <receiver name="redb-async"/>
+        <pollerConfig enabled="true"/>
+        <attribute name="subject" value="AS2 message openas2 to redb, async MDN"/>
+        <attribute name="protocol" value="as2"/>
+        <attribute name="content_transfer_encoding" value="binary"/>
+        <attribute name="encrypt" value="AES128"/>
+        <attribute name="sign" value="SHA-256"/>
+        <attribute name="as2_url" value="http://host.docker.internal:15082/inbound"/>
+        <attribute name="as2_mdn_to" value="openas2@example.com"/>
+        <attribute name="as2_receipt_option" value="http://127.0.0.1:14081"/>
+        <attribute name="as2_mdn_options" value="signed-receipt-protocol=optional, pkcs7-signature; signed-receipt-micalg=optional, sha-256"/>
+        <attribute name="prevent_canonicalization_for_mic" value="false"/>
+    </partnership>
+</partnerships>

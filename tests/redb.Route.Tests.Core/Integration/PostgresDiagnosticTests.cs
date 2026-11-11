@@ -18,7 +18,7 @@ public sealed class PostgresDiagnosticTests
             .AddJsonFile("appsettings.json")
             .Build();
 
-        var cs = config.GetConnectionString("Postgres")!;
+        var cs = global::redb.Route.Tests.Shared.TestDatabases.Postgres(config.GetConnectionString("Postgres")!);
         var license = config["Redb:License"];
 
         var services = new ServiceCollection();

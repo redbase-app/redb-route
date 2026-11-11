@@ -23,6 +23,9 @@
     <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="../Shared/TestDatabases.cs" Link="Shared/TestDatabases.cs" />
+  </ItemGroup>
 </Project>
 
 

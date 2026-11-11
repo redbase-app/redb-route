@@ -135,7 +135,17 @@ internal sealed class As2Consumer : IConsumer
                 _options.MaxConcurrentRequests, _options.RequestQueueLimit,
                 _options.RejectStatusCode, _options.RetryAfterSeconds,
                 onRejected: _endpoint.RecordRejected));
-        await Server.EnsureStarted(host, port, ct).ConfigureAwait(false);
+        try
+        {
+            await Server.EnsureStarted(host, port, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The listener did not come up: the route leaves it and the MDN client goes, so a later Start
+            // registers once and builds one client.
+            await Stop(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
 
         _logger?.LogInformation("AS2 consumer started: {Host}:{Port}{Path}", host, port, path);
     }

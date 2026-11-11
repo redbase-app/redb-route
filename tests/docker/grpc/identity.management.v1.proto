@@ -1,0 +1,108 @@
+// redb.Identity — management gRPC contract.
+//
+// The admin surface, for tooling rather than for relying parties. It sits on its own port
+// (`ManagementPort`), behind bearer authentication and the same granular scope table the HTTP management
+// API is checked against — one table in Core, so the same token yields the same verdict on both.
+//
+// Shape rule, and it differs from identity.v1.proto on purpose. There the messages are the RFC's own
+// fields, fixed by standards that do not move. Here there are 159 operations over an admin surface that
+// still grows, and typing every request and response would freeze it: every new field would be a contract
+// change in a file consumers have to regenerate. So the *addresses* are the contract — one rpc per
+// operation, named and stable — and the payloads are `google.protobuf.Struct` / `Value`, which carry
+// arbitrary JSON while remaining real protobuf on the wire. A generated client works; the payload is
+// documented by the REST API of the same name.
+//
+// Requests are always an object of named arguments. The names are the controller parameter names, the
+// same ones the REST route and query parameters use — `id`, `offset`, `count` — and a body-shaped
+// argument is simply the object itself.
+
+syntax = "proto3";
+
+package identity.management.v1;
+
+option csharp_namespace = "redb.Identity.Grpc.Management.V1";
+
+import "google/protobuf/struct.proto";
+
+// ── shared envelopes ─────────────────────────────────────
+
+message ManagementRequest {
+  // Named arguments for the operation. An operation that takes a request body puts that body's fields
+  // here directly; one that takes an id puts `id` here. Unknown keys are ignored.
+  google.protobuf.Struct arguments = 1;
+}
+
+message ManagementResponse {
+  // Whatever the operation returned: an object, a list, or nothing at all. `Value` rather than `Struct`
+  // because list endpoints answer with arrays and a Struct cannot hold one.
+  google.protobuf.Value result = 1;
+}
+
+// ── users ────────────────────────────────────────────────
+
+service Users {
+  rpc List (ManagementRequest) returns (ManagementResponse);
+  rpc Search (ManagementRequest) returns (ManagementResponse);
+  rpc Get (ManagementRequest) returns (ManagementResponse);
+  rpc Create (ManagementRequest) returns (ManagementResponse);
+  rpc Update (ManagementRequest) returns (ManagementResponse);
+  rpc Delete (ManagementRequest) returns (ManagementResponse);
+  rpc ChangePassword (ManagementRequest) returns (ManagementResponse);
+  rpc AdminResetPassword (ManagementRequest) returns (ManagementResponse);
+}
+
+// ── applications ─────────────────────────────────────────
+
+service Applications {
+  rpc List (ManagementRequest) returns (ManagementResponse);
+  rpc Get (ManagementRequest) returns (ManagementResponse);
+  rpc Create (ManagementRequest) returns (ManagementResponse);
+  rpc Update (ManagementRequest) returns (ManagementResponse);
+  rpc RotateSecret (ManagementRequest) returns (ManagementResponse);
+  rpc Delete (ManagementRequest) returns (ManagementResponse);
+}
+
+// ── groups ───────────────────────────────────────────────
+
+service Groups {
+  rpc List (ManagementRequest) returns (ManagementResponse);
+  rpc Search (ManagementRequest) returns (ManagementResponse);
+  rpc Get (ManagementRequest) returns (ManagementResponse);
+  rpc Create (ManagementRequest) returns (ManagementResponse);
+  rpc CreateChild (ManagementRequest) returns (ManagementResponse);
+  rpc Update (ManagementRequest) returns (ManagementResponse);
+  rpc Delete (ManagementRequest) returns (ManagementResponse);
+  rpc Move (ManagementRequest) returns (ManagementResponse);
+
+  // Hierarchy reads. The group tree is the one place this API is not flat.
+  rpc Tree (ManagementRequest) returns (ManagementResponse);
+  rpc Path (ManagementRequest) returns (ManagementResponse);
+  rpc Children (ManagementRequest) returns (ManagementResponse);
+
+  // Membership.
+  rpc ListMembers (ManagementRequest) returns (ManagementResponse);
+  rpc AddMember (ManagementRequest) returns (ManagementResponse);
+  rpc UpdateMember (ManagementRequest) returns (ManagementResponse);
+  rpc RemoveMember (ManagementRequest) returns (ManagementResponse);
+  rpc UserGroups (ManagementRequest) returns (ManagementResponse);
+  rpc IsMember (ManagementRequest) returns (ManagementResponse);
+}
+
+// ── scopes ───────────────────────────────────────────────
+
+service Scopes {
+  rpc List (ManagementRequest) returns (ManagementResponse);
+  rpc Get (ManagementRequest) returns (ManagementResponse);
+  rpc Create (ManagementRequest) returns (ManagementResponse);
+  rpc Update (ManagementRequest) returns (ManagementResponse);
+  rpc Delete (ManagementRequest) returns (ManagementResponse);
+}
+
+// ── tokens ───────────────────────────────────────────────
+
+service Tokens {
+  rpc List (ManagementRequest) returns (ManagementResponse);
+  rpc Revoke (ManagementRequest) returns (ManagementResponse);
+  rpc RevokeBySubject (ManagementRequest) returns (ManagementResponse);
+  rpc Prune (ManagementRequest) returns (ManagementResponse);
+}

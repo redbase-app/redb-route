@@ -9,7 +9,7 @@ namespace redb.Route.Tcp;
 /// .From(TcpDsl.Listen("0.0.0.0:9000").TextLine().InOut())
 ///
 /// // Producer — connect to remote host:
-/// .To(TcpDsl.Connect("192.168.1.10:9000").TextLine().Reconnect())
+/// .To(TcpDsl.Connect("192.0.2.10:9000").TextLine().Reconnect())
 /// </code></example>
 /// </summary>
 public static class TcpDsl

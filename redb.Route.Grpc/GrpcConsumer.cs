@@ -92,7 +92,16 @@ public class GrpcConsumer : IConsumer
         if (_options.Health)
             _healthRegistration = RegisterRoute(HealthCheckPath, HandleHealthCheck);
 
-        await Server.EnsureStarted(host, port, ct).ConfigureAwait(false);
+        try
+        {
+            await Server.EnsureStarted(host, port, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The listener did not come up: the methods leave it, so a later Start registers them once.
+            await Stop(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
 
         BaseUrl = Server.GetBaseUrl(host, port);
 

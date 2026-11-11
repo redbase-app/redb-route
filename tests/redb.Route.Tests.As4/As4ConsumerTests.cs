@@ -28,6 +28,49 @@ public class As4ConsumerTests
     private static readonly X509Certificate2 Stranger = As4TestMessages.KeyPair("CN=stranger.as4.test");
     private const string Payload = "<invoice xmlns=\"urn:example\"><total>42</total></invoice>";
 
+    // ── Start ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ListenerThatFailedToStart_LeavesNothingBehind_SoAManualStartRegistersOnce()
+    {
+        var calls = 0;
+        var port = global::redb.Route.Tests.Shared.TestPorts.Next();
+        // The 4.7.x line has no background start retry: the route is started by hand once the port is free.
+        var engine = new redb.Route.Configuration.RouteEngineOptions
+        {
+            ShutdownTimeout = TimeSpan.FromSeconds(2),
+        };
+
+        var squatter = new System.Net.Sockets.TcpListener(IPAddress.Loopback, port);
+        squatter.Start();
+        Stand stand;
+        try
+        {
+            stand = await Stand.StartAsync(_ => { Interlocked.Increment(ref calls); return Task.CompletedTask; },
+                engine: engine, port: port);
+            stand.Status.Should().Be(RouteStatus.Errored, "the port is taken");
+        }
+        finally
+        {
+            squatter.Stop();
+        }
+
+        await using (stand)
+        {
+            await stand.StartRoute();
+            stand.Status.Should().Be(RouteStatus.Started);
+
+            var exchange = NewExchange();
+            await stand.Send(exchange);
+            exchange.Out!.GetHeader<bool>(As4Headers.ReceiptValid).Should().BeTrue();
+            Volatile.Read(ref calls).Should().Be(1, "one registration of the route, not one per start");
+
+            await stand.Stop();
+            var stopped = () => stand.PostBytes("text/plain", [1]);
+            await stopped.Should().ThrowAsync<HttpRequestException>("the stopped receiver gives the port back");
+        }
+    }
+
     // ── Loopback ─────────────────────────────────────────────────────────────
 
     [Fact]
@@ -1164,9 +1207,9 @@ public class As4ConsumerTests
         public static async Task<Stand> StartAsync(Func<IExchange, Task> route, IIdempotentRepository? duplicates = null,
             bool streamBody = false, redb.Route.Configuration.StreamCacheOptions? spool = null,
             redb.Route.Configuration.RouteEngineOptions? engine = null, bool payloadList = false,
-            Action<As4Partner>? agreement = null, Action<As4ConnectionFactory>? receiver = null)
+            Action<As4Partner>? agreement = null, Action<As4ConnectionFactory>? receiver = null, int? port = null)
         {
-            var port = global::redb.Route.Tests.Shared.TestPorts.Next();
+            var listenPort = port ?? global::redb.Route.Tests.Shared.TestPorts.Next();
             var context = new RouteContext(options: engine);
             context.AddComponent(new As4Component());
             context.AddIdempotentRepository("dedup", duplicates ?? new InMemoryIdempotentRepository());
@@ -1182,14 +1225,26 @@ public class As4ConsumerTests
             context.AddToRegistry("a", Node("a", NodeA, bAtA));
             context.AddToRegistry("c", Node("c", Stranger, Partner("b", NodeB)));
 
-            var receive = As4Dsl.Receive("/as4/in").Host("127.0.0.1").Port(port).ConnectionFactory("b").IdempotentRepository("dedup");
+            var receive = As4Dsl.Receive("/as4/in").Host("127.0.0.1").Port(listenPort).ConnectionFactory("b").IdempotentRepository("dedup");
             if (streamBody) receive.StreamBody();
             if (payloadList) receive.PayloadList();
-            context.AddRoutes(r => r.From(receive)
+            context.AddRoutes(r => r.From(receive).RouteId(RouteId)
                 .Process((e, _) => route(e)));
             await context.Start();
-            return new Stand(context, port) { _receiveUri = receive.Build() };
+            return new Stand(context, listenPort) { _receiveUri = receive.Build() };
         }
+
+        /// <summary>The id of the receive route.</summary>
+        public const string RouteId = "as4-in";
+
+        /// <summary>The status of the receive route.</summary>
+        public RouteStatus Status => _context.GetRoute(RouteId)!.Status;
+
+        /// <summary>Starts the receive route by hand, as the Tsak routes controller does.</summary>
+        public Task StartRoute() => _context.StartRoute(RouteId);
+
+        /// <summary>Stops the context.</summary>
+        public Task Stop() => _context.Stop();
 
         public async Task Send(IExchange exchange, string from = "a")
         {

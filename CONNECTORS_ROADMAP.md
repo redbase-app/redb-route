@@ -126,7 +126,7 @@ and what is on the wishlist.** Updated whenever a connector ships or a new one i
 - **DSL example:**
 ```csharp
 .From("tcp:0.0.0.0:9000?codec=LengthPrefix&maxConnections=100")
-.To("tcp:192.168.1.100:9000?codec=LineDelimited")
+.To("tcp:192.0.2.10:9000?codec=LineDelimited")
 ```
 
 ---

@@ -111,7 +111,17 @@ internal sealed class As4Consumer : IConsumer
                 _options.MaxConcurrentRequests, _options.RequestQueueLimit,
                 _options.RejectStatusCode, _options.RetryAfterSeconds,
                 onRejected: _endpoint.RecordRejected));
-        await Server.EnsureStarted(_options.Host, _options.Port, ct).ConfigureAwait(false);
+        try
+        {
+            await Server.EnsureStarted(_options.Host, _options.Port, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The listener did not come up (a port still taken): the route leaves it, so a later Start registers
+            // once and a stopped receiver does not keep the port.
+            await Stop(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
 
         _logger?.LogInformation("AS4 receiver started: {Host}:{Port}{Path}, node {Node}", _options.Host, _options.Port, Path, _node.Name);
     }

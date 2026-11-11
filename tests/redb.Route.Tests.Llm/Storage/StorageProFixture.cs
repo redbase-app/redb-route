@@ -67,8 +67,8 @@ public sealed class StorageProFixture : IAsyncLifetime
             // against whichever backend the environment names.
             var builder = Provider switch
             {
-                "mssql" => options.UseMsSql(RequireConnectionString(config, "MsSql")),
-                "postgres" => options.UsePostgres(RequireConnectionString(config, "Postgres")),
+                "mssql" => options.UseMsSql(global::redb.Route.Tests.Shared.TestDatabases.MsSql(RequireConnectionString(config, "MsSql"))),
+                "postgres" => options.UsePostgres(global::redb.Route.Tests.Shared.TestDatabases.Postgres(RequireConnectionString(config, "Postgres"))),
                 // SQLite needs no stand: the file lives next to the test assembly. Full provider parity
                 // with the other two, so the same claims are checked on it rather than assumed.
                 "sqlite" => options.UseSqlite(RequireConnectionString(config, "Sqlite")),

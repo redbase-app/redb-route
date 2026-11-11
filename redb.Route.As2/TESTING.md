@@ -120,20 +120,21 @@ handling are correct against a real, independent partner, not merely self-consis
 
 ### Running the interop test
 
-The harness lives outside the repo at `C:\Work\yaml\as2` (Docker compose + OpenAS2 config + generated certs;
-see its `README.md`). The interop test is `As2InteropTests` (`[Trait("Category", "Interop")]`) and is
+The harness is profile `as2` of the test stand `docker-compose.tests.yml` (OpenAS2 with its configuration under
+`tests/docker/as2`, certificates from `tests/docker/gen-certs.sh`; see `tests/docker/README.md`). The interop test is `As2InteropTests` (`[Trait("Category", "Interop")]`) and is
 **gated** by `[As2InteropFact]`: without OpenAS2 on `127.0.0.1:14080` the cases are reported **skipped**, with the
 reason, never passed; `REDB_AS2_INTEROP=1` turns a missing stand into a failure. The reverse case listens on the
 fixed port the stand posts to (15081), so the three target frameworks take turns on it through a lock file in the
 temp directory, and each waits for its own uniquely named document.
 
 ```bash
-cd C:\Work\yaml\as2
-docker compose up -d
-dotnet test redb.Route/tests/redb.Route.Tests.As2 --filter Category=Interop
+bash tests/docker/gen-certs.sh        # once: the test certificates
+docker compose -f docker-compose.tests.yml --profile as2 up -d --wait
+dotnet test tests/redb.Route.Tests.As2 --filter Category=Interop
+docker compose -f docker-compose.tests.yml --profile as2 down -v
 ```
 
-Certificate paths come from the `AS2_INTEROP_CERTS` environment variable (default `C:\Work\yaml\as2\certs`).
+Certificate paths come from the `AS2_INTEROP_CERTS` environment variable (default `tests/docker/.generated/as2/certs`).
 
 ### Configuration notes learned from OpenAS2 4.9.0
 

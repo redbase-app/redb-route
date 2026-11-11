@@ -15,16 +15,17 @@ namespace redb.Route.Tests.Soap;
 /// Node's <c>soap</c> implements MTOM on the client but not the server, so this is the meaningful direction.
 /// Both halves are proven: our <c>multipart/related</c> parser lifts the foreign stack's inbound XOP
 /// attachment, and the foreign client parses the MTOM attachment our consumer returns. GATED
-/// (<c>Category=Interop</c>): no-ops unless the Node container answers on 127.0.0.1:18080. See
+/// (<c>Category=Interop</c>): no-ops unless the Node container answers on 127.0.0.1:18060. See
 /// <c>C:\Work\yaml\soap</c>.
 /// </summary>
 [Trait("Category", "Interop")]
 public class SoapMtomInteropTests
 {
     private const string Host = "127.0.0.1";
-    private const int ServerPort = 18080;
+    private const int ServerPort = 18060;
     // Distinct from SoapInteropTests' consumer port; offset by runtime major against parallel-TFM contention.
-    private static readonly int ConsumerPort = 18110 + Environment.Version.Major;
+    // 18180+: clear of the gRPC interop ports (18100 and 18110-18159) and of SoapInteropTests (18160+).
+    private static readonly int ConsumerPort = 18180 + Environment.Version.Major;
 
     [Fact]
     public async Task NodeMtomClient_To_RedbConsumer_CarriesAttachment()

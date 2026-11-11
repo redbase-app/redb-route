@@ -65,6 +65,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Pending changes live in `changelog/unreleased/` until the release; `pwsh scripts/changelog.ps1 -Preview` shows them.
 
+## [4.7.1] — 2026-11-11
+
+### Security
+
+- **SignalR packages move to the patched ASP.NET Core releases.** The SignalR client, protocol and Redis backplane
+  dependencies are now 10.0.15 / 9.0.23 / 8.0.34 by target framework, which carry the fix for CVE-2026-114147
+  (denial of service). Update the package; a self-hosted app also needs the matching .NET runtime patch. Packages: `redb.Route.SignalR`, `redb.Route.SignalR.StackExchangeRedis`.
+
+### Fixed
+
+- **A consumer whose start failed leaves nothing behind.** An HTTP, SOAP, gRPC, AS2 or AS4 receiver whose port was taken
+  kept its registration, so a later start registered twice and a stop left the port open; the IBM MQ listener and Azure Service
+  Bus kept a half-open connection or an unstarted processor. A route whose policy refuses at context start no longer
+  keeps its consumer running while it is reported `Errored`. Packages: `redb.Route`, `redb.Route.Http`, `redb.Route.Http.Hosting`, `redb.Route.Soap`, `redb.Route.Grpc`, `redb.Route.As2`, `redb.Route.As4`, `redb.Route.IbmMq`, `redb.Route.AzureServiceBus`.
+- **`redb-route-xml check --bin` holds the `connectionFactory` of `ftp://` and `sftp://` against the factory type.** A
+  bean of a class that is not a remote-file connection factory is now an error at check time, as for the other connectors,
+  instead of a failure when the endpoint is created. Packages: `redb.Route.GenericFile`, `redb.Route.Xml`.
+- **VS Code extension: `connectionFactory` hints on `ftp://` and `sftp://` name the factory type.** The catalog of
+  extension 0.2.28 types the option as a remote-file connection factory, so the bean hint and the hover show the
+  expected type instead of a plain object.
+
 ## [4.7.0] — 2026-11-06
 
 ### Breaking

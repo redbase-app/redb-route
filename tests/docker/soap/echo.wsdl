@@ -1,0 +1,12 @@
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" xmlns:tns="urn:soaptest" xmlns:xsd="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:soaptest">
+  <types><xsd:schema targetNamespace="urn:soaptest">
+    <xsd:element name="EchoRequest"><xsd:complexType><xsd:sequence><xsd:element name="msg" type="xsd:string"/></xsd:sequence></xsd:complexType></xsd:element>
+    <xsd:element name="EchoResponse"><xsd:complexType><xsd:sequence><xsd:element name="result" type="xsd:string"/></xsd:sequence></xsd:complexType></xsd:element>
+  </xsd:schema></types>
+  <message name="EchoIn"><part name="parameters" element="tns:EchoRequest"/></message>
+  <message name="EchoOut"><part name="parameters" element="tns:EchoResponse"/></message>
+  <portType name="EchoPort"><operation name="Echo"><input message="tns:EchoIn"/><output message="tns:EchoOut"/></operation></portType>
+  <binding name="EchoBinding" type="tns:EchoPort"><soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="Echo"><soap:operation soapAction="urn:soaptest/Echo"/><input><soap:body use="literal"/></input><output><soap:body use="literal"/></output></operation></binding>
+  <service name="EchoService"><port name="EchoPort" binding="tns:EchoBinding"><soap:address location="http://localhost:18080/echo"/></port></service>
+</definitions>

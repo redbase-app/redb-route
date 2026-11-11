@@ -122,4 +122,29 @@ public sealed class TypedReferenceGateTests : IDisposable
         // vm has no connectionFactory option; the name means nothing there and is not checked against ProbeRefFactory.
         TypeErrors(Check("""<to uri="vm://out?connectionFactory=main"/>""", WrongBean)).Should().BeEmpty();
     }
+
+    // Row 57: ftp and sftp share RemoteFileEndpointOptions, whose connectionFactory was marked without a type, so a bean
+    // of any class passed the gate. The mark now names the factories' common base.
+    private static readonly IReadOnlyList<CatalogComponent> RemoteFileCatalog =
+        ComponentCatalog.Build([new redb.Route.Ftp.FtpComponent(), new redb.Route.Sftp.SftpComponent()]);
+
+    [Theory]
+    [InlineData("ftp")]
+    [InlineData("sftp")]
+    public void ARemoteFileConnector_HoldsItsConnectionFactoryAgainstTheFactoryType(string scheme)
+    {
+        TypeErrors(Check($"""<to uri="{scheme}://host/out?connectionFactory=main"/>""", WrongBean, RemoteFileCatalog))
+            .Should().ContainSingle().Which.Should().EndWith(
+                $"'main' is registered as {typeof(DeepBeanTarget).FullName}, which is not an {nameof(redb.Route.GenericFile.RemoteFileConnectionFactory)}.");
+    }
+
+    [Theory]
+    [InlineData("ftp", typeof(redb.Route.Ftp.FtpConnectionFactory))]
+    [InlineData("sftp", typeof(redb.Route.Sftp.SftpConnectionFactory))]
+    public void ARemoteFileConnector_AcceptsItsOwnFactory(string scheme, Type factory)
+    {
+        var bean = $"""<bean name="main" type="{factory.FullName}, {factory.Assembly.GetName().Name}"/>""";
+
+        TypeErrors(Check($"""<to uri="{scheme}://host/out?connectionFactory=main"/>""", bean, RemoteFileCatalog)).Should().BeEmpty();
+    }
 }

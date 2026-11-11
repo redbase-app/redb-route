@@ -507,7 +507,8 @@ net9.0 and net10.0**; the live tests below skip when their stand is down unless 
 | Transport security | Real loopback TLS handshakes: a TLS receiver without a certificate refuses to start, one with a certificate leaves no plaintext port, the certificate from the node, mutual TLS accepting an allow-listed client certificate (and reporting it on the exchange), refusing a missing or foreign one in the handshake. |
 | Profile | MIME canonical form of uncompressed attachments (XML, text, binary, a CRLF split across reads, a DTD refused), four-corner properties required on receipt, signer outside its validity period, a stranger with the partner's subject, expired own or partner certificates refused before sending. |
 
-**Live interop with Holodeck B2B 8.1.1** (Docker stand `C:\Work\yaml\as4`, runs of 2026-09-25 to 2026-09-28):
+**Live interop with Holodeck B2B 8.1.1** (Docker stand described in the test files, `As4HolodeckLiveTests` and
+`As4HolodeckReferenceTests`; runs of 2026-09-25 to 2026-09-28):
 
 | Direction | Scenario | Result |
 |---|---|---|
@@ -517,7 +518,7 @@ net9.0 and net10.0**; the live tests below skip when their stand is down unless 
 | redb → Holodeck | Uncompressed `text/xml`, `application/xml`, `text/plain` whose raw and canonical bytes differ | Holodeck verifies our signature over the canonical form and answers with a receipt |
 
 **Live interop with Harmony AP 2.6.2** (NIIS; its MSH is **Domibus 5.1**, the eDelivery reference implementation;
-stand `C:\Work\yaml\as4\harmony` on a shared server, runs of 2026-09-26):
+Docker stand described in the test file `As4HarmonyLiveTests`; runs of 2026-09-26):
 
 | Direction | Scenario | Result |
 |---|---|---|

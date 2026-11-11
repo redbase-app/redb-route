@@ -271,7 +271,7 @@ Endpoints that share a pooled connection share its TLS identity and login, so th
 key includes every TLS and login setting.
 
 The integration tests run against a stand with a private CA, mutual TLS, EXTERNAL and OAuth 2.0
-(`C:\Work\yaml\rabbit-tls`, see `RabbitMQTlsBrokerTests`).
+(profile `rabbitmq-tls` of the test stand `docker-compose.tests.yml`, see `RabbitMQTlsBrokerTests`).
 
 ## Concurrency
 
