@@ -65,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Pending changes live in `changelog/unreleased/` until the release; `pwsh scripts/changelog.ps1 -Preview` shows them.
 
+## [4.7.2] — 2026-11-13
+
+### Changed
+
+- **Built on redb 4.7.2.** It fixes SQLite saving again after a rolled-back transaction: since 4.0.0 the second save could
+  silently overwrite another object. redb.Route itself has no change. Nothing to do on your side.
+
 ## [4.7.1] — 2026-11-11
 
 ### Security
