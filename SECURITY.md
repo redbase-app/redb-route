@@ -11,7 +11,7 @@
 If you discover a security vulnerability in redb.Route or any of its transport packages, please report it responsibly:
 
 1. **Do NOT** open a public GitHub issue
-2. Email: **security@redbase.app**
+2. Email: **support@redbase.app**
 3. Include:
    - Affected package(s) and version
    - Description of the vulnerability
