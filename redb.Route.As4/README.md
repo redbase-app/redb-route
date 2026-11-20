@@ -18,9 +18,18 @@ Schemes: `as4` (HTTP), `as4s` (HTTPS).
 - **Duplicate detection** on receive and **redelivery with the same message id** on send, built from the
   engine's `IIdempotentRepository` and `OnException` — no store or timer of the connector's own.
 
-> **Status:** interop is proven live against Holodeck B2B and Domibus in both directions, and the review of
-> 2026-09-28 is closed (see [Status](#status--maturity)). The design, the phase plan and the review live in
-> `../../docs/as4`.
+[![Certificate of the eDelivery AS4 conformance tests passed by redb.Route.As4 4.6.1](https://raw.githubusercontent.com/redbase-app/redb-route/main/redb.Route.As4/images/as4-ec-conformance-certificate.png)](https://ec.europa.eu/digital-building-blocks/sites/spaces/DIGITAL/pages/721846393/eDelivery+AS4+v1.x+conformant+products)
+
+**eDelivery AS4 conformance.** redb.Route.As4 4.6.1 is listed by the European Commission among
+[eDelivery AS4 v1.x conformant products](https://ec.europa.eu/digital-building-blocks/sites/spaces/DIGITAL/pages/721846393/eDelivery+AS4+v1.x+conformant+products):
+it passed the eDelivery conformance tests of the eDelivery AS4 Profile 1.16, Common Profile, 76 of 76 required tests,
+on 2026-11-04 ([certificate, PDF](https://redbase.app/files/as4/redb-route-as4-4.6.1-ec-conformance-certificate.pdf)).
+The certificate is for version 4.6.1; later versions have not gone through the conformance service again. It attests
+the eDelivery Common Profile, not Peppol.
+
+> **Status:** version 4.6.1 passed the eDelivery conformance tests and is listed by the European Commission among
+> eDelivery AS4 conformant products (above); interop is also proven live against Holodeck B2B and Domibus in both
+> directions (see [Status](#status--maturity)).
 
 ---
 
@@ -547,7 +556,8 @@ loopback handshakes above), and Pull and asynchronous receipts, which are out of
 | 8 | Transactions, limits, statistics, telemetry, shared host, Route-XML | done by tests; live Tsak and Jaeger check with the release |
 | 9 | Interop: Holodeck both ways, Domibus both ways, redelivery | done, live |
 | review | Findings of 2026-09-28 (`docs/as4/REVIEW-2026-09-28.md`) R1–R10 | done |
-| 11 | Release: CHANGELOG, connector roadmap, VS Code catalog, packaging | in progress |
+| 11 | Release: CHANGELOG, connector roadmap, VS Code catalog, packaging | done, released |
+| conformance | eDelivery conformance tests, AS4 Profile 1.16 Common Profile: 76 of 76 required tests (2026-11-04) | done for 4.6.1, listed by the European Commission 2026-11-19 |
 
 Asynchronous receipts (phase 6) and Pull (phase 10) are optional in the profile and out of scope for now.
 

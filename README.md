@@ -10,6 +10,16 @@ redb.Route is the .NET equivalent of [Apache Camel](https://camel.apache.org/) â
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-purple)](https://dotnet.microsoft.com)
 
+<a href="https://ec.europa.eu/digital-building-blocks/sites/spaces/DIGITAL/pages/721846393/eDelivery+AS4+v1.x+conformant+products"><img src="https://raw.githubusercontent.com/redbase-app/redb-route/main/redb.Route.As4/images/as4-ec-conformance-certificate.png" width="340" alt="Certificate of the eDelivery AS4 conformance tests passed by redb.Route.As4 4.6.1"></a>
+
+**eDelivery AS4 conformance.** [redb.Route.As4](https://github.com/redbase-app/redb-route/tree/main/redb.Route.As4)
+4.6.1 is listed by the European Commission among
+[eDelivery AS4 v1.x conformant products](https://ec.europa.eu/digital-building-blocks/sites/spaces/DIGITAL/pages/721846393/eDelivery+AS4+v1.x+conformant+products):
+it passed the eDelivery conformance tests of the eDelivery AS4 Profile 1.16, Common Profile, 76 of 76 required tests,
+on 2026-11-04 ([certificate, PDF](https://redbase.app/files/as4/redb-route-as4-4.6.1-ec-conformance-certificate.pdf)).
+The certificate is for version 4.6.1; later versions have not gone through the conformance service again. It attests
+the eDelivery Common Profile, not Peppol.
+
 > **Production runtime:** routes are packaged as `.tpkg` modules and deployed to **[redb.Tsak](https://github.com/redbase-app/redb-tsak)** â€” the runtime container with hot-reload, clustering, REST management API, CLI and Blazor dashboard. redb.Route handles the _what_ (pipeline logic); redb.Tsak handles the _where_, _when_ and _how many_ (deployment lifecycle). See [Running Routes in Production](#running-routes-in-production--redbtsak).
 
 ```csharp

@@ -5,7 +5,7 @@
  * reserialized; the diff of an attribute change is one line, pinned by tests.
  */
 
-import { parseXml, XmlElement, childElements, attr, XmlDocumentModel } from "./xmlmodel";
+import { parseXml, XmlElement, childElements, attr, XmlDocumentModel, textContent } from "./xmlmodel";
 
 /** One replacement: [start, end) → newText. */
 export interface TextReplacement {
@@ -27,17 +27,13 @@ export function resolveByPath(root: XmlElement, path: ElementPath): XmlElement |
     return current;
 }
 
-const ESCAPES: [RegExp, string][] = [
-    [/&/g, "&amp;"],
-    [/</g, "&lt;"],
-    [/"/g, "&quot;"],
-];
-
-export function escapeAttributeValue(value: string): string {
-    let out = value;
-    for (const [pattern, replacement] of ESCAPES)
-        out = out.replace(pattern, replacement);
-    return out;
+/**
+ * A decoded value ready to stand between the given quotes: `&` and `<` always, and only the delimiting quote, so
+ * an expression keeps its other quote readable (`expr='a == "x"'`, `expr="a == 'x'"`).
+ */
+export function escapeAttributeValue(value: string, quote: '"' | "'" = '"'): string {
+    const out = value.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    return quote === '"' ? out.replace(/"/g, "&quot;") : out.replace(/'/g, "&apos;");
 }
 
 /**
@@ -61,11 +57,15 @@ export function computeSetAttribute(
         return { start, end: existing.span.end, newText: "" };
     }
 
-    const escaped = escapeAttributeValue(value);
     if (existing) {
-        if (existing.value === escaped) return null;
-        return { start: existing.valueSpan.start, end: existing.valueSpan.end, newText: escaped };
+        // Compared decoded: an unchanged value keeps the file's own spelling (`&#60;`, `&gt;`) untouched.
+        if (existing.value === value) return null;
+        return {
+            start: existing.valueSpan.start, end: existing.valueSpan.end,
+            newText: escapeAttributeValue(value, existing.quote),
+        };
     }
+    const escaped = escapeAttributeValue(value);
 
     // Insert before the tag's closer: `/>` for self-closing, `>` otherwise.
     const insertAt = element.openTag.end - (element.selfClosing ? 2 : 1);
@@ -100,16 +100,14 @@ export function applyReplacement(text: string, replacement: TextReplacement): st
     return text.slice(0, replacement.start) + replacement.newText + text.slice(replacement.end);
 }
 
-const XML_TEXT_ESCAPES: [RegExp, string][] = [
-    [/&/g, "&amp;"],
-    [/</g, "&lt;"],
-];
-
+/** A decoded value as element text: `&` and `<`, and the `>` of a `]]>`, which text may not contain. */
 export function escapeTextContent(value: string): string {
-    let out = value;
-    for (const [pattern, replacement] of XML_TEXT_ESCAPES)
-        out = out.replace(pattern, replacement);
-    return out;
+    return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/]]>/g, "]]&gt;");
+}
+
+/** A value as one CDATA section; a `]]>` inside is split across two sections. */
+export function cdataSection(value: string): string {
+    return "<![CDATA[" + value.replace(/]]>/g, "]]]]><![CDATA[>") + "]]>";
 }
 
 /**
@@ -121,7 +119,9 @@ export function computeSetTextContent(
     const element = resolveByPath(parseXml(text).root, path);
     if (!element)
         throw new Error(`no element at path [${path.join(",")}]`);
-    const escaped = escapeTextContent(value);
+    // An element whose text the file keeps in CDATA stays in CDATA; otherwise the text is escaped.
+    const asCData = element.children.some(c => c.kind === "cdata");
+    const escaped = asCData ? cdataSection(value) : escapeTextContent(value);
 
     if (element.selfClosing) {
         const openTag = text.slice(element.openTag.start, element.openTag.end);
@@ -133,8 +133,8 @@ export function computeSetTextContent(
         };
     }
     if (element.content === null) return null;
-    const current = text.slice(element.content.start, element.content.end);
-    if (current === escaped) return null;
+    // Compared decoded: an unchanged value leaves the file's spelling and layout untouched.
+    if (textContent(element) === value) return null;
     return { start: element.content.start, end: element.content.end, newText: escaped };
 }
 

@@ -17,8 +17,15 @@ export interface Span {
 export interface XmlAttribute {
     /** Attribute name as written (may carry a prefix). */
     name: string;
-    /** Decoded is NOT attempted — the raw text between the quotes. */
+    /**
+     * The DECODED value: the entities of the raw text resolved (`&lt;` → `<`, `&#38;` → `&`), what the
+     * route loader reads. Shown and compared in this form; written back through escapeAttributeValue.
+     */
     value: string;
+    /** The raw text between the quotes, entities untouched. */
+    raw: string;
+    /** The delimiter the file uses for this attribute. */
+    quote: '"' | "'";
     /** The name token. */
     nameSpan: Span;
     /** Inside the quotes — the span to replace when editing the value. */
@@ -126,9 +133,12 @@ export function parseXml(text: string): XmlDocumentModel {
             if (valueEnd < 0) fail(`attribute '${name}' value never closes`, valueStart);
             position = valueEnd + 1;
 
+            const raw = text.slice(valueStart, valueEnd);
             owner.attributes.push({
                 name,
-                value: text.slice(valueStart, valueEnd),
+                value: decodeXmlEntities(raw),
+                raw,
+                quote: quote as '"' | "'",
                 nameSpan,
                 valueSpan: { start: valueStart, end: valueEnd },
                 span: { start: nameStart, end: position },
@@ -267,12 +277,32 @@ export function attr(element: XmlElement, name: string): XmlAttribute | null {
     return element.attributes.find(a => a.name === name) ?? null;
 }
 
-/** The concatenated text+cdata content of an element (for inline conditions etc.). */
+/**
+ * The concatenated text+cdata content of an element (for inline conditions etc.), DECODED: the entities of the text
+ * parts resolved, CDATA verbatim, as the route loader reads it.
+ */
 export function textContent(element: XmlElement): string {
     return element.children
         .filter((c): c is XmlText | XmlCData => c.kind === "text" || c.kind === "cdata")
-        .map(c => c.text)
+        .map(c => c.kind === "text" ? decodeXmlEntities(c.text) : c.text)
         .join("");
+}
+
+const NAMED_ENTITIES: Record<string, string> = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'" };
+
+/**
+ * Resolves the five predefined entities and character references (`&#60;`, `&#x3C;`). Anything else that starts
+ * with `&` stays as written: a DTD entity the editor does not know, or a stray ampersand.
+ */
+export function decodeXmlEntities(raw: string): string {
+    if (!raw.includes("&")) return raw;
+    return raw.replace(/&(#x[0-9A-Fa-f]+|#[0-9]+|[A-Za-z]+);/g, (whole, body: string) => {
+        if (body[0] === "#") {
+            const code = body[1] === "x" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+            return Number.isFinite(code) && code >= 0 && code <= 0x10FFFF ? String.fromCodePoint(code) : whole;
+        }
+        return NAMED_ENTITIES[body] ?? whole;
+    });
 }
 
 /** The deepest element whose span contains the offset (for cursor→node sync). */
