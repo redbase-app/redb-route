@@ -1,5 +1,6 @@
 using System;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Expressions;
 
@@ -39,7 +40,7 @@ public class ExchangeExpression : Expression
 
         try
         {
-            return (T)Convert.ChangeType(result, typeof(T));
+            return (T)RouteDecimal.ChangeType(result, typeof(T));
         }
         catch (InvalidCastException)
         {

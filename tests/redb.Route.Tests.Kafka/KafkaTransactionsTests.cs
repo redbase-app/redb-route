@@ -277,8 +277,8 @@ public sealed class KafkaTransactionsTests : IAsyncLifetime
             Message = new Message<string, byte[]> { Value = [] },
         };
         var commit = new KafkaCommitAction(consumer, record, logger: null);
-        var offsets = new KafkaConsumedOffsets(consumer, commit, cluster);
         var exchange = new Exchange(new Message("from-kafka"));
+        var offsets = new KafkaConsumedOffsets(consumer, commit, cluster, exchange);
         exchange.Properties[KafkaConsumedOffsets.PropertyKey] = offsets;
         return (exchange, commit, offsets);
     }
@@ -422,5 +422,171 @@ public sealed class KafkaTransactionsTests : IAsyncLifetime
         late.Commit.Committed.Should().BeFalse();
         capture.Entries.Should().ContainSingle(e => e.Level == LogLevel.Warning
                                                     && e.Message.Contains("after the route returned to its Kafka consumer"));
+    }
+
+    // ── A part of the consumed exchange never commits its offsets ──
+    //
+    // A split part or a multicast branch inherits the exchange's properties, the offered offsets included. Its own
+    // transaction must not take them: that would commit the whole record or batch before the other parts ran. The
+    // consumer commits once, after the route.
+
+    /// <summary>Completes when the route <paramref name="routeId"/> finishes an exchange: null on success, else the failure.</summary>
+    private sealed class RouteOutcome(string routeId) : IRouteLifecycleListener
+    {
+        public readonly TaskCompletionSource<Exception?> Done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task OnExchangeCompleted(string id, IExchange exchange, CancellationToken ct)
+        {
+            if (id == routeId) Done.TrySetResult(null);
+            return Task.CompletedTask;
+        }
+
+        public Task OnExchangeFailed(string id, IExchange exchange, Exception exception, CancellationToken ct)
+        {
+            if (id == routeId) Done.TrySetResult(exception);
+            return Task.CompletedTask;
+        }
+    }
+
+    private static int SplitIndex(IExchange exchange) => exchange.In.GetHeader<int>("CamelSplitIndex");
+
+    private static async Task<(RouteContext Context, RouteOutcome Outcome)> StartRoute(
+        string routeId, Action<redb.Route.Core.RouteBuilder> routes)
+    {
+        var outcome = new RouteOutcome(routeId);
+        var context = new RouteContext();
+        context.AddComponent(new KafkaComponent());
+        context.AddLifecycleListener(outcome);
+        context.AddRoutes(routes);
+        await context.Start();
+        return (context, outcome);
+    }
+
+    [Fact]
+    public async Task A_split_part_of_a_batch_does_not_commit_the_batch_in_its_transaction()
+    {
+        var input = await CreateTopic("eos-split-batch-in");
+        var output = await CreateTopic("eos-split-batch-out");
+        var group = $"eos-{Guid.NewGuid():N}";
+        foreach (var value in new[] { "r0", "r1", "r2" })
+            await Produce(input, value);
+
+        var (context, outcome) = await StartRoute("split-batch", r => r
+            .From($"kafka://{input}?brokers={BootstrapServers}&groupId={group}&autoOffsetReset=earliest" +
+                  "&maxPollRecords=3&pollTimeoutMs=5000")
+            .RouteId("split-batch")
+            .Split(ex => (IEnumerable<object?>)ex.In.Body!)
+                .Process(ex => ex.In.Body = ((IMessage)ex.In.Body!).Body)
+                .Process(ex => { if (SplitIndex(ex) == 1) throw new InvalidOperationException("part 1 fails"); })
+                .Transacted()
+                    .To($"kafka://{output}?brokers={BootstrapServers}&transactionalIdPrefix=eos-split-batch")
+                .End()
+            .EndSplit());
+        await using (context)
+        {
+            (await outcome.Done.Task.WaitAsync(TimeSpan.FromSeconds(60))).Should().NotBeNull("part 1 fails the batch");
+            await context.Stop();
+        }
+
+        Read(output, expected: 1).Should().Equal(["r0"], "part 0's own transaction committed its send");
+        (await CommittedOffset(group, input)).Should().Be(Offset.Unset.Value,
+            "part 0's transaction did not take the batch's offsets, and the failed batch is not committed");
+    }
+
+    [Fact]
+    public async Task A_batch_split_into_transacted_parts_is_committed_once_after_all_parts()
+    {
+        var input = await CreateTopic("eos-split-ok-in");
+        var output = await CreateTopic("eos-split-ok-out");
+        var group = $"eos-{Guid.NewGuid():N}";
+        foreach (var value in new[] { "r0", "r1", "r2" })
+            await Produce(input, value);
+
+        long? committedWhilePartsRan = null;
+        var (context, outcome) = await StartRoute("split-ok", r => r
+            .From($"kafka://{input}?brokers={BootstrapServers}&groupId={group}&autoOffsetReset=earliest" +
+                  "&maxPollRecords=3&pollTimeoutMs=5000")
+            .RouteId("split-ok")
+            .Split(ex => (IEnumerable<object?>)ex.In.Body!)
+                .Process(ex => ex.In.Body = ((IMessage)ex.In.Body!).Body)
+                .Transacted()
+                    .To($"kafka://{output}?brokers={BootstrapServers}&transactionalIdPrefix=eos-split-ok")
+                .End()
+                .Process(async (ex, _) =>
+                {
+                    if (SplitIndex(ex) == 2)
+                        committedWhilePartsRan = await CommittedOffset(group, input);
+                })
+            .EndSplit());
+        await using (context)
+        {
+            (await outcome.Done.Task.WaitAsync(TimeSpan.FromSeconds(60))).Should().BeNull();
+            await context.Stop();
+        }
+
+        committedWhilePartsRan.Should().Be(Offset.Unset.Value, "no part's transaction committed the batch");
+        (await CommittedOffset(group, input)).Should().Be(3, "the consumer committed the batch once, after all parts");
+        Read(output, expected: 3).Should().BeEquivalentTo(["r0", "r1", "r2"]);
+    }
+
+    [Fact]
+    public async Task A_split_part_of_one_record_does_not_commit_the_record_in_its_transaction()
+    {
+        var input = await CreateTopic("eos-split-one-in");
+        var output = await CreateTopic("eos-split-one-out");
+        var group = $"eos-{Guid.NewGuid():N}";
+        await Produce(input, "a,b,c");
+
+        var (context, outcome) = await StartRoute("split-one", r => r
+            .From($"kafka://{input}?brokers={BootstrapServers}&groupId={group}&autoOffsetReset=earliest")
+            .RouteId("split-one")
+            .Split(ex => System.Text.Encoding.UTF8.GetString((byte[])ex.In.Body!).Split(','))
+                .Process(ex => { if (SplitIndex(ex) == 1) throw new InvalidOperationException("part 1 fails"); })
+                .Transacted()
+                    .To($"kafka://{output}?brokers={BootstrapServers}&transactionalIdPrefix=eos-split-one")
+                .End()
+            .EndSplit());
+        await using (context)
+        {
+            (await outcome.Done.Task.WaitAsync(TimeSpan.FromSeconds(60))).Should().NotBeNull();
+            await context.Stop();
+        }
+
+        Read(output, expected: 1).Should().Equal(["a"]);
+        (await CommittedOffset(group, input)).Should().Be(Offset.Unset.Value);
+    }
+
+    [Fact]
+    public async Task A_multicast_branch_does_not_commit_the_record_in_its_transaction()
+    {
+        var input = await CreateTopic("eos-mc-in");
+        var output = await CreateTopic("eos-mc-out");
+        var group = $"eos-{Guid.NewGuid():N}";
+        await Produce(input, "order-1");
+
+        var (context, outcome) = await StartRoute("mc", r =>
+        {
+            r.From($"kafka://{input}?brokers={BootstrapServers}&groupId={group}&autoOffsetReset=earliest")
+                .RouteId("mc")
+                .Multicast()
+                    .To("direct:mc-send")
+                    .To("direct:mc-fail")
+                .EndMulticast();
+            r.From("direct:mc-send")
+                .Transacted()
+                    .To($"kafka://{output}?brokers={BootstrapServers}&transactionalIdPrefix=eos-mc")
+                .End();
+            r.From("direct:mc-fail")
+                .Process(_ => throw new InvalidOperationException("the second branch fails"));
+        });
+        await using (context)
+        {
+            (await outcome.Done.Task.WaitAsync(TimeSpan.FromSeconds(60))).Should().NotBeNull();
+            await context.Stop();
+        }
+
+        Read(output, expected: 1).Should().Equal(["order-1"], "the first branch's transaction committed its send");
+        (await CommittedOffset(group, input)).Should().Be(Offset.Unset.Value,
+            "the first branch's transaction did not take the record's offset");
     }
 }

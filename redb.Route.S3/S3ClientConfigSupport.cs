@@ -11,6 +11,14 @@ namespace redb.Route.S3;
 internal static class S3ClientConfigSupport
 {
     /// <summary>
+    /// The region and service URL a built client talks to, for the "client created" log: read from the client's own
+    /// configuration, so a connection factory's values show, not the endpoint's defaults.
+    /// </summary>
+    internal static (string Region, string ServiceUrl) Target(IClientConfig config) => (
+        config.RegionEndpoint?.SystemName ?? (string.IsNullOrEmpty(config.AuthenticationRegion) ? "(default)" : config.AuthenticationRegion),
+        string.IsNullOrEmpty(config.ServiceURL) ? "(default)" : redb.Route.Abstractions.EndpointUri.Sanitize(config.ServiceURL));
+
+    /// <summary>
     /// Applies timeouts, connection limits, retry policy and certificate trust to the config.
     /// <c>connectionTimeoutMs</c> maps to <see cref="ClientConfig.ConnectTimeout"/>,
     /// <c>socketTimeoutMs</c> to the overall request <see cref="ClientConfig.Timeout"/>.

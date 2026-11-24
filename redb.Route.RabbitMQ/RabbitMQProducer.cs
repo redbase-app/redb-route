@@ -529,6 +529,8 @@ public sealed class RabbitMQProducer : ConnectableProducer
             byte[] bytes => bytes,
             string str   => Encoding.UTF8.GetBytes(str),
             null         => Array.Empty<byte>(),
+            // A list has no wire form here (4.8.0 sends a list of IMessage element by element): refused, never its type name.
+            System.Collections.IEnumerable list when !BodyText.HasOwnText(list) => Encoding.UTF8.GetBytes(BodyText.Of(list)),
             var other    => Encoding.UTF8.GetBytes(other.ToString() ?? string.Empty)
         };
 
@@ -807,7 +809,9 @@ internal sealed class RabbitMQSendBatch : ITransactedAction
             catch (Exception ex)
             {
                 // Closing the channel discards its open transaction, so none of the batch is delivered, and the next
-                // batch starts on a fresh channel instead of committing what this one left behind.
+                // batch starts on a fresh channel instead of committing what this one left behind. The handler leaves
+                // the channel first: a closed channel is disposed, and leaving it then would throw over this failure.
+                channel.BasicReturnAsync -= onReturn;
                 await CloseAsync(channel).ConfigureAwait(false);
                 _logger?.LogError(ex,
                     "RabbitMQ transactional batch failed; none of its {Count} messages was published. First target: " +
@@ -815,10 +819,8 @@ internal sealed class RabbitMQSendBatch : ITransactedAction
                     _publishes.Count, _publishes.FirstOrDefault()?.Exchange, _publishes.FirstOrDefault()?.RoutingKey);
                 throw;
             }
-            finally
-            {
-                channel.BasicReturnAsync -= onReturn;
-            }
+
+            channel.BasicReturnAsync -= onReturn;
 
             // The transaction is committed: the routed messages are delivered and cannot be taken back. A returned one
             // is lost unless the route learns of it, so the send fails as an immediate publish of it fails.

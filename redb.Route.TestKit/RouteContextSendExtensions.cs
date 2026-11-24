@@ -117,7 +117,7 @@ public static class RouteContextSendExtensions
         {
             null => default,
             T typed => typed,
-            _ => (T)Convert.ChangeType(replyBody, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T),
+            _ => (T)RouteDecimal.ChangeType(replyBody, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T),
                 System.Globalization.CultureInfo.InvariantCulture),
         };
     }

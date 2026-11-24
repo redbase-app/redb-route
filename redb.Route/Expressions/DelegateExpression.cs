@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Expressions;
 
@@ -75,7 +76,7 @@ public class DelegateExpression<T> : Expression
             }
 
             // Try standard type conversion
-            return (K)Convert.ChangeType(result, typeof(K));
+            return (K)RouteDecimal.ChangeType(result, typeof(K));
         }
         catch (InvalidCastException)
         {

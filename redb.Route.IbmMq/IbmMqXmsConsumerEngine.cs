@@ -195,6 +195,33 @@ internal sealed class IbmMqXmsConsumerEngine
 
         var ct = _drain.ProcessingToken;
 
+        // A poison message (backed out backoutThreshold times) goes to the backout queue instead of the route, in the
+        // session's unit of work, as the IBM MQ classes for JMS requeue it before delivery. Checked before the route:
+        // a message that fails every time never reaches a check after it.
+        if (_transacted && _options.BackoutThreshold > 0)
+        {
+            var diverted = false;
+            try
+            {
+                diverted = MoveToBackoutQueueIfExceeded(session, message);
+                if (diverted)
+                    session.Commit();
+            }
+            catch (Exception ex)
+            {
+                // The move or its commit failed: roll back, the message returns to its queue.
+                diverted = true;
+                _endpoint.RecordError(ex);
+                _logger?.LogError(ex, "IBM MQ XMS: moving a poison message to the backout queue failed; rolling back");
+                try { session.Rollback(); } catch (Exception rollbackEx) { _logger?.LogWarning(rollbackEx, "IBM MQ XMS: rollback failed"); }
+            }
+            if (diverted)
+            {
+                _drain.Decrement();
+                return;
+            }
+        }
+
         // Continue the W3C distributed trace carried in the message properties.
         using var span = StartConsumerSpan(message);
 
@@ -219,11 +246,6 @@ internal sealed class IbmMqXmsConsumerEngine
             // Request-reply: send the Out body back to JMSReplyTo. On the delivering session, so under
             // transacted it commits atomically with consuming the request.
             SendReply(session, message, exchange);
-
-            // Poison-message diversion: mirror the poll path — a message whose delivery count has reached
-            // the threshold is copied to the backout queue.
-            if (_options.BackoutThreshold > 0)
-                MoveToBackoutQueueIfExceeded(session, message);
 
             // Commit the delivering session (no-op if a route .Transaction() block already committed it).
             ack?.Commit(ct).GetAwaiter().GetResult();
@@ -374,38 +396,39 @@ internal sealed class IbmMqXmsConsumerEngine
 
     // ── Backout queue ──
 
-    private void MoveToBackoutQueueIfExceeded(ISession session, XmsMessage message)
+    /// <summary>
+    /// Sends a message delivered more than <c>backoutThreshold</c> times to the backout queue on the delivering
+    /// (transacted) session, so the caller's commit takes it off its queue and puts it on the backout queue together.
+    /// <c>true</c> when it was sent; <c>false</c> when it is not a poison message, or no backout queue is configured.
+    /// </summary>
+    private bool MoveToBackoutQueueIfExceeded(ISession session, XmsMessage message)
     {
         int deliveryCount;
         try { deliveryCount = message.GetIntProperty(XMSC.JMSX_DELIVERY_COUNT); }
-        catch { return; } // property not available — nothing to decide on
+        catch { return false; } // property not available — nothing to decide on
 
         // JMSXDeliveryCount is 1 on first delivery; backout count is deliveries minus the current one.
         var backoutCount = deliveryCount - 1;
-        if (backoutCount < _options.BackoutThreshold) return;
+        if (backoutCount < _options.BackoutThreshold) return false;
 
         var boqName = _options.BackoutQueue;
         if (string.IsNullOrWhiteSpace(boqName))
         {
-            _logger?.LogWarning("IBM MQ XMS: message exceeded backout threshold but no backout queue configured");
-            return;
+            _logger?.LogError(
+                "IBM MQ XMS: message on {Destination} backed out {BackoutCount} times, but no backoutQueue is configured: " +
+                "it goes to the route again", _endpoint.Destination, backoutCount);
+            return false;
         }
 
-        try
-        {
-            var boq = session.CreateQueue(boqName);
-            var producer = session.CreateProducer(boq);
-            try { producer.Send(message); }
-            finally { try { producer.Close(); } catch { /* ignore */ } }
+        var boq = session.CreateQueue(boqName);
+        var producer = session.CreateProducer(boq);
+        try { producer.Send(message); }
+        finally { try { producer.Close(); } catch { /* ignore */ } }
 
-            _logger?.LogInformation(
-                "IBM MQ XMS: poison message moved to backout queue {BackoutQueue} (destination={Destination}, backoutCount={BackoutCount})",
-                boqName, _endpoint.Destination, backoutCount);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "IBM MQ XMS: failed to move message to backout queue {BackoutQueue}", boqName);
-        }
+        _logger?.LogWarning(
+            "IBM MQ XMS: poison message moved to backout queue {BackoutQueue} (destination={Destination}, backoutCount={BackoutCount})",
+            boqName, _endpoint.Destination, backoutCount);
+        return true;
     }
 
     private static bool HasReplyTo(XmsMessage message)

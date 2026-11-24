@@ -30,7 +30,7 @@ public sealed class PlaceholderExpression : Expression
         var value = Resolve(exchange.Context);
         if (value is T typed)
             return typed;
-        return (T)Convert.ChangeType(value, typeof(T), System.Globalization.CultureInfo.InvariantCulture);
+        return (T)RouteDecimal.ChangeType(value, typeof(T), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>The text with its placeholders resolved through <paramref name="context"/>; without one, defaults only.</summary>

@@ -509,6 +509,8 @@ public sealed class AmqpProducer : ConnectableProducer
             byte[] bytes => (object)bytes,
             string str   => str,
             null         => string.Empty,
+            // A list has no wire form here: refused, never sent as its type name (Split it into messages).
+            System.Collections.IEnumerable list when !BodyText.HasOwnText(list) => BodyText.Of(list),
             var other    => other.ToString() ?? string.Empty
         };
 

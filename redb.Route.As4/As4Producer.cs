@@ -561,7 +561,7 @@ internal sealed class As4Producer : ConnectableProducer
                 return;
             default:
                 // As the AS2 and HTTP producers do: any other body is sent as its UTF-8 text.
-                await output.WriteAsync(Encoding.UTF8.GetBytes(body.ToString() ?? string.Empty), ct).ConfigureAwait(false);
+                await output.WriteAsync(Encoding.UTF8.GetBytes(BodyText.Of(body)), ct).ConfigureAwait(false);
                 return;
         }
     }

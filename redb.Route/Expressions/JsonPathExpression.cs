@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Path;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Expressions;
 
@@ -236,7 +237,7 @@ internal static class JsonPathValues
                 if (effective == typeof(DateTime)) return DateTime.Parse(Text(value), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
                 if (effective == typeof(Guid)) return Guid.Parse(Text(value));
                 if (effective.IsEnum) return Enum.Parse(effective, Text(value), ignoreCase: true);
-                return Convert.ChangeType(primitive, effective, CultureInfo.InvariantCulture);
+                return RouteDecimal.ChangeType(primitive, effective, CultureInfo.InvariantCulture);
         }
 
         return node.Deserialize(target);

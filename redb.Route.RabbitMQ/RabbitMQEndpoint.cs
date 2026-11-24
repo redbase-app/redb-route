@@ -231,7 +231,8 @@ public sealed class RabbitMQEndpoint : EndpointBase<RabbitMQEndpointOptions>
 
         connection.RecoverySucceededAsync += (sender, args) =>
         {
-            Logger?.LogInformation("RabbitMQ connection recovery SUCCEEDED: host={Host}", Options.Host);
+            // The host the pooled connection recovered to, not this endpoint's URI host (a connection factory may name another).
+            Logger?.LogInformation("RabbitMQ connection recovery SUCCEEDED: host={Host}:{Port}", connection.Endpoint.HostName, connection.Endpoint.Port);
             return Task.CompletedTask;
         };
 

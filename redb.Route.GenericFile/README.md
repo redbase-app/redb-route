@@ -1,5 +1,7 @@
 # redb.Route.GenericFile
 
+> Documentation and articles: <https://redbase.app>
+
 Shared base library for file-based transports in the [redb.Route](../README.md) ESB framework.  
 Provides abstract consumer, producer, options, and file-operations interfaces that concrete transports (**File**, **FTP**, **SFTP**) inherit from. Not used directly — include one of the transport-specific packages instead.
 

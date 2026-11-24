@@ -108,8 +108,9 @@ public sealed class SqsEndpoint : EndpointBase<SqsEndpointOptions>, IDisposable
                 _client = new AmazonSQSClient(AwsClientSupport.ResolveCredentials(Options), config);
             }
 
-            Logger?.LogInformation("SQS client created: Region={Region}, ServiceUrl={ServiceUrl}, Queue={Queue}",
-                Options.Region, string.IsNullOrEmpty(Options.ServiceUrl) ? "(default)" : Options.ServiceUrl, QueueName);
+            var (region, serviceUrl) = AwsClientSupport.Target(_client.Config);
+            Logger?.LogInformation("SQS client created: Region={Region}, ServiceUrl={ServiceUrl}, Queue={Queue}, ConnectionFactory={ConnectionFactory}",
+                region, serviceUrl, QueueName, string.IsNullOrEmpty(Options.ConnectionFactory) ? "-" : Options.ConnectionFactory);
             return _client;
         }
         finally

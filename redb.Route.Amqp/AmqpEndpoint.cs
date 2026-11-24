@@ -227,8 +227,9 @@ public sealed class AmqpEndpoint : EndpointBase<AmqpEndpointOptions>
             var connection = await _component.GetOrCreateConnectionAsync(this, ct).ConfigureAwait(false);
             _session = new Session(connection);
 
-            Logger?.LogInformation("AMQP session opened on pooled connection: host={Host}, address={Address}",
-                Options.Host, Address);
+            // The pool key names the connection as the "connection opened" log does: the factory, or the inline host.
+            Logger?.LogInformation("AMQP session opened on pooled connection [{Key}]: address={Address}",
+                AmqpComponent.ResolveConnectionKey(Options), Address);
         }
         finally
         {

@@ -162,10 +162,16 @@ public sealed class IbmMqEndpointOptions : EndpointOptions
     /// <summary>Batch size for bulk receive. 0 = single message mode. (default: 0)</summary>
     public int BatchSize { get; set; }
 
-    /// <summary>Backout threshold — messages exceeding this are sent to BackoutQueue. 0 = disabled.</summary>
+    /// <summary>
+    /// With <c>transacted=true</c>: a message backed out this many times (over the input queue's BOTHRESH) goes to the
+    /// backout queue instead of the route. 0, with BOTHRESH 0 too, is off.
+    /// </summary>
     public int BackoutThreshold { get; set; }
 
-    /// <summary>Queue to route poison messages to. Falls back to BOQNAME from queue definition.</summary>
+    /// <summary>
+    /// Queue a poison message goes to, over the input queue's BOQNAME; without either, the queue manager's dead letter
+    /// queue.
+    /// </summary>
     public string? BackoutQueue { get; set; }
 
     /// <summary>Message selector expression (for topic subscriptions).</summary>

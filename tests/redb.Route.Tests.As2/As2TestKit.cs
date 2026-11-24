@@ -60,11 +60,14 @@ internal static class As2TestKit
     }
 
     /// <summary>
-    /// A raw AS2 body: the payload signed with <paramref name="signer"/> (none: unsigned) and encrypted for
-    /// <paramref name="recipient"/> (none: not encrypted). Returns the top-level MIME headers and the body.
+    /// A raw AS2 body: the payload compressed when <paramref name="compress"/> says so, signed with
+    /// <paramref name="signer"/> (none: unsigned) and encrypted for <paramref name="recipient"/> (none: not encrypted).
+    /// With <paramref name="compressAfterSign"/> the signed part is compressed (RFC 5402 §3.3/3.6) instead of the payload.
+    /// Returns the top-level MIME headers and the body.
     /// </summary>
     public static (string ContentType, string? TransferEncoding, byte[] Body) BuildMessage(
-        string payload, X509Certificate2? signer, X509Certificate2? recipient, string signAlg = "sha-256")
+        string payload, X509Certificate2? signer, X509Certificate2? recipient, string signAlg = "sha-256", bool compress = false,
+        bool compressAfterSign = false)
     {
         var engine = new As2CryptoEngine();
         MimeEntity entity = new MimePart("application", "edi-x12")
@@ -72,7 +75,9 @@ internal static class As2TestKit
             Content = new MimeContent(new MemoryStream(Encoding.UTF8.GetBytes(payload))),
             ContentTransferEncoding = ContentEncoding.Binary,
         };
+        if (compress && !compressAfterSign) entity = engine.Compress(entity);
         if (signer is not null) entity = engine.Sign(entity, signer, signAlg);
+        if (compress && compressAfterSign) entity = engine.Compress(entity);
         if (recipient is not null) entity = engine.Encrypt(entity, recipient, "aes-128-cbc");
 
         using var ms = new MemoryStream();

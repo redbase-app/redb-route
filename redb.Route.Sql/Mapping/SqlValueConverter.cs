@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 using System.Text.RegularExpressions;
+using redb.Route.Core;
 
 namespace redb.Route.Sql.Mapping;
 
@@ -170,8 +171,8 @@ internal static partial class SqlValueConverter
         {
             decimal? exact = value switch
             {
-                double f when double.IsFinite(f) && Math.Abs(f) < 7.9e28 && (double)(decimal)f == f => (decimal)f,
-                float f when float.IsFinite(f) && Math.Abs(f) < 7.9e28f && (float)(decimal)f == f => (decimal)f,
+                double f when double.IsFinite(f) && Math.Abs(f) < 7.9e28 && (double)RouteDecimal.FromDouble(f) == f => RouteDecimal.FromDouble(f),
+                float f when float.IsFinite(f) && Math.Abs(f) < 7.9e28f && (float)RouteDecimal.FromSingle(f) == f => RouteDecimal.FromSingle(f),
                 double or float => null,
                 _ => Convert.ToDecimal(value, Invariant),
             };

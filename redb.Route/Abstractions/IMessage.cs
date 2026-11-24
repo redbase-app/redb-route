@@ -1,3 +1,5 @@
+using redb.Route.Core;
+
 namespace redb.Route.Abstractions;
 
 /// <summary>
@@ -71,7 +73,7 @@ public interface IMessage
     {
         if (Body is null) return default;
         if (Body is T typed) return typed;
-        try { return (T)Convert.ChangeType(Body, typeof(T)); }
+        try { return (T)RouteDecimal.ChangeType(Body, typeof(T)); }
         catch { return default; } // conversion failure — return default by design
     }
 

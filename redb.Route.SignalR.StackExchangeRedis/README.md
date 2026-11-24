@@ -1,5 +1,7 @@
 # redb.Route.SignalR.StackExchangeRedis
 
+> Documentation and articles: <https://redbase.app>
+
 Redis backplane for the [redb.Route SignalR transport](../redb.Route.SignalR/README.md). It scales hubs out across
 replicas, and it keeps the hubs of one listener apart on a shared Redis.
 

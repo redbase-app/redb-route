@@ -53,6 +53,10 @@ values that come from the message (`header.x`, `body`, `property.x`, functions):
   These are columns of the object table and usually indexed, so this is the condition that
   cuts the most rows before props are read.
 
+A member can also be compared with another member, in either order: `where="Price > Cost"`,
+`where="Cost == Price"`. A member inside arithmetic on the other side (`Price > Cost * 2`) is
+refused when the route is built; such a condition goes into a specification, `filter="#spec"`.
+
 A list of keys is one query, not a loop: `member in list` and `member not in list` become an SQL
 `IN` in the storage, for props and base fields alike. The list is a collection the message carries
 or a literal in parentheses:

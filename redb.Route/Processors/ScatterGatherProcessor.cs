@@ -156,7 +156,7 @@ public sealed class ScatterGatherProcessor : IProcessor, IAsyncDisposable
                     await producer.Process(clone, ct).ConfigureAwait(false);
                     aggregated = aggregated is null ? clone : _aggregationStrategy(aggregated, clone);
 
-                    _logger?.LogDebug("Scatter-gather: received response from {Endpoint}", uri);
+                    _logger?.LogDebug("Scatter-gather: received response from {Endpoint}", EndpointUri.Sanitize(uri));
                 }
                 catch (OperationCanceledException) when (!callerCt.IsCancellationRequested && !_stopOnException)
                 {
@@ -173,7 +173,7 @@ public sealed class ScatterGatherProcessor : IProcessor, IAsyncDisposable
                 {
                     if (_stopOnException) throw;
                     clone.Exception = ex;
-                    _logger?.LogWarning(ex, "Scatter-gather: endpoint {Endpoint} failed", uri);
+                    _logger?.LogWarning(ex, "Scatter-gather: endpoint {Endpoint} failed", EndpointUri.Sanitize(uri));
                     aggregated = aggregated is null ? clone : _aggregationStrategy(aggregated, clone);
                 }
             }
@@ -211,7 +211,7 @@ public sealed class ScatterGatherProcessor : IProcessor, IAsyncDisposable
                     var producer = GetOrCreateProducer(recipients[index]);
                     await producer.Process(clone, ct).ConfigureAwait(false);
 
-                    _logger?.LogDebug("Scatter-gather: received response from {Endpoint}", recipients[index]);
+                    _logger?.LogDebug("Scatter-gather: received response from {Endpoint}", EndpointUri.Sanitize(recipients[index]));
                     return clone;
                 }
                 finally
@@ -244,7 +244,7 @@ public sealed class ScatterGatherProcessor : IProcessor, IAsyncDisposable
                     catch (OperationCanceledException) when (!callerCt.IsCancellationRequested)
                     {
                         // Timeout — skip this result
-                        _logger?.LogWarning("Scatter-gather: endpoint {Endpoint} timed out", recipients[index]);
+                        _logger?.LogWarning("Scatter-gather: endpoint {Endpoint} timed out", EndpointUri.Sanitize(recipients[index]));
                         return null;
                     }
                     catch (OperationCanceledException)
@@ -256,7 +256,7 @@ public sealed class ScatterGatherProcessor : IProcessor, IAsyncDisposable
                         var clone = clones[index] ?? exchange.Clone();
                         clones[index] = clone;
                         clone.Exception = ex;
-                        _logger?.LogWarning(ex, "Scatter-gather: endpoint {Endpoint} failed", recipients[index]);
+                        _logger?.LogWarning(ex, "Scatter-gather: endpoint {Endpoint} failed", EndpointUri.Sanitize(recipients[index]));
                         return clone;
                     }
                 })).ConfigureAwait(false);

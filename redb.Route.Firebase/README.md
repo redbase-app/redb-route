@@ -1,5 +1,7 @@
 # redb.Route.Firebase
 
+> Documentation and articles: <https://redbase.app>
+
 Firebase transport for the **redb.Route** ESB framework — **Firestore**, **Cloud Storage (GCS)**, and **FCM** in a single package.
 
 Firestore producer with CRUD, queries, and 500-doc batch writes. Realtime snapshot listener consumer.

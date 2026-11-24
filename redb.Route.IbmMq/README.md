@@ -1,5 +1,7 @@
 # redb.Route.IbmMq
 
+> Documentation and articles: <https://redbase.app>
+
 IBM MQ (WebSphere MQ) transport for **redb.Route** ESB framework.
 Native MQI access via `IBMXMSDotnetClient` (IBM.WMQ + IBM.XMS) — queues, topics, transactions, RPC, message groups, SSL/TLS, and W3C telemetry. Consumers can poll (default) or receive **event-driven** via an XMS `MessageListener` (`receiveMode=listener`, sub-50&#160;ms latency).
 
@@ -154,8 +156,8 @@ IBM MQ 9.4 developer image does not grant it to `app`.
 | `concurrentConsumers` | `1` | Parallel consumers |
 | `waitInterval` | `5000` | MQGET wait (ms), poll mode only |
 | `batchSize` | `0` | Batch size (0 = single) |
-| `backoutThreshold` | `0` | Poison message threshold |
-| `backoutQueue` | — | Backout queue name |
+| `backoutThreshold` | the queue's BOTHRESH | With `transacted=true` (poll mode): a message backed out this many times goes to the backout queue instead of the route, in the unit of work of its read (0 on both = off); see [Poison messages](#poison-messages) |
+| `backoutQueue` | the queue's BOQNAME | Backout queue; without one, the queue manager's dead letter queue |
 | `selector` | — | Message selector |
 | `convert` | `true` | Apply MQGMO_CONVERT |
 
@@ -206,6 +208,25 @@ turns on its connection, because a unit of work belongs to the connection.
 | `cCSID` | `1208` | Coded Character Set ID |
 | `mqmdWriteEnabled` | `false` | Write MQMD from headers |
 | `mqmdReadEnabled` | `true` | Read MQMD into headers |
+
+## Poison messages
+
+A consumer that reads under syncpoint (`transacted=true` in poll mode) backs a failed message out, and the message comes
+again with its backout count raised. It follows the provider's chain, as the IBM MQ classes for JMS do: once the backout
+count reaches the threshold, the message goes to the backout queue in the unit of work of its read, instead of to the
+route.
+
+- The threshold is `backoutThreshold`, else the input queue's BOTHRESH; the backout queue is `backoutQueue`, else the
+  input queue's BOQNAME. The endpoint's options override the queue's attributes.
+- With a threshold and no backout queue, the message goes to the queue manager's dead letter queue (DEADQ), behind a
+  dead letter header (MQDLH, reason MQRC_BACKOUT_THRESHOLD_REACHED), as the provider puts it there.
+- With a threshold and neither a backout queue nor a dead letter queue, the consumer does not start.
+- With no threshold anywhere (BOTHRESH 0 and no option), a message that always fails comes again at once, as from the
+  provider: give the route an error handler (`OnException`, a dead letter channel) that decides its pace and its end.
+- In listener mode the XMS client runs the same chain itself on the queue's BOTHRESH and BOQNAME (`backoutThreshold`
+  below BOTHRESH applies as above). The client moves the message with its context: the application's user needs
+  PASSALL (and PUT) on the backout queue and the dead letter queue, or the move fails with MQRC_NOT_AUTHORIZED (2035)
+  and the message stays on the input queue.
 
 ## Headers
 

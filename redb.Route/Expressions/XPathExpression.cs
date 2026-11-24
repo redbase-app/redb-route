@@ -370,7 +370,7 @@ public class XPathExpression : Expression, IPredicateExpression
             if (typeof(T) == typeof(int)) return (T)(object)(int)d;
             if (typeof(T) == typeof(long)) return (T)(object)(long)d;
             if (typeof(T) == typeof(float)) return (T)(object)(float)d;
-            if (typeof(T) == typeof(decimal)) return (T)(object)(decimal)d;
+            if (typeof(T) == typeof(decimal)) return (T)(object)RouteDecimal.FromDouble(d);
             if (typeof(T) == typeof(double)) return (T)(object)d;
             if (typeof(T) == typeof(bool)) return (T)(object)(d != 0);
         }
@@ -384,7 +384,7 @@ public class XPathExpression : Expression, IPredicateExpression
 
         try
         {
-            return (T)Convert.ChangeType(value, typeof(T));
+            return (T)RouteDecimal.ChangeType(value, typeof(T));
         }
         catch (Exception ex)
         {
@@ -497,7 +497,7 @@ public class XPathExpression : Expression, IPredicateExpression
             var elemType = typeof(T).GetElementType()!;
             var arr = Array.CreateInstance(elemType, textValues.Length);
             for (int i = 0; i < textValues.Length; i++)
-                arr.SetValue(Convert.ChangeType(textValues[i], elemType, System.Globalization.CultureInfo.InvariantCulture), i);
+                arr.SetValue(RouteDecimal.ChangeType(textValues[i], elemType, System.Globalization.CultureInfo.InvariantCulture), i);
             return (T)(object)arr;
         }
 
@@ -563,7 +563,7 @@ public class XPathExpression : Expression, IPredicateExpression
 
         try
         {
-            return (T)Convert.ChangeType(text, targetType, System.Globalization.CultureInfo.InvariantCulture);
+            return (T)RouteDecimal.ChangeType(text, targetType, System.Globalization.CultureInfo.InvariantCulture);
         }
         catch (Exception ex)
         {

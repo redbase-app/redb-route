@@ -1,5 +1,7 @@
 # redb.Route.DataFormats.XmlJson
 
+> Documentation and articles: <https://redbase.app>
+
 XML to JSON and back for redb.Route when there is no class for the document, as Apache Camel's `xmljson`.
 
 ## When a class exists, use it

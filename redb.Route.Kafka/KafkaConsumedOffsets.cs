@@ -14,6 +14,12 @@ namespace redb.Route.Kafka;
 /// <c>.Threads()</c>) commits after the consumer moved on, with a group generation that may no longer be current, and
 /// must not take them. One transaction takes them at most.
 /// </para>
+/// <para>
+/// Claimable only by the exchange the consumer handed the route. A split part, a multicast branch or any other copy
+/// inherits the exchange's properties, this one included, but it is one part of the unit of work: its transaction
+/// committing the offsets would commit the whole record or batch before the other parts ran. The consumer commits them
+/// once, after the route returned.
+/// </para>
 /// </summary>
 internal sealed class KafkaConsumedOffsets
 {
@@ -24,13 +30,15 @@ internal sealed class KafkaConsumedOffsets
 
     private readonly IConsumer<string, byte[]> _consumer;
     private readonly KafkaCommitAction _commit;
+    private readonly IExchange _owner;
     private int _state;
 
-    public KafkaConsumedOffsets(IConsumer<string, byte[]> consumer, KafkaCommitAction commit, string? cluster)
+    public KafkaConsumedOffsets(IConsumer<string, byte[]> consumer, KafkaCommitAction commit, string? cluster, IExchange owner)
     {
         _consumer = consumer;
         _commit = commit;
         Cluster = cluster;
+        _owner = owner;
     }
 
     /// <summary>The consumer's cluster id (<see cref="ClusterIdOf"/>); null when the consumer could not read it.</summary>
@@ -57,11 +65,21 @@ internal sealed class KafkaConsumedOffsets
     /// <summary>True once the route returned to the consumer: a transaction that did not take them before cannot now.</summary>
     public bool IsClosed => Volatile.Read(ref _state) == Closed;
 
-    /// <summary>The offsets a Kafka consumer offered on <paramref name="exchange"/>, of whatever cluster, if any.</summary>
-    public static KafkaConsumedOffsets? OfferedOn(IExchange exchange) =>
-        exchange.Properties.TryGetValue(PropertyKey, out var value) && value is KafkaConsumedOffsets offsets
-            ? offsets
-            : null;
+    /// <summary>
+    /// The offsets a Kafka consumer offered on <paramref name="exchange"/> itself, of whatever cluster, if any. Offsets
+    /// <paramref name="exchange"/> only inherited from the exchange they were offered on are reported through
+    /// <paramref name="inherited"/> and not returned.
+    /// </summary>
+    public static KafkaConsumedOffsets? OfferedOn(IExchange exchange, out bool inherited)
+    {
+        inherited = false;
+        if (!exchange.Properties.TryGetValue(PropertyKey, out var value) || value is not KafkaConsumedOffsets offsets)
+            return null;
+        if (ReferenceEquals(offsets._owner, exchange))
+            return offsets;
+        inherited = true;
+        return null;
+    }
 
     /// <summary>
     /// A cluster's identity for matching a consumer with a producer: the cluster id its brokers report, read through the

@@ -28,7 +28,7 @@ internal static class TypedValue
 
         try
         {
-            return (T)System.Convert.ChangeType(value, target, CultureInfo.InvariantCulture);
+            return (T)RouteDecimal.ChangeType(value, target, CultureInfo.InvariantCulture);
         }
         catch (InvalidCastException)
         {

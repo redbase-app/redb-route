@@ -292,7 +292,7 @@ public class ProducerTemplate : IProducerTemplate, IDisposable, IAsyncDisposable
         var target = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
         try
         {
-            return (T)Convert.ChangeType(result, target);
+            return (T)RouteDecimal.ChangeType(result, target);
         }
         catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
         {

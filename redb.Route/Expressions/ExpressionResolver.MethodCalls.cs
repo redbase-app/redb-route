@@ -1,4 +1,5 @@
 using System.Reflection;
+using redb.Route.Core;
 
 namespace redb.Route.Expressions;
 
@@ -80,7 +81,7 @@ public static partial class ExpressionResolver
             var target = Nullable.GetUnderlyingType(parameters[i].ParameterType) ?? parameters[i].ParameterType;
             converted[i] = arguments[i] is { } value && !target.IsInstanceOfType(value) && value is IConvertible
                            && typeof(IConvertible).IsAssignableFrom(target)
-                ? System.Convert.ChangeType(value, target, System.Globalization.CultureInfo.InvariantCulture)
+                ? RouteDecimal.ChangeType(value, target, System.Globalization.CultureInfo.InvariantCulture)
                 : arguments[i];
         }
         return converted;

@@ -58,6 +58,7 @@ public sealed class As2Builder
     private int? _rejectStatusCode;
     private int? _retryAfterSeconds;
     private long? _maxRequestBodySize;
+    private long? _maxDecompressedSize;
     private string? _idempotentRepository;
     private bool _streamBody;
     private long? _maxResponseBodySize;
@@ -121,6 +122,12 @@ public sealed class As2Builder
     /// <summary>Receive endpoint: the largest request body accepted, in bytes (default 100 MB); larger is answered 413.</summary>
     public As2Builder MaxRequestBodySize(long bytes) { _maxRequestBodySize = bytes; return this; }
 
+    /// <summary>
+    /// Receive endpoint: the most bytes a compressed message may inflate to; past it the message is refused with
+    /// <c>decompression-failed</c>. Unset: <see cref="MaxRequestBodySize"/>.
+    /// </summary>
+    public As2Builder MaxDecompressedSize(long bytes) { _maxDecompressedSize = bytes; return this; }
+
     /// <summary>Send endpoint: the largest response (synchronous MDN) read, in bytes (default 4 MB).</summary>
     public As2Builder MaxResponseBodySize(long bytes) { _maxResponseBodySize = bytes; return this; }
 
@@ -147,6 +154,7 @@ public sealed class As2Builder
         if (_rejectStatusCode is { } rsc) Add("rejectStatusCode", rsc.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (_retryAfterSeconds is { } ras) Add("retryAfterSeconds", ras.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (_maxRequestBodySize is { } mrb) Add("maxRequestBodySize", mrb.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (_maxDecompressedSize is { } mds) Add("maxDecompressedSize", mds.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (_streamBody) Add("streamBody", "true");
         if (_idempotentRepository is not null) Add("idempotentRepository", _idempotentRepository);
         if (AsMdnReceiver) Add("mode", "mdn");

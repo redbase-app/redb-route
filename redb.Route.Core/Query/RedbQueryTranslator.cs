@@ -457,7 +457,7 @@ internal static class RedbQueryTranslator
                     DateTime dateTime => new DateTimeOffset(dateTime),
                     _ => DateTimeOffset.Parse(value.ToString()!, CultureInfo.InvariantCulture),
                 },
-                _ => System.Convert.ChangeType(value, underlying, CultureInfo.InvariantCulture),
+                _ => redb.Route.Core.RouteDecimal.ChangeType(value, underlying, CultureInfo.InvariantCulture),
             };
         return converted;
     }

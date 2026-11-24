@@ -1,5 +1,7 @@
 # redb.Route.Grpc
 
+> Documentation and articles: <https://redbase.app>
+
 gRPC transport for redb.Route. A gRPC **method address is a route**: the consumer registers
 `/package.Service/Method` as a path route on the shared Kestrel host, so many methods live on one port as
 ordinary routes with their own ids, policies and metrics. The producer calls any method address with a

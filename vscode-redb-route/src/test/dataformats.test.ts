@@ -3,6 +3,7 @@ import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DataFormatInfo, formatCompletions, formatHover, startTagAt } from "../dataformats";
+import { withCursor } from "./cursor";
 
 const FORMATS = JSON.parse(fs.readFileSync(
     path.join(__dirname, "..", "..", "media", "redb-route-dataformats.json"), "utf8")) as DataFormatInfo[];
@@ -10,13 +11,13 @@ const FORMATS = JSON.parse(fs.readFileSync(
 const XMLJSON = "redb.Route.DataFormats.XmlJson.XmlJsonDataFormat, redb.Route.DataFormats.XmlJson";
 
 function completeAt(textWithCursor: string) {
-    const offset = textWithCursor.indexOf("|");
-    return formatCompletions(textWithCursor.replace("|", ""), offset, FORMATS);
+    const { text, offset } = withCursor(textWithCursor);
+    return formatCompletions(text, offset, FORMATS);
 }
 
 function hoverAt(textWithCursor: string) {
-    const offset = textWithCursor.indexOf("|");
-    return formatHover(textWithCursor.replace("|", ""), offset, FORMATS);
+    const { text, offset } = withCursor(textWithCursor);
+    return formatHover(text, offset, FORMATS);
 }
 
 const labels = (textWithCursor: string) => completeAt(textWithCursor).map(c => c.label);
@@ -132,8 +133,8 @@ describe("formatCompletions — Path options over the module's resources/", () =
         dirs: ["", "xsd", "xsd/common"],
     };
     const pathsAt = (textWithCursor: string, tree: typeof TREE | null = TREE) => {
-        const offset = textWithCursor.indexOf("|");
-        return formatCompletions(textWithCursor.replace("|", ""), offset, FORMATS, () => tree);
+        const { text, offset } = withCursor(textWithCursor);
+        return formatCompletions(text, offset, FORMATS, () => tree);
     };
 
     it("offers the files of resources/ for schema=, in the short form, replacing the value typed", () => {

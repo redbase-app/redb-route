@@ -234,7 +234,7 @@ public class RouteContext : IRouteContext, IAsyncDisposable
             return typed;
         try
         {
-            return (T)Convert.ChangeType(value, typeof(T));
+            return (T)RouteDecimal.ChangeType(value, typeof(T));
         }
         catch
         {

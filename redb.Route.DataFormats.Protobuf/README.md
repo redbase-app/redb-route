@@ -1,5 +1,7 @@
 # redb.Route.DataFormats.Protobuf
 
+> Documentation and articles: <https://redbase.app>
+
 Protocol Buffers as a redb.Route data format, on Google.Protobuf. The body is a generated
 `IMessage` class (protoc / Grpc.Tools).
 

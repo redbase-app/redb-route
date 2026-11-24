@@ -77,6 +77,26 @@ public abstract class SqlIdempotentAmbientTestsBase : IAsyncLifetime
         return await repository.Contains(key);
     }
 
+    [Fact]
+    public async Task Add_ThatLosesTheKeyToAConcurrentInsert_IsADuplicate_NotAnError()
+    {
+        // Another session inserts the key and commits while node A's insert of it is under way. PostgreSQL then fails
+        // node A's insert on the primary key (its existence check could not see the uncommitted row); SQL Server and SQLite
+        // wait on the row and find it. Either way the key is held: a duplicate, not an exception for the route.
+        var nodeA = Repository(Provider.ConnectionString);
+        await nodeA.Add("warm-up");   // creates the table
+        await using var other = await Factory(Provider.ConnectionString).CreateConnectionAsync();
+        await using var otherTx = await other.BeginTransactionAsync();
+        await SqlE2EDatabase.ExecuteAsync(other, otherTx,
+            $"INSERT INTO {_table} (processor_name, message_key, created_at, confirmed) VALUES ('route-1', 'race', '2026-01-01T00:00:00.0000000+00:00', 0)");
+
+        var addA = Task.Run(() => nodeA.Add("race"));
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        await otherTx.CommitAsync();
+
+        (await addA).Should().BeFalse("the other session's row holds the key");
+    }
+
     private SqlIdempotentRepository Repository(string connectionString)
     {
         _connectionStrings.Add(connectionString);

@@ -1,3 +1,5 @@
+using redb.Route.Abstractions;
+
 namespace redb.Route.Llm.Engine.Governance;
 
 /// <summary>
@@ -34,6 +36,34 @@ public interface IBudgetEnforcer
         AgentUsage iterationUsage,
         AgentUsage totalUsage,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// <see cref="PreCheckAsync(string?, AgentBudget, AgentUsage, CancellationToken)"/> with the run's exchange, which
+    /// the engine calls: an enforcer that stores usage reads it from the instance the endpoint chose
+    /// (<c>?redb=</c>). The default ignores the exchange, so an enforcer that stores nothing implements only the
+    /// member without it.
+    /// </summary>
+    ValueTask<BudgetDecision> PreCheckAsync(
+        string? conversationId,
+        AgentBudget budget,
+        AgentUsage usageSoFar,
+        IExchange? exchange,
+        CancellationToken ct = default)
+        => PreCheckAsync(conversationId, budget, usageSoFar, ct);
+
+    /// <summary>
+    /// <see cref="RecordAndCheckAsync(string?, AgentBudget, AgentUsage, AgentUsage, CancellationToken)"/> with the
+    /// run's exchange, which the engine calls: an enforcer that stores usage writes it to the instance the endpoint
+    /// chose (<c>?redb=</c>). The default ignores the exchange.
+    /// </summary>
+    ValueTask<BudgetDecision> RecordAndCheckAsync(
+        string? conversationId,
+        AgentBudget budget,
+        AgentUsage iterationUsage,
+        AgentUsage totalUsage,
+        IExchange? exchange,
+        CancellationToken ct = default)
+        => RecordAndCheckAsync(conversationId, budget, iterationUsage, totalUsage, ct);
 }
 
 /// <summary>Per-run budget. Components ≤ 0 disable that dimension of enforcement.</summary>

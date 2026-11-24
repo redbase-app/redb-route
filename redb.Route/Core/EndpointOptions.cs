@@ -47,6 +47,20 @@ public abstract class EndpointOptions
             EndpointUri.AddSensitiveKeys(names);
     }
 
+    /// <summary>
+    /// The values of this instance's <see cref="SensitiveAttribute"/>-marked string properties that are set: what the
+    /// endpoint knows to be secret, so a text that quotes one (a token in a request URL, a key in a driver message) can
+    /// be masked by value.
+    /// </summary>
+    internal IEnumerable<string> SensitiveValues() =>
+        GetType()
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.PropertyType == typeof(string) && p.GetIndexParameters().Length == 0
+                        && p.IsDefined(typeof(SensitiveAttribute), inherit: true))
+            .Select(p => p.GetValue(this) as string)
+            .OfType<string>()
+            .Where(v => v.Length > 0);
+
     /// <summary>Parameters from URI that were not mapped to typed properties.</summary>
     public IReadOnlyDictionary<string, string> UnmappedParameters =>
         _unmapped ?? (IReadOnlyDictionary<string, string>)new Dictionary<string, string>(0);

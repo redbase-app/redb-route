@@ -109,8 +109,9 @@ public sealed class SnsEndpoint : EndpointBase<SnsEndpointOptions>, IDisposable
                 _client = new AmazonSimpleNotificationServiceClient(AwsClientSupport.ResolveCredentials(Options), config);
             }
 
-            Logger?.LogInformation("SNS client created: Region={Region}, ServiceUrl={ServiceUrl}, Topic={Topic}",
-                Options.Region, string.IsNullOrEmpty(Options.ServiceUrl) ? "(default)" : Options.ServiceUrl, TopicName);
+            var (region, serviceUrl) = AwsClientSupport.Target(_client.Config);
+            Logger?.LogInformation("SNS client created: Region={Region}, ServiceUrl={ServiceUrl}, Topic={Topic}, ConnectionFactory={ConnectionFactory}",
+                region, serviceUrl, TopicName, string.IsNullOrEmpty(Options.ConnectionFactory) ? "-" : Options.ConnectionFactory);
             return _client;
         }
         finally

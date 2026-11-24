@@ -47,7 +47,7 @@ internal sealed class DynamicRouterProcessor : IProcessor, IAsyncDisposable
             if (nextUri is null)
                 break;
 
-            _logger?.LogDebug("DynamicRouter: hop {Hop} → {Uri}", hops + 1, nextUri);
+            _logger?.LogDebug("DynamicRouter: hop {Hop} → {Uri}", hops + 1, EndpointUri.Sanitize(nextUri));
 
             if (++hops > maxHops)
                 throw new InvalidOperationException(

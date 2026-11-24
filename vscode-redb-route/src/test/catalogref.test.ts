@@ -6,6 +6,7 @@ import {
 import { referencePosition } from "../beanref";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { withCursor } from "./cursor";
 
 const COMPONENTS: CatalogComponent[] = [
     {
@@ -29,13 +30,13 @@ const COMPONENTS: CatalogComponent[] = [
 const CATALOG = catalogByScheme(COMPONENTS);
 
 function at(textWithCursor: string) {
-    const offset = textWithCursor.indexOf("|");
-    return catalogReferencePosition(textWithCursor.replace("|", ""), offset, CATALOG);
+    const { text, offset } = withCursor(textWithCursor);
+    return catalogReferencePosition(text, offset, CATALOG);
 }
 
 function hoverAt(textWithCursor: string) {
-    const offset = textWithCursor.indexOf("|");
-    return catalogReferenceHover(textWithCursor.replace("|", ""), offset, CATALOG);
+    const { text, offset } = withCursor(textWithCursor);
+    return catalogReferenceHover(text, offset, CATALOG);
 }
 
 describe("catalogReferencePosition — options the catalog marks as registry references", () => {

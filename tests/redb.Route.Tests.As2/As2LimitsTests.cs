@@ -65,6 +65,81 @@ public class As2LimitsTests
     }
 
     [Fact]
+    public async Task CompressedMessage_ThatInflatesPastMaxDecompressedSize_IsRefusedWithDecompressionFailed_AndNotRouted()
+    {
+        // A few kilobytes on the wire that inflate to 2 MB: the body limit alone lets it through.
+        var port = FreePort();
+        await using var context = new RouteContext();
+        context.AddComponent(new As2Component());
+        context.AddToRegistry("recv", Receiver());
+        var routed = 0;
+        context.AddRoutes(r =>
+            r.From(As2Dsl.Receive("/in").Host("127.0.0.1").Port(port).ConnectionFactory("recv").MaxDecompressedSize(1024 * 1024))
+                .Process(_ => Interlocked.Increment(ref routed)));
+        await context.Start();
+
+        var bomb = BuildMessage(new string('X', 2 * 1024 * 1024), Cert, Cert, compress: true);
+        bomb.Body.Length.Should().BeLessThan(64 * 1024, "the point is a small body that inflates");
+        var response = await PostAsync(port, "/in", bomb);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var mdn = ReadMdn(response);
+        mdn.IsPositive.Should().BeFalse();
+        mdn.Disposition.Should().EndWith("processed/error: decompression-failed");
+        routed.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CompressedMessage_WithinMaxDecompressedSize_IsRouted()
+    {
+        var port = FreePort();
+        await using var context = new RouteContext();
+        context.AddComponent(new As2Component());
+        context.AddToRegistry("recv", Receiver());
+        string? delivered = null;
+        context.AddRoutes(r =>
+            r.From(As2Dsl.Receive("/in").Host("127.0.0.1").Port(port).ConnectionFactory("recv").MaxDecompressedSize(1024 * 1024))
+                .Process(e => delivered = System.Text.Encoding.UTF8.GetString((byte[])e.In.Body!)));
+        await context.Start();
+
+        var payload = new string('X', 512 * 1024);
+        var response = await PostAsync(port, "/in", BuildMessage(payload, Cert, Cert, compress: true));
+
+        ReadMdn(response).IsPositive.Should().BeTrue();
+        delivered.Should().Be(payload);
+    }
+
+    [Fact]
+    public async Task MaxDecompressedSize_Unset_IsMaxRequestBodySize()
+    {
+        // The payload a request hands over is bounded as its body is: a compressed body may not inflate past it.
+        var port = FreePort();
+        await using var context = new RouteContext();
+        context.AddComponent(new As2Component());
+        context.AddToRegistry("recv", Receiver());
+        var routed = 0;
+        context.AddRoutes(r =>
+            r.From(As2Dsl.Receive("/in").Host("127.0.0.1").Port(port).ConnectionFactory("recv").MaxRequestBodySize(256 * 1024))
+                .Process(_ => Interlocked.Increment(ref routed)));
+        await context.Start();
+
+        var response = await PostAsync(port, "/in", BuildMessage(new string('X', 1024 * 1024), Cert, Cert, compress: true));
+
+        ReadMdn(response).Disposition.Should().EndWith("processed/error: decompression-failed");
+        routed.Should().Be(0);
+        new As2EndpointOptions().MaxDecompressedSize.Should().BeNull();
+        var act = () => new As2EndpointOptions { MaxDecompressedSize = 0 }.Validate();
+        act.Should().Throw<ArgumentOutOfRangeException>().WithMessage("*maxDecompressedSize*");
+    }
+
+    private static MdnParser.MdnResult ReadMdn(HttpResponseMessage response)
+    {
+        var cte = response.Content.Headers.TryGetValues("Content-Transfer-Encoding", out var v) ? string.Join(",", v) : null;
+        var body = response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+        return MdnParser.Parse(response.Content.Headers.ContentType?.ToString(), cte, body, new As2CryptoEngine(), Cert);
+    }
+
+    [Fact]
     public async Task Mdn_LargerThanMaxRequestBodySize_IsRefusedWith413()
     {
         var port = FreePort();

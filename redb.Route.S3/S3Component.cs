@@ -104,10 +104,9 @@ public sealed class S3Endpoint : EndpointBase<S3EndpointOptions>, IDisposable
 
             _client = BuildClient();
 
-            Logger?.LogInformation("S3 client created: Region={Region}, ServiceUrl={ServiceUrl}, Bucket={Bucket}",
-                Options.Region,
-                string.IsNullOrEmpty(Options.ServiceUrl) ? "(default)" : Options.ServiceUrl,
-                BucketName);
+            var (region, serviceUrl) = S3ClientConfigSupport.Target(_client.Config);
+            Logger?.LogInformation("S3 client created: Region={Region}, ServiceUrl={ServiceUrl}, Bucket={Bucket}, ConnectionFactory={ConnectionFactory}",
+                region, serviceUrl, BucketName, string.IsNullOrEmpty(Options.ConnectionFactory) ? "-" : Options.ConnectionFactory);
 
             return _client;
         }

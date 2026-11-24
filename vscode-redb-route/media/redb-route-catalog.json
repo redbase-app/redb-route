@@ -306,6 +306,11 @@
         "sensitive": false
       },
       {
+        "name": "MaxDecompressedSize",
+        "type": "long",
+        "sensitive": false
+      },
+      {
         "name": "MaxRequestBodySize",
         "type": "long",
         "default": "104857600",

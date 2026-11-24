@@ -1,5 +1,6 @@
 using System.Text;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Serialization;
 
@@ -93,7 +94,7 @@ public sealed class ConvertBodyProcessor : IProcessor
         // Fallback: try System.Convert
         try
         {
-            return System.Convert.ChangeType(body, _targetType);
+            return RouteDecimal.ChangeType(body, _targetType);
         }
         catch (Exception ex)
         {

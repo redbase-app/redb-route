@@ -11,6 +11,41 @@ namespace redb.Route.IbmMq;
 public static class IbmMqMessageHelper
 {
     /// <summary>
+    /// Puts a dead letter header (MQDLH, version 1) in front of <paramref name="msg"/>'s data, as IBM MQ does for a
+    /// message it moves to the dead letter queue: the reason, the queue and queue manager it was on, the encoding,
+    /// character set and format of the data behind it; the message's format becomes MQFMT_DEAD_LETTER_HEADER.
+    /// </summary>
+    internal static void WrapInDeadLetterHeader(MQMessage msg, int reason, string queue, string queueManager)
+    {
+        msg.Seek(0);
+        var data = msg.ReadBytes(msg.MessageLength);
+        var format = msg.Format;
+        msg.ClearMessage();
+
+        msg.Write(Fixed("DLH ", 4));
+        msg.WriteInt4(MQC.MQDLH_VERSION_1);
+        msg.WriteInt4(reason);
+        msg.Write(Fixed(queue, 48));
+        msg.Write(Fixed(queueManager, 48));
+        msg.WriteInt4(msg.Encoding);
+        msg.WriteInt4(msg.CharacterSet);
+        msg.Write(Fixed(format, 8));
+        msg.WriteInt4(MQC.MQAT_DEFAULT);
+        msg.Write(Fixed("redb.Route", 28));
+        var now = DateTime.UtcNow;
+        msg.Write(Fixed(now.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture), 8));
+        msg.Write(Fixed(now.ToString("HHmmssff", System.Globalization.CultureInfo.InvariantCulture), 8));
+        msg.Write(data);
+        msg.Format = MQC.MQFMT_DEAD_LETTER_HEADER;
+
+        static byte[] Fixed(string text, int length)
+        {
+            var bytes = System.Text.Encoding.ASCII.GetBytes((text ?? string.Empty).PadRight(length));
+            return bytes.Length == length ? bytes : bytes[..length];
+        }
+    }
+
+    /// <summary>
     /// Extracts the body from an <see cref="MQMessage"/> as a string or byte[].
     /// Uses Format and CCSID to decide encoding.
     /// </summary>
@@ -215,6 +250,10 @@ public static class IbmMqMessageHelper
                 msg.Format = contentType is not null ? ContentTypeToFormat(contentType) : MQC.MQFMT_STRING;
                 break;
             case null:
+                break;
+            // A list has no wire form here (4.8.0 sends a list of IMessage element by element): refused, never its type name.
+            case System.Collections.IEnumerable list when !redb.Route.Core.BodyText.HasOwnText(list):
+                msg.WriteString(redb.Route.Core.BodyText.Of(list));
                 break;
             default:
                 msg.WriteString(body.ToString() ?? string.Empty);

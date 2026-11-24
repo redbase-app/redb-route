@@ -1,5 +1,7 @@
 # redb.Route.Kafka
 
+> Documentation and articles: <https://redbase.app>
+
 Apache Kafka transport for redb.Route. Consumer (subscribe), producer (publish), consumer groups, deferred-commit routing (idempotent producer), Kafka transactions with exactly-once consume-process-produce (`transactionalIdPrefix`), and full Confluent.Kafka configuration.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Kafka?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Kafka)

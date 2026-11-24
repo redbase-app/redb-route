@@ -1,5 +1,7 @@
 # redb.Route.Ldap
 
+> Documentation and articles: <https://redbase.app>
+
 LDAP / Active Directory connector for redb.Route. Search, CRUD, authentication, and change tracking — all directory operations as endpoints via Novell.Directory.Ldap.NETStandard.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Ldap?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Ldap)

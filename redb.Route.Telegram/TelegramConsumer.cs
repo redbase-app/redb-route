@@ -275,9 +275,9 @@ public sealed class TelegramConsumer : DrainableConsumer
             // message rather than re-throwing into the polling loop (which would only re-log the same error).
             span.Activity.RecordFailure(ex);
             Logger?.LogError(ex,
-                "Telegram consumer: unhandled processor error for message {MessageId} in chat {ChatId} — " +
+                "Telegram consumer: unhandled processor error for message {MessageId} — " +
                 "message dropped (at-most-once, no redelivery).",
-                msg.MessageId, msg.Chat.Id);
+                msg.MessageId);
         }
         finally
         {

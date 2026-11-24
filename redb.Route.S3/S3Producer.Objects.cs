@@ -48,7 +48,7 @@ internal sealed partial class S3Producer
                 request.InputStream = new MemoryStream(Array.Empty<byte>());
                 break;
             default:
-                request.ContentBody = body.ToString();
+                request.ContentBody = BodyText.Of(body);
                 break;
         }
 

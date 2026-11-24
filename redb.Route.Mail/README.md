@@ -1,5 +1,7 @@
 # redb.Route.Mail
 
+> Documentation and articles: <https://redbase.app>
+
 Email transport for redb.Route via MailKit. SMTP producer for sending, IMAP/POP3 consumers for receiving with IDLE push, attachments, TLS/SSL, and OAuth.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Mail?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Mail)

@@ -263,7 +263,7 @@ internal sealed class MqttProducer : ConnectableProducer
             ReadOnlyMemory<byte> rom => rom.ToArray(),
             ArraySegment<byte> seg => seg.ToArray(),
             string str => Encoding.UTF8.GetBytes(str),
-            _ => Encoding.UTF8.GetBytes(body.ToString() ?? string.Empty)
+            _ => Encoding.UTF8.GetBytes(BodyText.Of(body))
         };
     }
 

@@ -121,8 +121,8 @@ internal sealed class As2Producer : ConnectableProducer
         var messageId = $"<{Guid.NewGuid():N}@redb.route>";
         var request = new HttpRequestMessage(HttpMethod.Post, profile.PartnerUrl);
         AddHeader(request, As2Headers.As2Version, "1.2");
-        AddHeader(request, As2Headers.As2From, profile.As2From);
-        AddHeader(request, As2Headers.As2To, profile.As2To);
+        AddHeader(request, As2Headers.As2From, string.IsNullOrEmpty(profile.As2From) ? null : As2Headers.FormatName(profile.As2From));
+        AddHeader(request, As2Headers.As2To, string.IsNullOrEmpty(profile.As2To) ? null : As2Headers.FormatName(profile.As2To));
         AddHeader(request, As2Headers.MessageId, messageId);
         AddHeader(request, As2Headers.Subject, exchange.In.GetHeader<string>(As2Headers.Subject) ?? "AS2 Message");
         if (profile.MdnMode != As2MdnMode.None)
@@ -277,7 +277,7 @@ internal sealed class As2Producer : ConnectableProducer
             byte[] b => b,
             null => [],
             string s => Encoding.UTF8.GetBytes(s),
-            _ => Encoding.UTF8.GetBytes(message.Body.ToString() ?? string.Empty),
+            _ => Encoding.UTF8.GetBytes(BodyText.Of(message.Body)),
         };
 
         var (mediaType, mediaSubtype) = SplitContentType(message.ContentType);

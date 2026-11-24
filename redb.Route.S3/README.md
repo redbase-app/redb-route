@@ -1,5 +1,7 @@
 # redb.Route.S3
 
+> Documentation and articles: <https://redbase.app>
+
 S3/MinIO transport for the **redb.Route** ESB framework.
 
 Polling consumer with prefix filtering, glob patterns, idempotency, done-file markers, move/delete after read.

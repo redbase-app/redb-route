@@ -1,5 +1,6 @@
 ﻿using System.Text.RegularExpressions;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Expressions;
 
@@ -92,7 +93,7 @@ public sealed class StringExpression : Expression
         if (typeof(T) == typeof(string))
             return (T)(object)ExpressionResolver.TemplateText(result);
 
-        return (T)Convert.ChangeType(result, typeof(T), System.Globalization.CultureInfo.InvariantCulture);
+        return (T)RouteDecimal.ChangeType(result, typeof(T), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>

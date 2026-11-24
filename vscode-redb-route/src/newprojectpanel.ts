@@ -32,6 +32,8 @@ type PageMessage =
 export class NewProjectPanel {
     private static current: NewProjectPanel | undefined;
     private templates: RedbTemplate[] = [];
+    /** Major version of the highest installed SDK, the one that runs `dotnet new install`; null when unknown. */
+    private sdkMajor: number | null = null;
     private running: ChildProcess | undefined;
     private cancelled = false;
     private created: { folder: string; name: string } | undefined;
@@ -88,7 +90,7 @@ export class NewProjectPanel {
             case "install":
                 if (!(TEMPLATE_PACKAGE_IDS as readonly string[]).includes(message.packageId)) return;
                 await this.run(`Installing ${message.packageId}`, "dotnet",
-                    templateInstallArguments(message.packageId, message.version));
+                    templateInstallArguments(message.packageId, message.version, this.sdkMajor));
                 await this.sendState();
                 return;
             case "browse": {
@@ -118,6 +120,7 @@ export class NewProjectPanel {
             installedSdks(),
             ...TEMPLATE_PACKAGE_IDS.map(id => latestTemplateVersion(id)),
         ]);
+        this.sdkMajor = sdks && sdks.length > 0 ? Math.max(...sdks.map(s => s.major)) : null;
         const packages = TEMPLATE_PACKAGE_IDS.map((id, i) => ({ id, state: templateState(installedTemplatePackage(id), latest[i]) }));
         const templates: RedbTemplate[] = [];
         for (const { id, state } of packages) {

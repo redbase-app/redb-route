@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Reflection;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Expressions;
 
@@ -234,10 +235,10 @@ public static partial class ExpressionResolver
         switch (value)
         {
             case double d when !double.IsNaN(d) && !double.IsInfinity(d) && Math.Abs(d) < (double)decimal.MaxValue:
-                number = (decimal)d;
+                number = RouteDecimal.FromDouble(d);
                 break;
             case float f when !float.IsNaN(f) && !float.IsInfinity(f) && Math.Abs(f) < (float)decimal.MaxValue:
-                number = (decimal)f;
+                number = RouteDecimal.FromSingle(f);
                 break;
             case not (bool or double or float) when TryConvertToDecimal(value, out var converted):
                 number = converted;

@@ -232,8 +232,10 @@ internal sealed class As2Consumer : IConsumer
                 throw new As2DispositionException(As2Disposition.AuthenticationFailed,
                     $"AS2-From '{from}' and AS2-To '{to}' are not the agreement's '{profile.As2To}' and '{profile.As2From}'.");
 
-            // Unwrap: decrypt (outer) → verify signature (+ MIC over the signed part) → decompress (inner).
+            // Unwrap: decrypt (outer), then the signature and the compression in the order they were applied: compress
+            // then sign (RFC 5402 §3.2/3.5) or sign then compress (§3.3/3.6), each at most once.
             var entity = MimeEntity.Load(mime, persistent: true);
+            var wasCompressed = false;
 
             if (entity is ApplicationPkcs7Mime { SecureMimeType: SecureMimeType.EnvelopedData } enveloped)
             {
@@ -248,30 +250,37 @@ internal sealed class As2Consumer : IConsumer
                 wasEncrypted = true;
             }
 
-            if (entity is MultipartSigned signed)
+            while (true)
             {
-                if (profile.PartnerCertificate is null)
-                    throw new As2DispositionException(As2Disposition.AuthenticationFailed,
-                        "the message is signed and the agreement has no partner certificate to verify it.");
-                if (As2CertificateValidity.Problem(profile.PartnerCertificate, DateTimeOffset.UtcNow, "The partner's signing certificate") is { } invalid)
-                    throw new As2DispositionException(As2Disposition.AuthenticationFailed, invalid);
-                try { signatureValid = _engine.Verify(signed, profile.PartnerCertificate); }
-                catch (Exception e) when (e is not OperationCanceledException)
+                if (!wasSigned && entity is MultipartSigned signed)
                 {
-                    throw new As2DispositionException(As2Disposition.AuthenticationFailed, $"signature verification failed: {e.Message}", e);
+                    if (profile.PartnerCertificate is null)
+                        throw new As2DispositionException(As2Disposition.AuthenticationFailed,
+                            "the message is signed and the agreement has no partner certificate to verify it.");
+                    if (As2CertificateValidity.Problem(profile.PartnerCertificate, DateTimeOffset.UtcNow, "The partner's signing certificate") is { } invalid)
+                        throw new As2DispositionException(As2Disposition.AuthenticationFailed, invalid);
+                    try { signatureValid = _engine.Verify(signed, profile.PartnerCertificate); }
+                    catch (Exception e) when (e is not OperationCanceledException)
+                    {
+                        throw new As2DispositionException(As2Disposition.AuthenticationFailed, $"signature verification failed: {e.Message}", e);
+                    }
+                    // RFC 5402 §4.1: over the data that was signed, compressed or not.
+                    mic = _engine.ComputeReceivedMic(signed[0], receipt.MicAlg);
+                    entity = signed[0];
+                    wasSigned = true;
                 }
-                mic = _engine.ComputeReceivedMic(signed[0], receipt.MicAlg);
-                entity = signed[0];
-                wasSigned = true;
-            }
-
-            if (entity is ApplicationPkcs7Mime { SecureMimeType: SecureMimeType.CompressedData } compressed)
-            {
-                try { entity = Unwrap(spools, s => _engine.DecompressTo(compressed, s)); }
-                catch (Exception e) when (e is not OperationCanceledException)
+                else if (!wasCompressed && entity is ApplicationPkcs7Mime { SecureMimeType: SecureMimeType.CompressedData } compressed)
                 {
-                    throw new As2DispositionException(As2Disposition.DecompressionFailed, $"decompression failed: {e.Message}", e);
+                    // Bounded while it inflates: a small body can expand to gigabytes.
+                    try { entity = Unwrap(spools, s => _engine.DecompressTo(compressed, new BoundedWriteStream(s, _options.DecompressedLimit, "maxDecompressedSize"))); }
+                    catch (Exception e) when (e is not OperationCanceledException)
+                    {
+                        throw new As2DispositionException(As2Disposition.DecompressionFailed, $"decompression failed: {e.Message}", e);
+                    }
+                    wasCompressed = true;
                 }
+                else
+                    break;
             }
 
             mic ??= _engine.ComputeMic(entity, receipt.MicAlg, includeHeaders: false);
@@ -427,8 +436,8 @@ internal sealed class As2Consumer : IConsumer
             response.StatusCode = StatusCodes.Status200OK;
             response.ContentType = mdnContentType;
             response.Headers[As2Headers.As2Version] = "1.2";
-            if (!string.IsNullOrEmpty(profile.As2From)) response.Headers[As2Headers.As2From] = profile.As2From;
-            if (!string.IsNullOrEmpty(profile.As2To)) response.Headers[As2Headers.As2To] = profile.As2To;
+            if (!string.IsNullOrEmpty(profile.As2From)) response.Headers[As2Headers.As2From] = As2Headers.FormatName(profile.As2From);
+            if (!string.IsNullOrEmpty(profile.As2To)) response.Headers[As2Headers.As2To] = As2Headers.FormatName(profile.As2To);
             response.Headers[As2Headers.MessageId] = $"<{Guid.NewGuid():N}@redb.route>";
             if (!string.IsNullOrEmpty(mdnCte)) response.Headers["Content-Transfer-Encoding"] = mdnCte;
             await response.Body.WriteAsync(mdnBody, http.RequestAborted).ConfigureAwait(false);
@@ -497,8 +506,8 @@ internal sealed class As2Consumer : IConsumer
             content.Headers.TryAddWithoutValidation("Content-Transfer-Encoding", transferEncoding);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
-        if (!string.IsNullOrEmpty(profile.As2From)) request.Headers.TryAddWithoutValidation(As2Headers.As2From, profile.As2From);
-        if (!string.IsNullOrEmpty(profile.As2To)) request.Headers.TryAddWithoutValidation(As2Headers.As2To, profile.As2To);
+        if (!string.IsNullOrEmpty(profile.As2From)) request.Headers.TryAddWithoutValidation(As2Headers.As2From, As2Headers.FormatName(profile.As2From));
+        if (!string.IsNullOrEmpty(profile.As2To)) request.Headers.TryAddWithoutValidation(As2Headers.As2To, As2Headers.FormatName(profile.As2To));
         request.Headers.TryAddWithoutValidation(As2Headers.MessageId, $"<{Guid.NewGuid():N}@redb.route>");
 
         // Runs detached from the request, so nothing above it would see an exception: every outcome is logged here.

@@ -124,6 +124,17 @@ describe("newproject — the dotnet new command", () => {
         assert.equal(displayCommand("dotnet", ["new", "redb-route", "-o", "C:\\My Projects\\x"]),
             "dotnet new redb-route -o \"C:\\My Projects\\x\"");
     });
+
+    it("shows an argument the way a command line reads it back: quotes and trailing backslashes escaped", () => {
+        // A folder ending in a backslash: doubled, or it would escape the closing quote.
+        assert.equal(displayCommand("dotnet", ["-o", "C:\\My Projects\\"]), "dotnet -o \"C:\\My Projects\\\\\"");
+        // A quote inside, with and without backslashes before it.
+        assert.equal(displayCommand("dotnet", [`say "hi"`]), String.raw`dotnet "say \"hi\""`);
+        assert.equal(displayCommand("dotnet", [String.raw`a\"b`]), String.raw`dotnet "a\\\"b"`);
+        // A path without spaces stays as it is; an empty argument stays visible.
+        assert.equal(displayCommand("dotnet", [String.raw`C:\dir\x`]), String.raw`dotnet C:\dir\x`);
+        assert.equal(displayCommand("dotnet", ["new", ""]), `dotnet new ""`);
+    });
 });
 
 function redbTemplate(patch: Partial<RedbTemplate> & { shortName: string }): RedbTemplate {

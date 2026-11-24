@@ -166,7 +166,8 @@ public sealed record EndpointUri(
     /// Redacts <c>key=value</c> secret assignments inside arbitrary text — connection strings
     /// (<c>...;Password=p;...</c>), query fragments, and driver exception messages that may embed
     /// either. Only the value of a key considered sensitive by <see cref="IsSensitiveKey"/> is
-    /// replaced; everything else is preserved verbatim. Never throws.
+    /// replaced, and the password of a URI quoted in the text (<c>amqp://user:password@host</c>);
+    /// everything else is preserved verbatim. Never throws.
     /// <para>
     /// Use this as the backstop for text that is not a parseable endpoint URI. Note that logging an
     /// <see cref="Exception"/> object itself cannot be scrubbed in-process (the formatter renders
@@ -175,8 +176,13 @@ public sealed record EndpointUri(
     /// </summary>
     public static string RedactSecrets(string? text)
     {
-        if (string.IsNullOrEmpty(text) || text.IndexOf('=') < 0)
-            return text ?? string.Empty;
+        if (string.IsNullOrEmpty(text))
+            return string.Empty;
+
+        // A URI quoted in the text may carry a password in its userinfo (amqp://user:password@host).
+        text = RedactUserInfoPasswords(text);
+        if (text.IndexOf('=') < 0)
+            return text;
 
         var sb = new StringBuilder(text.Length);
         var i = 0;
@@ -214,6 +220,49 @@ public sealed record EndpointUri(
 
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Masks the password of every <c>scheme://user:password@host</c> in <paramref name="text"/>: the authority after
+    /// <c>://</c> runs to the next <c>/</c>, <c>?</c>, <c>#</c>, quote or white space, and its userinfo (before the last
+    /// <c>@</c>) keeps the user and loses what follows the first <c>:</c>.
+    /// </summary>
+    private static string RedactUserInfoPasswords(string text)
+    {
+        var marker = text.IndexOf("://", StringComparison.Ordinal);
+        if (marker < 0)
+            return text;
+
+        var sb = new StringBuilder(text.Length);
+        var i = 0;
+        while (marker >= 0)
+        {
+            var authorityStart = marker + 3;
+            var authorityEnd = authorityStart;
+            while (authorityEnd < text.Length && !IsAuthorityEnd(text[authorityEnd]))
+                authorityEnd++;
+
+            sb.Append(text, i, authorityStart - i);
+            var at = text.LastIndexOf('@', authorityEnd - 1, authorityEnd - authorityStart);
+            var colon = at > authorityStart ? text.IndexOf(':', authorityStart, at - authorityStart) : -1;
+            if (colon >= 0)
+            {
+                sb.Append(text, authorityStart, colon - authorityStart + 1);
+                sb.Append(Redacted);
+                sb.Append(text, at, authorityEnd - at);
+            }
+            else
+            {
+                sb.Append(text, authorityStart, authorityEnd - authorityStart);
+            }
+
+            i = authorityEnd;
+            marker = authorityEnd < text.Length ? text.IndexOf("://", authorityEnd, StringComparison.Ordinal) : -1;
+        }
+        sb.Append(text, i, text.Length - i);
+        return sb.ToString();
+    }
+
+    private static bool IsAuthorityEnd(char c) => c is '/' or '?' or '#' or ';' or '"' or '\'' || char.IsWhiteSpace(c);
 
     private static bool IsKeyChar(char c) => char.IsLetterOrDigit(c) || c is '_' or '.' or '-';
 

@@ -73,6 +73,12 @@ public sealed class AgentRunContext
 
     /// <summary>Exchange id of the parent exchange that initiated the run.</summary>
     public required string ExchangeId { get; init; }
+
+    /// <summary>
+    /// The redb instance the endpoint chose for its storage (<c>?redb=</c>, <see cref="LlmKeys.RedbName"/>), or null for
+    /// the registration's default. An observer that writes (the audit) writes there, as the stores do.
+    /// </summary>
+    public string? RedbName { get; init; }
 }
 
 /// <summary>Per-iteration snapshot — usage, stop reason, content shape.</summary>

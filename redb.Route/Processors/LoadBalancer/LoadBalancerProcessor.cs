@@ -76,7 +76,7 @@ public sealed class LoadBalancerProcessor : IProcessor, IAsyncDisposable
                 _strategy.ReportSuccess(selected);
 
                 _logger?.LogDebug("Load balancer: sent to {Endpoint} (failover attempt {Attempt})",
-                    selected, attempt + 1);
+                    EndpointUri.Sanitize(selected), attempt + 1);
                 return;
             }
             catch (OperationCanceledException)
@@ -106,7 +106,7 @@ public sealed class LoadBalancerProcessor : IProcessor, IAsyncDisposable
             await producer.Process(exchange, ct).ConfigureAwait(false);
             _strategy.ReportSuccess(endpoint);
 
-            _logger?.LogDebug("Load balancer: sent to {Endpoint}", endpoint);
+            _logger?.LogDebug("Load balancer: sent to {Endpoint}", EndpointUri.Sanitize(endpoint));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

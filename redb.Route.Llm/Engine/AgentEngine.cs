@@ -195,7 +195,11 @@ public sealed class AgentEngine : IAgentEngine
             FactoryName = request.Factory.Name,
             ProviderId = request.Factory.Provider,
             ModelId = request.Factory.ModelId ?? string.Empty,
-            ExchangeId = request.Exchange.ExchangeId
+            ExchangeId = request.Exchange.ExchangeId,
+            RedbName = request.Exchange.Properties.TryGetValue(LlmKeys.RedbName, out var redbName)
+                       && redbName is string { Length: > 0 } chosen
+                ? chosen
+                : null
         };
         await _observer.OnRunStartedAsync(runCtx, ct).ConfigureAwait(false);
 
@@ -303,7 +307,7 @@ public sealed class AgentEngine : IAgentEngine
                 }
 
                 var pre = await OutsideTransactionAsync(
-                    () => _budget.PreCheckAsync(request.ConversationId, request.Budget, totalUsage, ct)).ConfigureAwait(false);
+                    () => _budget.PreCheckAsync(request.ConversationId, request.Budget, totalUsage, request.Exchange, ct)).ConfigureAwait(false);
                 if (!pre.Continue)
                 {
                     _logger?.LogInformation("Budget pre-check stopped run: {Reason}", pre.Reason);
@@ -394,7 +398,7 @@ public sealed class AgentEngine : IAgentEngine
                 PublishConversationContext(request, transcript, iter, totalUsage);
 
                 var post = await OutsideTransactionAsync(() => _budget.RecordAndCheckAsync(
-                    request.ConversationId, request.Budget, iterUsage, totalUsage, ct)).ConfigureAwait(false);
+                    request.ConversationId, request.Budget, iterUsage, totalUsage, request.Exchange, ct)).ConfigureAwait(false);
                 if (!post.Continue)
                 {
                     _logger?.LogInformation("Budget post-check stopped run: {Reason}", post.Reason);

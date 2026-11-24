@@ -1,5 +1,7 @@
 # redb.Route.DataFormats.Yaml
 
+> Documentation and articles: <https://redbase.app>
+
 YAML as a redb.Route data format, on [YamlDotNet](https://github.com/aaubry/YamlDotNet).
 
 ```csharp

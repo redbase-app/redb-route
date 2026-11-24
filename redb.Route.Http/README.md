@@ -1,5 +1,7 @@
 # redb.Route.Http
 
+> Documentation and articles: <https://redbase.app>
+
 HTTP/HTTPS transport for redb.Route. HttpClient-based producer (outbound requests) and Kestrel-based consumer (webhook receiver) with CORS, auth, and streaming.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Http?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Http)

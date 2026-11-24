@@ -1,5 +1,7 @@
 # redb.Route.As2
 
+> Documentation and articles: <https://redbase.app>
+
 **AS2 (RFC 4130) B2B/EDI transport for the [redb.Route](../redb.Route) integration framework.** Exchange business
 documents with trading partners over HTTP(S) as signed and encrypted S/MIME messages, confirmed by MDN receipts:
 the protocol retail, logistics and EDI networks run on.
@@ -56,7 +58,7 @@ context.AddToRegistry("walmart", new As2ConnectionFactory
 |---|---|---|
 | `OurCertificate` | none | Our S/MIME certificate with its private key. Required when anything is signed or encrypted, or a signed MDN is agreed. |
 | `PartnerCertificate` | none | The partner's certificate. Required in the same cases. It is **pinned**: a signature is accepted only when made by this certificate, not merely by a valid one. |
-| `As2From` / `As2To` | required | Our and the partner's AS2 identifiers (RFC 4130 §6.2). |
+| `As2From` / `As2To` | required | Our and the partner's AS2 identifiers (RFC 4130 §6.2). Written as they are, or in double quotes when one is not an atom (a space, `"` or `\`). |
 | `PartnerUrl` | from the send URI | Where the producer POSTs. If both the factory and the send URI name one, they must be the same. |
 | `Sign` / `Encrypt` / `Compress` | `true` / `true` / `false` | What we do on send, and what we require on receive (an unsigned or unencrypted message where the agreement requires it is refused). |
 | `SignAlg` | `sha-256` | Signature digest, and the MIC algorithm. |
@@ -139,7 +141,9 @@ What happens to a request, in order:
 2. **Who.** `AS2-From` must be the partner's identifier and `AS2-To` ours (case-sensitive, a quoted-string is
    unquoted, RFC 4130 §6.2).
 3. **Decrypt** with `OurCertificate`, **verify** the signature against the pinned `PartnerCertificate` (which must be
-   within its validity period), **decompress**.
+   within its validity period), **decompress** (up to `maxDecompressedSize`, the body limit by default; past it the
+   message is refused with `decompression-failed`). A message compressed before it was signed and one signed before it
+   was compressed (RFC 5402 §3.3, OpenAS2's compress-after-signing) are both unwrapped; the MIC is over the signed part.
 4. **Policy.** A message not signed or not encrypted where the agreement requires it is refused.
 5. **Duplicates** (with `idempotentRepository`): a `Message-ID` processed before is answered and not delivered.
 6. **Route.** The decrypted document is the body; its content type is `Message.ContentType` (e.g. `application/edi-x12`).
@@ -269,6 +273,7 @@ AES-GCM is not supported. An unsupported or unallowed algorithm stops the endpoi
 | `mode` | receive | `message` | `mdn` for an asynchronous-MDN receiver (`As2.ReceiveMdn`). |
 | `useTls`, `sslCertPath`, `sslCertPassword` | receive | off | TLS of the receive server; the `as2s` scheme sets `useTls`. |
 | `maxRequestBodySize` | receive | 100 MB | Larger requests are answered 413 before they are read. |
+| `maxDecompressedSize` | receive | `maxRequestBodySize` | A compressed message inflating past this is refused with `decompression-failed`. |
 | `maxConcurrentRequests`, `requestQueueLimit`, `rejectStatusCode`, `retryAfterSeconds` | receive | `0`, `0`, `429`, `1` | Admission limit, below. |
 | `idempotentRepository` | receive | none | Duplicate detection, above. |
 | `streamBody` | receive | `false` | The body is the spooled payload as a `Stream` (closed with the exchange) instead of `byte[]`. |
@@ -276,7 +281,7 @@ AES-GCM is not supported. An unsupported or unallowed algorithm stops the endpoi
 | `maxResponseBodySize` | send | 4 MB | The synchronous MDN is read up to this; larger fails the send without reading it. |
 
 The fluent builder has the same knobs: `.Host()`, `.Port()`, `.Tls()`, `.ConnectionFactory()`,
-`.MaxRequestBodySize()`, `.MaxResponseBodySize()`, `.IdempotentRepository()`, `.StreamBody()`, `.MaxConcurrentRequests()`,
+`.MaxRequestBodySize()`, `.MaxDecompressedSize()`, `.MaxResponseBodySize()`, `.IdempotentRepository()`, `.StreamBody()`, `.MaxConcurrentRequests()`,
 `.RejectStatusCode()`, `.RetryAfterSeconds()`. The URI form:
 
 ```

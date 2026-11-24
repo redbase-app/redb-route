@@ -105,7 +105,6 @@ public sealed class TelegramProducer : ConnectableProducer
         cts.CancelAfter(TimeSpan.FromSeconds(_options.SendTimeoutSeconds));
         var reqCt = cts.Token;
 
-        ChatId? chatIdForLog = null;
         try
         {
             // answer is addressed by callbackQueryId, download by fileId — neither needs a chat.
@@ -120,7 +119,6 @@ public sealed class TelegramProducer : ConnectableProducer
             else
             {
                 var chatId = ResolveChatId(exchange);
-                chatIdForLog = chatId;
                 activity?.SetTag("messaging.destination.name", chatId.ToString());
                 activity?.SetTag("messaging.telegram.chat.id", chatId.ToString());
 
@@ -154,7 +152,7 @@ public sealed class TelegramProducer : ConnectableProducer
         catch (ApiRequestException ex)
         {
             activity.RecordFailure(ex);
-            LogPublishDiagnostics(ex, exchange, chatIdForLog);
+            LogPublishDiagnostics(ex, exchange);
             throw;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
@@ -225,7 +223,7 @@ public sealed class TelegramProducer : ConnectableProducer
         ), ct).ConfigureAwait(false);
 
         SetSentMessageId(exchange, result);
-        Logger?.LogDebug("Telegram: sent message {MessageId} to chat {ChatId}", result.MessageId, chatId);
+        Logger?.LogDebug("Telegram: sent message {MessageId}", result.MessageId);
     }
 
     private async Task SendDocumentAsync(
@@ -255,7 +253,7 @@ public sealed class TelegramProducer : ConnectableProducer
         ), ct).ConfigureAwait(false);
 
         SetSentMessageId(exchange, result);
-        Logger?.LogDebug("Telegram: sent document {MessageId} to chat {ChatId}", result.MessageId, chatId);
+        Logger?.LogDebug("Telegram: sent document {MessageId}", result.MessageId);
     }
 
     private async Task SendPhotoAsync(
@@ -285,7 +283,7 @@ public sealed class TelegramProducer : ConnectableProducer
         ), ct).ConfigureAwait(false);
 
         SetSentMessageId(exchange, result);
-        Logger?.LogDebug("Telegram: sent photo {MessageId} to chat {ChatId}", result.MessageId, chatId);
+        Logger?.LogDebug("Telegram: sent photo {MessageId}", result.MessageId);
     }
 
     private async Task AnswerCallbackQueryAsync(
@@ -305,7 +303,7 @@ public sealed class TelegramProducer : ConnectableProducer
         {
             null       => null,
             string s   => s,
-            var other  => other.ToString()
+            var other  => BodyText.Of(other)
         };
 
         activity?.SetTag("messaging.destination.name", callbackQueryId);
@@ -352,7 +350,7 @@ public sealed class TelegramProducer : ConnectableProducer
              .ConfigureAwait(false);
 
         SetSentMessageId(exchange, result);
-        Logger?.LogDebug("Telegram: edited message {MessageId} in chat {ChatId}", messageId, chatId);
+        Logger?.LogDebug("Telegram: edited message {MessageId}", messageId);
     }
 
     private async Task DeleteMessageAsync(
@@ -367,7 +365,7 @@ public sealed class TelegramProducer : ConnectableProducer
             c => bot.DeleteMessage(chatId, messageId, cancellationToken: c), ct)
             .ConfigureAwait(false);
 
-        Logger?.LogDebug("Telegram: deleted message {MessageId} in chat {ChatId}", messageId, chatId);
+        Logger?.LogDebug("Telegram: deleted message {MessageId}", messageId);
     }
 
     // ── Download ──────────────────────────────────────────────────────────────
@@ -584,7 +582,7 @@ public sealed class TelegramProducer : ConnectableProducer
             string s => s,
             byte[] b => System.Text.Encoding.UTF8.GetString(b),
             null     => null,
-            _        => body.ToString()
+            _        => BodyText.Of(body)
         };
 
         if (string.IsNullOrEmpty(text))
@@ -777,7 +775,7 @@ public sealed class TelegramProducer : ConnectableProducer
         exchange.In.Headers[TelegramHeaders.SentMessageId] = result.MessageId;
     }
 
-    private void LogPublishDiagnostics(ApiRequestException ex, IExchange exchange, ChatId? chatId)
+    private void LogPublishDiagnostics(ApiRequestException ex, IExchange exchange)
     {
         var body     = exchange.In.Body;
         var bodySize = body switch
@@ -789,10 +787,9 @@ public sealed class TelegramProducer : ConnectableProducer
         };
 
         Logger?.LogError(ex,
-            "Telegram publish failed: mode={Mode} chatId={ChatId} parseMode={ParseMode} " +
+            "Telegram publish failed: mode={Mode} parseMode={ParseMode} " +
             "bodySize={BodySize} errorCode={ErrorCode} retryAfter={RetryAfter}",
             _endpoint.Mode,
-            chatId?.ToString() ?? "(unresolved)",
             _options.ParseMode ?? "None",
             bodySize,
             ex.ErrorCode,

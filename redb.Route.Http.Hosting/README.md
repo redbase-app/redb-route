@@ -1,5 +1,7 @@
 # redb.Route.Http.Hosting
 
+> Documentation and articles: <https://redbase.app>
+
 Shared Kestrel HTTP hosting infrastructure for the [redb.Route](../redb.Route) ESB framework.
 
 Provides `SharedHttpServerManager` — a multiplexing HTTP server (one Kestrel per `host:port`, many routes)

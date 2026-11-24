@@ -118,9 +118,25 @@ export function dotnetNewArguments(request: NewProjectRequest): string[] {
     return args;
 }
 
-/** The command as the Output channel shows it, quoted where a shell would need it. */
+/**
+ * The command as the Output channel shows it, quoted where a shell would need it. Display only: the process is
+ * started without a shell, with the arguments as an array.
+ */
 export function displayCommand(executable: string, args: string[]): string {
-    return [executable, ...args].map(a => /[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a).join(" ");
+    return [executable, ...args].map(quoteArgument).join(" ");
+}
+
+/**
+ * One argument as a command line reads it back (the Windows argv rules and a POSIX double-quoted word agree here): a
+ * quote is escaped with a backslash, and the backslashes right before a quote or at the end are doubled, so a folder
+ * like `C:\dir\` does not swallow the closing quote. Other backslashes, as in a Windows path, stay single.
+ */
+function quoteArgument(argument: string): string {
+    if (argument !== "" && !/[\s"]/.test(argument)) return argument;
+    const escaped = argument
+        .replace(/(\\*)"/g, (_match, slashes: string) => `${slashes}${slashes}\\"`)
+        .replace(/(\\+)$/, (_match, slashes: string) => `${slashes}${slashes}`);
+    return `"${escaped}"`;
 }
 
 // ── the page ─────────────────────────────────────────────────────────

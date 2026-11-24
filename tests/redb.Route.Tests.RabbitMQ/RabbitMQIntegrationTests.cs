@@ -272,6 +272,31 @@ public sealed class RabbitMQIntegrationTests
     }
 
     [Fact]
+    public async Task A_failed_transactional_batch_reports_the_brokers_error_not_a_disposed_channel()
+    {
+        // The broker closes the channel (404 NOT_FOUND) for a publish to an exchange that does not exist; the commit fails.
+        var uri = EndpointUriParser.Parse(
+            $"rabbitmq://tx-cause?host={Host}&port={Port}&username=admin&password=admin" +
+            $"&exchange=missing-{Guid.NewGuid():N}&routingKey=x&transacted=true");
+        var endpoint = (RabbitMQEndpoint)new RabbitMQComponent().CreateEndpoint(uri);
+        var producer = (RabbitMQProducer)endpoint.CreateProducer();
+        await producer.Start();
+        try
+        {
+            var send = () => InTransaction(new Exchange(new Message("nowhere")), (ex, ct) => producer.Process(ex, ct));
+
+            var failure = (await send.Should().ThrowAsync<Exception>()).Which;
+            failure.Should().NotBeOfType<ObjectDisposedException>("the cause is the broker's, not the closed channel's");
+            failure.ToString().Should().Contain("NOT_FOUND");
+        }
+        finally
+        {
+            await producer.Stop();
+            await endpoint.Stop();
+        }
+    }
+
+    [Fact]
     public async Task Producer_without_transacted_joins_the_block_and_sends_nothing_when_it_fails()
     {
         var received = await SendFromAFailedBlock($"test-join-{Guid.NewGuid():N}", producerParams: null);

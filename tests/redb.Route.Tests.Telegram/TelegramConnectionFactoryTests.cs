@@ -85,4 +85,33 @@ public sealed class TelegramConnectionFactoryTests
         uri.Should().Contain("token=");
         uri.Should().StartWith("telegram://send?token=");
     }
+
+    [Fact]
+    public void TheTokenInARequestUrlPath_IsMaskedInTheEndpointsLastErrorWarningAndRefusal()
+    {
+        // The Bot API puts the token in the path (https://api.telegram.org/bot<token>/sendMessage), where no key=value
+        // masking finds it; the endpoint knows its token and masks it by value, plain or URL-escaped.
+        var component = Wire("support-bot", new TelegramConnectionFactory { Token = Token });
+        var endpoint = (TelegramEndpoint)component.CreateEndpoint(EndpointUriParser.Parse("telegram://send?connectionFactory=support-bot&chatId=1"));
+
+        endpoint.RecordError(new HttpRequestException($"POST https://api.telegram.org/bot{Token}/sendMessage failed"));
+        endpoint.RecordWarning($"retrying https://api.telegram.org/bot{Uri.EscapeDataString(Token)}/getUpdates");
+        endpoint.RecordRefused($"refused for bot{Token}");
+
+        endpoint.LastErrorMessage.Should().Be("POST https://api.telegram.org/bot****/sendMessage failed");
+        endpoint.LastWarningMessage.Should().Be("retrying https://api.telegram.org/bot****/getUpdates");
+        endpoint.LastRefusalMessage.Should().Be("refused for bot****");
+    }
+
+    [Fact]
+    public void ATokenGivenInTheUri_IsMaskedByValueToo()
+    {
+        var component = new TelegramComponent();
+        new RouteContext().AddComponent(component);
+        var endpoint = (TelegramEndpoint)component.CreateEndpoint(EndpointUriParser.Parse($"telegram://send?token={Token}&chatId=1"));
+
+        endpoint.RecordError(new HttpRequestException($"GET https://api.telegram.org/bot{Token}/getMe: 401"));
+
+        endpoint.LastErrorMessage.Should().NotContain(Token).And.Contain("bot****/getMe");
+    }
 }

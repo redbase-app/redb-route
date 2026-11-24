@@ -1,6 +1,7 @@
 using System.Globalization;
 using redb.Route.Abstractions;
 using redb.Route.Expressions;
+using redb.Route.Core;
 
 namespace redb.Route.Aggregation;
 
@@ -188,7 +189,7 @@ public static class AggregationStrategies
             }
 
             var running = old.Properties.ContainsKey(FoldMarker) && old.In.Body is { } body && IsNumber(body)
-                ? Convert.ToDecimal(body, CultureInfo.InvariantCulture)
+                ? RouteDecimal.From(body)
                 : Number(expression.Evaluate<object>(old), expression);
             old.In.Body = combine(running, incoming);
             old.Properties[FoldMarker] = true;
@@ -199,7 +200,7 @@ public static class AggregationStrategies
     private static decimal Number(object? value, IExpression expression) => value switch
     {
         null => throw new InvalidOperationException($"Aggregation: expression '{expression}' evaluated to null; a number is required."),
-        _ when IsNumber(value) => Convert.ToDecimal(value, CultureInfo.InvariantCulture),
+        _ when IsNumber(value) => RouteDecimal.From(value),
         string s when decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed) => parsed,
         _ => throw new InvalidOperationException($"Aggregation: expression '{expression}' evaluated to '{value}' ({value.GetType().Name}); a number is required."),
     };

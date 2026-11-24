@@ -1,5 +1,7 @@
 # redb.Route.DataFormats.Avro
 
+> Documentation and articles: <https://redbase.app>
+
 Apache Avro (binary encoding) as a redb.Route data format, on [Chr.Avro](https://github.com/ch-robinson/dotnet-avro):
 the schema is built from the CLR type, so a plain POCO round-trips without a `.avsc` file; an explicit
 schema can be given as JSON.

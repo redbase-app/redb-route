@@ -303,7 +303,7 @@ public sealed class KafkaConsumer : DrainableConsumer
         if (_options.AckMode != AckMode.Manual)
             return null;
 
-        var offered = new KafkaConsumedOffsets(_consumer!, commitAction, await ClusterIdAsync().ConfigureAwait(false));
+        var offered = new KafkaConsumedOffsets(_consumer!, commitAction, await ClusterIdAsync().ConfigureAwait(false), exchange);
         exchange.Properties[KafkaConsumedOffsets.PropertyKey] = offered;
         return offered;
     }

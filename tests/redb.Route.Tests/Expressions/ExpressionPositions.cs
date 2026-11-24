@@ -116,7 +116,7 @@ internal static class ExpressionPositions
         string s => $"\"{Escape(s)}\"",
         bool b => b ? "true" : "false",
         int or long or short or byte => $"{Convert.ToInt64(value, CultureInfo.InvariantCulture)}:{value.GetType().Name}",
-        double or float or decimal => $"{Convert.ToDecimal(value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture)}:{value.GetType().Name}",
+        double or float or decimal => $"{redb.Route.Core.RouteDecimal.From(value).ToString(CultureInfo.InvariantCulture)}:{value.GetType().Name}",
         System.Collections.ICollection collection => $"<{value.GetType().Name} count={collection.Count}>",
         _ => $"<{value.GetType().Name}>"
     };

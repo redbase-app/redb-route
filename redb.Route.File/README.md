@@ -1,5 +1,7 @@
 # redb.Route.File
 
+> Documentation and articles: <https://redbase.app>
+
 File system transport for redb.Route. Polling consumer with glob filtering, read locking, and idempotency. Atomic file producer with temp-file writes, append, and conflict strategies.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.File?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.File)

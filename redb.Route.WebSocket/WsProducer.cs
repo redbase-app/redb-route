@@ -184,7 +184,7 @@ public sealed class WsProducer : ConnectableProducer
             Stream s => ReadStream(s),
             string str => _encoding.GetBytes(str),
             null => [],
-            _ => _encoding.GetBytes(body.ToString()!)
+            _ => _encoding.GetBytes(BodyText.Of(body))
         };
 
         return (data, wsType);

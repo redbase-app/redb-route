@@ -150,6 +150,51 @@ public class As2ReceiveSecurityTests
         ReadMdn(response).IsPositive.Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData("US", "US")]
+    [InlineData("0123456780000", "0123456780000")]
+    [InlineData("as2_company!#~", "as2_company!#~")]
+    [InlineData("AS2 Test", "\"AS2 Test\"")]
+    [InlineData("a\"b", "\"a\\\"b\"")]
+    [InlineData("a\\b", "\"a\\\\b\"")]
+    public void As2Name_IsWrittenAtomic_OrQuotedWhenItIsNotAnAtom(string name, string wire)
+    {
+        // RFC 4130 §6.2: the quoted form only when the name is not an AS2-atomic-name.
+        As2Headers.FormatName(name).Should().Be(wire);
+        As2Consumer.IsAgreedIdentifier(wire, name).Should().BeTrue("what we write reads back as the same name");
+    }
+
+    [Fact]
+    public async Task Producer_QuotesAnAs2IdentifierThatIsNotAnAtom()
+    {
+        using var trap = new As2Trap(FreePort());
+        await using var context = new RouteContext();
+        context.AddComponent(new As2Component());
+        context.AddToRegistry("them", Sender(f => { f.As2From = "THEM CORP"; f.MdnMode = As2MdnMode.None; }));
+        var producer = context.GetEndpoint(As2Dsl.Send(trap.Url("/as2")).ConnectionFactory("them")).CreateProducer();
+        await producer.Start();
+
+        await producer.Process(new Exchange(new Message("PO*QUOTE~")));
+
+        var headers = trap.Requests.Single().Headers;
+        headers["AS2-From"].Should().Be("\"THEM CORP\"");
+        headers["AS2-To"].Should().Be("US");
+    }
+
+    [Fact]
+    public async Task Receiver_AnswersWithItsAs2IdentifierQuoted_WhenItIsNotAnAtom()
+    {
+        var (context, delivered, port) = await StartReceiver(Receiver(f => f.As2From = "US EAST"));
+        await using var _ = context;
+
+        var response = await PostAsync(port, "/in", BuildMessage("PO*QUOTED-US~", Cert, Cert),
+            new Dictionary<string, string?> { ["AS2-To"] = "\"US EAST\"" });
+
+        delivered.Should().ContainSingle();
+        response.Headers.GetValues("AS2-From").Single().Should().Be("\"US EAST\"");
+        response.Headers.GetValues("AS2-To").Single().Should().Be("THEM");
+    }
+
     [Fact]
     public async Task Message_WithAs2IdentifiersInAnotherCase_IsRefused()
     {

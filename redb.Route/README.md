@@ -1,5 +1,7 @@
 # redb.Route
 
+> Documentation and articles: <https://redbase.app>
+
 Core ESB engine — async-first message routing with fluent C# DSL, 30+ EIP processors, unified expression engine with 17 predicates, OpenTelemetry telemetry, and built-in components (Direct, SEDA, Timer, Mock, Log).
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route)
@@ -438,6 +440,9 @@ no credentials; and a business key goes on a span, not in baggage, which travels
 
 A few behaviours are easy to get wrong from reading a single method, so they are stated here.
 
+- **A body a producer has no wire form for.** It is sent as its own text (`ToString()` overridden: a number, a record,
+  a JSON node). A list or an object whose text would only be its type name is refused, naming the endpoint
+  (`BodyText`).
 - **A stopped exchange.** `exchange.Stop()` stops the pipeline from running its remaining steps; it is not an
   exception. A `DoFinally()` block still runs, because it is the C# `finally` of `TryCatchProcessor`. A failure and a
   cancellation behave the same way.

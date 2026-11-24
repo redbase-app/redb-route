@@ -1,5 +1,7 @@
 # redb.Route.Soap
 
+> Documentation and articles: <https://redbase.app>
+
 **SOAP / WSDL web-service transport for the [redb.Route](../redb.Route) ESB framework**, oriented to Apache
 Camel's `camel-cxf`. Call SOAP services and host SOAP endpoints as ordinary route steps — with the two SOAP
 header planes, SOAP 1.1 / 1.2, faults, WS-Security (UsernameToken + XML-Signature + XML-Encryption), MTOM

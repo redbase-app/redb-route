@@ -1,5 +1,7 @@
 # redb.Route.Sftp
 
+> Documentation and articles: <https://redbase.app>
+
 SFTP transport for redb.Route. Polling consumer and atomic producer via SSH.NET — key/password auth, proxy, idempotency, glob filtering, temp-file upload, chmod, and recursive directory traversal.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Sftp?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Sftp)

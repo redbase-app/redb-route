@@ -2179,6 +2179,7 @@
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="idempotentRepository" type="xs:string" />
     <xs:attribute name="maxConcurrentRequests" type="xs:int" />
+    <xs:attribute name="maxDecompressedSize" type="xs:long" />
     <xs:attribute name="maxRequestBodySize" type="xs:long" />
     <xs:attribute name="maxResponseBodySize" type="xs:long" />
     <xs:attribute name="mdnMode">
@@ -2250,6 +2251,7 @@
     <xs:attribute name="host" type="xs:string" />
     <xs:attribute name="idempotentRepository" type="xs:string" />
     <xs:attribute name="maxConcurrentRequests" type="xs:int" />
+    <xs:attribute name="maxDecompressedSize" type="xs:long" />
     <xs:attribute name="maxRequestBodySize" type="xs:long" />
     <xs:attribute name="maxResponseBodySize" type="xs:long" />
     <xs:attribute name="mdnMode">

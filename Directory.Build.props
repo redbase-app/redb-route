@@ -15,9 +15,10 @@
     <Product>REDB Route</Product>
     <Copyright>Copyright В© redbase 2026</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/redbase-app/redb</RepositoryUrl>
+    <PackageProjectUrl>https://redbase.app</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/redbase-app/redb-route</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <Version>4.7.2</Version>
-    <PackageVersion>4.7.2</PackageVersion>
+    <Version>4.7.5</Version>
+    <PackageVersion>4.7.5</PackageVersion>
   </PropertyGroup>
 </Project>

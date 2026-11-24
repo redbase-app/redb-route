@@ -65,12 +65,12 @@ internal sealed class RoutingSlipProcessor : IProcessor, IAsyncDisposable
             }
             catch (Exception ex) when (_ignoreInvalidEndpoints)
             {
-                _logger?.LogWarning(ex, "Routing Slip: ignoring invalid endpoint '{Uri}'", uri);
+                _logger?.LogWarning(ex, "Routing Slip: ignoring invalid endpoint '{Uri}'", EndpointUri.Sanitize(uri));
                 continue;
             }
 
             exchange.Properties[SlipEndpointProperty] = uri;
-            _logger?.LogDebug("Routing Slip: hop {Hop}/{Total} → {Uri}", i + 1, uris.Count, uri);
+            _logger?.LogDebug("Routing Slip: hop {Hop}/{Total} → {Uri}", i + 1, uris.Count, EndpointUri.Sanitize(uri));
 
             await Core.CountedSend.Process(pair.Endpoint, pair.Producer, exchange, ct).ConfigureAwait(false);
 

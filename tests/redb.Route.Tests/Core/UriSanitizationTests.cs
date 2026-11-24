@@ -119,6 +119,19 @@ public class UriSanitizationTests
         EndpointUri.RedactSecrets(input).Should().Be(expected);
     }
 
+    [Theory]
+    [InlineData("None of the endpoints were reachable: amqp://svc:Sup3rS3cret@broker:5672/vhost",
+                "None of the endpoints were reachable: amqp://svc:****@broker:5672/vhost")]
+    [InlineData("connect to 'redis://default:pw@cache:6379' failed", "connect to 'redis://default:****@cache:6379' failed")]
+    [InlineData("a://u:p@h1 then b://v:q@h2?password=x", "a://u:****@h1 then b://v:****@h2?password=****")]
+    [InlineData("ftp://anonymous@host/dir", "ftp://anonymous@host/dir")]
+    [InlineData("see https://example.com/a?b=c", "see https://example.com/a?b=c")]
+    [InlineData("Endpoint=amqps://u:p@ns;SharedAccessKey=k", "Endpoint=amqps://u:****@ns;SharedAccessKey=****")]
+    public void RedactSecrets_MasksThePasswordOfAQuotedUri(string input, string expected)
+    {
+        EndpointUri.RedactSecrets(input).Should().Be(expected);
+    }
+
     [Fact]
     public void RedactSecrets_KeepsNonSecretKeysAndSurroundingText()
     {

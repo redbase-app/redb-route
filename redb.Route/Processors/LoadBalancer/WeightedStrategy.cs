@@ -30,7 +30,7 @@ public sealed class WeightedStrategy : ILoadBalancerStrategy
         foreach (var (uri, weight) in endpointWeights)
         {
             if (weight <= 0)
-                throw new ArgumentException($"Weight for '{uri}' must be positive, got {weight}.", nameof(endpointWeights));
+                throw new ArgumentException($"Weight for '{EndpointUri.Sanitize(uri)}' must be positive, got {weight}.", nameof(endpointWeights));
 
             for (var i = 0; i < weight; i++)
                 expanded.Add(uri);

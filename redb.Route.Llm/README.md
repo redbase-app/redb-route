@@ -1,5 +1,7 @@
 # redb.Route.Llm
 
+> Documentation and articles: <https://redbase.app>
+
 > Internal package README. The NuGet description is separate.
 > Long-form docs live under [doc/](doc/).
 
@@ -564,6 +566,52 @@ covered in [doc/RAG.md](doc/RAG.md).)
 > agents) and a tour of all 9 schemas — see [`doc/STORAGE.md`](doc/STORAGE.md).
 > That guide shows *why* each surface matters and how a `.From("kafka://…").To("llm://…")`
 > route lights up persistence with a single header.
+
+### All of the agent's memory in a separate named database
+
+Conversations, tool calls with their input and output, costs and the knowledge base are not business data. To keep
+them in a database of their own, name a redb instance for them, either per endpoint or once at registration:
+
+- `?redb=<name>` on the `llm:` endpoint decides for everything that endpoint writes: transcripts, approvals,
+  prompts, the knowledge base, the tool-call audit and the conversation's accumulated cost.
+- `AddRedbLlmStorage("<name>")` makes `<name>` the default of every store, the audit and the budget, for endpoints
+  without `?redb=`. An endpoint's `?redb=` still wins.
+
+In Tsak the name is a named instance of the context's `Redb` section:
+
+```jsonc
+"Tsak": {
+  "Contexts": {
+    "agents": {
+      "Redb": {
+        "agent-memory": {
+          "Provider": "postgres",
+          "ConnectionString": "Host=db;Database=agent_memory;Username=app;Password=secret",
+          "UsePro": true
+        }
+      }
+    }
+  }
+}
+```
+
+```csharp
+route.Services.AddRedbLlmStorage("agent-memory");
+```
+
+A named instance does not create its schema at start unless it is the context's `RedbInstanceName`; create the
+database's schema beforehand otherwise, as for any named instance.
+
+One part does not follow the name: the **reservation of tool idempotency keys** goes through the host's registered
+`IIdempotentRepository`, so it lives in that repository's database, while the stored tool outputs follow the name. To
+keep the reservations in the agent's database as well, register the repository on the named instance yourself. That
+repository is the host's single `IIdempotentRepository`, so whatever else resolves it from DI moves with it:
+
+```csharp
+route.Services.AddSingleton<IIdempotentRepository>(sp => new RedbIdempotentRepository(
+    () => sp.GetRequiredService<IRouteContext>().CreateRedbScope("agent-memory"),
+    new RedbIdempotentOptions { ProcessorName = "llm-tools" }));
+```
 
 ## URI reference
 

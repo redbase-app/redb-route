@@ -129,9 +129,13 @@ public sealed class IbmMqConsumer : IConsumer
                 }
                 else
                 {
-                    var openOptions = MQC.MQOO_INPUT_SHARED | MQC.MQOO_FAIL_IF_QUIESCING;
+                    // INQUIRE: the poison chain reads the queue's BOTHRESH and BOQNAME.
+                    var openOptions = MQC.MQOO_INPUT_SHARED | MQC.MQOO_INQUIRE | MQC.MQOO_FAIL_IF_QUIESCING;
                     worker.Queue = qm.AccessQueue(_endpoint.Destination, openOptions);
                 }
+
+                if (i == 0)
+                    _poison = ResolvePoisonChain(qm, worker.Queue);
 
                 worker.Loop = Task.Run(() => ReceiveLoopAsync(worker, _cts.Token), _cts.Token);
                 _workers.Add(worker);
@@ -330,6 +334,12 @@ public sealed class IbmMqConsumer : IConsumer
             mqMsg.ReplyToQueueName?.Trim(),
             mqMsg.MessageType);
 
+        // A poison message (backed out backoutThreshold times) goes to the backout queue instead of the route, in the
+        // same unit of work as its read, as the IBM MQ classes for JMS requeue it before delivery. Checked before the
+        // route: a message that fails every time never reaches a check after it.
+        if (await DivertPoisonAsync(worker, mqMsg).ConfigureAwait(false))
+            return;
+
         var exchange = CreateExchange(mqMsg);
 
         _logger?.LogDebug(
@@ -353,12 +363,6 @@ public sealed class IbmMqConsumer : IConsumer
             if (!string.IsNullOrWhiteSpace(mqMsg.ReplyToQueueName))
             {
                 await SendReplyAsync(worker, exchange, mqMsg, ct).ConfigureAwait(false);
-            }
-
-            // Handle backout threshold
-            if (_options.BackoutThreshold > 0 && mqMsg.BackoutCount >= _options.BackoutThreshold)
-            {
-                await MoveToBackoutQueueAsync(worker, mqMsg, ct).ConfigureAwait(false);
             }
 
             // Commit in non-transacted mode is implicitly done by MQGET without syncpoint. In transacted mode the
@@ -533,32 +537,105 @@ public sealed class IbmMqConsumer : IConsumer
         }
     }
 
-    // ── Backout queue ──
+    // ── Poison messages: the provider's chain ──
 
-    private async Task MoveToBackoutQueueAsync(Worker worker, MQMessage mqMsg, CancellationToken ct)
+    /// <summary>
+    /// Where a poison message goes, as the IBM MQ classes for JMS decide it: the backout threshold and backout queue of
+    /// the endpoint when set, else the input queue's own BOTHRESH and BOQNAME; with a threshold in force and no backout
+    /// queue, the queue manager's dead letter queue (DEADQ). <see cref="Threshold"/> is 0 when the consumer does not read
+    /// under syncpoint (a message read without it is never backed out).
+    /// </summary>
+    private sealed record PoisonChain(int Threshold, string? BackoutQueue, string? DeadLetterQueue)
     {
-        var boqName = _options.BackoutQueue;
-        if (string.IsNullOrWhiteSpace(boqName))
+        public string? Target => BackoutQueue ?? DeadLetterQueue;
+    }
+
+    private PoisonChain _poison = new(0, null, null);
+
+    /// <summary>
+    /// Resolves the chain once, with the first worker's connection: the input queue's BOTHRESH and BOQNAME (inquired on
+    /// the opened queue) and the queue manager's DEADQ, the endpoint's options over them. A threshold in force with
+    /// neither a backout queue nor a dead letter queue cannot work: the start fails.
+    /// </summary>
+    private PoisonChain ResolvePoisonChain(MQQueueManager qm, MQQueue? queue)
+    {
+        var syncpoint = _options.Transacted == true;
+        var threshold = _options.BackoutThreshold;
+        var backoutQueue = Blank(_options.BackoutQueue);
+        if (queue is not null)
         {
-            _logger?.LogWarning("Message exceeded backout threshold but no backout queue configured");
-            return;
+            if (threshold <= 0)
+                threshold = queue.BackoutThreshold;
+            backoutQueue ??= Blank(queue.BackoutRequeueName);
         }
+        var deadLetterQueue = Blank(qm.DeadLetterQueueName);
+
+        if (syncpoint && threshold > 0 && backoutQueue is null && deadLetterQueue is null)
+            throw new InvalidOperationException(
+                $"IBM MQ consumer on '{_endpoint.Destination}': a backout threshold of {threshold} is in force, but there is " +
+                "neither a backout queue (backoutQueue, or the queue's BOQNAME) nor a dead letter queue on the queue " +
+                "manager (DEADQ): a poison message would have nowhere to go.");
+
+        return new PoisonChain(syncpoint ? threshold : 0, backoutQueue, deadLetterQueue);
+
+        static string? Blank(string? name) => string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+    }
+
+    /// <summary>
+    /// A message read under syncpoint that was backed out as often as the threshold goes to the backout queue (or the
+    /// dead letter queue) and the unit of work commits, instead of the route running it again. <c>true</c> when the
+    /// message was taken care of here; <c>false</c> when it goes to the route.
+    /// </summary>
+    private Task<bool> DivertPoisonAsync(Worker worker, MQMessage mqMsg)
+    {
+        if (_poison.Threshold <= 0 || mqMsg.BackoutCount < _poison.Threshold)
+            return Task.FromResult(false);
+        return Task.FromResult(MoveToBackoutQueue(worker, mqMsg,
+            $"backed out {mqMsg.BackoutCount} times (backout threshold {_poison.Threshold})", commit: true));
+    }
+
+    /// <summary>
+    /// Puts <paramref name="mqMsg"/> on the backout queue, or the dead letter queue, under the worker's syncpoint, so its
+    /// read and the put commit together, and commits when <paramref name="commit"/>. A put that fails backs the unit of
+    /// work out: the message returns to its queue.
+    /// </summary>
+    private bool MoveToBackoutQueue(Worker worker, MQMessage mqMsg, string reason, bool commit)
+    {
+        var target = _poison.Target;
+        if (target is null)
+            return false;
 
         try
         {
-            var qm = worker.Qm;
-            using var boq = qm.AccessQueue(boqName, MQC.MQOO_OUTPUT | MQC.MQOO_FAIL_IF_QUIESCING);
-            var pmo = new MQPutMessageOptions { Options = MQC.MQPMO_NO_SYNCPOINT };
-            boq.Put(mqMsg, pmo);
+            PutToBackoutQueue(worker, mqMsg);
+            if (commit)
+                worker.Qm.Commit();
 
-            _logger?.LogInformation(
-                "Poison message moved to backout queue: destination={Destination}, boq={BackoutQueue}, backoutCount={BackoutCount}",
-                _endpoint.Destination, boqName, mqMsg.BackoutCount);
+            _logger?.LogWarning("IBM MQ message moved to {Target}: destination={Destination}, {Reason}",
+                target, _endpoint.Destination, reason);
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Failed to move message to backout queue {BackoutQueue}", boqName);
+            _endpoint.RecordError(ex);
+            _logger?.LogError(ex, "Failed to move an IBM MQ message to {Target}; backing out", target);
+            try { worker.Qm.Backout(); }
+            catch (Exception backoutEx) { _logger?.LogWarning(backoutEx, "IBM MQ backout after a failed move failed"); }
         }
+        return true;
+    }
+
+    /// <summary>
+    /// Puts a message on the backout queue under the worker's syncpoint (it commits with the unit of work); without a
+    /// backout queue on the dead letter queue, behind a dead letter header as the provider writes it.
+    /// </summary>
+    private void PutToBackoutQueue(Worker worker, MQMessage mqMsg)
+    {
+        var target = _poison.Target ?? throw new InvalidOperationException("No backout or dead letter queue.");
+        if (_poison.BackoutQueue is null)
+            IbmMqMessageHelper.WrapInDeadLetterHeader(mqMsg, MQC.MQRC_BACKOUT_THRESHOLD_REACHED,
+                _endpoint.Destination, _options.QueueManager);
+        using var queue = worker.Qm.AccessQueue(target, MQC.MQOO_OUTPUT | MQC.MQOO_FAIL_IF_QUIESCING);
+        queue.Put(mqMsg, new MQPutMessageOptions { Options = MQC.MQPMO_SYNCPOINT });
     }
 
     private void CloseWorkerDestination(Worker w)

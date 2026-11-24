@@ -1,10 +1,11 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { elementPosition } from "../elementposition";
+import { withCursor } from "./cursor";
 
 function at(textWithCursor: string) {
-    const offset = textWithCursor.indexOf("|");
-    return elementPosition(textWithCursor.replace("|", ""), offset);
+    const { text, offset } = withCursor(textWithCursor);
+    return elementPosition(text, offset);
 }
 
 describe("elementPosition — where skeletons are allowed", () => {

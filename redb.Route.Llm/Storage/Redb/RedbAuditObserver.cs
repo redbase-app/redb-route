@@ -79,7 +79,8 @@ public sealed class RedbAuditObserver : IAgentObserver
                 }
             };
 
-            await using var scope = _context.CreateRedbScope(_defaultRedbName);
+            // The instance the endpoint chose (?redb=) decides, as it does for every store; else the registration's.
+            await using var scope = _context.CreateRedbScope(context.Run.RedbName ?? _defaultRedbName);
             await scope.Service.SaveAsync(row).ConfigureAwait(false);
         }
         catch (Exception ex)

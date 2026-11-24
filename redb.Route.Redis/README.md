@@ -1,5 +1,7 @@
 # redb.Route.Redis
 
+> Documentation and articles: <https://redbase.app>
+
 Redis transport for redb.Route. Pub/Sub, Streams, key-value, lists, sorted sets — every Redis data structure is reachable as an endpoint URI via StackExchange.Redis; the builder has factories for keys, Pub/Sub, streams and lists, and `Redis.Command(operation, key)` for the rest.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Redis?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Redis)

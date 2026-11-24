@@ -503,7 +503,7 @@ public sealed partial class BeanInvoker
                     $"bean: the argument value '{text}' is not convertible to {target.Name} for {where}.");
         try
         {
-            return System.Convert.ChangeType(value, Nullable.GetUnderlyingType(target) ?? target,
+            return RouteDecimal.ChangeType(value, Nullable.GetUnderlyingType(target) ?? target,
                 System.Globalization.CultureInfo.InvariantCulture);
         }
         catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)

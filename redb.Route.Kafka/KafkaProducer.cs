@@ -38,6 +38,7 @@ public sealed class KafkaProducer : ConnectableProducer
     private string _cluster = "";
     private bool _rebuild;
     private int _warnedForeignOffsets;
+    private int _warnedInheritedOffsets;
     private int _warnedClosedOffsets;
 
     /// <summary>Creates a Kafka producer.</summary>
@@ -302,7 +303,16 @@ public sealed class KafkaProducer : ConnectableProducer
     /// </summary>
     private KafkaConsumedOffsets? OffsetsOfThisCluster(IExchange exchange)
     {
-        var offered = KafkaConsumedOffsets.OfferedOn(exchange);
+        var offered = KafkaConsumedOffsets.OfferedOn(exchange, out var inherited);
+        if (inherited)
+        {
+            WarnOnce(ref _warnedInheritedOffsets,
+                "Kafka transaction on topic {Topic} runs on a part of the consumed exchange (a split part, a multicast " +
+                "branch or another copy) and does not take the consumed offsets: the consumer commits them once, after " +
+                "the whole route. Put the transaction around the split or multicast for exactly-once.",
+                _endpoint.TopicName);
+            return null;
+        }
         if (offered is null || offered.Cluster == _cluster)
             return offered;
 
@@ -412,6 +422,8 @@ public sealed class KafkaProducer : ConnectableProducer
             byte[] bytes => bytes,
             string str   => Encoding.UTF8.GetBytes(str),
             null         => Array.Empty<byte>(),
+            // A list has no wire form here (4.8.0 sends its elements one by one): refused, never sent as its type name.
+            System.Collections.IEnumerable list when !BodyText.HasOwnText(list) => Encoding.UTF8.GetBytes(BodyText.Of(list)),
             _            => Encoding.UTF8.GetBytes(body.ToString() ?? string.Empty)
         };
 

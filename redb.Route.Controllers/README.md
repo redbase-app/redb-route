@@ -1,5 +1,7 @@
 # redb.Route.Controllers
 
+> Documentation and articles: <https://redbase.app>
+
 Transport-agnostic controller dispatch for the [redb.Route](../README.md) ESB framework.  
 Provides a `RedbController` base class, attribute-based routing, parameter binding, and five dispatcher implementations for **generic**, **HTTP**, **SOAP**, **SignalR**, and **gRPC** transports with 16 DSL extension methods. Controllers are transport-unaware — the same controller class works behind any InOut endpoint.
 

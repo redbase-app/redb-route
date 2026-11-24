@@ -294,7 +294,7 @@ public abstract class GenericFileProducer<TOptions> : IProducer
         }
         else
         {
-            var text = body.ToString() ?? "";
+            var text = BodyText.Of(body);
             var encoding = ResolveEncoding();
             var textBytes = encoding.GetBytes(text);
             await Operations.WriteAsync(path, textBytes, ct).ConfigureAwait(false);
@@ -318,7 +318,7 @@ public abstract class GenericFileProducer<TOptions> : IProducer
         }
         else
         {
-            var text = body?.ToString() ?? "";
+            var text = body is null ? "" : BodyText.Of(body);
             await Operations.AppendTextAsync(path, text, encoding, ct).ConfigureAwait(false);
         }
 

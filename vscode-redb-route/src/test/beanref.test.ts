@@ -4,18 +4,19 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { beanCallPosition, beanNames, referencePosition, typedReferencePosition } from "../beanref";
 import { buildIndex, ElementInfo } from "../graphmodel";
+import { withCursor } from "./cursor";
 
 const INDEX = buildIndex(JSON.parse(fs.readFileSync(
     path.join(__dirname, "..", "..", "media", "redb-route-elements.json"), "utf8")) as ElementInfo[]);
 
 function typedAt(textWithCursor: string) {
-    const offset = textWithCursor.indexOf("|");
-    return typedReferencePosition(textWithCursor.replace("|", ""), offset, INDEX);
+    const { text, offset } = withCursor(textWithCursor);
+    return typedReferencePosition(text, offset, INDEX);
 }
 
 function at(textWithCursor: string) {
-    const offset = textWithCursor.indexOf("|");
-    return referencePosition(textWithCursor.replace("|", ""), offset);
+    const { text, offset } = withCursor(textWithCursor);
+    return referencePosition(text, offset);
 }
 
 describe("referencePosition — where `#` offers bean names", () => {
@@ -118,8 +119,8 @@ describe("beanNames — the beans a `#` may name", () => {
 });
 
 function callAt(textWithCursor: string) {
-    const offset = textWithCursor.indexOf("|");
-    return beanCallPosition(textWithCursor.replace("|", ""), offset, INDEX);
+    const { text, offset } = withCursor(textWithCursor);
+    return beanCallPosition(text, offset, INDEX);
 }
 
 describe("beanCallPosition — the bean name of an expression's bean call", () => {

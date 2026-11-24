@@ -1,5 +1,7 @@
 # redb.Route.SignalR
 
+> Documentation and articles: <https://redbase.app>
+
 SignalR transport for the **redb.Route** ESB framework.
 
 Provides an embedded Kestrel-based SignalR Hub **consumer** (server) and two **producer** modes:

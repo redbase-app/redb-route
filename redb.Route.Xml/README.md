@@ -1,5 +1,7 @@
 # redb.Route.Xml
 
+> Documentation and articles: <https://redbase.app>
+
 Declarative XML routes for [redb.Route](https://www.nuget.org/packages/redb.Route): `.route.xml`
 documents load into the existing fluent DSL — **one engine, no second semantics**. Every element
 is a thin facade over exactly one DSL verb; whatever the XML can say, C# can say, and the two

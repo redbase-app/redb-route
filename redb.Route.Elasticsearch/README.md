@@ -1,5 +1,7 @@
 # redb.Route.Elasticsearch
 
+> Documentation and articles: <https://redbase.app>
+
 Elasticsearch connector for the [redb.Route](../README.md) ESB framework.  
 Provides a full-featured **producer** (9 operations) and a **polling consumer** with deep pagination, source filtering, and delete-after-read. Compatible with **Elasticsearch 8.x**.
 

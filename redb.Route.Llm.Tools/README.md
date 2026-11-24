@@ -1,5 +1,7 @@
 # redb.Route.Llm.Tools
 
+> Documentation and articles: <https://redbase.app>
+
 Optional batteries package for `redb.Route.Llm`. Ships reusable building blocks the agent engine can dispatch to as tools.
 
 Every tool is shipped twice:

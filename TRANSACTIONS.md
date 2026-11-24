@@ -103,7 +103,7 @@ does.
 
 A `sql:` step opens its own connection, and under `.Transacted()` that connection **joins the ambient transaction**
 instead of starting one of its own. So a route whose database work is plain SQL is transacted the same way — just
-keep it to one connection's worth of work and do not mix it with `redb` against the same database (see
+keep it to one data source and do not mix it with `redb` against the same database (see
 [One database per transacted route](#one-database-per-transacted-route)).
 
 ```csharp
@@ -124,9 +124,13 @@ The statement runs inside the route's transaction, the Kafka message leaves only
 the delivery is acknowledged after the message went out. A failure anywhere rolls the statement back and publishes
 nothing.
 
-Keep the database work of a transacted route to **one** `sql:` step: every step opens its own connection, and a second
-connection inside one transaction is the case the one-database rule forbids. Several statements go in one step, as
-above, or through the connector's batch mode.
+Several `sql:` steps in one block are fine when they use the **same data source**: each step opens a connection, runs
+its statement and closes the connection before the next step, and PostgreSQL's and SQL Server's drivers hand the next
+step the same enlisted connection, so the transaction stays local and the steps commit or roll back together (measured
+on both). What the one-database rule forbids is a second connection **while another is open** in one transaction: a
+`sql:` step next to `redb` work against the same database (below); a `StreamList` reader (refused inside a
+transaction); parallel branches (see [Parallelism](#parallelism)); or two data sources. Several statements can also go
+in one step, as above, or through the connector's batch mode.
 
 ## The order things commit in
 
@@ -317,14 +321,26 @@ past the transaction. Raw SQL that must commit with the redb work goes through `
 
 ## Scope timeout
 
-The scope timeout defaults to **1 minute**. Long work inside a transaction holds locks for that whole time, so keep
-transacted blocks short.
+The scope timeout defaults to **30 seconds** (`TransactionPolicy.Timeout`). Long work inside a transaction holds locks
+for that whole time, so keep transacted blocks short. A block that needs longer says so:
+`.Transacted(new TransactionPolicy { Timeout = TimeSpan.FromMinutes(2) })`.
 
 ## Parallelism
 
-A parallel `.Split()` or `.Multicast()` **inside** a transaction is refused: concurrent commands on one transaction's
-connection are not possible, and a failing branch would roll the whole transaction back at once. For parallel work,
-keep the parent **without** `.Transacted()` and open a transaction **inside each sub-route**:
+A parallel fan-out **inside** a transaction is not refused. A parallel `.Split()` or `.Multicast()` runs each branch
+under a dependent clone of the route's transaction (`DependentClone(BlockCommitUntilComplete)`): the transaction commits
+only after every branch finished, and a branch that fails rolls the whole transaction back. A parallel
+`.RecipientList()` or `.ScatterGather()` runs its branches on the route's transaction itself, at the same time, without
+that isolation: a failed branch in best-effort mode (`stopOnException=false`) is aggregated, the block still commits, and
+the other branches' sends go out (4.8.0 gives these two the dependent clone of `Split` and `Multicast`). The broker sends
+of the branches join the block and leave after the commit, as any send in it does.
+
+Database work in the branches is another matter: each parallel branch has a DI scope of its own and opens its own
+connection while the other branches hold theirs, and two connections at once in one transaction need a distributed
+transaction (see [One database per transacted route](#one-database-per-transacted-route)): SQL Server refuses it,
+PostgreSQL breaks the commit. Apache Camel binds a transaction to its thread, so its parallel branches run outside the
+transaction altogether. For parallel database work, keep the parent **without** `.Transacted()` and open a transaction
+**inside each sub-route**:
 
 ```csharp
 From("rabbitmq://batches?queue=batches.in")

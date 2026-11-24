@@ -65,7 +65,7 @@ public sealed class SortDefinition : ProcessorDefinition
             if (y is null) return 1;
 
             if (IsNumber(x) && IsNumber(y))
-                return Convert.ToDecimal(x, CultureInfo.InvariantCulture).CompareTo(Convert.ToDecimal(y, CultureInfo.InvariantCulture));
+                return RouteDecimal.From(x).CompareTo(RouteDecimal.From(y));
             if (x is string sx && y is string sy)
                 return string.CompareOrdinal(sx, sy);
             if (x is IComparable cx && x.GetType() == y.GetType())

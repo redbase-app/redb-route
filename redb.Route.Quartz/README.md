@@ -1,5 +1,7 @@
 # redb.Route.Quartz
 
+> Documentation and articles: <https://redbase.app>
+
 Quartz.NET scheduling transport for redb.Route. Cron-expression schedules and interval timers backed by the Quartz scheduler with thread pool management.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.Quartz?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.Quartz)

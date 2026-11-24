@@ -1,5 +1,7 @@
 # redb.Route.Llm.Mcp
 
+> Documentation and articles: <https://redbase.app>
+
 MCP (Model Context Protocol) client connector for **redb.Route.Llm**. Spawns external MCP servers (stdio + HTTP+SSE), discovers their tool catalogue via `tools/list`, and projects every remote tool into the existing `IToolDescriptorRegistry` so the agent picks them up like any native redb tool.
 
 ## Wave 1 (current)

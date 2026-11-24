@@ -65,6 +65,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Pending changes live in `changelog/unreleased/` until the release; `pwsh scripts/changelog.ps1 -Preview` shows them.
 
+## [4.7.5] — 2026-11-24
+
+### Changed
+
+- **A transacted IBM MQ consumer with a backout threshold (`backoutThreshold` or the queue's BOTHRESH) and neither a
+  backout queue nor a dead letter queue no longer starts**; before, such a poison message was redelivered without end.
+  A poison message now follows the provider's chain: `backoutQueue` or the queue's BOQNAME, else the queue manager's DEADQ. Packages: `redb.Route.IbmMq`. Upgrade: [UPGRADING.md](UPGRADING.md#an-ibm-mq-consumer-with-a-backout-threshold-needs-somewhere-to-put-a-poison-message).
+- **VS Code extension 0.2.30: completion and validation know the `as2` option `maxDecompressedSize`.** A route that
+  sets it is no longer marked as an error in the editor.
+
+### Fixed
+
+- **An endpoint's last error, warning and refusal text no longer carries credentials.** A connector exception that
+  quoted a URI with its password (`amqp://user:password@host`) or a secret option reached the `lastError` of
+  `RouteHealthCheck` and the endpoint statistics as it was; the text is now masked as endpoint URIs are. Packages: `redb.Route`.
+- **A double or a float that becomes a decimal is the number that was written.** An expression evaluated as a decimal, a
+  JSONPath number read as a decimal, a converted body or header, a sum or sort over numbers and a mock comparison used the
+  runtime's conversion, which cut 12345678901234.56 to 12345678901234.6; they now take the shortest text of the double,
+  through the new public `RouteDecimal` helper. Packages: `redb.Route`, `redb.Route.Core`, `redb.Route.Sql`, `redb.Route.Controllers`, `redb.Route.TestKit`.
+- **An endpoint's last error, warning and refusal text masks the secrets the endpoint holds wherever they appear.** A
+  Telegram bot token in the path of a request URL, or a key quoted by a driver, kept its value there. Now every
+  `[Sensitive]` option of the endpoint and every secret URI parameter is masked by value, plain or URL-escaped. Packages: `redb.Route`.
+- **Dynamic router, routing slip, scatter-gather, load balancer and dead-letter channel log endpoint URIs masked.** A
+  password in the user-info or a secret parameter of a URI these steps resolve per message or hold from configuration was
+  written to the log in clear; the same holds for the text of an invalid endpoint URI or a bad load-balancer weight. Packages: `redb.Route`.
+- **A producer no longer sends a body's type name.** A text producer sends bytes and a stream as their UTF-8 text (LLM,
+  SMTP and SOAP sent `System.Byte[]` or the stream's type name), any other body as its own text; a list or an object whose
+  text would only be its type name is refused, naming the endpoint. Convert or serialize such a body before the send. The
+  new public `BodyText` helper carries the rule. Packages: `redb.Route`, `redb.Route.MqttNet`, `redb.Route.Redis`, `redb.Route.Tcp`, `redb.Route.WebSocket`, `redb.Route.Telegram`, `redb.Route.GenericFile`, `redb.Route.Mail`, `redb.Route.Grpc`, `redb.Route.As2`, `redb.Route.As4`, `redb.Route.S3`, `redb.Route.Soap`, `redb.Route.Llm`, `redb.Route.Http`.
+- **A compressed AS2 message cannot inflate without bound.** The receiver stops decompressing past the new
+  `maxDecompressedSize` (by default the endpoint's `maxRequestBodySize`) and answers `decompression-failed`; a few
+  kilobytes on the wire could fill the spool and, without `streamBody`, the memory before. Packages: `redb.Route.As2`.
+- **AS2 identifiers that are not an atom are sent quoted.** An `As2From` or `As2To` with a space, `"` or `\` goes into
+  `AS2-From` and `AS2-To` as a quoted name (RFC 4130 §6.2), in messages and in MDNs.
+  Before, it was written bare, which is not a valid AS2-name. Packages: `redb.Route.As2`.
+- **An AS2 receiver accepts a message signed before it was compressed** (RFC 5402 §3.3), encrypted or not: the signature
+  is verified and the MIC is over the signed part, as OpenAS2 sends it with `compression_mode` compress-after-signing.
+  Before, only a message compressed and then signed was unwrapped: a message signed first was refused as unsigned
+  where signing is agreed. Packages: `redb.Route.As2`.
+- **A `redbQuery` condition that compares a field with another field filters** (`where="Price > Cost"`, either order).
+  It passed the route build and then failed in the storage's query parser with an unhelpful message. Packages: `redb.Route.Core`.
+- **The redb idempotent repository no longer fails with `NullReferenceException` when it reads a key another node is
+  deleting.** An idempotent consumer, an AS4, S3, file or mail receiver that checked a message id at the moment another
+  node released the same id could fail that message with the exception; the entry on its way out is now passed over. Packages: `redb.Route.Core`.
+- **Connection logs name what a connection factory set, not the endpoint's defaults.** With `connectionFactory=`, the
+  Elasticsearch, S3, SQS and SNS "client created" lines showed the endpoint's default nodes, region or service URL
+  (`http://localhost:9200`, `us-east-1`) instead of the factory's; they now show the target the client was built with and
+  the factory's name. The AMQP "session opened" and RabbitMQ "connection recovery" lines name the pooled connection
+  instead of the endpoint's host. Only the logs change; the connections always used the factory. Packages: `redb.Route.Elasticsearch`, `redb.Route.S3`, `redb.Route.Sqs`, `redb.Route.Amqp`, `redb.Route.RabbitMQ`.
+- **`backoutThreshold` now takes a poison message off its queue.** The IBM MQ consumer checked the backout count only after
+  a successful route, so a message that always failed was backed out forever. A transacted consumer now moves a message
+  backed out `backoutThreshold` times to `backoutQueue` before the route, in the unit of work of its read. Packages: `redb.Route.IbmMq`.
+- **A split part or a multicast branch no longer commits the consumed Kafka offsets in its own transaction.** The
+  transaction of the first part committed the offsets of the whole record or batch before the other parts ran, so a
+  later failure could not bring them back. The consumer now commits once, after the route; for exactly-once, put the
+  transaction around the split or multicast. Packages: `redb.Route.Kafka`.
+- **A list body no longer goes out as its type name at the Kafka, RabbitMQ, IBM MQ and AMQP producers.** A list (a list
+  of `IMessage` included) is refused at the send, naming that it has no wire form; serialize it or `Split` it first.
+  4.8.0 sends a list of `IMessage` element by element. Packages: `redb.Route.Kafka`, `redb.Route.RabbitMQ`, `redb.Route.IbmMq`, `redb.Route.Amqp`.
+- **The tool-call audit and the conversation's accumulated cost go to the redb instance the `llm:` endpoint names**
+  (`?redb=`), as transcripts and approvals did; they went to the default instance. New `AddRedbLlmStorage("name")`
+  makes a named instance the default of every store; additions only: `AgentRunContext.RedbName` and two
+  `IBudgetEnforcer` default members that take the exchange. Packages: `redb.Route.Llm`.
+- **A failed transactional RabbitMQ send reports its cause.** When a transacted block's publish or `tx.commit` failed,
+  the send threw `ObjectDisposedException` from the closed channel instead of the broker's error. Packages: `redb.Route.RabbitMQ`.
+- **An idempotent consumer on the SQL repository treats two copies of a message arriving at the same moment as a
+  duplicate.** The insert that lost the key threw a primary key violation (always possible on PostgreSQL, under load on
+  SQL Server), so that exchange failed and went to the route's error handling: redelivered, dead-lettered or reported to
+  the caller. It now answers that the key is held and the copy is skipped. Packages: `redb.Route.Sql`.
+- **Telegram log lines no longer carry the chat id.** The debug lines of sent, edited and deleted messages, the publish
+  failure line and the consumer's dropped-message line identified the chat, which is personal data; they keep the
+  message id and the operation. Packages: `redb.Route.Telegram`.
+- **VS Code extension: New Project installs the templates without the "::" deprecation notice.** The page pins the
+  template version as `package@version` on .NET SDK 9 and later, which SDK 10 asks for, and keeps `package::version`
+  on SDK 8, which does not accept `@`.
+- **VS Code extension: the New Project log shows each `dotnet` command the way a shell reads it back.** A folder
+  ending in a backslash or an argument with quotes is now quoted so the line can be copied into a terminal as it is.
+  The command itself always ran with the right arguments; only the log line was affected.
+- **VS Code extension: editing a value in the diagram properties panel no longer corrupts `&`, `<`, `>` or quotes.** The
+  panel showed `&amp;&amp;` as written and escaped it again on save; it now shows the value as the route reads it and
+  writes it back escaped once, keeping the attribute's quote style and CDATA text. A value saved earlier with doubled
+  entities (`&amp;amp;`) is fixed by hand in the text.
+
 ## [4.7.2] — 2026-11-13
 
 ### Changed

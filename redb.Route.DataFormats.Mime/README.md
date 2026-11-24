@@ -1,5 +1,7 @@
 # redb.Route.DataFormats.Mime
 
+> Documentation and articles: <https://redbase.app>
+
 MIME multipart as a redb.Route data format, on [MimeKit](https://github.com/jstedfast/MimeKit): Apache Camel's
 `mimeMultipart`, with a form mode for `multipart/form-data`. The files of a form or of a `multipart/mixed` body become
 [message attachments](../README.md#attachments), so the same route can send them on with `smtp:` or store them.

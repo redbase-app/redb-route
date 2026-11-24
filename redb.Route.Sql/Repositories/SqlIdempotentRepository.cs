@@ -59,7 +59,26 @@ public sealed class SqlIdempotentRepository : IIdempotentRepository
     public bool JoinsAmbientTransaction => Volatile.Read(ref _ambientBehaviour) == Joins;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// An insert that loses the key to another one at the same moment (an error on PostgreSQL, and on SQL Server when both
+    /// pass the existence check) answers <c>false</c>: the key is held, the message is a duplicate.
+    /// </remarks>
     public async Task<bool> Add(string key, CancellationToken ct = default)
+    {
+        try
+        {
+            return await InsertAsync(key, ct).ConfigureAwait(false);
+        }
+        catch (DbException)
+        {
+            // The primary key let the other insert through: the key is held. Any other failure leaves no row and stands.
+            if (await Contains(key, ct).ConfigureAwait(false))
+                return false;
+            throw;
+        }
+    }
+
+    private async Task<bool> InsertAsync(string key, CancellationToken ct)
     {
         await EnsureTableAsync(ct).ConfigureAwait(false);
         await CleanupIfNeededAsync(ct).ConfigureAwait(false);

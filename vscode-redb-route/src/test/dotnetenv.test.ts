@@ -66,7 +66,14 @@ describe("dotnetenv — where the templates stand", () => {
     });
 
     it("installs a pinned version when one is known", () => {
-        assert.deepEqual(templateInstallArguments("redb.Templates", "4.4.3"), ["new", "install", "redb.Templates::4.4.3"]);
-        assert.deepEqual(templateInstallArguments("redb.Tsak.Templates", null), ["new", "install", "redb.Tsak.Templates"]);
+        assert.deepEqual(templateInstallArguments("redb.Templates", "4.4.3", 10), ["new", "install", "redb.Templates@4.4.3"]);
+        assert.deepEqual(templateInstallArguments("redb.Tsak.Templates", null, 10), ["new", "install", "redb.Tsak.Templates"]);
+    });
+
+    it("pins with @ from SDK 9 on and with :: on SDK 8 or an unknown SDK", () => {
+        assert.deepEqual(templateInstallArguments("redb.Templates", "4.4.3", 9), ["new", "install", "redb.Templates@4.4.3"]);
+        assert.deepEqual(templateInstallArguments("redb.Templates", "4.4.3", 11), ["new", "install", "redb.Templates@4.4.3"]);
+        assert.deepEqual(templateInstallArguments("redb.Templates", "4.4.3", 8), ["new", "install", "redb.Templates::4.4.3"]);
+        assert.deepEqual(templateInstallArguments("redb.Templates", "4.4.3", null), ["new", "install", "redb.Templates::4.4.3"]);
     });
 });

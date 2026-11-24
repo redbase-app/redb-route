@@ -150,6 +150,27 @@ public class RouteHealthCheckTests : IAsyncLifetime
         act.Should().Throw<ArgumentNullException>();
     }
 
+    [Fact]
+    public async Task AnErrorThatQuotesACredentialedUri_ReachesThePayloadMasked()
+    {
+        // A connector's exception may quote the URI it failed on, password and all; the payload is often read by
+        // unauthenticated probes.
+        _context.AddRoutes(r => r.From("direct://health-leak").Process(_ =>
+            throw new InvalidOperationException(
+                "None of the endpoints were reachable: amqp://svc:Sup3rS3cret@broker:5672 (password=Sup3rS3cret)")));
+        await _context.Start();
+        var producer = _context.GetEndpoint("direct://health-leak").CreateProducer();
+        await producer.Start();
+        try { await producer.Process(new Exchange(new Message("x"))); }
+        catch (InvalidOperationException) { }
+
+        var result = await new RouteHealthCheck(_context).CheckHealthAsync(CreateContext());
+
+        var payload = System.Text.Json.JsonSerializer.Serialize(result.Data);
+        payload.Should().Contain("svc:" + EndpointUri.Redacted + "@broker", "the error is still there, masked");
+        payload.Should().NotContain("Sup3rS3cret");
+    }
+
     private static HealthCheckContext CreateContext()
     {
         return new HealthCheckContext

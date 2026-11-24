@@ -1,5 +1,7 @@
 # redb.Route.Ftp
 
+> Documentation and articles: <https://redbase.app>
+
 FTP/FTPS transport for the [redb.Route](../README.md) ESB framework.  
 Polling consumer and atomic producer powered by FluentFTP — passive/active mode, FTPS (TLS), glob filtering, idempotency, temp-file upload, recursive directories, and jail-path protection.
 

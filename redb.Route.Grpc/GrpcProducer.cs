@@ -319,7 +319,7 @@ public class GrpcProducer : ConnectableProducer
             {
                 byte[] bytes => ByteString.CopyFrom(bytes),
                 string str => ByteString.CopyFromUtf8(str),
-                _ => ByteString.CopyFromUtf8(exchange.In.Body.ToString() ?? string.Empty)
+                _ => ByteString.CopyFromUtf8(BodyText.Of(exchange.In.Body))
             };
         }
 

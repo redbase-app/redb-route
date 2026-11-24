@@ -1,5 +1,7 @@
 # redb.Route.WebSocket
 
+> Documentation and articles: <https://redbase.app>
+
 WebSocket transport for redb.Route. ClientWebSocket producer and Kestrel-based WebSocket server consumer with text/binary frames, ping/pong, reconnect, and subprotocol support.
 
 [![NuGet](https://img.shields.io/nuget/v/redb.Route.WebSocket?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route.WebSocket)

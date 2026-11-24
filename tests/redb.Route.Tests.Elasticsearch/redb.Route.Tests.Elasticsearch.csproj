@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <Compile Include="../redb.Route.Tests/Cluster/CapturingLoggerProvider.cs" Link="Shared/CapturingLoggerProvider.cs" />
     <ProjectReference Include="..\..\redb.Route\redb.Route.csproj" />
     <ProjectReference Include="..\..\redb.Route.Elasticsearch\redb.Route.Elasticsearch.csproj" />
   </ItemGroup>

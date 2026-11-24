@@ -205,7 +205,7 @@ public class SmtpProducer : IProducer
             msg.Priority = p;
 
         // ── Body ──
-        var body = exchange.In.Body?.ToString() ?? "";
+        var body = exchange.In.Body is { } raw ? BodyText.Of(raw) : "";
         var contentType = GetHeader(exchange, MailHeaders.ContentType)
                           ?? _options.ResolveOption(_options.ContentType, exchange)
                           ?? _options.ContentType;

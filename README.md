@@ -9,6 +9,7 @@ redb.Route is the .NET equivalent of [Apache Camel](https://camel.apache.org/) â
 [![NuGet](https://img.shields.io/nuget/v/redb.Route?label=NuGet&color=blue)](https://www.nuget.org/packages/redb.Route)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![.NET](https://img.shields.io/badge/.NET-8%20%7C%209%20%7C%2010-purple)](https://dotnet.microsoft.com)
+[![Website](https://img.shields.io/badge/docs-redbase.app-orange)](https://redbase.app)
 
 <a href="https://ec.europa.eu/digital-building-blocks/sites/spaces/DIGITAL/pages/721846393/eDelivery+AS4+v1.x+conformant+products"><img src="https://raw.githubusercontent.com/redbase-app/redb-route/main/redb.Route.As4/images/as4-ec-conformance-certificate.png" width="340" alt="Certificate of the eDelivery AS4 conformance tests passed by redb.Route.As4 4.6.1"></a>
 
@@ -374,6 +375,11 @@ secrets are replaced with a constant `****` â€” never a partial prefix.
 
 To register a credential parameter that is not an annotated option, call
 `EndpointUri.AddSensitiveKeys("myCustomToken")` at startup.
+
+The same values are masked inside the error, warning and refusal texts an endpoint records: every `[Sensitive]`
+option and every secret URI parameter of the endpoint is replaced wherever it appears, plain or URL-escaped. This
+masking covers those endpoint texts only; the log step (see [Logging](#logging)) writes exactly what the route
+author asks for.
 
 **3. The id of an unnamed route carries neither.** A route that declares no `RouteId("...")` is named
 after its endpoint: the scheme, the path and a deterministic UUID of the whole URI
@@ -1530,6 +1536,9 @@ a secret's name (`*token*`, `*password*`...). The length of a value is the SDK's
     .ShowRouteId()
 .EndLog()
 ```
+
+The log step writes exactly what the route author asks for, including a header or property that holds a secret. The
+masking by value described under `[Sensitive]` applies to endpoint error and warning texts, not to this step.
 
 ---
 

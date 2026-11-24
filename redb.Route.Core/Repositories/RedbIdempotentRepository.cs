@@ -125,8 +125,7 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
                 .ToListAsync()
                 .ConfigureAwait(false);
 
-            if (existing.Any(e => e.Props.ProcessorName == _options.ProcessorName
-                               && e.Props.MessageKey == key))
+            if (existing.Any(e => IsEntryOf(e, key)))
                 return false;
 
             var entry = new RedbObject<IdempotentEntryProps>
@@ -176,8 +175,7 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
             foreach (var item in items)
             {
-                if (item.Props.ProcessorName != _options.ProcessorName
-                    || item.Props.MessageKey != key) continue;
+                if (!IsEntryOf(item, key)) continue;
                 item.Props.Confirmed = true;
                 await redb.SaveAsync(item).ConfigureAwait(false);
             }
@@ -204,8 +202,7 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
 
             foreach (var item in items)
             {
-                if (item.Props.ProcessorName != _options.ProcessorName
-                    || item.Props.MessageKey != key) continue;
+                if (!IsEntryOf(item, key)) continue;
                 await redb.DeleteAsync(item).ConfigureAwait(false);
             }
         }, MaxRetries, BaseDelayMs);
@@ -229,8 +226,7 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
                 .ToListAsync()
                 .ConfigureAwait(false);
 
-            return items.Any(e => e.Props.ProcessorName == _options.ProcessorName
-                               && e.Props.MessageKey == key);
+            return items.Any(e => IsEntryOf(e, key));
         }, MaxRetries, BaseDelayMs);
     }
 
@@ -255,6 +251,13 @@ public sealed class RedbIdempotentRepository : IIdempotentRepository
                 await redb.DeleteAsync((IEnumerable<IRedbObject>)items).ConfigureAwait(false);
         }, MaxRetries, BaseDelayMs);
     }
+
+    /// <summary>
+    /// Whether <paramref name="entry"/> is the entry of <paramref name="key"/> for this processor. An entry another caller is
+    /// deleting at that moment can come back without its props: it is passed over, as one already gone.
+    /// </summary>
+    private bool IsEntryOf(RedbObject<IdempotentEntryProps> entry, string key) =>
+        entry.Props is { } props && props.ProcessorName == _options.ProcessorName && props.MessageKey == key;
 
     private async Task EnsureSchemeAsync()
     {

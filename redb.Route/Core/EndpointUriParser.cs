@@ -41,14 +41,14 @@ public static class EndpointUriParser
             // Colon format: scheme:path (e.g., redis:GET:user:123)
             var colonIndex = basePart.IndexOf(':');
             if (colonIndex <= 0)
-                throw new ArgumentException($"Invalid endpoint URI format: '{uri}'. Expected scheme://path or scheme:path.", nameof(uri));
+                throw new ArgumentException($"Invalid endpoint URI format: '{EndpointUri.Sanitize(uri)}'. Expected scheme://path or scheme:path.", nameof(uri));
 
             scheme = basePart[..colonIndex].ToLowerInvariant();
             path = basePart[(colonIndex + 1)..];
         }
 
         if (string.IsNullOrEmpty(scheme))
-            throw new ArgumentException($"Empty scheme in URI: '{uri}'.", nameof(uri));
+            throw new ArgumentException($"Empty scheme in URI: '{EndpointUri.Sanitize(uri)}'.", nameof(uri));
 
         // Parse query parameters
         var parameters = ParseQueryString(queryPart);

@@ -1,5 +1,7 @@
 # redb.Route.Llm.Abstractions
 
+> Documentation and articles: <https://redbase.app>
+
 Contracts package for the `redb.Route.Llm` tool surface. Apache 2.0.
 
 Holds the **declarative** types every redb.Route LLM tool author needs, without

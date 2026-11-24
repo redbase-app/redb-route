@@ -1,5 +1,7 @@
 # redb.Route.Templates
 
+> Documentation and articles: <https://redbase.app>
+
 Build a payload from a template instead of concatenating strings: the analog of WSO2 PayloadFactory
 and Camel's templating components, on [Scriban](https://github.com/scriban/scriban). Templates
 live in files, embedded resources or inline; the result type is explicit so substituted values are

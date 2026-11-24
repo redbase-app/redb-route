@@ -453,4 +453,52 @@ public sealed class RedbIdempotentRepositoryTests
         var sut = CreateSut();
         sut.Should().BeAssignableTo<IIdempotentRepository>();
     }
+
+    // ── An entry read while another caller deletes it ───────────────
+
+    /// <summary>
+    /// The entry of a key that another node is deleting at that moment: the lookup by name still finds its object, and
+    /// its props are gone (PostgreSQL, two nodes on one key). Each operation passes it over instead of failing.
+    /// </summary>
+    private static RedbObject<IdempotentEntryProps> EntryBeingDeleted() => new() { id = 42, Props = null! };
+
+    [Fact]
+    public async Task Add_WhileTheEntryIsBeingDeleted_ClaimsTheKey_InsteadOfThrowing()
+    {
+        SetupQuery([EntryBeingDeleted()]);
+        _redb.SaveAsync(Arg.Any<IRedbObject<IdempotentEntryProps>>()).Returns(1L);
+
+        var result = await CreateSut().Add("msg-001");
+
+        result.Should().BeTrue("the entry found is on its way out; uniqueness decides if it is not gone yet");
+    }
+
+    [Fact]
+    public async Task Contains_WhileTheEntryIsBeingDeleted_IsFalse_InsteadOfThrowing()
+    {
+        SetupQuery([EntryBeingDeleted()]);
+
+        (await CreateSut().Contains("msg-001")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Confirm_WhileTheEntryIsBeingDeleted_SavesNothing_InsteadOfThrowing()
+    {
+        SetupQuery([EntryBeingDeleted()]);
+
+        await CreateSut().Confirm("msg-001");
+
+        await _redb.DidNotReceive().SaveAsync(Arg.Any<IRedbObject<IdempotentEntryProps>>());
+    }
+
+    [Fact]
+    public async Task Remove_WhileTheEntryIsBeingDeleted_DeletesNothing_InsteadOfThrowing()
+    {
+        SetupQuery([EntryBeingDeleted()]);
+
+        await CreateSut().Remove("msg-001");
+
+        await _redb.DidNotReceive().DeleteAsync(Arg.Any<IRedbObject>());
+    }
+
 }

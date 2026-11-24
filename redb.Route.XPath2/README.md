@@ -1,5 +1,7 @@
 # redb.Route.XPath2
 
+> Documentation and articles: <https://redbase.app>
+
 XPath 2.0 expressions for redb.Route, usable in every position that takes an expression.
 
 ```csharp

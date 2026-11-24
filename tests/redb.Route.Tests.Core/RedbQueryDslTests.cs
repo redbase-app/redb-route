@@ -26,6 +26,7 @@ public sealed class RedbQueryDslTests
     {
         public string? Status { get; set; }
         public int Total { get; set; }
+        public int Limit { get; set; }
         public string? Note { get; set; }
         public bool Urgent { get; set; }
         public CustomerProps? Customer { get; set; }
@@ -147,7 +148,29 @@ public sealed class RedbQueryDslTests
         gated(new OrderProps { Status = "open" }).Should().BeFalse("the gate folded to false for THIS message");
     }
 
+    [Theory]
+    [InlineData("Total > Limit", 5, 3, true)]
+    [InlineData("Total > Limit", 3, 5, false)]
+    [InlineData("Limit < Total", 5, 3, true)]
+    [InlineData("Limit < Total", 3, 5, false)]
+    [InlineData("Total == Limit", 4, 4, true)]
+    [InlineData("Limit == Total", 4, 5, false)]
+    public async Task AFieldAgainstAnotherField_ComparesTheTwoFields(string where, int total, int limit, bool expected)
+    {
+        var predicate = await PredicateFor(where);
+
+        predicate(new OrderProps { Total = total, Limit = limit }).Should().Be(expected);
+    }
+
     // ── loud refusals at route build ─────────────────────────────────
+
+    [Fact]
+    public void AFieldAgainstAComputedField_RefusesWithTheSpecHint()
+    {
+        var act = () => NewRoute().RedbQuery(typeof(OrderProps), where: "Total > Limit * 2");
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*#spec*");
+    }
 
     [Fact]
     public void ArithmeticOnProps_RefusesWithTheSpecHint()

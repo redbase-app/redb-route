@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.Json;
 using redb.Route.Abstractions;
 using redb.Route.Controllers.Attributes;
+using redb.Route.Core;
 
 namespace redb.Route.Controllers;
 
@@ -162,7 +163,7 @@ public static class ParameterResolver
 
             // Header, query, route and property values are wire text: "12.5" is twelve and a half on every
             // server, not 125 under de-DE or a failed parse under ru-RU.
-            return Convert.ChangeType(value, underlying, CultureInfo.InvariantCulture);
+            return RouteDecimal.ChangeType(value, underlying, CultureInfo.InvariantCulture);
         }
         catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException or ArgumentException)
         {

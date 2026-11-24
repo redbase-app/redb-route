@@ -61,7 +61,7 @@ public sealed class DeadLetterChannelProcessor : IProcessor
         {
             var failure = RouteCancellation.Normalize(ex, ct);
             exchange.Exception = failure;
-            _logger?.LogWarning(failure, "Dead-lettering exchange to {Uri}.", _deadLetterUri);
+            _logger?.LogWarning(failure, "Dead-lettering exchange to {Uri}.", EndpointUri.Sanitize(_deadLetterUri));
             try
             {
                 var (endpoint, producer) = await GetOrCreatePair(ct).ConfigureAwait(false);
@@ -70,7 +70,7 @@ public sealed class DeadLetterChannelProcessor : IProcessor
             }
             catch (Exception sendEx)
             {
-                _logger?.LogError(sendEx, "Dead-letter delivery to {Uri} failed.", _deadLetterUri);
+                _logger?.LogError(sendEx, "Dead-letter delivery to {Uri} failed.", EndpointUri.Sanitize(_deadLetterUri));
             }
 
             if (_rethrow) throw;

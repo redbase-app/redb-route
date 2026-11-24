@@ -1,5 +1,6 @@
 using System;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Expressions;
 
@@ -42,7 +43,7 @@ public class ConstantExpression : Expression
 
         try
         {
-            return (K)Convert.ChangeType(_value, typeof(K));
+            return (K)RouteDecimal.ChangeType(_value, typeof(K));
         }
         catch (Exception ex)
         {

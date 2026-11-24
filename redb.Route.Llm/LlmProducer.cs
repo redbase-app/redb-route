@@ -280,7 +280,7 @@ public sealed class LlmProducer : ConnectableProducer
         {
             null => string.Empty,
             string s => s,
-            _ => body.ToString() ?? string.Empty
+            _ => BodyText.Of(body)
         };
         return [new LlmTextBlock(text)];
     }

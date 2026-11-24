@@ -1,5 +1,6 @@
 using System.Globalization;
 using redb.Route.Abstractions;
+using redb.Route.Core;
 
 namespace redb.Route.Components;
 
@@ -142,8 +143,8 @@ internal static class MockValues
         {
             try
             {
-                return Convert.ToDecimal(expected, CultureInfo.InvariantCulture)
-                    == Convert.ToDecimal(actual, CultureInfo.InvariantCulture);
+                return RouteDecimal.From(expected)
+                    == RouteDecimal.From(actual);
             }
             catch (OverflowException) { return false; }
         }

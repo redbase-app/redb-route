@@ -1,6 +1,7 @@
 using redb.Route.Abstractions;
 using redb.Route.Components.Bean;
 using redb.Route.Predicates;
+using redb.Route.Core;
 
 namespace redb.Route.Expressions;
 
@@ -52,7 +53,7 @@ internal sealed class BeanMethodExpression : Expression, IPredicateExpression, I
             return typed;
         if (typeof(T) == typeof(string))
             return (T)(object)ExpressionResolver.TemplateText(result);
-        return (T)Convert.ChangeType(result, typeof(T), System.Globalization.CultureInfo.InvariantCulture);
+        return (T)RouteDecimal.ChangeType(result, typeof(T), System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <inheritdoc cref="IPredicateExpression.Matches" />

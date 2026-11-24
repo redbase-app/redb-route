@@ -88,6 +88,17 @@ public sealed class As2EndpointOptions : EndpointOptions
     public long MaxRequestBodySize { get; set; } = DefaultMaxRequestBodySize;
 
     /// <summary>
+    /// Receive side: the most bytes a compressed message (RFC 3274) may inflate to. A few kilobytes of compressed data
+    /// can inflate to gigabytes, and the inflated payload is spooled and, without <see cref="StreamBody"/>, held in
+    /// memory; past this limit the inflating stops and the message is refused with <c>decompression-failed</c>. Unset
+    /// (default): <see cref="MaxRequestBodySize"/>, so the payload a request hands over is bounded as its body is.
+    /// </summary>
+    public long? MaxDecompressedSize { get; set; }
+
+    /// <summary>The bound of a decompressed payload: <see cref="MaxDecompressedSize"/>, else <see cref="MaxRequestBodySize"/>.</summary>
+    internal long DecompressedLimit => MaxDecompressedSize ?? MaxRequestBodySize;
+
+    /// <summary>
     /// Send side: the largest response body read, in bytes (the synchronous MDN). A larger one (a proxy's error page,
     /// say) fails the send without being read. Default <see cref="DefaultMaxResponseBodySize"/>.
     /// </summary>
@@ -175,6 +186,8 @@ public sealed class As2EndpointOptions : EndpointOptions
             throw new ArgumentOutOfRangeException(nameof(Timeout), Timeout, "AS2 timeout must be non-negative.");
         if (MaxRequestBodySize <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxRequestBodySize), MaxRequestBodySize, "AS2 maxRequestBodySize must be positive.");
+        if (MaxDecompressedSize is <= 0)
+            throw new ArgumentOutOfRangeException(nameof(MaxDecompressedSize), MaxDecompressedSize, "AS2 maxDecompressedSize must be positive.");
         if (MaxResponseBodySize <= 0)
             throw new ArgumentOutOfRangeException(nameof(MaxResponseBodySize), MaxResponseBodySize, "AS2 maxResponseBodySize must be positive.");
         ConcurrencyLimitOptions.ValidateShape(MaxConcurrentRequests, RequestQueueLimit, RejectStatusCode, RetryAfterSeconds);

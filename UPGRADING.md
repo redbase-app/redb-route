@@ -3,6 +3,33 @@
 What to check and change when moving to a new version. Each section lists the changes that need action;
 [CHANGELOG.md](CHANGELOG.md) has the full list of what changed.
 
+## 4.7.5
+
+### An IBM MQ consumer with a backout threshold needs somewhere to put a poison message
+
+A transacted IBM MQ consumer with a backout threshold (the `backoutThreshold` option, or the input queue's BOTHRESH)
+and neither a backout queue (`backoutQueue`, or the queue's BOQNAME) nor a dead letter queue on the queue manager
+(DEADQ) no longer starts. It fails with:
+
+```text
+IBM MQ consumer on '<queue>': a backout threshold of <n> is in force, but there is neither a backout queue
+(backoutQueue, or the queue's BOQNAME) nor a dead letter queue on the queue manager (DEADQ): a poison message would
+have nowhere to go.
+```
+
+Before, such a consumer started, and a message over the threshold was redelivered through the route without end.
+
+What to configure, one of:
+
+- `backoutQueue=<queue>` on the endpoint, or BOQNAME on the input queue (`ALTER QLOCAL(<queue>) BOQNAME(<boq>)`);
+- a dead letter queue on the queue manager (`ALTER QMGR DEADQ(<dlq>)`): a poison message then goes there behind a dead
+  letter header;
+- or no threshold at all (BOTHRESH 0 and no `backoutThreshold`), with an error handler in the route that decides what
+  happens to a message that keeps failing.
+
+A consumer that already had `backoutQueue` set behaves as before, and now also honours the queue's own BOTHRESH and
+BOQNAME when the endpoint sets neither.
+
 ## 4.7.0
 
 ### An unclosed `${` is an error

@@ -19,3 +19,17 @@ SET AUTHREC PROFILE(SYSTEM.DEFAULT.MODEL.QUEUE) OBJTYPE(QUEUE) PRINCIPAL('app') 
 * A topic object for the node DEV (no trailing slash: 'DEV/' would be an empty level under it) falls under the
 * DEV.** topic authority of user app.
 DEFINE TOPIC(DEV.TEST.TOPIC) TOPICSTR('DEV') REPLACE
+
+* IbmMqPoisonTests: a message backed out backoutThreshold times goes to DEV.QUEUE.POISON.BOQ.
+DEFINE QLOCAL(DEV.QUEUE.POISON) REPLACE
+DEFINE QLOCAL(DEV.QUEUE.POISON.BOQ) REPLACE
+
+* IbmMqPoisonCanonTests: poison handling by the input queue's own BOTHRESH and BOQNAME, and the queue manager's DEADQ.
+DEFINE QLOCAL(DEV.QUEUE.ATTR.BOQ) REPLACE
+DEFINE QLOCAL(DEV.QUEUE.ATTR) BOTHRESH(2) BOQNAME('DEV.QUEUE.ATTR.BOQ') REPLACE
+DEFINE QLOCAL(DEV.QUEUE.NOBOQ) BOTHRESH(2) REPLACE
+
+* XMS listener mode applies the queue's BOTHRESH and BOQNAME itself (IbmMqPoisonCanonTests, listener). Without
+* PASSALL for the stand's user its MQOPEN of the backout queue and of the dead letter queue fails with
+* MQRC_NOT_AUTHORIZED (2035, seen in an XMS trace) and the poison message stays on the input queue.
+SET AUTHREC PROFILE('DEV.**') OBJTYPE(QUEUE) PRINCIPAL('app') AUTHADD(PASSALL)

@@ -279,7 +279,7 @@ public class HttpProducer : ConnectableProducer
         }
         else
         {
-            var text = body.ToString() ?? string.Empty;
+            var text = BodyText.Of(body);
             content = new StringContent(text, Encoding.UTF8);
         }
 

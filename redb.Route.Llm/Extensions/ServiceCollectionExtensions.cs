@@ -23,7 +23,7 @@ public static class LlmServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the LLM component, agent engine, tool registry and no-op
-    /// defaults for every governance dependency. Call <see cref="AddRedbLlmStorage"/>
+    /// defaults for every governance dependency. Call <see cref="AddRedbLlmStorage(IServiceCollection)"/>
     /// afterwards to swap the in-memory defaults for redb-backed stores.
     /// <example>
     /// <code>
@@ -229,6 +229,22 @@ public static class LlmServiceCollectionExtensions
     /// </para>
     /// </summary>
     public static IServiceCollection AddRedbLlmStorage(this IServiceCollection services)
+        => AddRedbLlmStorageCore(services, redbName: null);
+
+    /// <summary>
+    /// <see cref="AddRedbLlmStorage(IServiceCollection)"/> with the agent's memory in the named redb instance
+    /// <paramref name="redbName"/> (a Tsak context's named <c>Redb</c> instance, or one registered with
+    /// <c>RegisterRedbService</c>): every store, the tool-call audit and the conversation's accumulated cost go there.
+    /// An endpoint's <c>?redb=</c> still decides for what that endpoint writes. The reservation of tool idempotency
+    /// keys stays in the registered <see cref="IIdempotentRepository"/>'s database.
+    /// </summary>
+    public static IServiceCollection AddRedbLlmStorage(this IServiceCollection services, string redbName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(redbName);
+        return AddRedbLlmStorageCore(services, redbName);
+    }
+
+    private static IServiceCollection AddRedbLlmStorageCore(IServiceCollection services, string? redbName)
     {
         // Schemes for every props row used below are auto-synced by the host's
         // own `redb.InitializeAsync()` (it scans loaded assemblies for
@@ -237,39 +253,39 @@ public static class LlmServiceCollectionExtensions
         // gates.
 
         services.AddSingleton<IConversationStore>(sp =>
-            new RedbConversationStore(sp.GetRequiredService<IRouteContext>()));
+            new RedbConversationStore(sp.GetRequiredService<IRouteContext>(), redbName));
 
         services.AddSingleton<IToolIdempotencyStore>(sp =>
             new RedbToolIdempotencyStore(
                 sp.GetRequiredService<IIdempotentRepository>(),
-                sp.GetRequiredService<IRouteContext>()));
+                sp.GetRequiredService<IRouteContext>(), redbName));
 
         services.AddSingleton<IApprovalStore>(sp =>
-            new RedbApprovalStore(sp.GetRequiredService<IRouteContext>()));
+            new RedbApprovalStore(sp.GetRequiredService<IRouteContext>(), redbName));
 
         services.AddSingleton<ICostBudgetStore>(sp =>
-            new RedbCostBudgetStore(sp.GetRequiredService<IRouteContext>()));
+            new RedbCostBudgetStore(sp.GetRequiredService<IRouteContext>(), redbName));
 
         services.AddSingleton<IPromptTemplateRegistry>(sp =>
-            new RedbPromptTemplateRegistry(sp.GetRequiredService<IRouteContext>()));
+            new RedbPromptTemplateRegistry(sp.GetRequiredService<IRouteContext>(), redbName));
 
         services.AddSingleton<IToolCacheStore>(sp =>
-            new RedbToolResultCache(sp.GetRequiredService<IRouteContext>()));
+            new RedbToolResultCache(sp.GetRequiredService<IRouteContext>(), redbName));
 
         services.AddSingleton<IEvalRunStore>(sp =>
-            new RedbEvalRunStore(sp.GetRequiredService<IRouteContext>()));
+            new RedbEvalRunStore(sp.GetRequiredService<IRouteContext>(), redbName));
 
         services.AddSingleton<IKnowledgeStore>(sp =>
-            new RedbKnowledgeStore(sp.GetRequiredService<IRouteContext>()));
+            new RedbKnowledgeStore(sp.GetRequiredService<IRouteContext>(), redbName));
 
         services.AddSingleton<IBatchStore>(sp =>
-            new RedbBatchStore(sp.GetRequiredService<IRouteContext>()));
+            new RedbBatchStore(sp.GetRequiredService<IRouteContext>(), redbName));
 
         // Only the defaults this package ships are replaced — a host's own observer or budget enforcer
         // is left exactly as registered. Taking a user registration away is what `Replace` used to do
         // here silently, and the audit observer is not worth breaking someone's governance for.
         ReplaceShippedDefault<IAgentObserver>(services,
-            sp => new RedbAuditObserver(sp.GetRequiredService<IRouteContext>()),
+            sp => new RedbAuditObserver(sp.GetRequiredService<IRouteContext>(), redbName),
             typeof(NoopAgentObserver));
 
         // Cross-run budgets arrive with the store: the per-run ceiling is now also checked against the

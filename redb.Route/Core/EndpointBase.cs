@@ -50,6 +50,12 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
     private long _lastWarningTicks;
     private volatile string _lastWarningMessage = "";
 
+    // The values this endpoint knows to be secret, longest first; read on the first recorded text.
+    private string[]? _secretValues;
+
+    // A secret this short would mask ordinary words and numbers of the text; it is left to the key=value masking.
+    private const int MinSecretLength = 4;
+
     // ── Processing time (sliding window of last 100 durations in ticks) ──
     private readonly ConcurrentQueue<long> _processingTimes = new();
     private const int MaxProcessingTimesHistory = 100;
@@ -296,7 +302,7 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
     /// <summary>Record a processing error with exception details. Thread-safe.</summary>
     public void RecordError(Exception exception)
     {
-        _lastErrorMessage = exception.Message;
+        _lastErrorMessage = Masked(exception.Message);
         RecordError();
     }
 
@@ -311,7 +317,7 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
     /// <summary>Record a processing warning with message. Thread-safe.</summary>
     public void RecordWarning(string message)
     {
-        _lastWarningMessage = message;
+        _lastWarningMessage = Masked(message);
         RecordWarning();
     }
 
@@ -361,11 +367,39 @@ public abstract class EndpointBase<TOptions> : IEndpoint, IEndpointStatistics wh
     /// </remarks>
     public void RecordRefused(string reason)
     {
-        _lastRefusalMessage = reason ?? "";
+        _lastRefusalMessage = Masked(reason);
         Interlocked.Increment(ref _refused);
         var nowTicks = DateTime.UtcNow.Ticks;
         Interlocked.Exchange(ref _lastActivityTicks, nowTicks);
         Interlocked.Exchange(ref _lastRefusalTicks, nowTicks);
+    }
+
+    /// <summary>
+    /// <paramref name="text"/> as the endpoint statistics keep it: secret <c>key=value</c> pairs and URI passwords masked
+    /// (<see cref="EndpointUri.RedactSecrets"/>), and every value this endpoint knows to be secret masked wherever it
+    /// stands, plain or URL-escaped, such as a bot token in the path of a request URL. The secrets are the
+    /// <see cref="SensitiveAttribute"/> options of the endpoint and the URI parameters whose names are sensitive.
+    /// </summary>
+    internal string Masked(string? text)
+    {
+        var masked = EndpointUri.RedactSecrets(text);
+        if (masked.Length == 0)
+            return masked;
+        foreach (var secret in _secretValues ??= SecretValues())
+            masked = masked.Replace(secret, EndpointUri.Redacted, StringComparison.Ordinal);
+        return masked;
+    }
+
+    private string[] SecretValues()
+    {
+        var values = Options.SensitiveValues()
+            .Concat(Uri.RawParameters.Where(p => EndpointUri.IsSensitiveKey(p.Key)).Select(p => p.Value))
+            .Where(v => v.Length >= MinSecretLength);
+        return values
+            .SelectMany(v => new[] { v, System.Uri.EscapeDataString(v) })
+            .Distinct(StringComparer.Ordinal)
+            .OrderByDescending(v => v.Length)
+            .ToArray();
     }
 
     // ── Utility ──

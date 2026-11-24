@@ -65,14 +65,14 @@ public sealed class SoapProducer : ConnectableProducer
             // envelope, so we neither wrap it nor inject headers/security; those are the route's own.
             envelope = exchange.In.Body is byte[] raw
                 ? raw
-                : System.Text.Encoding.UTF8.GetBytes(exchange.In.Body?.ToString() ?? string.Empty);
+                : System.Text.Encoding.UTF8.GetBytes(exchange.In.Body is { } envelopeBody ? BodyText.Of(envelopeBody) : string.Empty);
         }
         else
         {
             // PAYLOAD / POJO dataFormat: build an envelope around the body fragment.
             var bodyXml = dataFormat == SoapDataFormat.Pojo && exchange.In.Body is not null and not string
                 ? SoapPojo.Serialize(exchange.In.Body)                    // typed object ⇒ document/literal XML
-                : exchange.In.Body?.ToString() ?? string.Empty;
+                : exchange.In.Body is { } fragment ? BodyText.Of(fragment) : string.Empty;
 
             var headerXml = BuildHeaderBlock(exchange.In.Headers);       // envelope <soap:Header> plane
             // WS-Security UsernameToken (Ф4a): prepend a <wsse:Security> header when the factory supplies creds.

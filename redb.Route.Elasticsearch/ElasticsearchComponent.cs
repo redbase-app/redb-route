@@ -96,13 +96,15 @@ public sealed class ElasticsearchEndpoint : EndpointBase<ElasticsearchEndpointOp
             if (_client is not null)
                 return _client;
 
-            _client = BuildClient();
+            var (client, nodes) = BuildClient();
+            _client = client;
 
-            // Nodes may be a comma-separated list of URLs and can carry userinfo
-            // credentials (http://user:pass@host); sanitize each before logging.
-            var sanitizedNodes = string.Join(",", Options.Nodes.Split(',').Select(EndpointUri.Sanitize));
-            Logger?.LogInformation("Elasticsearch client created: Nodes={Nodes}, Index={Index}",
-                sanitizedNodes, IndexName);
+            // The nodes the client was built with: the connection factory's when one is named, not the endpoint's
+            // default. They may be a comma-separated list of URLs carrying userinfo credentials
+            // (http://user:pass@host); each is sanitized before logging.
+            var sanitizedNodes = string.Join(",", nodes.Split(',').Select(EndpointUri.Sanitize));
+            Logger?.LogInformation("Elasticsearch client created: Nodes={Nodes}, Index={Index}, ConnectionFactory={ConnectionFactory}",
+                sanitizedNodes, IndexName, string.IsNullOrEmpty(Options.ConnectionFactory) ? "-" : Options.ConnectionFactory);
 
             return _client;
         }
@@ -124,7 +126,8 @@ public sealed class ElasticsearchEndpoint : EndpointBase<ElasticsearchEndpointOp
 
     // ── Helpers ──
 
-    private ElasticsearchClient BuildClient()
+    /// <summary>The client, and the nodes it connects to (for the log).</summary>
+    private (ElasticsearchClient Client, string Nodes) BuildClient()
     {
         // 1. Named factory from registry — a set-but-unknown name fails loud, never a
         // silent fallback to URI parameters (Ф11 Ж-1).
@@ -135,7 +138,7 @@ public sealed class ElasticsearchEndpoint : EndpointBase<ElasticsearchEndpointOp
                 Options.ConnectionFactory);
             Logger?.LogDebug("Elasticsearch: using ConnectionFactory '{Name}' from registry",
                 Options.ConnectionFactory);
-            return registryFactory.Build();
+            return (registryFactory.Build(), registryFactory.Nodes);
         }
 
         // 2. Build from options
@@ -153,7 +156,7 @@ public sealed class ElasticsearchEndpoint : EndpointBase<ElasticsearchEndpointOp
             MaxDeadTimeout = Options.MaxDeadTimeout,
             MaxRetries = Options.MaxRetries,
         };
-        return factory.Build();
+        return (factory.Build(), factory.Nodes);
     }
 
     private static (ElasticsearchOperationType Operation, string IndexName) ParsePath(string path)

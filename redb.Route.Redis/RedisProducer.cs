@@ -298,7 +298,7 @@ public sealed class RedisProducer : ConnectableProducer
         null => RedisValue.EmptyString,
         byte[] arr => arr,
         string s => s,
-        _ => body.ToString() ?? string.Empty
+        _ => BodyText.Of(body)
     };
 
     // ═══════════════════════════════════════════════════════════

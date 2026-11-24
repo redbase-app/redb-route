@@ -86,9 +86,17 @@ export function templateState(installed: InstalledTemplatePackage | null, latest
     return { kind: "current", installed };
 }
 
-/** The `dotnet new install` arguments for a template package, pinned to a version when one is known. */
-export function templateInstallArguments(packageId: string, version: string | null): string[] {
-    return ["new", "install", version ? `${packageId}::${version}` : packageId];
+/**
+ * The `dotnet new install` arguments for a template package, pinned to a version when one is known.
+ * `sdkMajor` is the major version of the SDK that runs the command (the highest installed one): SDK 9 and later
+ * take `package@version` and SDK 10 warns that `::` is deprecated, while SDK 8 refuses `@` and knows only `::`.
+ * An unknown SDK gets `::`, which every SDK accepts.
+ */
+export function templateInstallArguments(packageId: string, version: string | null, sdkMajor: number | null): string[] {
+    if (!version)
+        return ["new", "install", packageId];
+    const separator = sdkMajor !== null && sdkMajor >= 9 ? "@" : "::";
+    return ["new", "install", `${packageId}${separator}${version}`];
 }
 
 /** The NuGet flat-container index of a package, listing its versions. */

@@ -93,4 +93,16 @@ public static class As2Headers
         // every From(http) -> To(as2) route into an accidental preserve-host proxy.
         "Host",
     };
+
+    /// <summary>
+    /// An AS2-name as it goes into <c>AS2-From</c> / <c>AS2-To</c> (RFC 4130 §6.2): as it is when every character is
+    /// printable ASCII other than space, double quote and backslash (an AS2-atomic-name), else in double quotes with
+    /// <c>"</c> and <c>\</c> escaped (an AS2-quoted-name).
+    /// </summary>
+    internal static string FormatName(string name)
+    {
+        if (name.Length > 0 && name.All(c => c is > ' ' and <= '~' and not '"' and not '\\'))
+            return name;
+        return "\"" + name.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+    }
 }
