@@ -32,7 +32,7 @@ From(GrpcDsl.Listen("0.0.0.0:5001").Method("/identity.v1.Identity/Introspect"))
 
 // The built-in generic service (headers + payload envelope), unchanged.
 From(GrpcDsl.Listen("0.0.0.0:5001"))
-    .Process(async (exchange, ct) => exchange.Message.SetBody(Handle(exchange.Message.GetBody<byte[]>())));
+    .Process(exchange => exchange.In.Body = Handle((byte[])exchange.In.Body!));
 
 // Client.
 From("direct://send")

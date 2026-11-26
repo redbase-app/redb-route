@@ -31,8 +31,9 @@ services.AddRedbRoute(route =>
     route.Services.AddRedbRouteSignalR();
 
     // Hub server — accept connections, process method invocations
-    route.AddRoute("signalr-server", r => r
+    route.AddRoutes(r => r
         .From(SignalR.Hub("0.0.0.0:5000/chatHub").InOut())
+        .RouteId("signalr-server")
         .Process(e =>
         {
             var method = e.In.Headers["redbSignalR.Method"];
@@ -40,14 +41,16 @@ services.AddRedbRoute(route =>
         }));
 
     // Client — connect to a remote hub and send messages
-    route.AddRoute("signalr-client", r => r
+    route.AddRoutes(r => r
         .From("direct:send")
+        .RouteId("signalr-client")
         .To(SignalR.Connect("api.example.com:5000/chatHub")
             .Method("Send").Reconnect()));
 
     // Server broadcast — push to all connected clients of the local hub
-    route.AddRoute("signalr-broadcast", r => r
+    route.AddRoutes(r => r
         .From("direct:notify")
+        .RouteId("signalr-broadcast")
         .To(SignalR.Broadcast("0.0.0.0:5000/chatHub")
             .Method("Notify")));
 });
@@ -193,8 +196,9 @@ Client invocations are fire-and-forget. The hub returns `null`.
 When `inOut=true`, the consumer returns the `exchange.Out.Body` as the hub method result:
 
 ```csharp
-route.AddRoute("rpc", r => r
+route.AddRoutes(r => r
     .From(SignalR.Hub("0.0.0.0:5000/rpcHub").InOut())
+    .RouteId("rpc")
     .Process(e =>
     {
         var input = (long)e.In.Body!;
@@ -245,8 +249,9 @@ SignalR.Hub("0.0.0.0:5000/chatHub").DefaultGroup("lobby")
 
 // Membership depends on who is connecting: rejoin on the Connected event, which the hub
 // dispatches as an exchange like any other.
-route.AddRoute("rejoin", r => r
+route.AddRoutes(r => r
     .From(SignalR.Hub("0.0.0.0:5000/chatHub"))
+    .RouteId("rejoin")
     .Filter(Header(SignalRHeaders.Event).isEqualTo("Connected"))
     .Process(async (e, ct) =>
     {
@@ -271,8 +276,9 @@ Target audiences for server-mode producer:
 
 ```csharp
 // Broadcast to a specific group
-route.AddRoute("group-notify", r => r
+route.AddRoutes(r => r
     .From("direct:alert")
+    .RouteId("group-notify")
     .SetHeader("redbSignalR.Group", "admins")
     .To(SignalR.Broadcast("0.0.0.0:5000/chatHub")
         .Method("Alert")));

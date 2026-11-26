@@ -20,7 +20,7 @@ No additional dependencies.
 ### Fluent DSL
 
 ```csharp
-using redb.Route.File.Fluent;
+using redb.Route.File;
 
 // Poll directory for new files
 From(FileDsl.Read("/data/incoming")

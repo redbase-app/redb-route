@@ -18,7 +18,7 @@ dotnet add package redb.Route.Quartz
 ### Fluent DSL
 
 ```csharp
-using redb.Route.Quartz.Fluent;
+using redb.Route.Quartz;
 
 // Cron schedule — every weekday at 8:00 AM
 From(Cron.Schedule("daily-report", "0 0 8 ? * MON-FRI"))

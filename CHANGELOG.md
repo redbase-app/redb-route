@@ -65,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Pending changes live in `changelog/unreleased/` until the release; `pwsh scripts/changelog.ps1 -Preview` shows them.
 
+## [4.7.6] — 2026-11-27
+
+### Changed
+
+- **Route 4.7.6 runs on redb 4.7.6, which loads pages with less memory and plans more queries through the indexes.**
+  Route's own code is unchanged; the VS Code extension stays 0.2.30. A database needs no conversion step.
+
 ## [4.7.5] — 2026-11-24
 
 ### Changed

@@ -66,7 +66,9 @@ All of it — for **one line** of DI registration.
 services.AddRedbRoute(route =>
 {
     route.Services.AddRedbRouteLlm();              // engine + in-memory defaults
-    route.Services.AddRedbIdempotentRepository();  // required by the idempotency store
+    // required by the idempotency store: the redb store wraps the IIdempotentRepository service
+    route.Services.AddSingleton<IIdempotentRepository>(sp => new RedbIdempotentRepository(
+        sp.GetRequiredService<IServiceScopeFactory>(), new RedbIdempotentOptions { ProcessorName = "llm-tools" }));
     route.Services.AddRedbLlmStorage();            // ← one line: everything moves to redb
 
     route.Services.AddLlmConnectionFactory("claude", f =>
@@ -548,8 +550,8 @@ a conversation tree is usually small (tens of messages).
   default store assumes single-instance / eventual consistency.
 - **Audit is best-effort.** `RedbAuditObserver` swallows failures. If audit
   **must** land, log to a file/Kafka via a second observer and ship out.
-- **`AddRedbIdempotentRepository()` is required.** `RedbToolIdempotencyStore`
-  wraps `IIdempotentRepository`. Calling `AddRedbLlmStorage()` without it
+- **An `IIdempotentRepository` service is required.** `RedbToolIdempotencyStore`
+  wraps it (a `RedbIdempotentRepository`, as above). Calling `AddRedbLlmStorage()` without it
   throws on the first tool call. Keep them next to each other in DI.
 - **Cleanup — only roots and flat schemas.** `DeleteWithPurgeAsync` cascades
   soft-delete down the tree. Pass only `ConversationProps.id` —

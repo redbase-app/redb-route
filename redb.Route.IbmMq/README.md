@@ -27,7 +27,7 @@ services.AddRedbRoute(route =>
 ```csharp
 public class MyRoutes : RouteBuilder
 {
-    public override void Configure()
+    protected override void Configure()
     {
         From("wmq:DEV.QUEUE.1?host=mq-host&queueManager=QM1&channel=DEV.APP.SVRCONN")
             .Log("Received: ${body}")
@@ -62,7 +62,7 @@ From(Wmq.Topic("EVENTS/ORDER")
     .ConcurrentConsumers(4))
 
 // Persistent send with JMS interop
-To(Wmq.Queue("ORDERS.OUT")
+.To(Wmq.Queue("ORDERS.OUT")
     .Host("mq-host")
     .Persistent()
     .TargetClient(IbmMqTargetClient.Jms))
@@ -73,7 +73,7 @@ From(Wmq.Queue("TXN.QUEUE")
     .Transacted())
 
 // RPC (request/reply)
-To(Wmq.Queue("RPC.SERVICE")
+.To(Wmq.Queue("RPC.SERVICE")
     .Host("mq-host")
     .ReplyTo()
     .Timeout(10))

@@ -16,13 +16,13 @@ dotnet add package redb.Route.MqttNet
 ### Fluent DSL
 
 ```csharp
-using redb.Route.MqttNet.Fluent;
+using redb.Route.MqttNet;
 
 // Subscribe to topic
 From(Mqtt.Subscribe("sensors/temperature/#")
         .Server("mqtt.example.com").Port(1883)
         .ClientId("route-consumer")
-        .Qos(MqttQualityOfServiceLevel.AtLeastOnce))
+        .Qos(1))
     .Log("Temperature: ${body}")
     .To("direct://process");
 
@@ -31,7 +31,7 @@ From("direct://alerts")
     .To(Mqtt.Publish("alerts/critical")
         .Server("mqtt.example.com")
         .Username("svc").Password("secret")
-        .Qos(MqttQualityOfServiceLevel.ExactlyOnce)
+        .Qos(2)
         .Retain());
 
 // Shared subscription (load balancing across consumers)
@@ -44,7 +44,7 @@ From(Mqtt.Subscribe("orders/new")
 // Broker configuration (shared across routes)
 From(Mqtt.Subscribe("events/#")
         .Broker("main")
-        .Qos(MqttQualityOfServiceLevel.AtLeastOnce))
+        .Qos(1))
     .To("seda://events");
 ```
 

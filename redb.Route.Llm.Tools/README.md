@@ -7,7 +7,7 @@ Optional batteries package for `redb.Route.Llm`. Ships reusable building blocks 
 Every tool is shipped twice:
 
 1. **As a DSL extension on `IRouteDefinition`** — the canonical, composable form. Plug into any existing route step (LLM tool, AMQP enrichment, HTTP pipeline) by adding `.HttpFetch(opts)` / `.JsonPath()` / etc. just like any other built-in route operator.
-2. **As a standalone `RouteBuilder` wrapper** — a thin convenience class (`HttpFetchTool`, `JsonPathTool`, …) that mounts the same logic behind a `direct:` endpoint with the right `AsLlmTool(...)` aspect already attached. Use it when you want to hand a single object to `context.AddRoutes(...)` — for example for external/process tools (shell, RPC) where the `direct:` indirection is the whole point.
+2. **As a standalone `RouteBuilder` wrapper** — a thin convenience class (`HttpFetchTool`, `JsonPathTool`, …) that mounts the same logic behind a `direct:` endpoint with the right `AsLlmTool(...)` aspect already attached. Use it when you want to hand a single object to `context.AddRoutes(...)` or `route.AddRouteBuilder<T>()` — for example for external/process tools (shell, RPC) where the `direct:` indirection is the whole point.
 
 Pick **the DSL extension** for everything else.
 
@@ -33,7 +33,7 @@ services.AddRedbRoute(route =>
 {
     route.Services.AddRedbRouteLlm();
 
-    route.AddRouteBuilder(new InlineToolRoutes());
+    route.AddRouteBuilder<InlineToolRoutes>();
 });
 
 internal sealed class InlineToolRoutes : RouteBuilder
@@ -41,7 +41,7 @@ internal sealed class InlineToolRoutes : RouteBuilder
     protected override void Configure()
     {
         var fetchOpts = new HttpFetchOptions { HostAllowlist = ["api.example.com"] };
-        var tavily    = new TavilyWebSearchOptions { ApiKey = Env.Var("TAVILY_API_KEY") };
+        var tavily    = new TavilyWebSearchOptions { ApiKey = Environment.GetEnvironmentVariable("TAVILY_API_KEY")! };
 
         From("direct:llm.http_fetch")
             .AsLlmTool("http_fetch").Description("HTTP GET a URL.").Then()
@@ -87,18 +87,18 @@ When you want to ship a tool as a single object — typically because the route 
 services.AddRedbRoute(route =>
 {
     route.Services.AddRedbRouteLlm();
-    route.AddRouteBuilder(new HttpFetchTool(new HttpFetchOptions
-    {
-        HostAllowlist = ["api.example.com"]
-    }));
-    route.AddRouteBuilder(new JsonPathTool());
-    route.AddRouteBuilder(new XPathTool());
-    route.AddRouteBuilder(new RegexExtractTool());
-    route.AddRouteBuilder(new MathEvalTool());
-    route.AddRouteBuilder(new TavilyWebSearchTool(new TavilyWebSearchOptions
+    // A wrapper is resolved from DI, so its options are registered as services.
+    route.Services.AddSingleton(new HttpFetchOptions { HostAllowlist = ["api.example.com"] });
+    route.Services.AddSingleton(new TavilyWebSearchOptions
     {
         ApiKey = Environment.GetEnvironmentVariable("TAVILY_API_KEY")!
-    }));
+    });
+    route.AddRouteBuilder<HttpFetchTool>();
+    route.AddRouteBuilder<JsonPathTool>();
+    route.AddRouteBuilder<XPathTool>();
+    route.AddRouteBuilder<RegexExtractTool>();
+    route.AddRouteBuilder<MathEvalTool>();
+    route.AddRouteBuilder<TavilyWebSearchTool>();
 });
 ```
 
@@ -107,8 +107,8 @@ The wrappers do nothing more than `From(opts.EndpointUri).AsLlmTool(...).Then().
 Reference the registered tool name in any LLM step:
 
 ```csharp
-.To(LlmDsl.Factory("openai")
-    .Tools("http_fetch", "json_path", "xpath", "regex_extract", "math_eval", "web_search")
+.To(Llm.Factory("openai")
+    .Tools("http_fetch,json_path,xpath,regex_extract,math_eval,web_search")
     .MaxIterations(6)
     .AsUri())
 ```

@@ -36,7 +36,7 @@ using redb.Route.Exec;
 services.AddRedbRoute()
         .AddRedbRouteExec();
 
-routes.From(Direct.From("git-status"))
+routes.From(Direct.Endpoint("git-status"))
       .To(ExecDsl.Run("git")
                  .Args("status", "--short")
                  .WorkingDirectory("/srv/app")

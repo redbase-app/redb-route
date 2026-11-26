@@ -20,7 +20,7 @@ No additional dependencies.
 ### Fluent DSL
 
 ```csharp
-using redb.Route.Tcp.Fluent;
+using redb.Route.Tcp;
 
 // TCP server (consumer)
 From(TcpDsl.Listen("0.0.0.0:9000")
@@ -43,8 +43,8 @@ From(TcpDsl.Listen("0.0.0.0:9001")
         .InOut())
     .Process(async (e, ct) =>
     {
-        var request = e.Message.GetBody<byte[]>();
-        e.Message.SetBody(HandleRequest(request));
+        var request = (byte[])e.In.Body!;
+        e.In.Body = HandleRequest(request);
     });
 
 // TLS

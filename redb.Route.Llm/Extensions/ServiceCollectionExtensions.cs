@@ -223,8 +223,8 @@ public static class LlmServiceCollectionExtensions
     /// <see cref="IAgentObserver"/> with the audit observer.
     /// <para>
     /// The redb-backed idempotency store wraps the
-    /// <see cref="IIdempotentRepository"/> already registered by
-    /// <c>AddRedbIdempotentRepository(...)</c>; if no repository is registered
+    /// <see cref="IIdempotentRepository"/> service already registered (for example a
+    /// <c>RedbIdempotentRepository</c>); if no repository is registered
     /// the call will throw at first use.
     /// </para>
     /// </summary>

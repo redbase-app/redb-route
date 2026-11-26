@@ -18,13 +18,13 @@ dotnet add package redb.Route.Mail
 ### Fluent DSL
 
 ```csharp
-using redb.Route.Mail.Fluent;
+using redb.Route.Mail;
 
 // Send email via SMTP
 From("direct://send-email")
     .To(Smtp.Send("smtp.gmail.com")
         .Port(587)
-        .Security(SecureSocketOptions.StartTls)
+        .Security("StartTls")
         .Username("sender@gmail.com").Password("app-password")
         .From("sender@gmail.com")
         .To("recipient@example.com")
@@ -33,7 +33,7 @@ From("direct://send-email")
 // Receive emails via IMAP (IDLE push)
 From(Imap.Read("imap.gmail.com")
         .Port(993)
-        .Security(SecureSocketOptions.SslOnConnect)
+        .Security("Ssl")
         .Username("inbox@gmail.com").Password("app-password")
         .Folder("INBOX")
         .Unseen()
@@ -47,7 +47,7 @@ From(Imap.Read("imap.gmail.com")
 // POP3 polling
 From(Pop3.Read("pop3.example.com")
         .Port(995)
-        .Security(SecureSocketOptions.SslOnConnect)
+        .Security("Ssl")
         .Username("user").Password("pass")
         .Delay(30000)
         .MaxMessages(10))

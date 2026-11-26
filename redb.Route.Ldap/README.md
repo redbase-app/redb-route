@@ -27,7 +27,7 @@ ldap:OPERATION:baseDn?server=host&port=389&bindDn=cn=admin,dc=example,dc=com&bin
 using redb.Route.Ldap;
 
 // Search users
-From(Ldap.Search("ou=users,dc=example,dc=com")
+From(LdapDsl.Search("ou=users,dc=example,dc=com")
         .Server("ldap.example.com")
         .BindDn("cn=admin,dc=example,dc=com")
         .BindPassword("secret")
@@ -39,7 +39,7 @@ From(Ldap.Search("ou=users,dc=example,dc=com")
     .To("direct://process");
 
 // Watch for changes (consumer — polls for modifications)
-From(Ldap.Watch("ou=users,dc=example,dc=com")
+From(LdapDsl.Watch("ou=users,dc=example,dc=com")
         .Server("ldap.example.com")
         .BindDn("cn=admin,dc=example,dc=com")
         .BindPassword("secret")
@@ -51,21 +51,21 @@ From(Ldap.Watch("ou=users,dc=example,dc=com")
 
 // Add entry
 From("direct://create-user")
-    .To(Ldap.Add("ou=users,dc=example,dc=com")
+    .To(LdapDsl.Add("ou=users,dc=example,dc=com")
         .Server("ldap.example.com")
         .BindDn("cn=admin,dc=example,dc=com")
         .BindPassword("secret"));
 
 // Modify entry
 From("direct://update-user")
-    .To(Ldap.Modify("cn=alice,ou=users,dc=example,dc=com")
+    .To(LdapDsl.Modify("cn=alice,ou=users,dc=example,dc=com")
         .Server("ldap.example.com")
         .BindDn("cn=admin,dc=example,dc=com")
         .BindPassword("secret"));
 
 // Bind (authentication check)
 From("direct://authenticate")
-    .To(Ldap.Bind("dc=example,dc=com")
+    .To(LdapDsl.Bind("dc=example,dc=com")
         .Server("ldap.example.com"));
 ```
 
@@ -73,7 +73,7 @@ From("direct://authenticate")
 
 | Category | Methods |
 |----------|---------|
-| **Operations** | `Ldap.Search()`, `Ldap.Compare()`, `Ldap.Add()`, `Ldap.Modify()`, `Ldap.Delete()`, `Ldap.Rename()`, `Ldap.Bind()`, `Ldap.Watch()` |
+| **Operations** | `LdapDsl.Search()`, `LdapDsl.Compare()`, `LdapDsl.Add()`, `LdapDsl.Modify()`, `LdapDsl.Delete()`, `Ldap.Rename()`, `LdapDsl.Bind()`, `LdapDsl.Watch()` |
 | **Connection** | `.Server()`, `.Port()`, `.Ssl()`, `.StartTls()`, `.ConnectionFactory()`, `.ConnectTimeout()`, `.OperationTimeout()` |
 | **Auth** | `.BindDn()`, `.BindPassword()` |
 | **Search** | `.Filter()`, `.Scope()`, `.Attributes()`, `.PageSize()`, `.SizeLimit()`, `.TimeLimit()` |

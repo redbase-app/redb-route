@@ -93,7 +93,7 @@ public class OrderRoutes : RouteBuilder
 ### Fluent Builders
 
 ```csharp
-using redb.Route.Fluent;
+using redb.Route;
 
 // Direct — sync in-process
 From(Direct.Endpoint("orders"))
@@ -307,8 +307,8 @@ migration off `BeginRedbTransaction()`.
 
 // Lambda style — callback sub-routes
 .Choice(c => c
-    .When(Header("type").isEqualTo("order"), r => r.To("direct://orders"))
-    .When(Header("type").isEqualTo("payment"), r => r.To("direct://payments"))
+    .When(e => e.In.GetHeader<string>("type") == "order", r => r.To("direct://orders"))
+    .When(e => e.In.GetHeader<string>("type") == "payment", r => r.To("direct://payments"))
     .Otherwise(r => r.To("seda://unknown")))
 
 // String expression style

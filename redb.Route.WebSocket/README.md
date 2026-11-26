@@ -18,7 +18,7 @@ dotnet add package redb.Route.WebSocket
 ### Fluent DSL
 
 ```csharp
-using redb.Route.WebSocket.Fluent;
+using redb.Route.WebSocket;
 
 // WebSocket server (consumer)
 From(Ws.Listen("0.0.0.0:8080/ws")
@@ -26,8 +26,8 @@ From(Ws.Listen("0.0.0.0:8080/ws")
         .InOut())
     .Process(async (e, ct) =>
     {
-        var msg = e.Message.GetBody<string>();
-        e.Message.SetBody($"Echo: {msg}");
+        var msg = (string)e.In.Body!;
+        e.In.Body = $"Echo: {msg}";
     });
 
 // WebSocket client (producer)
@@ -86,7 +86,7 @@ From(Ws.Listen("0.0.0.0:8080/stream"))
     .To("direct://slow-work");
 
 From("direct://slow-work-done")
-    .SetHeader(WsHeaders.TargetConnection, Simple("${header.redbWs.ConnectionId}"))
+    .SetHeader(WsHeaders.TargetConnection, Expr("${header.redbWs.ConnectionId}"))
     .To(Ws.Broadcast("0.0.0.0:8080/stream"));
 ```
 

@@ -18,7 +18,7 @@ dotnet add package redb.Route.Http
 ### Fluent DSL
 
 ```csharp
-using redb.Route.Http.Fluent;
+using redb.Route.Http;
 
 // Outbound HTTP call (producer)
 From("direct://send")
@@ -192,7 +192,7 @@ silently fall back to inline URI parameters.
 ```csharp
 context.AddToRegistry("prod", new HttpConnectionFactory
 {
-    AuthScheme = "Bearer",
+    AuthScheme = HttpAuthScheme.Bearer,
     AuthToken = secrets.ApiToken,
 });
 // http://api.internal/orders?connectionFactory=prod

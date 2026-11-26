@@ -30,21 +30,23 @@ services.AddRedbRoute(route =>
     route.Services.AddRedbRouteS3();
 
     // Poll MinIO bucket for new CSV files
-    route.AddRoute("s3-import", r => r
+    route.AddRoutes(r => r
         .From(S3.Bucket("incoming")
             .ServiceUrl("http://localhost:9000").ForcePathStyle()
             .AccessKey("minioadmin").SecretKey("minioadmin")
             .Prefix("data/").Include("*.csv")
             .DeleteAfterRead().Delay(30_000))
+        .RouteId("s3-import")
         .To("log:received"));
 
     // Upload to AWS S3 with SSE-KMS
-    route.AddRoute("s3-export", r => r
+    route.AddRoutes(r => r
         .From("direct:upload")
+        .RouteId("s3-export")
         .To(S3.Bucket("reports")
             .Region("eu-west-1")
             .AccessKey("AKIA...").SecretKey("...")
-            .KeyName(Expression.Header("fileName"))
+            .KeyName(new HeaderExpression("fileName"))
             .UseKmsEncryption("arn:aws:kms:eu-west-1:123456:key/abc")
             .StorageClass("INTELLIGENT_TIERING")));
 });
@@ -511,7 +513,7 @@ S3.Bucket("my-bucket", S3OperationType.CreateDownloadLink)
 S3.Bucket("archive")
     .Region("eu-west-1")
     .AccessKey("KEY").SecretKey("SECRET")
-    .KeyName(Expression.Header("fileName"))
+    .KeyName(new HeaderExpression("fileName"))
     .MultiPartUpload().PartSize(10_485_760)
     .UseKmsEncryption("my-key-id")
     .StorageClass("INTELLIGENT_TIERING")

@@ -41,7 +41,7 @@ in full - key material included:
 ```xml
 <bean name="globex" type="redb.Route.As2.As2ConnectionFactory, redb.Route.As2">
   <property key="OurCertificate">
-    <bean type="System.Security.Cryptography.X509Certificates.X509CertificateLoader, System.Security.Cryptography.X509Certificates"
+    <bean type="System.Security.Cryptography.X509Certificates.X509CertificateLoader, System.Security.Cryptography"
           factoryMethod="LoadPkcs12FromFile">
       <constructorArg value="{{As2.CertificateDirectory}}/hub.pfx"/>
       <constructorArg value="{{As2.CertificatePassword}}"/>
@@ -52,6 +52,8 @@ in full - key material included:
   <property key="Sign" value="true"/>
 </bean>
 ```
+
+`X509CertificateLoader` exists from .NET 9; this demo targets .NET 10. On .NET 8 use the `X509Certificate2` constructor form shown in the redb.Route.Xml README.
 
 ## Build and deploy
 

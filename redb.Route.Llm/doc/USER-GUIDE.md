@@ -796,7 +796,8 @@ By default the agent loop is stateless — fast for tests, useless for productio
 
 ```csharp
 route.Services.AddRedbRouteLlm();
-route.Services.AddRedbIdempotentRepository();
+route.Services.AddSingleton<IIdempotentRepository>(sp => new RedbIdempotentRepository(
+    sp.GetRequiredService<IServiceScopeFactory>(), new RedbIdempotentOptions { ProcessorName = "llm-tools" }));
 route.Services.AddRedbLlmStorage();   // ← persists everything to redb
 ```
 

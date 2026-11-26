@@ -33,28 +33,31 @@ services.AddRedbRoute(route =>
     route.Services.AddRedbRouteFirebase();
 
     // Realtime Firestore → log changes
-    route.AddRoute("firestore-watch", r => r
+    route.AddRoutes(r => r
         .From(Firestore.Collection("orders")
             .Where("status==pending")
             .CredentialPath("/secrets/firebase.json"))
+        .RouteId("firestore-watch")
         .To("log:order-change"));
 
     // Upload file to GCS bucket
-    route.AddRoute("storage-upload", r => r
+    route.AddRoutes(r => r
         .From("direct:upload")
+        .RouteId("storage-upload")
         .To(FirebaseStorage.Bucket("media-uploads")
             .Operation(FirebaseStorageOperationType.Upload)
-            .ObjectName(Expression.Header("fileName"))
+            .ObjectName(new HeaderExpression("fileName"))
             .ContentType("application/pdf")
             .CacheControl("public, max-age=86400")
             .CredentialPath("/secrets/firebase.json")));
 
     // Send push notification
-    route.AddRoute("push-notify", r => r
+    route.AddRoutes(r => r
         .From("direct:notify")
-        .To(Fcm.Token(Expression.Header("deviceToken"))
+        .RouteId("push-notify")
+        .To(Fcm.Token(new HeaderExpression("deviceToken"))
             .Title("New Order")
-            .Body(Expression.Simple("Order ${body['id']} is ready"))
+            .Body(RouteBuilder.Expr("Order ${body['id']} is ready"))
             .CredentialPath("/secrets/firebase.json")));
 });
 ```
@@ -141,12 +144,12 @@ fstore://users/uid-123/orders?operation=Query&limit=10
 // Overwrite entire document (default)
 route.From("direct:save")
     .To(Firestore.Collection("users")
-        .DocumentId(Expression.Header("userId")));
+        .DocumentId(new HeaderExpression("userId")));
 
 // Merge — only update provided fields
 route.From("direct:update-partial")
     .To(Firestore.Collection("users")
-        .DocumentId(Expression.Header("userId"))
+        .DocumentId(new HeaderExpression("userId"))
         .Merge());
 ```
 
@@ -284,7 +287,7 @@ fbstorage://media-bucket?operation=List&prefix=archive/
 ```csharp
 route.From("direct:upload")
     .To(FirebaseStorage.Bucket("media")
-        .ObjectName(Expression.Simple("uploads/${header.category}/${header.fileName}"))
+        .ObjectName(RouteBuilder.Expr("uploads/${header.category}/${header.fileName}"))
         .ContentType("application/pdf")
         .CacheControl("public, max-age=3600"));
 ```
@@ -403,9 +406,9 @@ report `redbFcm.SuccessCount` / `redbFcm.FailureCount`.
 
 ```csharp
 route.From("direct:push")
-    .To(Fcm.Token(Expression.Header("deviceToken"))
+    .To(Fcm.Token(new HeaderExpression("deviceToken"))
         .Title("Order Shipped")
-        .Body(Expression.Simple("Your order ${body['orderId']} is on the way"))
+        .Body(RouteBuilder.Expr("Your order ${body['orderId']} is on the way"))
         .ImageUrl("https://example.com/shipped.png")
         .CredentialPath("/secrets/firebase.json"));
 ```
@@ -416,7 +419,7 @@ route.From("direct:push")
 route.From("direct:broadcast")
     .To(Fcm.Topic("breaking-news")
         .Title("Breaking News")
-        .Body(Expression.Simple("${body['headline']}"))
+        .Body(RouteBuilder.Expr("${body['headline']}"))
         .CredentialPath("/secrets/firebase.json"));
 ```
 
@@ -434,7 +437,7 @@ route.From("direct:targeted")
 ```csharp
 // Silent push — no visible notification, just data payload
 route.From("direct:sync")
-    .To(Fcm.Token(Expression.Header("deviceToken"))
+    .To(Fcm.Token(new HeaderExpression("deviceToken"))
         .DataOnly()
         .CredentialPath("/secrets/firebase.json"));
 // Body as Dictionary<string, string> → FCM data payload
@@ -445,7 +448,7 @@ route.From("direct:sync")
 
 ```csharp
 route.From("direct:push")
-    .To(Fcm.Token(Expression.Header("deviceToken"))
+    .To(Fcm.Token(new HeaderExpression("deviceToken"))
         .Title("Update Available")
 
         // Android
@@ -488,7 +491,7 @@ exchange.In.Headers["redbFcm.Data.action"] = "refresh";
 ## Fluent DSL Reference
 
 ```csharp
-using redb.Route.Firebase.Fluent;
+using redb.Route.Firebase;
 ```
 
 ### Firestore

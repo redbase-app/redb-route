@@ -18,12 +18,12 @@ dotnet add package redb.Route.Sftp
 ### Fluent DSL
 
 ```csharp
-using redb.Route.Sftp.Fluent;
+using redb.Route.Sftp;
 
 // Poll remote directory
 From(Sftp.Directory("/uploads")
         .Host("sftp.example.com").Port(22)
-        .Username("user").PrivateKey("/keys/id_rsa")
+        .Username("user").PrivateKey(Constant("/keys/id_rsa"))
         .Include("*.xml")
         .Delay(10000)
         .MoveTo("/uploads/archive")
@@ -45,8 +45,8 @@ From("direct://export")
 From(Sftp.Directory("/data")
         .Host("internal-sftp")
         .Username("svc")
-        .Proxy(ProxyTypes.Http, "proxy.corp.net", 8080)
-        .ProxyAuth("proxy-user", "proxy-pass"))
+        .Proxy("Http", Constant("proxy.corp.net"), 8080)
+        .ProxyAuth(Constant("proxy-user"), Constant("proxy-pass")))
     .To("direct://ingest");
 ```
 

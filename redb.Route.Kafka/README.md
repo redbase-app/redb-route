@@ -30,7 +30,7 @@ using redb.Route.Kafka;
 From(Kafka.Topic("orders")
         .Brokers("broker1:9092,broker2:9092")
         .GroupId("order-service")
-        .AutoOffsetReset(AutoOffsetReset.Earliest)
+        .AutoOffsetReset("Earliest")
         .MaxPollRecords(500))
     .Log("Received: ${body}")
     .To("direct://process");
@@ -39,9 +39,9 @@ From(Kafka.Topic("orders")
 From("direct://outbound")
     .To(Kafka.Topic("events")
         .Brokers("broker1:9092")
-        .Acks(Acks.All)
+        .Acks("All")
         .Key("order-key")
-        .Compression(CompressionType.Lz4));
+        .Compression("Lz4"));
 
 // Inside a transacted block the send joins the transaction: it goes out once the database has
 // committed. The builder's .Transacted() also makes the producer idempotent and requires the block.

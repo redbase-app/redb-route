@@ -55,7 +55,7 @@ and what is on the wishlist.** Updated whenever a connector ships or a new one i
 - **DSL example:**
 ```csharp
 .From("kafka:orders?brokers=kafka:9092&groupId=order-processor&autoOffsetReset=earliest")
-.To("kafka:enriched?brokers=kafka:9092&keySerializer=String&valueSerializer=Json")
+.To("kafka:enriched?brokers=kafka:9092")
 ```
 
 #### `redb.Route.RabbitMQ` — RabbitMQ ✅
@@ -65,7 +65,7 @@ and what is on the wishlist.** Updated whenever a connector ships or a new one i
 - **Key features:** routing keys via Simple expressions, dead-letter exchange, QoS prefetch, mandatory/immediate, RPC (Direct Reply-To), connection recovery
 - **DSL example:**
 ```csharp
-.From("rabbitmq:orders?exchange=orders.ex&queue=orders.q&autoAck=false&prefetchCount=10")
+.From("rabbitmq:orders?exchange=orders.ex&queue=orders.q&ackMode=Manual&prefetchCount=10")
 .To("rabbitmq:notifications?exchange=notifications.ex&routingKey=${header.customerType}")
 ```
 
@@ -125,8 +125,8 @@ and what is on the wishlist.** Updated whenever a connector ships or a new one i
 - **Key features:** framing codecs (`LineDelimited`, `LengthPrefix`, `Raw`, `FixedLength`), `maxConnections`, `keepAlive`, `idleTimeout`, custom `ICodec`
 - **DSL example:**
 ```csharp
-.From("tcp:0.0.0.0:9000?codec=LengthPrefix&maxConnections=100")
-.To("tcp:192.0.2.10:9000?codec=LineDelimited")
+.From("tcp:0.0.0.0:9000?lengthPrefixed=true&maxConnections=100")
+.To("tcp:192.0.2.10:9000?textLine=true")
 ```
 
 ---
@@ -158,7 +158,7 @@ and what is on the wishlist.** Updated whenever a connector ships or a new one i
 - **Key features:** auth via `username/password` or `privateKey`, `knownHosts` host-key verification, atomic upload via `tempPrefix`, `stepwise` cd compatibility mode
 - **DSL example:**
 ```csharp
-.From("sftp:sftp.example.com/incoming?username=user&privateKey=~/.ssh/id_rsa&delay=30000")
+.From("sftp:sftp.example.com/incoming?username=user&privateKeyPath=~/.ssh/id_rsa&delay=30000")
 .To("sftp:sftp.example.com/outgoing?username=user&password=xxx&tempPrefix=.tmp")
 ```
 
@@ -180,8 +180,8 @@ and what is on the wishlist.** Updated whenever a connector ships or a new one i
 - **Key features:** SMTP send (To/CC/BCC from headers, body → email body, attachments via `MimePart[]`), POP3 polling with `delete=true`, IMAP polling + **IDLE push**, folder select, unseen filter, full TLS/STARTTLS
 - **DSL example:**
 ```csharp
-.To("smtp:mail.example.com:587?username=bot@ex.com&password=xxx&tls=true")
-.From("imap:mail.example.com:993?username=inbox@ex.com&password=xxx&folder=INBOX&unseen=true&tls=true")
+.To("smtp:mail.example.com:587?username=bot@ex.com&password=xxx&security=StartTls")
+.From("imap:mail.example.com:993?username=inbox@ex.com&password=xxx&folder=INBOX&fetchFilter=Unseen&security=Ssl")
 ```
 
 #### `redb.Route.Ldap` — LDAP / Active Directory ✅

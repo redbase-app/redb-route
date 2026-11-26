@@ -150,7 +150,7 @@ into `Out.Body`.
 ```csharp
 public sealed class MyRoutes : RouteBuilder
 {
-    public override void Configure()
+    protected override void Configure()
     {
         From("kafka://orders")
             .To("llm://claude?temperature=0.1&maxTokens=512&conversation=header")
@@ -336,7 +336,7 @@ Anything else is opt-in per name — a trailing `*` makes it a prefix match:
 .To(Llm.Factory("claude")
       .Tools("profile_state,billing_check")
       .User("${header.X-User-Id}")                       // → llm.user.id in the tool
-      .PropagateToolHeaders("x-tenant-id", "x-app-*"))
+      .PropagateToolHeaders("x-tenant-id", "x-app-*").AsUri())
 ```
 
 > **Trust model.** `llm.user.id` and `llm.audit.*` are read off the inbound
@@ -377,9 +377,14 @@ r.From("direct:tool-publish")
 A tool runs on a child of the agent exchange, in its DI scope and its ambient transaction. An agent step
 inside `.Transacted()` is therefore one unit of work with its tools: a tool's redb or `sql:` writes go into
 the route's transaction, and a Kafka or RabbitMQ send with `transacted=true` is deferred into the route's
-`TRANSACT_ACTION` set and committed with it. When the route rolls back, those writes and sends go with it,
-and so do the run's conversation turns, tool cache entries and idempotency reservations: a retry runs the
-tools again against a clean state.
+`TRANSACT_ACTION` set and committed with it. When the route rolls back, those writes and sends go with it.
+With the redb stores (`AddRedbLlmStorage()`) so do the run's conversation turns, tool cache entries and
+idempotency reservations: a retry runs the tools again against a clean state.
+
+The in-memory default `InMemoryConversationStore` is not transactional. After a rollback the conversation keeps
+the rolled-back run's turns, its tool calls and their results included, so the model of a redelivered run reads
+that the tool was already called and may not call it again. Use `AddRedbLlmStorage()` for an `llm:` step with a
+conversation inside `.Transacted()`, or keep the step outside the block.
 
 Two things are kept out of that unit:
 
@@ -526,7 +531,9 @@ opt-in via a single call:
 services.AddRedbRoute(route =>
 {
     route.Services.AddRedbRouteLlm();          // engine + in-memory defaults
-    route.Services.AddRedbIdempotentRepository();   // required for idempotency
+    // required for idempotency: the redb store wraps the IIdempotentRepository service
+    route.Services.AddSingleton<IIdempotentRepository>(sp => new RedbIdempotentRepository(
+        sp.GetRequiredService<IServiceScopeFactory>(), new RedbIdempotentOptions { ProcessorName = "llm-tools" }));
     route.Services.AddRedbLlmStorage();         // ← swap defaults for REDB stores
 });
 ```

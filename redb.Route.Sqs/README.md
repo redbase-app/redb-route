@@ -29,20 +29,20 @@ From(Sqs.Queue("orders").WaitTimeSeconds(20).ConcurrentConsumers(4))
     .Process(HandleOrder);
 
 // Produce to a queue
-To(Sqs.Queue("orders").Region("eu-west-1"));
+.To(Sqs.Queue("orders").Region("eu-west-1"));
 
 // FIFO queue (name ends in .fifo) — group id required
-To(Sqs.Queue("orders.fifo").MessageGroupId("${header.customerId}"));
+.To(Sqs.Queue("orders.fifo").MessageGroupId("${header.customerId}"));
 
 // Publish to an SNS topic
-To(Sns.Topic("events").Region("us-east-1"));
+.To(Sns.Topic("events").Region("us-east-1"));
 
 // SNS → SQS fan-out: subscribe a queue, then consume it with sqs://
-To(Sns.Topic("events").SubscribeSnsToSqs("arn:aws:sqs:us-east-1:000000000000:events-q"));
+.To(Sns.Topic("events").SubscribeSnsToSqs("arn:aws:sqs:us-east-1:000000000000:events-q"));
 
 // Same, but raw delivery — the queue gets the bare payload (no SNS JSON envelope),
 // and SNS attributes arrive as SQS attributes (so trace context survives the hop):
-To(Sns.Topic("events")
+.To(Sns.Topic("events")
     .SubscribeSnsToSqs("arn:aws:sqs:us-east-1:000000000000:events-q")
     .RawMessageDelivery());
 ```

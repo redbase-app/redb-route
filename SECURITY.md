@@ -61,8 +61,8 @@ All transports that support TLS (HTTP, gRPC, TCP, SFTP, SMTP, MQTT, AMQP, IBM MQ
 
 ```csharp
 // DANGEROUS — never in production
-Http.Post("api.example.com/data")
-    .IgnoreSslErrors()   // only for local dev/testing
+Smtp.Send("smtp.example.com")
+    .TrustAllCertificates()   // only for local dev/testing
 ```
 
 ### Expression injection

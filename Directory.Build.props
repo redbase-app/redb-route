@@ -18,7 +18,7 @@
     <PackageProjectUrl>https://redbase.app</PackageProjectUrl>
     <RepositoryUrl>https://github.com/redbase-app/redb-route</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <Version>4.7.5</Version>
-    <PackageVersion>4.7.5</PackageVersion>
+    <Version>4.7.6</Version>
+    <PackageVersion>4.7.6</PackageVersion>
   </PropertyGroup>
 </Project>

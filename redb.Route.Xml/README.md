@@ -199,6 +199,7 @@ The rules are generic — **no connector has XML-specific code**:
 <bean name="main-db" type="redb.Route.Sql.Connection.SqlConnectionFactory, redb.Route.Sql">
   <constructorArg>
     <bean type="redb.Route.Sql.Connection.SqlConnectionOptions, redb.Route.Sql">
+      <property key="ProviderName" value="Npgsql"/>
       <property key="ConnectionString" value="{{db.main.connection}}"/>
     </bean>
   </constructorArg>
@@ -226,7 +227,7 @@ built by a static creator rather than a constructor, `factoryMethod=` names it a
 ```xml
 <bean name="globex" type="redb.Route.As2.As2ConnectionFactory, redb.Route.As2">
   <property key="OurCertificate">
-    <bean type="System.Security.Cryptography.X509Certificates.X509CertificateLoader, System.Security.Cryptography.X509Certificates"
+    <bean type="System.Security.Cryptography.X509Certificates.X509CertificateLoader, System.Security.Cryptography"
           factoryMethod="LoadPkcs12FromFile">
       <constructorArg value="{{as2.certificates}}/hub.pfx"/>
       <constructorArg value="{{as2.password}}"/>

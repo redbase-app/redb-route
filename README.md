@@ -616,30 +616,22 @@ route-level retry with backoff and a dead-letter sink, use `OnException(...)` (s
 
 ### Dead Letter Channel
 
-Routes the failing exchange to a sink endpoint after retries are exhausted. The exception is preserved on the exchange (`exchange.GetException()`) and accessible from the dead-letter sub-route.
-
-```csharp
-// Route-level: any unhandled failure goes to seda://dlq
-From("kafka://orders")
-    .DeadLetterChannel("seda://dlq")
-    .Process(...)
-    .To("sql://orders");
-
-// The DLQ route inspects the exception and decides what to do
-From("seda://dlq")
-    .Log("DLQ: ${header.JMSCorrelationID} — ${exception.message}")
-    .Choice()
-        .When(e => e.GetException() is TimeoutException).To("seda://retry-later")
-        .Otherwise().To("sftp://archive/failed/")
-    .EndChoice();
-```
-
-**For the whole context** — Camel's context-level `errorHandler(deadLetterChannel(...))`: every route sends there a
-failure no `OnException` took, stamped with `CamelDeadLetterReason` / `CamelDeadLetterExceptionType` /
+Routes the failing exchange to a sink endpoint after retries are exhausted. The dead letter channel belongs to the
+context, as Camel's context-level `errorHandler(deadLetterChannel(...))`: every route sends there a failure no
+`OnException` took, stamped with `CamelDeadLetterReason` / `CamelDeadLetterExceptionType` /
 `CamelDeadLetterTimestamp`, and the failure is handled. Redeliveries stay with `OnException`.
 
 ```csharp
 context.ErrorHandler = new DeadLetterErrorHandler(context, "direct://errors");
+
+// The dead-letter route reads the stamped headers and decides what to do
+From("direct://errors")
+    .Log("DLQ: ${header.CamelDeadLetterExceptionType}: ${header.CamelDeadLetterReason}")
+    .Choice()
+        .When(e => (string?)e.In.Headers["CamelDeadLetterExceptionType"] == typeof(TimeoutException).FullName)
+            .To("seda://retry-later")
+        .Otherwise().To("sftp://archive/failed/")
+    .EndChoice();
 ```
 ```xml
 <!-- context.xml -->
@@ -709,7 +701,7 @@ public class OrderRoutes : RouteBuilder
 
         OnException<DbException>()
             .MaximumRedeliveries(2)
-            .UseOriginalMessage()         // restore original body before sending to handler
+            .UseOriginalBody()            // restore original body before sending to handler
             .To("seda://db-failures")
         .EndOnException();
 
@@ -770,22 +762,26 @@ From("direct://audit").RouteConfigurationId("audit").To("rabbitmq://audit");
   `<route routeConfigurationId="…">`.
 - `Intercept*` and `OnCompletion` are not part of a route configuration yet; share them through a base class.
 
-### OnException — configure form (action)
+### OnException — several handlers
 
-For multiple handlers in one block. Each `Handle<T>` accepts a sub-route and per-exception redelivery options.
+Several handlers are several `OnException` blocks, each with its own redelivery options and its own steps:
 
 ```csharp
-.OnException(cfg => cfg
-    .Handle<TimeoutException>(
-        handler:        h => h.Log("Timeout, retry").To("seda://retry"),
-        maxRedeliveries: 3,
-        redeliveryDelay: TimeSpan.FromSeconds(2),
-        useExponentialBackoff: true)
-    .Handle<HttpRequestException>(
-        handler:        h => h.To("seda://http-fail"),
-        maxRedeliveries: 5)
-    .Handle<DbException>(
-        handler:        h => h.To("seda://db-fail")));
+OnException<TimeoutException>()
+    .MaximumRedeliveries(3)
+    .RedeliveryDelay(TimeSpan.FromSeconds(2))
+    .UseExponentialBackOff()
+    .Log("Timeout, retry").To("seda://retry")
+.EndOnException();
+
+OnException<HttpRequestException>()
+    .MaximumRedeliveries(5)
+    .To("seda://http-fail")
+.EndOnException();
+
+OnException<DbException>()
+    .To("seda://db-fail")
+.EndOnException();
 ```
 
 ### Redelivery configuration
@@ -836,13 +832,16 @@ public class PaymentRoutes : RouteBuilder
 
         From("kafka://payments?groupId=svc")
             .RouteId("payment-pipeline")
-            // 2. Route-level DLC — anything that bubbles past handlers ends up here
-            .DeadLetterChannel("seda://payments-dlq")
+            // 2. Route-level dead letter — a failure no nearer handler takes ends up here
+            .OnException<Exception>()
+                .Handled()
+                .To("seda://payments-dlq")
+            .EndOnException()
 
             // 3. Route-local override — timeout policy specific to this route
             .OnException<TimeoutException>()
                 .MaximumRedeliveries(2)
-                .UseOriginalMessage()
+                .UseOriginalBody()
                 .To("seda://payment-timeouts")
             .EndOnException()
 
@@ -1033,7 +1032,7 @@ context.RegisterPrefixResolver("order.", (exchange, path) => orders.Read(exchang
 .WireTap("seda://audit")
 
 // Multicast — send to multiple endpoints in parallel
-.Multicast("direct://service-a", "direct://service-b")
+.Multicast().To("direct://service-a").To("direct://service-b").EndMulticast()
 
 // Throttle — rate limiting
 .Throttle(100)                              // max 100 messages/second
@@ -1180,7 +1179,7 @@ public class OrderApi : RouteBuilder
 }
 ```
 
-The same pattern works for `Grpc.Listen(...)` and `Ws.Listen(...)`.
+The same pattern works for `GrpcDsl.Listen(...)` and `Ws.Listen(...)`.
 
 ---
 
@@ -1245,7 +1244,7 @@ The RabbitMQ producer uses publisher confirms by default with broker-side flow c
 .To(Rabbit.Queue("orders")
     .Host("rabbit.local")
     .MaxOutstandingConfirms(2048)        // in-flight publishes throttled by ThrottlingRateLimiter
-    .Mandatory(true)                     // unroutable messages surface as exceptions (BasicReturn)
+    .Mandatory()                         // unroutable messages surface as exceptions (BasicReturn)
     .Transacted(false)                   // or use AMQP transactions instead of confirms
     .AutomaticRecovery(true)             // reconnect + re-declare topology on broker restart
     .TopologyRecoveryEnabled(true))
@@ -1491,7 +1490,7 @@ evaluated per message; the exchange is not touched:
 
 ```csharp
 From("http://0.0.0.0:8080/sap/ack")
-    .Unmarshal().Json<SapAck>()
+    .Unmarshal<SapAck>("application/json")
     .SpanTag("sap.order.id", XPath("/Ack/OrderNo"))                    // the route span
     .SpanTag("sap.order.id", Header("orderNo"), SpanTarget.Inbound)    // the request's server span
     .Traced("post-to-erp")
@@ -1551,8 +1550,8 @@ Each transport ships a type-safe fluent builder. Builders implement `implicit op
 ```csharp
 .To(Direct.Endpoint("my-service"))                              // direct:my-service
 .To(Seda.Send("orders").ConcurrentConsumers(5).Size(1000))      // seda:orders?...
-.From(Timer.Every("poll").Period(5000).Delay(1000))             // timer:poll?period=5000&delay=1000
-.From(Timer.Once("init"))                                       // fire once
+.From(TimerDsl.Every("poll").Period(5000).Delay(1000))          // timer:poll?period=5000&delay=1000
+.From(TimerDsl.Once("init"))                                    // fire once
 .To(LogDsl.Info("audit").ShowHeaders().ShowBody())              // log:audit?...
 .To(MockDsl.Endpoint("result").ExpectedMessageCount(3))         // mock:result?...
 ```
@@ -1570,7 +1569,7 @@ Kafka.Topic("orders")
     .Brokers("broker1:9092,broker2:9092")
     .GroupId("order-svc")
     .AutoOffsetReset("Earliest")
-    .Sasl("PLAIN", "user", "pass")
+    .Sasl("PLAIN", Placeholder("{{kafka.user}}"), Placeholder("{{kafka.password}}"))
     .Acks("All")
     .Compression("zstd")
 
@@ -1587,7 +1586,7 @@ Rabbit.Exchange("ui-notify", "fanout").Declare()    // no queue name: each consu
 // Redis
 Redis.Subscribe("events")
 Redis.XRead("orders-stream").ConsumerGroup("svc").ConsumerName("worker-1")
-Redis.Set("cache-key").ConnectionString("localhost:6379").Ttl(3600)
+Redis.Set("cache-key").Connection("localhost:6379").Ttl(3600)
 Redis.LPush("work-queue")
 
 // SQL
@@ -1601,8 +1600,8 @@ Http.Post("api.example.com/orders").BearerAuth().Timeout(5000).ContentType("appl
 Http.Listen("/webhooks/stripe").Host("0.0.0.0").Port(8080).Cors().InOut()
 
 // gRPC
-Grpc.Call("localhost:50051")
-Grpc.Listen("0.0.0.0:50051")
+GrpcDsl.Call("localhost:50051")
+GrpcDsl.Listen("0.0.0.0:50051")
 
 // SOAP / WSDL (WS-Security, MTOM, SOAP 1.1/1.2, ?wsdl publishing)
 Soap.Call("https://gds/air.svc").ConnectionFactory("amadeus").Operation("GetFares")
@@ -1616,7 +1615,7 @@ FileDsl.Write("/data/outbox").AutoCreate(true).TempPrefix(".tmp").FileExist("Ove
 // SFTP
 Sftp.Directory("/remote/inbox")
     .Host("sftp.example.com").Port(22)
-    .Username("user").PrivateKeyFile("/keys/id_rsa")
+    .Username("user").PrivateKey(Constant("/keys/id_rsa"))
     .Include("*.xml").Delete()
 
 // MQTT 5.0
@@ -1627,14 +1626,14 @@ Mqtt.Publish("alerts/temperature").Broker("mqtt.local").Retain()
 Amqp.Address("orders").Host("amqp.local").Port(5672).Username("admin").Password("admin")
 
 // Email
-Smtp.Send("smtp.gmail.com").Port(587).Username("user").Password("pass").UseSsl()
+Smtp.Send("smtp.gmail.com").Port(587).Username("user").Password("pass").Security("StartTls")
     .From("noreply@example.com").To("admin@example.com")
-Imap.Read("imap.gmail.com").Port(993).Username("user").Password("pass").UseSsl()
+Imap.Read("imap.gmail.com").Port(993).Username("user").Password("pass").Security("Ssl")
     .Folder("INBOX").Unseen().Delete()
 
 // TCP
-Tcp.Listen("0.0.0.0:9000").Codec("textline").Delimiter("\n")
-Tcp.Connect("server:9000").Codec("lengthprefixed").Tls()
+TcpDsl.Listen("0.0.0.0:9000").TextLine().Delimiter("\n")
+TcpDsl.Connect("server:9000").LengthPrefixed().Ssl()
 
 // WebSocket
 Ws.Listen("0.0.0.0:8080/ws")
@@ -1846,7 +1845,7 @@ of every version; install it with `Extensions: Install from VSIX...`.
 |--------|---------|-------------|
 | `direct:` | redb.Route | `Direct.Endpoint("name")` |
 | `seda:` | redb.Route | `Seda.Consume("name")` / `Seda.Send("name")` |
-| `timer:` | redb.Route | `Timer.Every("name")` / `Timer.Once("name")` |
+| `timer:` | redb.Route | `TimerDsl.Every("name")` / `TimerDsl.Once("name")` |
 | `log:` | redb.Route | `LogDsl.Info("name")` |
 | `mock:` | redb.Route | `MockDsl.Endpoint("name")` |
 | `kafka:` | redb.Route.Kafka | `Kafka.Topic("name")` |
@@ -1855,26 +1854,26 @@ of every version; install it with `Extensions: Install from VSIX...`.
 | `sql:` | redb.Route.Sql | `Sql.Poll("query")` / `Sql.Execute("stmt")` / `Sql.Procedure("sp")` |
 | `http:` / `https:` | redb.Route.Http | `Http.Get("path")` / `Http.Listen("path")` / … |
 | `as2:` / `as2s:` | redb.Route.As2 | `As2.Receive("path")` / `As2.Send("url")` / `As2.ReceiveMdn("path")` |
-| `grpc:` | redb.Route.Grpc | `Grpc.Call("host:port")` / `Grpc.Listen("host:port")` |
+| `grpc:` | redb.Route.Grpc | `GrpcDsl.Call("host:port")` / `GrpcDsl.Listen("host:port")` |
 | `soap:` / `soaps:` | redb.Route.Soap | `Soap.Call("url")` / `Soap.Listen("path")` |
 | `file:` | redb.Route.File | `FileDsl.Read("dir")` / `FileDsl.Write("dir")` |
 | `sftp:` | redb.Route.Sftp | `Sftp.Directory("path")` |
 | `mqtt:` | redb.Route.MqttNet | `Mqtt.Subscribe("topic")` / `Mqtt.Publish("topic")` |
 | `amqp:` | redb.Route.Amqp | `Amqp.Address("name")` |
 | `mail:` | redb.Route.Mail | `Smtp.Send("host")` / `Imap.Read("host")` / `Pop3.Read("host")` |
-| `tcp:` | redb.Route.Tcp | `Tcp.Listen("host:port")` / `Tcp.Connect("host:port")` |
+| `tcp:` | redb.Route.Tcp | `TcpDsl.Listen("host:port")` / `TcpDsl.Connect("host:port")` |
 | `websocket:` | redb.Route.WebSocket | `Ws.Listen("host:port/path")` / `Ws.Connect("host:port/path")` |
 | `cron:` / `qtimer:` | redb.Route.Quartz | `Cron.Schedule("name", "expr")` / `QTimer.Every("name")` |
-| `exec:` | redb.Route.Exec | `ExecDsl.Run()` (producer) / `ExecDsl.Schedule(...)` (scheduled consumer) |
+| `exec:` | redb.Route.Exec | `ExecDsl.Run()` (producer) / `ExecDsl.Run(...).Schedule("5m")` (scheduled consumer) |
 | `llm:` | redb.Route.Llm | `Llm.Factory("haiku")` / `Llm.Factory("openai")` / `Llm.Factory("groq")` / … |
 | `mcp:` | redb.Route.Llm.Mcp | `mcp://serverName/toolName` — auto-registered from MCP `tools/list` |
 | `asb:` | redb.Route.AzureServiceBus | `Asb.Queue("name")` / `Asb.Topic("name", "sub")` |
 | `es:` | redb.Route.Elasticsearch | `Es.Index("name")` |
-| `fstore:` / `fbstorage:` / `fcm:` | redb.Route.Firebase | `Firestore.Collection("name")` / `FbStorage.Bucket("b")` / `Fcm.Send()` |
+| `fstore:` / `fbstorage:` / `fcm:` | redb.Route.Firebase | `Firestore.Collection("name")` / `FirebaseStorage.Bucket("b")` / `Fcm.Token("t")` |
 | `ftp:` / `ftps:` | redb.Route.Ftp | `Ftp.Directory("/path")` |
-| `wmq:` | redb.Route.IbmMq | `IbmMq.Queue("name")` / `IbmMq.Topic("name")` |
-| `ldap:` / `ldaps:` | redb.Route.Ldap | `Ldap.Search("baseDn")` |
-| `s3:` | redb.Route.S3 | `S3Dsl.Bucket("name")` |
+| `wmq:` | redb.Route.IbmMq | `Wmq.Queue("name")` / `Wmq.Topic("name")` |
+| `ldap:` / `ldaps:` | redb.Route.Ldap | `LdapDsl.Search("baseDn")` |
+| `s3:` | redb.Route.S3 | `S3.Bucket("name")` |
 | `sqs:` / `sns:` | redb.Route.Sqs | `Sqs.Queue("name")` / `Sns.Topic("name")` |
 | `telegram:` | redb.Route.Telegram | `Tg.Receive(token)` / `Tg.Send(token)` |
 | `signalr:` | redb.Route.SignalR | `SignalR.Hub("/hub")` |
@@ -2171,7 +2170,7 @@ Global options: `--profile/-p`, `--url/-u`, `--key/-k`, `--output table|json|qui
 ```bash
 # Switch profile, watch routes live
 tsak profile use prod
-tsak route list --watch --interval 2
+tsak route list orders --watch --interval 2
 
 # Cluster ops
 tsak cluster status
@@ -2180,7 +2179,7 @@ tsak cluster rebalance --yes
 # Hot-deploy a module via REST + scheduler ops
 tsak module list -o json
 tsak scheduler jobs
-tsak scheduler pause --job orders.daily-report
+tsak scheduler pause orders.daily-report
 ```
 
 ### Web UI — Blazor Server dashboard
@@ -2284,7 +2283,7 @@ Minimal config:
       "ClusterName":          "default",
       "GroupName":            "default",
       "NodeId":               null,    // null = auto-generate / pick from ENV
-      "HeartbeatInterval":    5000,
+      "HeartbeatIntervalSeconds": 5,
       "LeaderLockTtlSeconds": 10
     }
   },

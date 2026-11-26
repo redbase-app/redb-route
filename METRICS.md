@@ -126,7 +126,7 @@ XML-escaped. A timer-driven monitoring route is the classic shape:
 ```csharp
 r.From("timer:stats?period=60000")
  .To("controlbus:route?action=stats")
- .To("log:route-stats?level=Info");
+ .To("log:route-stats?level=Information");
 ```
 
 Mind one trap: from inside a wire-tap branch, `routeId=current` names the *branch* route, not the

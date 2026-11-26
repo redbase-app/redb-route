@@ -377,8 +377,8 @@ From(Tg.Receive(token))
     .Filter(Header(TelegramHeaders.UpdateType).isEqualTo("CallbackQuery"))
     .SetBody("✅ Done")                                         // optional toast text
     .To(Tg.Answer(token))                                       // clears the spinner
-    .Process(e => e.In.SetBody(HandleAction(
-        e.In.GetHeader<string>(TelegramHeaders.CallbackData)!)))
+    .Process(e => e.In.Body = HandleAction(
+        e.In.GetHeader<string>(TelegramHeaders.CallbackData)!))
     .To(Tg.Send(token).ChatId(Header(TelegramHeaders.ChatId))); // send follow-up
 ```
 
@@ -423,9 +423,8 @@ The exchange headers are identical to the long-polling path — downstream route
 
 ```csharp
 // Requires redb.Route.Http for Http.Listen(...)
-From(Http.Listen("/tg/webhook")
-         .Header("X-Telegram-Bot-Api-Secret-Token", webhookSecret)
-         .InOut())
+From(Http.Listen("/tg/webhook").InOut())
+    .Filter(Header("X-Telegram-Bot-Api-Secret-Token").isEqualTo(webhookSecret))   // the secret_token of setWebhook
     .UnpackTelegramUpdate()          // deserialise JSON → Update + populate headers
     .To("direct://tg-dispatch");
 

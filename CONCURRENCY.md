@@ -32,7 +32,7 @@ the `.To("seda://x?concurrentConsumers=N")` workaround — no named endpoint req
   Concurrency across concurrent requests stays capped at N. **RPC works, losslessly.**
 
 ```csharp
-From("file://in?move=.done")
+From("file://in?moveTo=.done")
     .Threads(10)                    // up to 10 files processed in parallel
         .Process(HeavyTransform)
         .To("http://scoring-api/score")
